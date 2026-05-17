@@ -1203,6 +1203,48 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "async")]
+    fn test_decoder_post_filter_without_base_selection_skips_output_selection_resolve() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled_with_phase_profile();
+
+        let row_filter_c = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["c"]),
+            move |batch: RecordBatch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_c)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                TEST_BATCH
+                    .slice(row_group_idx * 100, 100)
+                    .project(&[0])
+                    .unwrap()
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+
+        let report = metrics.phase_profile_report().unwrap();
+        assert_eq!(phase_profile_count(&report, "output_selection_resolve"), 0);
+    }
+
+    #[test]
     fn test_decoder_auto_cost_model_post_filter_applies_fragmented_filter() {
         let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
@@ -2165,6 +2207,21 @@ mod test {
             .map(|range| data.slice(range.start as usize..range.end as usize))
             .collect::<Vec<_>>();
         decoder.push_ranges(ranges, data).unwrap();
+    }
+
+    #[cfg(feature = "async")]
+    fn phase_profile_count(report: &str, phase: &str) -> usize {
+        report
+            .lines()
+            .skip(1)
+            .find_map(|line| {
+                let mut fields = line.split(',');
+                let name = fields.next()?;
+                let _total_ms = fields.next()?;
+                let count = fields.next()?;
+                (name == phase).then(|| count.parse().unwrap())
+            })
+            .unwrap_or(0)
     }
 
     fn not_multiple_of_three_filter(batch: &RecordBatch) -> BooleanArray {

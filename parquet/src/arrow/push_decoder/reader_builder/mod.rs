@@ -1120,22 +1120,24 @@ impl RowGroupReaderBuilder {
                 .build()
             });
 
-        plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-        plan_builder = self
-            .metrics
-            .time_phase(ArrowReaderPhase::OutputSelectionResolve, || {
-                resolve_selection_policy_for_expensive_output(
-                    plan_builder,
-                    &read_projection,
-                    self.row_group_offset_index(row_group_idx),
-                    row_count,
-                    ExpensiveOutputProfile::from_row_group(
-                        self.metadata.row_group(row_group_idx),
-                        &read_projection,
-                        row_count,
-                    ),
-                )
-            });
+        if plan_builder.selection().is_some() {
+            plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+            plan_builder =
+                self.metrics
+                    .time_phase(ArrowReaderPhase::OutputSelectionResolve, || {
+                        resolve_selection_policy_for_expensive_output(
+                            plan_builder,
+                            &read_projection,
+                            self.row_group_offset_index(row_group_idx),
+                            row_count,
+                            ExpensiveOutputProfile::from_row_group(
+                                self.metadata.row_group(row_group_idx),
+                                &read_projection,
+                                row_count,
+                            ),
+                        )
+                    });
+        }
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
