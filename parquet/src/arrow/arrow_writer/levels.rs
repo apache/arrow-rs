@@ -728,6 +728,18 @@ impl LevelInfoBuilder {
             return true;
         }
 
+        // Timestamps with matching unit but UTC-equivalent timezone aliases (e.g. "UTC"
+        // vs "+00:00") are treated as compatible. The on-disk parquet representation
+        // depends only on whether the timezone is non-empty (see
+        // `arrow_to_parquet_type` in `schema/mod.rs`), so accepting these aliases
+        // does not change what is written. This matches DataFusion's
+        // `temporal_coercion_strict_timezone` rule.
+        if let (DataType::Timestamp(au, Some(atz)), DataType::Timestamp(bu, Some(btz))) = (a, b) {
+            if au == bu && is_utc_alias(atz) && is_utc_alias(btz) {
+                return true;
+            }
+        }
+
         // get the values out of the dictionaries
         let (a, b) = match (a, b) {
             (DataType::Dictionary(_, va), DataType::Dictionary(_, vb)) => {
@@ -761,6 +773,16 @@ impl LevelInfoBuilder {
             _ => false,
         }
     }
+}
+
+/// Returns true when `tz` is one of the recognized UTC timezone aliases.
+///
+/// Producers of arrow batches use a variety of strings to denote UTC: `"UTC"`,
+/// `"+00:00"` or `"Z"` are all common and semantically
+/// identical. Treating these as interchangeable lets writers accept batches from
+/// upstream systems (DataFusion, Iceberg) that disagree on the canonical spelling.
+fn is_utc_alias(tz: &str) -> bool {
+    matches!(tz, "UTC" | "+00:00" | "Z")
 }
 
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
@@ -1029,7 +1051,7 @@ mod tests {
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
     use arrow_data::{ArrayData, ArrayDataBuilder};
-    use arrow_schema::{Fields, Schema};
+    use arrow_schema::{Fields, Schema, TimeUnit};
 
     #[test]
     fn test_calculate_array_levels_twitter_example() {
@@ -2295,6 +2317,54 @@ mod tests {
             logical_nulls,
         };
         assert_eq!(levels[0], expected_level);
+    }
+
+    #[test]
+    fn timestamp_utc_aliases_are_compatible() {
+        // Arrays produced by upstream systems often tag UTC differently than the
+        // writer's target schema. The writer should accept these aliases as long
+        // as the time unit matches; the on-disk parquet representation only cares
+        // whether a timezone is set, not what string was used.
+        let aliases = ["UTC", "+00:00", "Z"];
+        for &target in &aliases {
+            for &source in &aliases {
+                let target_ty =
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(target.into()));
+                let source_ty =
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(source.into()));
+                let array = Arc::new(
+                    TimestampMicrosecondArray::from(vec![0_i64, 1])
+                        .with_timezone(source),
+                ) as ArrayRef;
+                let field = Field::new("ts", target_ty.clone(), true);
+                LevelInfoBuilder::try_new(&field, Default::default(), &array).unwrap_or_else(
+                    |e| panic!("expected {target} ↔ {source} to be compatible, got: {e}"),
+                );
+                assert!(
+                    LevelInfoBuilder::types_compatible(&target_ty, &source_ty),
+                    "{target} should be compatible with {source}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timestamp_non_utc_timezones_remain_incompatible() {
+        // Only UTC aliases are folded together; named zones and arbitrary offsets
+        // must still match exactly so we don't silently misinterpret instants.
+        let target = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
+        let cases = [
+            DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into())),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+05:30".into())),
+            // Different time unit isn't covered either.
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        ];
+        for case in cases {
+            assert!(
+                !LevelInfoBuilder::types_compatible(&target, &case),
+                "{case:?} should not be compatible with {target:?}",
+            );
+        }
     }
 
     #[test]
