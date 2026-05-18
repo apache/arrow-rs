@@ -361,10 +361,11 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+        ListArray, ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::CastOptions;

@@ -25,7 +25,13 @@ use crate::type_conversion::{
 };
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, FixedSizeListArray, GenericListArray, GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder, StructArray};
+use arrow::array::{
+    ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewBuilder,
+    BooleanBuilder, FixedSizeBinaryBuilder, FixedSizeListArray, GenericListArray,
+    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
+    OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
+    StructArray,
+};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
@@ -1066,6 +1072,7 @@ pub(crate) struct VariantToFixedSizeListArrowRowBuilder<'a> {
     element_builder: ListElementBuilder<'a>,
     nulls: NullBufferBuilder,
     cast_options: &'a CastOptions<'a>,
+    shredded: bool,
 }
 
 impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
@@ -1096,6 +1103,7 @@ impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
             element_builder,
             nulls: NullBufferBuilder::new(capacity),
             cast_options,
+            shredded,
         })
     }
 
@@ -1112,7 +1120,7 @@ impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
             Ok(Some(list)) => {
                 let len = list.len();
                 if len != self.list_size as usize {
-                    if self.cast_options.safe {
+                    if self.cast_options.safe && !self.shredded {
                         self.append_null()?;
                         return Ok(false);
                     }
