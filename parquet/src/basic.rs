@@ -316,7 +316,7 @@ pub enum LogicalType {
 
 impl LogicalType {
     /// doc
-    pub fn int(bit_width: i8, is_signed: bool) -> Self {
+    pub fn integer(bit_width: i8, is_signed: bool) -> Self {
         Self::Integer {
             bit_width,
             is_signed,
@@ -403,7 +403,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
             }
             10 => {
                 let val = IntType::read_thrift(&mut *prot)?;
-                Self::int(val.bit_width, val.is_signed)
+                Self::integer(val.bit_width, val.is_signed)
             }
             11 => {
                 prot.skip_empty_struct()?;
@@ -1540,7 +1540,7 @@ impl str::FromStr for LogicalType {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             // The type is a placeholder that gets updated elsewhere
-            "INTEGER" => Ok(LogicalType::int(8, false)),
+            "INTEGER" => Ok(LogicalType::integer(8, false)),
             "MAP" => Ok(LogicalType::Map),
             "LIST" => Ok(LogicalType::List),
             "ENUM" => Ok(LogicalType::Enum),
@@ -1922,35 +1922,35 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(8, false))),
+            ConvertedType::from(Some(LogicalType::integer(8, false))),
             ConvertedType::UINT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(8, true))),
+            ConvertedType::from(Some(LogicalType::integer(8, true))),
             ConvertedType::INT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(16, false))),
+            ConvertedType::from(Some(LogicalType::integer(16, false))),
             ConvertedType::UINT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(16, true))),
+            ConvertedType::from(Some(LogicalType::integer(16, true))),
             ConvertedType::INT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(32, false))),
+            ConvertedType::from(Some(LogicalType::integer(32, false))),
             ConvertedType::UINT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(32, true))),
+            ConvertedType::from(Some(LogicalType::integer(32, true))),
             ConvertedType::INT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(64, false))),
+            ConvertedType::from(Some(LogicalType::integer(64, false))),
             ConvertedType::UINT_64
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::int(64, true))),
+            ConvertedType::from(Some(LogicalType::integer(64, true))),
             ConvertedType::INT_64
         );
         assert_eq!(
@@ -2005,10 +2005,10 @@ mod tests {
         test_roundtrip(LogicalType::timestamp(false, TimeUnit::MICROS));
         test_roundtrip(LogicalType::timestamp(true, TimeUnit::MILLIS));
         test_roundtrip(LogicalType::timestamp(true, TimeUnit::NANOS));
-        test_roundtrip(LogicalType::int(8, true));
-        test_roundtrip(LogicalType::int(16, false));
-        test_roundtrip(LogicalType::int(32, true));
-        test_roundtrip(LogicalType::int(64, false));
+        test_roundtrip(LogicalType::integer(8, true));
+        test_roundtrip(LogicalType::integer(16, false));
+        test_roundtrip(LogicalType::integer(32, true));
+        test_roundtrip(LogicalType::integer(64, false));
         test_roundtrip(LogicalType::Json);
         test_roundtrip(LogicalType::Bson);
         test_roundtrip(LogicalType::Uuid);
@@ -2226,19 +2226,19 @@ mod tests {
             LogicalType::Bson,
             LogicalType::Enum,
             LogicalType::Uuid,
-            LogicalType::int(8, false),
-            LogicalType::int(16, false),
-            LogicalType::int(32, false),
-            LogicalType::int(64, false),
+            LogicalType::integer(8, false),
+            LogicalType::integer(16, false),
+            LogicalType::integer(32, false),
+            LogicalType::integer(64, false),
         ];
         check_sort_order(unsigned, SortOrder::UNSIGNED);
 
         // Signed comparison (physical type does not matter)
         let signed = vec![
-            LogicalType::int(8, true),
-            LogicalType::int(16, true),
-            LogicalType::int(32, true),
-            LogicalType::int(64, true),
+            LogicalType::integer(8, true),
+            LogicalType::integer(16, true),
+            LogicalType::integer(32, true),
+            LogicalType::integer(64, true),
             LogicalType::decimal(20, 4),
             LogicalType::Date,
             LogicalType::time(false, TimeUnit::MILLIS),

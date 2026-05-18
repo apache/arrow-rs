@@ -556,12 +556,12 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::Int8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(8, true)))
+            .with_logical_type(Some(LogicalType::integer(8, true)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::Int16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(16, true)))
+            .with_logical_type(Some(LogicalType::integer(16, true)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -574,22 +574,22 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::UInt8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(8, false)))
+            .with_logical_type(Some(LogicalType::integer(8, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(16, false)))
+            .with_logical_type(Some(LogicalType::integer(16, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(32, false)))
+            .with_logical_type(Some(LogicalType::integer(32, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt64 => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::int(64, false)))
+            .with_logical_type(Some(LogicalType::integer(64, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),

@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn test_primitive_type() {
         let mut result = Type::primitive_type_builder("foo", PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::int(32, true)))
+            .with_logical_type(Some(LogicalType::integer(32, true)))
             .with_id(Some(0))
             .build();
         assert!(result.is_ok());
@@ -1461,7 +1461,7 @@ mod tests {
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
                 basic_info.logical_type_ref(),
-                Some(&LogicalType::int(32, true))
+                Some(&LogicalType::integer(32, true))
             );
             assert_eq!(basic_info.converted_type(), ConvertedType::INT_32);
             assert_eq!(basic_info.id(), 0);
@@ -1476,7 +1476,7 @@ mod tests {
         // Test illegal inputs with logical type
         result = Type::primitive_type_builder("foo", PhysicalType::INT64)
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::int(8, true)))
+            .with_logical_type(Some(LogicalType::integer(8, true)))
             .build();
         assert!(result.is_err());
         if let Err(e) = result {

@@ -543,7 +543,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::int(32, true)),
+                    Some(LogicalType::integer(32, true)),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -555,7 +555,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::int(8, false)),
+                    Some(LogicalType::integer(8, false)),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )
@@ -567,7 +567,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::int(16, true)),
+                    Some(LogicalType::integer(16, true)),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )
@@ -579,7 +579,7 @@ mod tests {
                     "field",
                     Some(42),
                     PhysicalType::INT32,
-                    Some(LogicalType::int(16, true)),
+                    Some(LogicalType::integer(16, true)),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )

@@ -440,7 +440,7 @@ impl Parser<'_> {
                                     "Failed to parse is_signed for INTEGER type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::int(bit_width, is_signed));
+                                logical = Some(LogicalType::integer(bit_width, is_signed));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -1023,14 +1023,14 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::int(8, true)))
+                    .with_logical_type(Some(LogicalType::integer(8, true)))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_2", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::int(16, false)))
+                    .with_logical_type(Some(LogicalType::integer(16, false)))
                     .build()
                     .unwrap(),
             ),
