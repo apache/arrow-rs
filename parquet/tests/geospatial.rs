@@ -30,7 +30,7 @@ mod test {
             ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
             arrow_writer::ArrowWriterOptions,
         },
-        basic::{EdgeInterpolationAlgorithm, GeometryType, LogicalType},
+        basic::{EdgeInterpolationAlgorithm, LogicalType},
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
