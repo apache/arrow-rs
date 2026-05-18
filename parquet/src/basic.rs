@@ -2326,15 +2326,15 @@ mod tests {
                 is_signed: true,
             },
             LogicalType::Integer {
-                bit_width: 8,
+                bit_width: 16,
                 is_signed: true,
             },
             LogicalType::Integer {
-                bit_width: 8,
+                bit_width: 32,
                 is_signed: true,
             },
             LogicalType::Integer {
-                bit_width: 8,
+                bit_width: 64,
                 is_signed: true,
             },
             LogicalType::Decimal {
