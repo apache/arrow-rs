@@ -1974,6 +1974,10 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::variant(None))),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::geometry(None))),
             ConvertedType::NONE
         );
