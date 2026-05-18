@@ -2297,116 +2297,19 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_utc_aliases_are_compatible() {
-        // Arrays produced by upstream systems often tag UTC differently than the
-        // writer's target schema. The writer should accept these aliases as long
-        // as the time unit matches; the on-disk parquet representation only cares
-        // whether a timezone is set, not what string was used.
-        let aliases = ["UTC", "+00:00", "Z"];
-        for &target in &aliases {
-            for &source in &aliases {
-                let target_ty = DataType::Timestamp(TimeUnit::Microsecond, Some(target.into()));
-                let source_ty = DataType::Timestamp(TimeUnit::Microsecond, Some(source.into()));
-                let array =
-                    Arc::new(TimestampMicrosecondArray::from(vec![0_i64, 1]).with_timezone(source))
-                        as ArrayRef;
-                let field = Field::new("ts", target_ty.clone(), true);
-                LevelInfoBuilder::try_new(&field, Default::default(), &array).unwrap_or_else(|e| {
-                    panic!("expected {target} ↔ {source} to be compatible, got: {e}")
-                });
-                assert!(
-                    LevelInfoBuilder::types_compatible(&target_ty, &source_ty),
-                    "{target} should be compatible with {source}",
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn timestamp_utc_aliases_are_compatible_when_nested() {
-        let leaf_target = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
-        let leaf_source = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
-
-        let nests: &[(DataType, DataType)] = &[
-            (
-                DataType::List(Arc::new(Field::new_list_field(leaf_target.clone(), true))),
-                DataType::List(Arc::new(Field::new_list_field(leaf_source.clone(), true))),
-            ),
-            (
-                DataType::LargeList(Arc::new(Field::new_list_field(leaf_target.clone(), true))),
-                DataType::LargeList(Arc::new(Field::new_list_field(leaf_source.clone(), true))),
-            ),
-            (
-                DataType::FixedSizeList(
-                    Arc::new(Field::new_list_field(leaf_target.clone(), true)),
-                    3,
-                ),
-                DataType::FixedSizeList(
-                    Arc::new(Field::new_list_field(leaf_source.clone(), true)),
-                    3,
-                ),
-            ),
-            (
-                DataType::Struct(vec![Field::new("ts", leaf_target.clone(), true)].into()),
-                DataType::Struct(vec![Field::new("ts", leaf_source.clone(), true)].into()),
-            ),
-            (
-                DataType::Map(
-                    Arc::new(Field::new(
-                        "entries",
-                        DataType::Struct(
-                            vec![
-                                Field::new("keys", DataType::Utf8, false),
-                                Field::new("values", leaf_target.clone(), true),
-                            ]
-                            .into(),
-                        ),
-                        false,
-                    )),
-                    false,
-                ),
-                DataType::Map(
-                    Arc::new(Field::new(
-                        "entries",
-                        DataType::Struct(
-                            vec![
-                                Field::new("keys", DataType::Utf8, false),
-                                Field::new("values", leaf_source.clone(), true),
-                            ]
-                            .into(),
-                        ),
-                        false,
-                    )),
-                    false,
-                ),
-            ),
-        ];
-
-        for (target, source) in nests {
-            assert!(
-                LevelInfoBuilder::types_compatible(target, source),
-                "nested UTC alias mismatch should be compatible: {target:?} vs {source:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn timestamp_non_utc_timezones_remain_incompatible() {
-        // Only UTC aliases are folded together; named zones and arbitrary offsets
-        // must still match exactly so we don't silently misinterpret instants.
-        let target = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
-        let cases = [
-            DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into())),
-            DataType::Timestamp(TimeUnit::Microsecond, Some("+05:30".into())),
-            // Different time unit isn't covered either.
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-        ];
-        for case in cases {
-            assert!(
-                !LevelInfoBuilder::types_compatible(&target, &case),
-                "{case:?} should not be compatible with {target:?}",
-            );
-        }
+    fn timestamp_utc_aliases_accepted_by_writer() {
+        // Verifies that LevelInfoBuilder::try_new (the writer's entry point)
+        // accepts arrays whose timezone is a UTC alias different from the field's.
+        // Detailed equivalence tests live in arrow_schema::datatype::tests.
+        let field = Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            true,
+        );
+        let array = Arc::new(TimestampMicrosecondArray::from(vec![0_i64, 1]).with_timezone("UTC"))
+            as ArrayRef;
+        LevelInfoBuilder::try_new(&field, Default::default(), &array)
+            .expect("UTC and +00:00 should be treated as compatible");
     }
 
     #[test]
