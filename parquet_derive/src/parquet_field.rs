@@ -693,42 +693,24 @@ impl Type {
 
         match last_part.trim() {
             "bool" => quote! { None },
-            "u8" => quote! { Some(LogicalType::Integer {
-                bit_width: 8,
-                is_signed: false,
-            }) },
-            "u16" => quote! { Some(LogicalType::Integer {
-                bit_width: 16,
-                is_signed: false,
-            }) },
-            "u32" => quote! { Some(LogicalType::Integer {
-                bit_width: 32,
-                is_signed: false,
-            }) },
-            "u64" => quote! { Some(LogicalType::Integer {
-                bit_width: 64,
-                is_signed: false,
-            }) },
-            "i8" => quote! { Some(LogicalType::Integer {
-                bit_width: 8,
-                is_signed: true,
-            }) },
-            "i16" => quote! { Some(LogicalType::Integer {
-                bit_width: 16,
-                is_signed: true,
-            }) },
+            "u8" => quote! { Some(LogicalType::int(8, false)) },
+            "u16" => quote! { Some(LogicalType::int(16, false)) },
+            "u32" => quote! { Some(LogicalType::int(32, false)) },
+            "u64" => quote! { Some(LogicalType::int(64, false)) },
+            "i8" => quote! { Some(LogicalType::int(8, true)) },
+            "i16" => quote! { Some(LogicalType::int(16, true)) },
             "i32" | "i64" => quote! { None },
             "usize" => {
-                quote! { Some(LogicalType::Integer {
-                    bit_width: usize::BITS as i8,
-                    is_signed: false
-                }) }
+                quote! { Some(LogicalType::int(
+                    usize::BITS as i8,
+                    false
+                )) }
             }
             "isize" => {
-                quote! { Some(LogicalType::Integer {
-                    bit_width: usize::BITS as i8,
-                    is_signed: true
-                }) }
+                quote! { Some(LogicalType::int(
+                    usize::BITS as i8,
+                    true
+                )) }
             }
             "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
