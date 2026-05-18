@@ -2328,18 +2328,15 @@ mod tests {
         let aliases = ["UTC", "+00:00", "Z"];
         for &target in &aliases {
             for &source in &aliases {
-                let target_ty =
-                    DataType::Timestamp(TimeUnit::Microsecond, Some(target.into()));
-                let source_ty =
-                    DataType::Timestamp(TimeUnit::Microsecond, Some(source.into()));
-                let array = Arc::new(
-                    TimestampMicrosecondArray::from(vec![0_i64, 1])
-                        .with_timezone(source),
-                ) as ArrayRef;
+                let target_ty = DataType::Timestamp(TimeUnit::Microsecond, Some(target.into()));
+                let source_ty = DataType::Timestamp(TimeUnit::Microsecond, Some(source.into()));
+                let array =
+                    Arc::new(TimestampMicrosecondArray::from(vec![0_i64, 1]).with_timezone(source))
+                        as ArrayRef;
                 let field = Field::new("ts", target_ty.clone(), true);
-                LevelInfoBuilder::try_new(&field, Default::default(), &array).unwrap_or_else(
-                    |e| panic!("expected {target} ↔ {source} to be compatible, got: {e}"),
-                );
+                LevelInfoBuilder::try_new(&field, Default::default(), &array).unwrap_or_else(|e| {
+                    panic!("expected {target} ↔ {source} to be compatible, got: {e}")
+                });
                 assert!(
                     LevelInfoBuilder::types_compatible(&target_ty, &source_ty),
                     "{target} should be compatible with {source}",
