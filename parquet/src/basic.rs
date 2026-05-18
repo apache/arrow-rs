@@ -2002,9 +2002,9 @@ mod tests {
         test_roundtrip(LogicalType::timestamp(true, TimeUnit::MILLIS));
         test_roundtrip(LogicalType::timestamp(true, TimeUnit::NANOS));
         test_roundtrip(LogicalType::int(8, true));
-        test_roundtrip(LogicalType::int(16, true));
+        test_roundtrip(LogicalType::int(16, false));
         test_roundtrip(LogicalType::int(32, true));
-        test_roundtrip(LogicalType::int(64, true));
+        test_roundtrip(LogicalType::int(64, false));
         test_roundtrip(LogicalType::Json);
         test_roundtrip(LogicalType::Bson);
         test_roundtrip(LogicalType::Uuid);
