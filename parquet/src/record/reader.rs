@@ -1925,17 +1925,17 @@ mod tests {
         assert_eq!(rows, expected_rows);
     }
 
-    #[test]
-    fn test_reader_iter_returns_error_when_num_records_exceeds_data() {
-        let file = get_test_file("nulls.snappy.parquet");
+    fn assert_err_on_overcount(file_name: &str, proj_schema: Option<Type>) {
+        let file = get_test_file(file_name);
         let file_reader = SerializedFileReader::new(file).unwrap();
         let metadata = file_reader.metadata();
-        let descr = metadata.file_metadata().schema_descr_ptr();
         let row_group_reader = file_reader.get_row_group(0).unwrap();
-
         let actual_rows = row_group_reader.metadata().num_rows() as usize;
-        assert_eq!(actual_rows, 8);
 
+        let descr = match proj_schema {
+            Some(schema) => Arc::new(SchemaDescriptor::new(Arc::new(schema))),
+            None => metadata.file_metadata().schema_descr_ptr(),
+        };
         let reader = TreeBuilder::new()
             .build(descr, &*row_group_reader)
             .unwrap();
@@ -1955,31 +1955,13 @@ mod tests {
     }
 
     #[test]
+    fn test_reader_iter_returns_error_when_num_records_exceeds_data() {
+        assert_err_on_overcount("nulls.snappy.parquet", None);
+    }
+
+    #[test]
     fn test_reader_iter_returns_error_for_repeated_field_when_num_records_exceeds_data() {
-        let file = get_test_file("repeated_primitive_no_list.parquet");
-        let file_reader = SerializedFileReader::new(file).unwrap();
-        let metadata = file_reader.metadata();
-        let descr = metadata.file_metadata().schema_descr_ptr();
-        let row_group_reader = file_reader.get_row_group(0).unwrap();
-
-        let actual_rows = row_group_reader.metadata().num_rows() as usize;
-
-        let reader = TreeBuilder::new()
-            .build(descr, &*row_group_reader)
-            .unwrap();
-        let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
-
-        let rows: Vec<Result<Row>> = iter.collect();
-        assert_eq!(rows.len(), actual_rows + 1);
-        for row in &rows[..actual_rows] {
-            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
-        }
-        let err = rows[actual_rows].as_ref().unwrap_err();
-        assert!(
-            err.to_string().contains("Unexpected end of column data"),
-            "Unexpected error message: {}",
-            err
-        );
+        assert_err_on_overcount("repeated_primitive_no_list.parquet", None);
     }
 
     #[test]
@@ -1995,29 +1977,6 @@ mod tests {
              }",
         )
         .unwrap();
-        let file = get_test_file("map_no_value.parquet");
-        let file_reader = SerializedFileReader::new(file).unwrap();
-        let metadata = file_reader.metadata();
-        let row_group_reader = file_reader.get_row_group(0).unwrap();
-
-        let actual_rows = row_group_reader.metadata().num_rows() as usize;
-
-        let proj_descr = Arc::new(SchemaDescriptor::new(Arc::new(schema)));
-        let reader = TreeBuilder::new()
-            .build(proj_descr, &*row_group_reader)
-            .unwrap();
-        let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
-
-        let rows: Vec<Result<Row>> = iter.collect();
-        assert_eq!(rows.len(), actual_rows + 1);
-        for row in &rows[..actual_rows] {
-            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
-        }
-        let err = rows[actual_rows].as_ref().unwrap_err();
-        assert!(
-            err.to_string().contains("Unexpected end of column data"),
-            "Unexpected error message: {}",
-            err
-        );
+        assert_err_on_overcount("map_no_value.parquet", Some(schema));
     }
 }
