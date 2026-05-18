@@ -437,11 +437,17 @@ impl Reader {
     fn read_field(&mut self) -> Result<Field> {
         let field = match *self {
             Reader::PrimitiveReader(_, ref mut column) => {
+                if !column.has_next() {
+                    return Err(general_err!("Unexpected end of column data"));
+                }
                 let value = column.current_value()?;
                 column.read_next()?;
                 value
             }
             Reader::OptionReader(def_level, ref mut reader) => {
+                if !reader.has_next() {
+                    return Err(general_err!("Unexpected end of column data"));
+                }
                 if reader.current_def_level() > def_level {
                     reader.read_field()?
                 } else {
@@ -465,6 +471,9 @@ impl Reader {
                 Field::Group(row)
             }
             Reader::RepeatedReader(_, def_level, rep_level, ref mut reader) => {
+                if !reader.has_next() {
+                    return Err(general_err!("Unexpected end of column data"));
+                }
                 let mut elements = Vec::new();
                 loop {
                     if reader.current_def_level() > def_level {
@@ -488,6 +497,9 @@ impl Reader {
                 Field::ListInternal(make_list(elements))
             }
             Reader::KeyValueReader(_, def_level, rep_level, ref mut keys, ref mut values) => {
+                if !keys.has_next() {
+                    return Err(general_err!("Unexpected end of column data"));
+                }
                 let mut pairs = Vec::new();
                 loop {
                     if keys.current_def_level() > def_level {
@@ -1911,5 +1923,101 @@ mod tests {
             ))
         ),]];
         assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_reader_iter_returns_error_when_num_records_exceeds_data() {
+        let file = get_test_file("nulls.snappy.parquet");
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let metadata = file_reader.metadata();
+        let descr = metadata.file_metadata().schema_descr_ptr();
+        let row_group_reader = file_reader.get_row_group(0).unwrap();
+
+        let actual_rows = row_group_reader.metadata().num_rows() as usize;
+        assert_eq!(actual_rows, 8);
+
+        let reader = TreeBuilder::new()
+            .build(descr, &*row_group_reader)
+            .unwrap();
+        let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
+
+        let rows: Vec<Result<Row>> = iter.collect();
+        assert_eq!(rows.len(), actual_rows + 1);
+        for row in &rows[..actual_rows] {
+            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
+        }
+        let err = rows[actual_rows].as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("Unexpected end of column data"),
+            "Unexpected error message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_reader_iter_returns_error_for_repeated_field_when_num_records_exceeds_data() {
+        let file = get_test_file("repeated_primitive_no_list.parquet");
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let metadata = file_reader.metadata();
+        let descr = metadata.file_metadata().schema_descr_ptr();
+        let row_group_reader = file_reader.get_row_group(0).unwrap();
+
+        let actual_rows = row_group_reader.metadata().num_rows() as usize;
+
+        let reader = TreeBuilder::new()
+            .build(descr, &*row_group_reader)
+            .unwrap();
+        let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
+
+        let rows: Vec<Result<Row>> = iter.collect();
+        assert_eq!(rows.len(), actual_rows + 1);
+        for row in &rows[..actual_rows] {
+            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
+        }
+        let err = rows[actual_rows].as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("Unexpected end of column data"),
+            "Unexpected error message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_reader_iter_returns_error_for_map_field_when_num_records_exceeds_data() {
+        let schema = parse_message_type(
+            "message schema {
+               REQUIRED group my_map (MAP) {
+                 REPEATED group key_value {
+                   REQUIRED INT32 key;
+                   OPTIONAL INT32 value;
+                 }
+               }
+             }",
+        )
+        .unwrap();
+        let file = get_test_file("map_no_value.parquet");
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let metadata = file_reader.metadata();
+        let row_group_reader = file_reader.get_row_group(0).unwrap();
+
+        let actual_rows = row_group_reader.metadata().num_rows() as usize;
+
+        let proj_descr = Arc::new(SchemaDescriptor::new(Arc::new(schema)));
+        let reader = TreeBuilder::new()
+            .build(proj_descr, &*row_group_reader)
+            .unwrap();
+        let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
+
+        let rows: Vec<Result<Row>> = iter.collect();
+        assert_eq!(rows.len(), actual_rows + 1);
+        for row in &rows[..actual_rows] {
+            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
+        }
+        let err = rows[actual_rows].as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("Unexpected end of column data"),
+            "Unexpected error message: {}",
+            err
+        );
     }
 }
