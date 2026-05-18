@@ -723,18 +723,8 @@ impl LevelInfoBuilder {
     /// and the other is a native array, the dictionary values must have the same type as the
     /// native array
     fn types_compatible(a: &DataType, b: &DataType) -> bool {
-        // if the Arrow data types are equal, the types are deemed compatible
         if a.equals_datatype(b) {
             return true;
-        }
-
-        // Timestamps with matching unit but UTC-equivalent timezone aliases (e.g. "UTC"
-        // vs "+00:00") are treated as compatible. The on-disk parquet representation
-        // does not change for "UTC" vs "+00:00" so it's fine to accept either as being valid.
-        if let (DataType::Timestamp(au, Some(atz)), DataType::Timestamp(bu, Some(btz))) = (a, b) {
-            if au == bu && is_utc_alias(atz) && is_utc_alias(btz) {
-                return true;
-            }
         }
 
         // get the values out of the dictionaries
@@ -770,16 +760,6 @@ impl LevelInfoBuilder {
             _ => false,
         }
     }
-}
-
-/// Returns true when `tz` is one of the recognized UTC timezone aliases.
-///
-/// Producers of arrow batches use a variety of strings to denote UTC: `"UTC"`,
-/// `"+00:00"` or `"Z"` are all common and semantically  identical. Treating these as
-/// interchangeable lets writers accept batches from upstream systems (DataFusion, Iceberg)
-/// that disagree on the canonical spelling.
-fn is_utc_alias(tz: &str) -> bool {
-    matches!(tz, "UTC" | "+00:00" | "Z")
 }
 
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
@@ -2339,6 +2319,74 @@ mod tests {
                     "{target} should be compatible with {source}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn timestamp_utc_aliases_are_compatible_when_nested() {
+        let leaf_target = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
+        let leaf_source = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+
+        let nests: &[(DataType, DataType)] = &[
+            (
+                DataType::List(Arc::new(Field::new_list_field(leaf_target.clone(), true))),
+                DataType::List(Arc::new(Field::new_list_field(leaf_source.clone(), true))),
+            ),
+            (
+                DataType::LargeList(Arc::new(Field::new_list_field(leaf_target.clone(), true))),
+                DataType::LargeList(Arc::new(Field::new_list_field(leaf_source.clone(), true))),
+            ),
+            (
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(leaf_target.clone(), true)),
+                    3,
+                ),
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(leaf_source.clone(), true)),
+                    3,
+                ),
+            ),
+            (
+                DataType::Struct(vec![Field::new("ts", leaf_target.clone(), true)].into()),
+                DataType::Struct(vec![Field::new("ts", leaf_source.clone(), true)].into()),
+            ),
+            (
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(
+                            vec![
+                                Field::new("keys", DataType::Utf8, false),
+                                Field::new("values", leaf_target.clone(), true),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )),
+                    false,
+                ),
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(
+                            vec![
+                                Field::new("keys", DataType::Utf8, false),
+                                Field::new("values", leaf_source.clone(), true),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )),
+                    false,
+                ),
+            ),
+        ];
+
+        for (target, source) in nests {
+            assert!(
+                LevelInfoBuilder::types_compatible(target, source),
+                "nested UTC alias mismatch should be compatible: {target:?} vs {source:?}",
+            );
         }
     }
 

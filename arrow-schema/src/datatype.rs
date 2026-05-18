@@ -722,6 +722,13 @@ impl DataType {
                         })
                     })
             }
+            // Timestamps with matching unit whose timezones are both recognized UTC
+            // aliases are considered equivalent.
+            (DataType::Timestamp(a_unit, Some(a_tz)), DataType::Timestamp(b_unit, Some(b_tz)))
+                if a_unit == b_unit && a_tz != b_tz =>
+            {
+                is_utc_alias(a_tz) && is_utc_alias(b_tz)
+            }
             _ => self == other,
         }
     }
@@ -872,6 +879,16 @@ impl DataType {
     pub fn new_fixed_size_list(data_type: DataType, size: i32, nullable: bool) -> Self {
         DataType::FixedSizeList(Arc::new(Field::new_list_field(data_type, nullable)), size)
     }
+}
+
+/// Returns true when `tz` is one of the recognized UTC timezone aliases.
+///
+/// Producers of arrow batches use a variety of strings to denote UTC: `"UTC"`,
+/// `"+00:00"` and `"Z"` are all common and semantically
+/// identical. Treating these as interchangeable lets writers accept batches from
+/// upstream systems that disagree on the canonical spelling.
+pub fn is_utc_alias(tz: &str) -> bool {
+    matches!(tz, "UTC" | "+00:00" | "Z")
 }
 
 /// The maximum precision for [DataType::Decimal32] values
