@@ -1936,9 +1936,7 @@ mod tests {
             Some(schema) => Arc::new(SchemaDescriptor::new(Arc::new(schema))),
             None => metadata.file_metadata().schema_descr_ptr(),
         };
-        let reader = TreeBuilder::new()
-            .build(descr, &*row_group_reader)
-            .unwrap();
+        let reader = TreeBuilder::new().build(descr, &*row_group_reader).unwrap();
         let iter = ReaderIter::new(reader, actual_rows + 1).unwrap();
 
         let rows: Vec<Result<Row>> = iter.collect();

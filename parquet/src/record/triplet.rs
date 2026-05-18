@@ -570,8 +570,7 @@ mod tests {
     }
 
     fn open_triplet_iter(file_name: &str, path: &[&str], batch_size: usize) -> TripletIter {
-        let column_path =
-            ColumnPath::from(path.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        let column_path = ColumnPath::from(path.iter().map(|x| x.to_string()).collect::<Vec<_>>());
         let file = get_test_file(file_name);
         let file_reader = SerializedFileReader::new(file).unwrap();
         let metadata = file_reader.metadata();
