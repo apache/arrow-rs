@@ -18,6 +18,24 @@
 //! ALP (Adaptive Lossless floating-Point) Encoding
 //!
 //! Based on the draft Parquet spec: <https://github.com/apache/parquet-format/pull/557>
+//!
+//! # Page layout
+//!
+//! An ALP-encoded page consists of a fixed-size header, an offset array
+//! locating each vector inside the body, and the vector data itself:
+//!
+//! ```text
+//! +-------------+-----------------------------+--------------------------------------+
+//! |   Header    |        Offset Array         |            Vector Data               |
+//! |  (7 bytes)  |   (num_vectors * 4 bytes)   |            (variable)                |
+//! +-------------+------+------+-----+---------+----------+----------+-----+----------+
+//! | Page Header | off0 | off1 | ... | off N-1 | Vector 0 | Vector 1 | ... | Vec N-1  |
+//! |  (7 bytes)  | (4B) | (4B) |     |  (4B)   |(variable)|(variable)|     |(variable)|
+//! +-------------+------+------+-----+---------+----------+----------+-----+----------+
+//! ```
+//!
+//! Each vector entry has the form
+//! `[AlpInfo][ForInfo][PackedValues][ExceptionPositions][ExceptionValues]`.
 
 use crate::util::bit_util::{FromBitpacked, FromBytes};
 
