@@ -315,7 +315,7 @@ pub enum LogicalType {
 }
 
 impl LogicalType {
-    /// doc
+    /// Create a [`LogicalType::Integer`] variant with the given `bit_width` and `is_signed`
     pub fn integer(bit_width: i8, is_signed: bool) -> Self {
         Self::Integer {
             bit_width,
@@ -323,12 +323,12 @@ impl LogicalType {
         }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Decimal`] variant with the given `scale` and `precision`
     pub fn decimal(scale: i32, precision: i32) -> Self {
         Self::Decimal { scale, precision }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Time`] variant with the given `is_adjusted_to_u_t_c` and `unit`
     pub fn time(is_adjusted_to_u_t_c: bool, unit: TimeUnit) -> Self {
         Self::Time {
             is_adjusted_to_u_t_c,
@@ -336,7 +336,7 @@ impl LogicalType {
         }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Timestamp`] variant with the given `is_adjusted_to_u_t_c` and `unit`
     pub fn timestamp(is_adjusted_to_u_t_c: bool, unit: TimeUnit) -> Self {
         Self::Timestamp {
             is_adjusted_to_u_t_c,
@@ -344,19 +344,19 @@ impl LogicalType {
         }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Variant`] variant with the given `specification_version`
     pub fn variant(specification_version: Option<i8>) -> Self {
         Self::Variant {
             specification_version,
         }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Geometry`] variant with the given `crs`
     pub fn geometry(crs: Option<String>) -> Self {
         Self::Geometry { crs }
     }
 
-    /// doc
+    /// Create a [`LogicalType::Geography`] variant with the given `crs` and `algorithm`
     pub fn geography(crs: Option<String>, algorithm: Option<EdgeInterpolationAlgorithm>) -> Self {
         Self::Geography { crs, algorithm }
     }
