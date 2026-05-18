@@ -45,7 +45,10 @@
 
 use std::{fmt, io};
 
-use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
+use crate::basic::{
+    ConvertedType, DecimalType, GeographyType, GeometryType, IntType, LogicalType, TimeUnit,
+    Type as PhysicalType, VariantType,
+};
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::schema::types::Type;
 
@@ -284,30 +287,28 @@ fn print_logical_and_converted(
 ) -> String {
     match logical_type {
         Some(logical_type) => match logical_type {
-            LogicalType::Integer {
+            LogicalType::Integer(IntType {
                 bit_width,
                 is_signed,
-            } => {
+            }) => {
                 format!("INTEGER({bit_width},{is_signed})")
             }
-            LogicalType::Decimal { scale, precision } => {
+            LogicalType::Decimal(DecimalType { scale, precision }) => {
                 format!("DECIMAL({precision},{scale})")
             }
-            LogicalType::Timestamp {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => {
+            LogicalType::Timestamp(tt) => {
                 format!(
                     "TIMESTAMP({},{})",
-                    print_timeunit(unit),
-                    is_adjusted_to_u_t_c
+                    print_timeunit(&tt.unit),
+                    tt.is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::Time {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => {
-                format!("TIME({},{})", print_timeunit(unit), is_adjusted_to_u_t_c)
+            LogicalType::Time(tt) => {
+                format!(
+                    "TIME({},{})",
+                    print_timeunit(&tt.unit),
+                    tt.is_adjusted_to_u_t_c
+                )
             }
             LogicalType::Date => "DATE".to_string(),
             LogicalType::Bson => "BSON".to_string(),
@@ -318,17 +319,17 @@ fn print_logical_and_converted(
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
-            LogicalType::Variant {
+            LogicalType::Variant(VariantType {
                 specification_version,
-            } => format!("VARIANT({specification_version:?})"),
-            LogicalType::Geometry { crs } => {
+            }) => format!("VARIANT({specification_version:?})"),
+            LogicalType::Geometry(GeometryType { crs }) => {
                 if let Some(crs) = crs {
                     format!("GEOMETRY({crs})")
                 } else {
                     "GEOMETRY".to_string()
                 }
             }
-            LogicalType::Geography { crs, algorithm } => {
+            LogicalType::Geography(GeographyType { crs, algorithm }) => {
                 let algorithm = algorithm.unwrap_or_default();
                 if let Some(crs) = crs {
                     format!("GEOGRAPHY({algorithm}, {crs})")

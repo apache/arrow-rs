@@ -260,6 +260,85 @@ macro_rules! thrift_union {
     }
 }
 
+/// Macro used to generate Rust enums for Thrift unions where variants are a mix of unit and
+/// tuple types. This version allows for unknown variants for forwards compatibility.
+///
+/// Use of this macro requires modifying the thrift IDL. For variants with empty structs as their
+/// type, delete the typename (i.e. `1: EmptyStruct Var1;` becomes `1: Var1`). For variants with a
+/// non-empty type, the typename must be contained within parens (e.g. `1: MyType Var1;` becomes
+/// `1: (MyType) Var1;`).
+///
+/// This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
+///
+/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[macro_export]
+#[allow(clippy::crate_in_macro_def)]
+macro_rules! thrift_union_with_unknown {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
+        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[allow(non_camel_case_types)]
+        #[allow(non_snake_case)]
+        #[allow(missing_docs)]
+        pub enum $identifier $(<$lt>)? {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name $( ( $crate::__thrift_union_type!{$field_type $($field_lt)? $($element_type)?} ) )?),*,
+            _Unknown {
+                /// The field id encountered when parsing the unknown variant.
+                field_id: i16,
+            },
+        }
+
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
+                let field_ident = prot.read_field_begin(0)?;
+                if field_ident.field_type == FieldType::Stop {
+                    return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
+                }
+                let ret = match field_ident.id {
+                    $($field_id => {
+                        let val = $crate::__thrift_read_variant!(prot, $field_name $($field_type $($element_type)?)?);
+                        val
+                    })*
+                    _ => {
+                        prot.skip(field_ident.field_type)?;
+                        Self::_Unknown {
+                            field_id: field_ident.id,
+                        }
+                    }
+                };
+                let field_ident = prot.read_field_begin(field_ident.id)?;
+                if field_ident.field_type != FieldType::Stop {
+                    return Err(general_err!(
+                        concat!("Received multiple fields for union from remote {}", stringify!($identifier))
+                    ));
+                }
+                Ok(ret)
+            }
+        }
+
+        impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                match self {
+                    $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
+                      $crate::__thrift_write_variant_rhs!($field_id $($field_type)?, writer, variant_val),)*
+                    Self::_Unknown{..} => return Err(general_err!("Trying to write unknown variant")),
+                };
+                writer.write_struct_end()
+            }
+        }
+
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
+    }
+}
+
 /// Macro used to generate Rust structs from a Thrift `struct` definition.
 ///
 /// Note:
