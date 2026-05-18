@@ -18,10 +18,12 @@
 //! Provides utility functions for concatenation of elements in arrays.
 use std::sync::Arc;
 
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{
+    BinaryViewBuilder, BufferBuilder, FixedSizeBinaryBuilder, StringViewBuilder,
+};
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 
@@ -168,6 +170,129 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     Ok(unsafe { builder.build_unchecked() }.into())
 }
 
+/// Returns the elementwise concatenation of a [`FixedSizeBinaryArray`].
+///
+/// The result has `value_length = left.value_length() + right.value_length()`.
+/// An index is null if either input is null at that position.
+///
+/// An error will be returned if `left` and `right` have different lengths.
+pub fn concat_elements_fixed_size_binary(
+    left: &FixedSizeBinaryArray,
+    right: &FixedSizeBinaryArray,
+) -> Result<FixedSizeBinaryArray, ArrowError> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let left_size = left.value_length() as usize;
+    let right_size = right.value_length() as usize;
+    let output_size = left_size + right_size;
+
+    // Pre-compute combined null bitmap so the per-row NULL check is efficient
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_size as i32);
+    let mut buffer = MutableBuffer::with_capacity(output_size);
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
+            buffer.clear();
+            buffer.extend_from_slice(left.value(i));
+            buffer.extend_from_slice(right.value(i));
+            result.append_value(&buffer)?;
+        }
+    }
+
+    Ok(result.finish())
+}
+
+/// Concatenates two `BinaryViewArray`s element-wise.
+/// If either element is `Null`, the result element is also `Null`.
+///
+/// # Errors
+/// - Returns an error if the input arrays have different lengths.
+/// - Returns an error if any concatenated value exceeds `u32::MAX` in length.
+pub fn concat_elements_binary_view_array(
+    left: &BinaryViewArray,
+    right: &BinaryViewArray,
+) -> Result<BinaryViewArray, ArrowError> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+    let mut result = BinaryViewBuilder::with_capacity(left.len());
+
+    // Avoid reallocations by writing to a reused buffer
+    let mut buffer = MutableBuffer::new(0);
+
+    // Pre-compute combined null bitmap, so the per-row NULL check is efficient
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
+            buffer.clear();
+            buffer.extend_from_slice(left.value(i));
+            buffer.extend_from_slice(right.value(i));
+            result.try_append_value(&buffer)?;
+        }
+    }
+    Ok(result.finish())
+}
+
+/// Concatenates two `StringViewArray`s element-wise.
+/// If either element is `Null`, the result element is also `Null`.
+///
+/// # Errors
+/// - Returns an error if the input arrays have different lengths.
+/// - Returns an error if any concatenated value exceeds `u32::MAX` in length.
+/// - Returns an error if concatenated strings do not result in a proper UTF-8 string
+// Cannot reuse code with `GenericByteViewBuilder` since `try_append_value` works with
+// `AsRef<T::Native>`, and there is no conversion from `ByteViewType` to this or [u8]
+pub fn concat_elements_string_view_array(
+    left: &StringViewArray,
+    right: &StringViewArray,
+) -> Result<StringViewArray, ArrowError> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let mut result = StringViewBuilder::with_capacity(left.len());
+
+    // Avoid reallocations by writing to a reused buffer
+    let mut buffer: Vec<u8> = Vec::new();
+
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
+            buffer.clear();
+            buffer.extend_from_slice(left.value(i).as_bytes());
+            buffer.extend_from_slice(right.value(i).as_bytes());
+            let s = std::str::from_utf8(&buffer).map_err(|_| {
+                ArrowError::ComputeError("Concatenated values are not valid UTF-8".into())
+            })?;
+            result.try_append_value(s)?;
+        }
+    }
+    Ok(result.finish())
+}
+
 /// Returns the elementwise concatenation of [`Array`]s.
 ///
 /// # Errors
@@ -185,22 +310,43 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
         (DataType::Utf8, DataType::Utf8) => {
             let left = left.as_any().downcast_ref::<StringArray>().unwrap();
             let right = right.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right).unwrap()))
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
             let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right).unwrap()))
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
         }
         (DataType::Binary, DataType::Binary) => {
             let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
             let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right).unwrap()))
+            Ok(Arc::new(concat_element_binary(left, right)?))
         }
         (DataType::LargeBinary, DataType::LargeBinary) => {
             let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
             let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right).unwrap()))
+            Ok(Arc::new(concat_element_binary(left, right)?))
+        }
+        (DataType::BinaryView, DataType::BinaryView) => {
+            let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
+        }
+        (DataType::Utf8View, DataType::Utf8View) => {
+            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
+        }
+        (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
+            let left = left
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            let right = right
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            Ok(Arc::new(concat_elements_fixed_size_binary(left, right)?))
         }
         // unimplemented
         _ => Err(ArrowError::NotYetImplemented(format!(
@@ -213,6 +359,8 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::Buffer;
+
     #[test]
     fn test_string_concat() {
         let left = [Some("foo"), Some("bar"), None]
@@ -356,6 +504,121 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_concat() {
+        let left = FixedSizeBinaryArray::from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
+        let right = FixedSizeBinaryArray::from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+
+        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+
+        let expected = FixedSizeBinaryArray::from(vec![None, Some(b"baryyy" as &[u8]), None]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_concat_no_null() {
+        let left = FixedSizeBinaryArray::from(vec![b"ab" as &[u8], b"cd"]);
+        let right = FixedSizeBinaryArray::from(vec![b"12" as &[u8], b"34"]);
+
+        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+
+        let expected = FixedSizeBinaryArray::from(vec![b"ab12" as &[u8], b"cd34"]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_concat_error() {
+        let left = FixedSizeBinaryArray::from(vec![b"ab" as &[u8], b"cd"]);
+        let right = FixedSizeBinaryArray::from(vec![b"12" as &[u8]]);
+
+        let output = concat_elements_fixed_size_binary(&left, &right);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Compute error: Arrays must have the same length: 2 != 1".to_string()
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_binary_concat_empty() {
+        let left = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+        let right = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+
+        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+
+        let expected = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_binary_view_concat() {
+        let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
+        let right = BinaryViewArray::from_iter(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+
+        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+
+        let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_string_view_concat() {
+        let left = StringViewArray::from_iter(vec![Some("foo"), Some("bar"), None]);
+        let right = StringViewArray::from_iter(vec![None, Some("yyy"), Some("zzz")]);
+
+        let output = concat_elements_string_view_array(&left, &right).unwrap();
+
+        let expected = StringViewArray::from_iter(vec![None, Some("baryyy"), None]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_binary_view_concat_no_null() {
+        let left = BinaryViewArray::from_iter(vec![
+            Some(b"foo" as &[u8]),
+            Some(b"bar"),
+            Some(b""),
+            Some(b"baz"),
+        ]);
+        let right = BinaryViewArray::from_iter(vec![
+            Some(b"bar" as &[u8]),
+            Some(b"baz"),
+            Some(b""),
+            Some(b""),
+        ]);
+
+        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+
+        let expected = BinaryViewArray::from_iter(vec![
+            Some(b"foobar" as &[u8]),
+            Some(b"barbaz"),
+            Some(b""),
+            Some(b"baz"),
+        ]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_binary_view_concat_error() {
+        let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar")]);
+        let right = BinaryViewArray::from_iter(vec![Some(b"baz" as &[u8])]);
+
+        let output = concat_elements_binary_view_array(&left, &right);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Compute error: Arrays must have the same length: 2 != 1".to_string()
+        );
+    }
+
+    #[test]
+    fn test_binary_view_concat_empty() {
+        let left = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+        let right = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+
+        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+        let expected = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
     fn test_concat_dyn_same_type() {
         // test for StringArray
         let left = StringArray::from(vec![Some("foo"), Some("bar"), None]);
@@ -397,6 +660,26 @@ mod tests {
             .into_data()
             .into();
         let expected = LargeBinaryArray::from_opt_vec(vec![None, Some(b"baryyy"), None]);
+        assert_eq!(output, expected);
+
+        // test for BinaryViewArray
+        let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
+        let right = BinaryViewArray::from_iter(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let output: BinaryViewArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
+        assert_eq!(output, expected);
+
+        // test for FixedSizeBinaryArray
+        let left = FixedSizeBinaryArray::from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
+        let right = FixedSizeBinaryArray::from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let output: FixedSizeBinaryArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = FixedSizeBinaryArray::from(vec![None, Some(b"baryyy" as &[u8]), None]);
         assert_eq!(output, expected);
     }
 

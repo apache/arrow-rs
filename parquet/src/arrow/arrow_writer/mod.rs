@@ -765,6 +765,26 @@ impl std::fmt::Debug for ArrowColumnChunk {
 }
 
 impl ArrowColumnChunk {
+    /// Returns the [`ColumnCloseResult`] produced when the chunk was closed.
+    ///
+    /// Exposes encoding information, collected statistics, and the optional
+    /// [`ColumnIndexMetaData`](crate::file::page_index::column_index::ColumnIndexMetaData)
+    /// / [`OffsetIndexMetaData`](crate::file::page_index::offset_index::OffsetIndexMetaData)
+    /// gathered for the column chunk.
+    pub fn close(&self) -> &ColumnCloseResult {
+        &self.close
+    }
+
+    /// Returns a mutable reference to the [`ColumnCloseResult`].
+    ///
+    /// This allows callers to mutate the close result before the chunk is
+    /// appended to a row group — for example, clearing `column_index` or
+    /// `bloom_filter` based on a dynamic rule that inspects the encodings and
+    /// collected page statistics.
+    pub fn close_mut(&mut self) -> &mut ColumnCloseResult {
+        &mut self.close
+    }
+
     /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
     pub fn append_to_row_group<W: Write + Send>(
         self,
@@ -900,8 +920,11 @@ impl ArrowColumnWriter {
         chunker: &mut ContentDefinedChunker,
     ) -> Result<()> {
         let levels = &col.0;
-        let chunks =
-            chunker.get_arrow_chunks(levels.def_levels(), levels.rep_levels(), levels.array())?;
+        let chunks = chunker.get_arrow_chunks(
+            levels.def_level_data().as_ref(),
+            levels.rep_level_data().as_ref(),
+            levels.array(),
+        )?;
 
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
@@ -1364,10 +1387,15 @@ fn write_leaf(
         }
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
-            typed.write_batch(
-                get_bool_array_slice(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
+            let values = get_bool_array_slice(array, indices);
+            typed.write_batch_internal(
+                values.as_slice(),
+                None,
+                levels.def_level_data().as_ref(),
+                levels.rep_level_data().as_ref(),
+                None,
+                None,
+                None,
             )
         }
         ColumnWriter::Int64ColumnWriter(typed) => {
@@ -1518,7 +1546,15 @@ fn write_leaf(
                     ));
                 }
             };
-            typed.write_batch(bytes.as_slice(), levels.def_levels(), levels.rep_levels())
+            typed.write_batch_internal(
+                bytes.as_slice(),
+                None,
+                levels.def_level_data().as_ref(),
+                levels.rep_level_data().as_ref(),
+                None,
+                None,
+                None,
+            )
         }
     }
 }
@@ -1531,8 +1567,8 @@ fn write_primitive<E: ColumnValueEncoder>(
     writer.write_batch_internal(
         values,
         Some(levels.non_null_indices()),
-        levels.def_levels(),
-        levels.rep_levels(),
+        levels.def_level_data().as_ref(),
+        levels.rep_level_data().as_ref(),
         None,
         None,
         None,
@@ -2762,7 +2798,7 @@ mod tests {
                             .set_bloom_filter_enabled(bloom_filter)
                             .set_bloom_filter_position(bloom_filter_position);
                         if let Some(ndv) = bloom_filter_ndv {
-                            builder = builder.set_bloom_filter_ndv(ndv);
+                            builder = builder.set_bloom_filter_max_ndv(ndv);
                         }
                         let props = builder.build();
 
@@ -4561,6 +4597,44 @@ mod tests {
     }
 
     #[test]
+    fn test_arrow_writer_skip_path_in_schema() {
+        let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
+        let file_schema = Arc::new(batch_schema.clone());
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        // default options should still write path_in_schema
+        let skip_options = ArrowWriterOptions::new();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buf, file_schema.clone(), skip_options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // override to not write path_in_schema
+        let skip_options = ArrowWriterOptions::new().with_properties(
+            WriterProperties::builder()
+                .set_write_path_in_schema(false)
+                .build(),
+        );
+
+        let mut buf2 = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buf2, file_schema.clone(), skip_options)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // buf2 should be a bit smaller due to lack of path_in_schema
+        assert!(buf.len() > buf2.len());
+    }
+
+    #[test]
     fn mismatched_schemas() {
         let batch_schema = Schema::new(vec![Field::new("count", DataType::Int32, false)]);
         let file_schema = Arc::new(Schema::new(vec![Field::new(
@@ -5065,5 +5139,55 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    fn arrow_column_chunk_close_mut_drops_column_index() {
+        use crate::arrow::ArrowSchemaConverter;
+        use crate::file::writer::SerializedFileWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(props.coerce_types())
+            .convert(&schema)
+            .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+        let mut col_writers = factory.create_column_writers(0).unwrap();
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
+        for leaves in compute_leaves(schema.field(0), &arr).unwrap() {
+            col_writers[0].write(&leaves).unwrap();
+        }
+        let mut chunk = col_writers.pop().unwrap().close().unwrap();
+
+        // Immutable accessor exposes the close result produced at close time.
+        assert!(
+            chunk.close().column_index.is_some(),
+            "EnabledStatistics::Page should produce a column_index"
+        );
+
+        // Mutable accessor lets callers drop the page-level index before append.
+        chunk.close_mut().column_index = None;
+        assert!(chunk.close().column_index.is_none());
+
+        let mut rg = writer.next_row_group().unwrap();
+        chunk.append_to_row_group(&mut rg).unwrap();
+        rg.close().unwrap();
+        let file_meta = writer.close().unwrap();
+
+        // After dropping column_index, the resulting file records no column
+        // index offset/length for this chunk.
+        let cc = file_meta.row_group(0).column(0);
+        assert!(cc.column_index_range().is_none());
     }
 }

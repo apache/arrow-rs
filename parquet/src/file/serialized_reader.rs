@@ -2117,7 +2117,7 @@ mod tests {
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Received empty union from remote ColumnOrder"
+            "Parquet error: Expected list element type of Struct but got List"
         );
     }
 
