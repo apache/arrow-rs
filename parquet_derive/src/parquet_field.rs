@@ -693,18 +693,18 @@ impl Type {
 
         match last_part.trim() {
             "bool" => quote! { None },
-            "u8" => quote! { Some(LogicalType::int(8, false)) },
-            "u16" => quote! { Some(LogicalType::int(16, false)) },
-            "u32" => quote! { Some(LogicalType::int(32, false)) },
-            "u64" => quote! { Some(LogicalType::int(64, false)) },
-            "i8" => quote! { Some(LogicalType::int(8, true)) },
-            "i16" => quote! { Some(LogicalType::int(16, true)) },
+            "u8" => quote! { Some(LogicalType::integer(8, false)) },
+            "u16" => quote! { Some(LogicalType::integer(16, false)) },
+            "u32" => quote! { Some(LogicalType::integer(32, false)) },
+            "u64" => quote! { Some(LogicalType::integer(64, false)) },
+            "i8" => quote! { Some(LogicalType::integer(8, true)) },
+            "i16" => quote! { Some(LogicalType::integer(16, true)) },
             "i32" | "i64" => quote! { None },
             "usize" => {
-                quote! { Some(LogicalType::int(usize::BITS as i8, false)) }
+                quote! { Some(LogicalType::integer(usize::BITS as i8, false)) }
             }
             "isize" => {
-                quote! { Some(LogicalType::int(usize::BITS as i8, true)) }
+                quote! { Some(LogicalType::integer(usize::BITS as i8, true)) }
             }
             "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
