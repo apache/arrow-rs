@@ -19,11 +19,11 @@ use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
 use arrow_array::cast::as_primitive_array;
 use arrow_array::types::Float32Type;
-use arrow_array::{Array, ArrayRef, Float32Array, RecordBatch};
+use arrow_array::{Array, RecordBatch};
+use arrow_csv::ReaderBuilder as CsvReaderBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -32,10 +32,6 @@ fn test_read_f32_alp() {
     let data_dir = PathBuf::from(parquet_test_data());
     let parquet_path = data_dir.join("alp_float_arade.parquet");
     let expected_csv_path = data_dir.join("alp_arade_expect.csv");
-    if !parquet_path.exists() || !expected_csv_path.exists() {
-        eprintln!("Skipping ALP test files not found");
-        return;
-    }
 
     let expected = read_expected_csv_batch(&expected_csv_path);
     let actual = read_parquet_batch(&parquet_path);
@@ -93,45 +89,12 @@ fn read_parquet_batch(path: &PathBuf) -> RecordBatch {
 
 fn read_expected_csv_batch(path: &PathBuf) -> RecordBatch {
     let file = File::open(path).unwrap();
-    let mut lines = BufReader::new(file).lines();
-
-    let header = lines.next().expect("expected csv header line").unwrap();
-    assert_eq!(
-        header.trim(),
-        "value1,value2,value3,value4",
-        "unexpected csv header"
-    );
-
-    let mut c0 = Vec::new();
-    let mut c1 = Vec::new();
-    let mut c2 = Vec::new();
-    let mut c3 = Vec::new();
-    for (line_idx, line) in lines.enumerate() {
-        let line = line.unwrap();
-        if line.trim().is_empty() {
-            continue;
-        }
-        let values: Vec<_> = line.split(',').map(str::trim).collect();
-        assert_eq!(
-            values.len(),
-            4,
-            "wrong csv column count at line {}",
-            line_idx + 2
-        );
-        c0.push(values[0].parse::<f32>().unwrap());
-        c1.push(values[1].parse::<f32>().unwrap());
-        c2.push(values[2].parse::<f32>().unwrap());
-        c3.push(values[3].parse::<f32>().unwrap());
-    }
-
-    RecordBatch::try_new(
-        alp_schema(),
-        vec![
-            Arc::new(Float32Array::from(c0)) as ArrayRef,
-            Arc::new(Float32Array::from(c1)) as ArrayRef,
-            Arc::new(Float32Array::from(c2)) as ArrayRef,
-            Arc::new(Float32Array::from(c3)) as ArrayRef,
-        ],
-    )
-    .unwrap()
+    let schema = alp_schema();
+    let reader = CsvReaderBuilder::new(schema.clone())
+        .with_header(true)
+        .build(file)
+        .unwrap();
+    let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+    assert!(!batches.is_empty(), "expected non-empty csv batch set");
+    concat_batches(&schema, &batches).unwrap()
 }
