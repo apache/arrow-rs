@@ -218,8 +218,8 @@ pub struct IntType {
 
 thrift_struct!(
 pub struct VariantType {
-  // The version of the variant specification that the variant was
-  // written with.
+  /// The version of the variant specification that the variant was
+  /// written with.
   1: optional i8 specification_version
 }
 );
