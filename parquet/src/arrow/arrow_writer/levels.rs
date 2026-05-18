@@ -730,10 +730,7 @@ impl LevelInfoBuilder {
 
         // Timestamps with matching unit but UTC-equivalent timezone aliases (e.g. "UTC"
         // vs "+00:00") are treated as compatible. The on-disk parquet representation
-        // depends only on whether the timezone is non-empty (see
-        // `arrow_to_parquet_type` in `schema/mod.rs`), so accepting these aliases
-        // does not change what is written. This matches DataFusion's
-        // `temporal_coercion_strict_timezone` rule.
+        // does not change for "UTC" vs "+00:00" so it's fine to accept either as being valid.
         if let (DataType::Timestamp(au, Some(atz)), DataType::Timestamp(bu, Some(btz))) = (a, b) {
             if au == bu && is_utc_alias(atz) && is_utc_alias(btz) {
                 return true;
@@ -778,9 +775,9 @@ impl LevelInfoBuilder {
 /// Returns true when `tz` is one of the recognized UTC timezone aliases.
 ///
 /// Producers of arrow batches use a variety of strings to denote UTC: `"UTC"`,
-/// `"+00:00"` or `"Z"` are all common and semantically
-/// identical. Treating these as interchangeable lets writers accept batches from
-/// upstream systems (DataFusion, Iceberg) that disagree on the canonical spelling.
+/// `"+00:00"` or `"Z"` are all common and semantically  identical. Treating these as
+/// interchangeable lets writers accept batches from upstream systems (DataFusion, Iceberg)
+/// that disagree on the canonical spelling.
 fn is_utc_alias(tz: &str) -> bool {
     matches!(tz, "UTC" | "+00:00" | "Z")
 }
