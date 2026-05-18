@@ -701,16 +701,10 @@ impl Type {
             "i16" => quote! { Some(LogicalType::int(16, true)) },
             "i32" | "i64" => quote! { None },
             "usize" => {
-                quote! { Some(LogicalType::int(
-                    usize::BITS as i8,
-                    false
-                )) }
+                quote! { Some(LogicalType::int(usize::BITS as i8, false)) }
             }
             "isize" => {
-                quote! { Some(LogicalType::int(
-                    usize::BITS as i8,
-                    true
-                )) }
+                quote! { Some(LogicalType::int(usize::BITS as i8, true)) }
             }
             "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
