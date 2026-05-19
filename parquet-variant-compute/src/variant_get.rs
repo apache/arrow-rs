@@ -421,12 +421,16 @@ fn can_use_perfect_shredding_arrow_cast(from_type: &DataType, to_type: &DataType
         Utf8 | LargeUtf8 | Utf8View => matches!(to_type, Utf8 | LargeUtf8 | Utf8View),
         Binary | LargeBinary | BinaryView => matches!(to_type, Binary | LargeBinary | BinaryView),
         FixedSizeBinary(16) => matches!(to_type, FixedSizeBinary(16)),
-        List(_) | LargeList(_) | ListView(_) | LargeListView(_) => {
-            matches!(
-                to_type,
-                List(_) | LargeList(_) | ListView(_) | LargeListView(_)
-            )
-        }
+        List(_) | LargeList(_) | ListView(_) | LargeListView(_) => match (from_type, to_type) {
+            (
+                List(from_field)
+                | LargeList(from_field)
+                | ListView(from_field)
+                | LargeListView(from_field),
+                List(to_field) | LargeList(to_field) | ListView(to_field) | LargeListView(to_field),
+            ) => can_use_perfect_shredding_arrow_cast(from_field.data_type(), to_field.data_type()),
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -520,7 +524,9 @@ mod test {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{GetOptions, try_perfect_shredding, variant_get};
+    use super::{
+        GetOptions, can_use_perfect_shredding_arrow_cast, try_perfect_shredding, variant_get,
+    };
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{
         ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant,
@@ -4619,6 +4625,23 @@ mod test {
             let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
             assert_eq!(&index_result, &index_expected);
         }
+    }
+
+    #[test]
+    fn test_perfect_shredding_list_cast_gate_uses_variant_element_semantics() {
+        let int64_item = Arc::new(Field::new("item", DataType::Int64, true));
+        let utf8_item = Arc::new(Field::new("item", DataType::Utf8, true));
+        assert!(!can_use_perfect_shredding_arrow_cast(
+            &DataType::List(int64_item),
+            &DataType::List(utf8_item),
+        ));
+
+        let int32_item = Arc::new(Field::new("item", DataType::Int32, true));
+        let int64_item = Arc::new(Field::new("item", DataType::Int64, true));
+        assert!(can_use_perfect_shredding_arrow_cast(
+            &DataType::List(int32_item),
+            &DataType::List(int64_item),
+        ));
     }
 
     #[test]
