@@ -19,7 +19,7 @@
 //!
 //! Normal predicate pushdown decodes predicate columns first, builds a
 //! `RowSelection`, and then decodes output columns for selected rows. The
-//! The post-filter path in this module instead decodes the union of predicate and
+//! post-filter path in this module instead decodes the union of predicate and
 //! output columns once and applies predicates after decode.
 //!
 //! ```text

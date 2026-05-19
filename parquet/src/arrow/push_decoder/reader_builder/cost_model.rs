@@ -17,11 +17,14 @@
 
 //! Runtime post-filter cost decisions for push decoder row groups.
 //!
-//! The cost model is intentionally adaptive rather than purely static. The first
-//! eligible row group is evaluated with predicate pushdown so the reader can
-//! observe the actual `RowSelection` shape produced by the predicate chain.
-//! Later row groups may then switch to post-filter execution if the observed
-//! shape suggests pushdown is doing extra work without pruning enough rows.
+//! The cost model is intentionally adaptive rather than purely static. There
+//! are two ways to enter post-filter execution:
+//!
+//! * a narrow static rule starts there for variable-width predicate columns,
+//!   where building fragmented pushdown selections is commonly expensive
+//! * the first eligible row group runs predicate pushdown, records the actual
+//!   `RowSelection` shape, and lets later row groups use post-filter if that
+//!   shape suggests pushdown is doing extra work without pruning enough rows
 //!
 //! ```text
 //! Start
@@ -47,7 +50,6 @@ use crate::arrow::arrow_reader::selection::{
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::basic::Type as PhysicalType;
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(super) enum RowGroupCostModelState {
     /// Collect row-selection shape from early row groups before choosing a mode.
@@ -55,7 +57,7 @@ pub(super) enum RowGroupCostModelState {
     /// Predicate pushdown remains the execution mode for this reader.
     UsePushdown,
     /// Later row groups should decode once and evaluate predicates after decode.
-    UsePostFilter { reason: CostModelDecisionReason },
+    UsePostFilter,
 }
 
 impl Default for RowGroupCostModelState {
@@ -75,10 +77,8 @@ impl RowGroupReaderBuilder {
         //   predicates after decode changes where short-circuiting can happen.
         // * virtual columns are not read from Parquet pages and need their
         //   existing projection path.
-        matches!(
-            self.cost_model_state,
-            RowGroupCostModelState::UsePostFilter { .. }
-        ) && self.post_filter_cost_model_enabled
+        matches!(self.cost_model_state, RowGroupCostModelState::UsePostFilter)
+            && self.post_filter_cost_model_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && budget.is_unbounded()
             && !self.has_virtual_columns()
@@ -108,7 +108,7 @@ impl RowGroupReaderBuilder {
         self.build_post_filter_read_projection(filter)
     }
 
-    pub(super) fn should_start_with_post_filter_for_predicate_cost(
+    pub(super) fn should_start_with_post_filter_for_variable_width_predicate(
         &self,
         filter: &RowFilter,
         row_group_idx: usize,
@@ -208,7 +208,7 @@ impl RowGroupReaderBuilder {
         self.metrics.record_cost_model_trigger(reason);
 
         if prefers_post_filter && self.post_filter_cost_model_supported(budget) {
-            self.cost_model_state = RowGroupCostModelState::UsePostFilter { reason };
+            self.cost_model_state = RowGroupCostModelState::UsePostFilter;
         } else {
             self.cost_model_state = RowGroupCostModelState::UsePushdown;
         }

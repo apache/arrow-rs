@@ -238,3 +238,362 @@ fn coalesce_adjacent_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::ProjectionMask;
+    use crate::arrow::arrow_reader::selection::LoadedRowRanges;
+    use crate::arrow::arrow_reader::{
+        ReadPlanBuilder, RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector,
+    };
+    use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+
+    #[test]
+    fn test_resolve_selection_policy_preserves_mask_choice() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(99),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                plan_builder,
+                &ProjectionMask::all(),
+                None,
+                101
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_resolve_selection_policy_preserves_selector_choice() {
+        let selection = RowSelection::from(vec![RowSelector::select(128)]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                plan_builder,
+                &ProjectionMask::all(),
+                None,
+                128
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_resolve_selection_policy_respects_explicit_policy() {
+        let selection = RowSelection::from(vec![RowSelector::select(1), RowSelector::skip(1)]);
+        let mask_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Mask);
+        let selector_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Selectors);
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(mask_builder, &ProjectionMask::all(), None, 2)
+                .row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                selector_builder,
+                &ProjectionMask::all(),
+                None,
+                2
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_sparse_loaded_ranges_force_selectors() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_dense_loaded_ranges_preserve_mask() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_explicit_mask_keeps_sparse_loaded_ranges() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Mask);
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+
+        let mut plan = plan_builder.build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected mask cursor");
+        };
+        assert!(cursor.is_sparse());
+    }
+
+    #[test]
+    fn test_loaded_ranges_intersects_many_ranges_across_projected_columns() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(1),
+            RowSelector::skip(39),
+            RowSelector::select(1),
+            RowSelector::skip(39),
+            RowSelector::select(1),
+            RowSelector::skip(9),
+        ]);
+        let offset_index = vec![
+            offset_index_column(&[0, 20, 40, 60, 80]),
+            offset_index_column(&[0, 15, 35, 55, 75]),
+            offset_index_column(&[0, 10, 30, 50, 70, 90]),
+        ];
+
+        let loaded = loaded_ranges_for_projection(
+            Some(&selection),
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            100,
+        );
+
+        assert_eq!(
+            loaded,
+            Some(LoadedRowRanges::new(vec![10..15, 50..55, 90..100], 100))
+        );
+    }
+
+    #[test]
+    fn test_auto_expensive_fragmented_output_prefers_selectors() {
+        let selection = q38_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_800,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_expensive_fragmented_output_prefers_selectors_without_selector_count_gate() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            52,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_cheap_fragmented_output_keeps_mask() {
+        let selection = q38_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 8.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_800,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_auto_moderate_selectivity_expensive_output_keeps_mask() {
+        let selection = q26_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_200,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    fn q38_like_fragmented_selection() -> RowSelection {
+        let mut selectors = Vec::new();
+        for _ in 0..600 {
+            selectors.push(RowSelector::select(1));
+            selectors.push(RowSelector::skip(12));
+        }
+        RowSelection::from(selectors)
+    }
+
+    fn q26_like_fragmented_selection() -> RowSelection {
+        let mut selectors = Vec::new();
+        for _ in 0..600 {
+            selectors.push(RowSelector::select(2));
+            selectors.push(RowSelector::skip(10));
+        }
+        RowSelection::from(selectors)
+    }
+
+    fn sparse_test_offset_index() -> Vec<OffsetIndexMetaData> {
+        vec![OffsetIndexMetaData {
+            page_locations: vec![
+                PageLocation {
+                    offset: 0,
+                    compressed_page_size: 10,
+                    first_row_index: 0,
+                },
+                PageLocation {
+                    offset: 10,
+                    compressed_page_size: 10,
+                    first_row_index: 2,
+                },
+                PageLocation {
+                    offset: 20,
+                    compressed_page_size: 10,
+                    first_row_index: 4,
+                },
+            ],
+            unencoded_byte_array_data_bytes: None,
+        }]
+    }
+
+    fn offset_index_column(first_rows: &[i64]) -> OffsetIndexMetaData {
+        OffsetIndexMetaData {
+            page_locations: first_rows
+                .iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index: *first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
+        }
+    }
+}

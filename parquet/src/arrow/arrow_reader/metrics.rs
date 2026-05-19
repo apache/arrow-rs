@@ -260,11 +260,6 @@ impl ArrowReaderMetrics {
         self.load(|inner| &inner.cost_model_post_filter_row_group_count)
     }
 
-    /// Cost model: number of times cost modeling was disabled by a forced policy
-    pub fn cost_model_forced_policy_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.cost_model_forced_policy_count)
-    }
-
     /// Cost model: number of incomplete observation-window decisions
     pub fn cost_model_observation_incomplete_count(&self) -> Option<usize> {
         self.load(|inner| &inner.cost_model_observation_incomplete_count)
@@ -409,7 +404,6 @@ impl ArrowReaderMetrics {
             CostModelDecisionReason::PushdownStillPreferred => {
                 &inner.cost_model_pushdown_still_preferred_count
             }
-            CostModelDecisionReason::ForcedPolicy => &inner.cost_model_forced_policy_count,
         };
         counter.fetch_add(1, Ordering::Relaxed);
     }
@@ -510,8 +504,6 @@ pub struct ArrowReaderMetricsInner {
     cost_model_pushdown_row_group_count: AtomicUsize,
     /// Number of row groups executed with post-filter
     cost_model_post_filter_row_group_count: AtomicUsize,
-    /// Number of cost-model decisions disabled by forced policy
-    cost_model_forced_policy_count: AtomicUsize,
     /// Number of incomplete cost-model observations
     cost_model_observation_incomplete_count: AtomicUsize,
     /// Number of cost-model decisions that kept pushdown
@@ -551,7 +543,6 @@ impl ArrowReaderMetricsInner {
             cost_model_observed_row_group_count: AtomicUsize::new(0),
             cost_model_pushdown_row_group_count: AtomicUsize::new(0),
             cost_model_post_filter_row_group_count: AtomicUsize::new(0),
-            cost_model_forced_policy_count: AtomicUsize::new(0),
             cost_model_observation_incomplete_count: AtomicUsize::new(0),
             cost_model_pushdown_still_preferred_count: AtomicUsize::new(0),
             cost_model_high_selectivity_no_pruning_count: AtomicUsize::new(0),

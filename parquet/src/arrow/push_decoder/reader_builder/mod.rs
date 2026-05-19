@@ -21,23 +21,19 @@ mod filter;
 mod selection_policy;
 
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::{ArrowReaderMetrics, ArrowReaderPhase};
 use crate::arrow::arrow_reader::selection::RowGroupExecutionMode;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy, RowSelector,
 };
-use crate::arrow::in_memory_row_group::ColumnChunkData;
+use crate::arrow::in_memory_row_group::{ColumnChunkData, InMemoryRowGroup};
 use crate::arrow::push_decoder::reader_builder::cost_model::RowGroupCostModelState;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::reader_builder::selection_policy::{
     ExpensiveOutputProfile, resolve_selection_policy_for_expensive_output,
-};
-#[cfg(test)]
-use crate::arrow::push_decoder::reader_builder::selection_policy::{
-    loaded_ranges_for_projection, resolve_selection_policy_for_projection,
 };
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
@@ -63,11 +59,38 @@ struct RowGroupInfo {
 
 enum CostModelTransition {
     ContinuePushdown,
-    StartPostSelection { selection: RowSelection },
-    EnablePostFilter,
+    /// The current row group already evaluated predicates and produced a
+    /// selection, but Auto now prefers post-filter for this scan shape. Decode
+    /// the current row group's output once and apply the existing selection
+    /// after decode instead of evaluating predicates a second time.
+    StartPostSelection {
+        selection: RowSelection,
+    },
 }
 
 /// This is the inner state machine for reading a single row group.
+///
+/// The top-level flow is:
+///
+/// ```text
+/// Start
+///   +-- no filter / no predicates ----------------------> StartData
+///   +-- Auto chooses post-filter ------------------------> WaitingOnPostFilterData
+///   +-- predicate pushdown ------------------------------> Filters
+///
+/// Filters -> WaitingOnFilterData -> Filters | StartData
+///
+/// StartData
+///   +-- no rows after selection/limit -------------------> Finished
+///   +-- output data needed ------------------------------> WaitingOnData
+///
+/// WaitingOnData
+///   +-- Auto switches current row group to post-selection > WaitingOnPostSelectionData
+///   +-- output reader ready -----------------------------> Finished
+/// ```
+///
+/// Each state arm delegates to a `transition_*` method so the dispatch table
+/// remains readable before diving into the details for each phase.
 #[derive(Debug)]
 enum RowGroupDecoderState {
     Start {
@@ -360,68 +383,6 @@ impl RowGroupReaderBuilder {
         self.post_filter_cost_model_enabled = false;
     }
 
-    fn ensure_post_filter_state(&mut self) -> Result<(), ParquetError> {
-        if self.post_filter.is_some() {
-            return Ok(());
-        }
-
-        let filter = self.filter.take().ok_or_else(|| {
-            ParquetError::General(
-                "post-filter cost model selected without a row filter".to_string(),
-            )
-        })?;
-        self.post_filter = Some(Arc::new(Mutex::new(filter)));
-        Ok(())
-    }
-
-    fn resolve_cost_model_transition(
-        &mut self,
-        row_group_info: &RowGroupInfo,
-        cache_info: Option<&CacheInfo>,
-    ) -> Result<CostModelTransition, ParquetError> {
-        if cache_info.is_none()
-            || !matches!(
-                self.cost_model_state,
-                RowGroupCostModelState::Observing { .. }
-            )
-            || !self.post_filter_cost_model_supported(row_group_info.budget)
-        {
-            return Ok(CostModelTransition::ContinuePushdown);
-        }
-
-        let decision = row_group_info
-            .plan_builder
-            .resolve_selection_strategy_decision();
-        let observed_selection = row_group_info.plan_builder.selection().cloned();
-
-        self.observe_cost_model_candidate(
-            decision,
-            row_group_info.row_count,
-            row_group_info.budget,
-        );
-
-        if matches!(
-            self.cost_model_state,
-            RowGroupCostModelState::UsePostFilter { .. }
-        ) {
-            if row_group_info.base_selection.is_none() {
-                let selection = observed_selection.unwrap_or_else(|| {
-                    RowSelection::from(vec![RowSelector::select(row_group_info.row_count)])
-                });
-                return Ok(CostModelTransition::StartPostSelection { selection });
-            }
-
-            self.ensure_post_filter_state()?;
-            self.metrics
-                .record_cost_model_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
-            return Ok(CostModelTransition::EnablePostFilter);
-        }
-
-        self.metrics
-            .record_cost_model_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
-        Ok(CostModelTransition::ContinuePushdown)
-    }
-
     /// take the current state, leaving None in its place.
     ///
     /// Returns an error if there the state wasn't put back after the previous
@@ -517,555 +478,620 @@ impl RowGroupReaderBuilder {
         &mut self,
         current_state: RowGroupDecoderState,
     ) -> Result<NextState, ParquetError> {
-        let result = match current_state {
-            RowGroupDecoderState::Start { row_group_info } => {
-                debug_assert!(
-                    !row_group_info.budget.is_exhausted(),
-                    "RowGroupFrontier should not hand off row groups after the output limit is exhausted"
-                );
-
-                let column_chunks = None; // no prior column chunks
-
-                if let Some(filter) = self.post_filter.as_ref().cloned() {
-                    return self.start_post_filter(row_group_info, filter);
-                }
-
-                let Some(filter) = self.filter.take() else {
-                    // no filter, start trying to read data immediately
-                    return Ok(NextState::again(RowGroupDecoderState::StartData {
-                        row_group_info,
-                        column_chunks,
-                        cache_info: None,
-                    }));
-                };
-                // no predicates in filter, so start reading immediately
-                if filter.predicates.is_empty() {
-                    return Ok(NextState::again(RowGroupDecoderState::StartData {
-                        row_group_info,
-                        column_chunks,
-                        cache_info: None,
-                    }));
-                };
-
-                if self.should_start_with_post_filter_for_predicate_cost(
-                    &filter,
-                    row_group_info.row_group_idx,
-                    row_group_info.budget,
-                ) {
-                    let filter = Arc::new(Mutex::new(filter));
-                    self.post_filter = Some(Arc::clone(&filter));
-                    return self.start_post_filter(row_group_info, filter);
-                }
-
-                if self.should_use_post_filter_by_cost(row_group_info.budget) {
-                    if self
-                        .post_filter_read_projection(&filter, row_group_info.budget)
-                        .is_some()
-                    {
-                        let filter = Arc::new(Mutex::new(filter));
-                        self.post_filter = Some(Arc::clone(&filter));
-                        return self.start_post_filter(row_group_info, filter);
-                    }
-
-                    self.cost_model_state = RowGroupCostModelState::UsePushdown;
-                }
-
-                // we have predicates to evaluate
-                let cache_projection =
-                    self.compute_cache_projection(row_group_info.row_group_idx, &filter);
-
-                let cache_info = CacheInfo::new(
-                    cache_projection,
-                    Arc::new(RwLock::new(RowGroupCache::new(
-                        self.batch_size,
-                        self.max_predicate_cache_size,
-                    ))),
-                );
-
-                let filter_info = FilterInfo::new(filter, cache_info);
-                NextState::again(RowGroupDecoderState::Filters {
-                    row_group_info,
-                    filter_info,
-                    column_chunks,
-                })
-            }
-            // need to evaluate filters
+        match current_state {
+            RowGroupDecoderState::Start { row_group_info } => self.transition_start(row_group_info),
             RowGroupDecoderState::Filters {
                 row_group_info,
                 column_chunks,
                 filter_info,
-            } => {
-                let RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection,
-                    budget,
-                } = row_group_info;
-
-                // If nothing is selected, we are done with this row group
-                if !plan_builder.selects_any() {
-                    // ruled out entire row group
-                    self.filter = Some(filter_info.into_filter());
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::Finished,
-                        RowGroupBuildResult::Finished {
-                            remaining_budget: budget,
-                        },
-                    ));
-                }
-
-                // Make a request for the data needed to evaluate the current predicate
-                let predicate = filter_info.current();
-
-                // need to fetch pages the column needs for decoding, figure
-                // that out based on the current selection and projection
-                let data_request =
-                    self.metrics
-                        .time_phase(ArrowReaderPhase::PredicateRangePlanning, || {
-                            DataRequestBuilder::new(
-                                row_group_idx,
-                                row_count,
-                                self.batch_size,
-                                &self.metadata,
-                                predicate.projection(), // use the predicate's projection
-                            )
-                            .with_selection(plan_builder.selection())
-                            // Fetch predicate columns; expand selection only for cached predicate columns
-                            .with_cache_projection(Some(filter_info.cache_projection()))
-                            .with_column_chunks(column_chunks)
-                            .build()
-                        });
-
-                let row_group_info = RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection,
-                    budget,
-                };
-
-                NextState::again(RowGroupDecoderState::WaitingOnFilterData {
-                    row_group_info,
-                    filter_info,
-                    data_request,
-                })
-            }
+            } => self.transition_filters(row_group_info, column_chunks, filter_info),
             RowGroupDecoderState::WaitingOnFilterData {
                 row_group_info,
                 data_request,
-                mut filter_info,
-            } => {
-                // figure out what ranges we still need
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
-                if !needed_ranges.is_empty() {
-                    // still need data
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::WaitingOnFilterData {
-                            row_group_info,
-                            filter_info,
-                            data_request,
-                        },
-                        RowGroupBuildResult::NeedsData(needed_ranges),
-                    ));
-                }
-
-                // otherwise we have all the data we need to evaluate the predicate
-                let RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    mut plan_builder,
-                    base_selection,
-                    budget,
-                } = row_group_info;
-
-                let predicate = filter_info.current();
-
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
-                    &self.metadata,
-                    predicate.projection(),
-                    &mut self.buffers,
-                )?;
-
-                let cache_options = filter_info.cache_builder().producer();
-
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_batch_size(self.batch_size)
-                    .with_cache_options(Some(&cache_options))
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
-
-                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-                plan_builder = resolve_selection_policy_for_expensive_output(
-                    plan_builder,
-                    predicate.projection(),
-                    self.row_group_offset_index(row_group_idx),
-                    row_count,
-                    ExpensiveOutputProfile::from_row_group(
-                        self.metadata.row_group(row_group_idx),
-                        predicate.projection(),
-                        row_count,
-                    ),
-                );
-
-                // When this is the final predicate in the chain and an output
-                // limit is set, tell the filter evaluation to stop once enough
-                // matching rows have been accumulated.
-                let predicate_limit = filter_info
-                    .is_last()
-                    .then(|| budget.selected_row_limit())
-                    .flatten();
-
-                // Evaluate the filter via `with_predicate_options`, opting into
-                // early termination when this is the final predicate and an
-                // output limit was set.
-                let mut predicate_options =
-                    PredicateOptions::new(array_reader, filter_info.current_mut())
-                        .with_metrics(self.metrics.clone());
-                if let Some(limit) = predicate_limit {
-                    predicate_options = predicate_options.with_limit(limit, row_count);
-                }
-                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
-
-                let row_group_info = RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection,
-                    budget,
-                };
-
-                // Take back the column chunks that were read
-                let column_chunks = Some(row_group.column_chunks);
-
-                // advance to the next predicate, if any
-                match filter_info.advance() {
-                    AdvanceResult::Continue(filter_info) => {
-                        NextState::again(RowGroupDecoderState::Filters {
-                            row_group_info,
-                            column_chunks,
-                            filter_info,
-                        })
-                    }
-                    // done with predicates, proceed to reading data
-                    AdvanceResult::Done(filter, cache_info) => {
-                        // remember we need to put back the filter
-                        assert!(self.filter.is_none());
-                        self.filter = Some(filter);
-                        NextState::again(RowGroupDecoderState::StartData {
-                            row_group_info,
-                            column_chunks,
-                            cache_info: Some(cache_info),
-                        })
-                    }
-                }
-            }
+                filter_info,
+            } => self.transition_waiting_on_filter_data(row_group_info, data_request, filter_info),
             RowGroupDecoderState::StartData {
                 row_group_info,
                 column_chunks,
                 cache_info,
-            } => {
-                let RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection,
-                    budget,
-                } = row_group_info;
-
-                let BudgetedReadPlan {
-                    mut plan_builder,
-                    rows_before_budget,
-                    rows_after_budget,
-                    remaining_budget,
-                } = budget.apply_to_plan(plan_builder, row_count);
-
-                if rows_before_budget == 0 {
-                    // ruled out entire row group
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::Finished,
-                        RowGroupBuildResult::Finished { remaining_budget },
-                    ));
-                }
-
-                if rows_after_budget == 0 {
-                    // no rows left after applying limit/offset
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::Finished,
-                        RowGroupBuildResult::Finished { remaining_budget },
-                    ));
-                }
-
-                let data_request =
-                    self.metrics
-                        .time_phase(ArrowReaderPhase::OutputRangePlanning, || {
-                            DataRequestBuilder::new(
-                                row_group_idx,
-                                row_count,
-                                self.batch_size,
-                                &self.metadata,
-                                &self.projection,
-                            )
-                            .with_selection(plan_builder.selection())
-                            .with_column_chunks(column_chunks)
-                            // Final projection fetch shouldn't expand selection for cache
-                            // so don't call with_cache_projection here
-                            .build()
-                        });
-
-                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-                plan_builder =
-                    self.metrics
-                        .time_phase(ArrowReaderPhase::OutputSelectionResolve, || {
-                            resolve_selection_policy_for_expensive_output(
-                                plan_builder,
-                                &self.projection,
-                                self.row_group_offset_index(row_group_idx),
-                                row_count,
-                                ExpensiveOutputProfile::from_row_group(
-                                    self.metadata.row_group(row_group_idx),
-                                    &self.projection,
-                                    row_count,
-                                ),
-                            )
-                        });
-
-                let row_group_info = RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection,
-                    budget: remaining_budget,
-                };
-
-                NextState::again(RowGroupDecoderState::WaitingOnData {
-                    row_group_info,
-                    data_request,
-                    cache_info,
-                })
-            }
+            } => self.transition_start_data(row_group_info, column_chunks, cache_info),
             RowGroupDecoderState::WaitingOnPostFilterData {
                 row_group_info,
                 data_request,
                 read_projection,
                 filter,
-            } => {
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
-                if !needed_ranges.is_empty() {
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::WaitingOnPostFilterData {
-                            row_group_info,
-                            data_request,
-                            read_projection,
-                            filter,
-                        },
-                        RowGroupBuildResult::NeedsData(needed_ranges),
-                    ));
-                }
-
-                let RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection: _,
-                    budget,
-                } = row_group_info;
-
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
-                    &self.metadata,
-                    &read_projection,
-                    &mut self.buffers,
-                )?;
-
-                let plan = plan_builder.build_with_metrics(&self.metrics);
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_batch_size(self.batch_size)
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), &read_projection)?;
-
-                let reader = ParquetRecordBatchReader::new_post_filter(
-                    array_reader,
-                    plan,
-                    filter,
-                    self.metadata.file_metadata().schema_descr(),
-                    &read_projection,
-                    &self.projection,
-                    self.metrics.clone(),
-                )?;
-
-                self.metrics
-                    .record_cost_model_row_group(RowGroupExecutionMode::PostFilter);
-
-                NextState::result(
-                    RowGroupDecoderState::Finished,
-                    RowGroupBuildResult::Data {
-                        batch_reader: Box::new(reader),
-                        remaining_budget: budget,
-                    },
-                )
-            }
+            } => self.transition_waiting_on_post_filter_data(
+                row_group_info,
+                data_request,
+                read_projection,
+                filter,
+            ),
             RowGroupDecoderState::WaitingOnPostSelectionData {
                 row_group_info,
                 data_request,
                 selection,
                 cache_info,
-            } => {
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
-                if !needed_ranges.is_empty() {
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::WaitingOnPostSelectionData {
-                            row_group_info,
-                            data_request,
-                            selection,
-                            cache_info,
-                        },
-                        RowGroupBuildResult::NeedsData(needed_ranges),
-                    ));
-                }
-
-                let RowGroupInfo {
-                    row_group_idx,
-                    row_count,
-                    plan_builder,
-                    base_selection: _,
-                    budget,
-                } = row_group_info;
-
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
-                    &self.metadata,
-                    &self.projection,
-                    &mut self.buffers,
-                )?;
-
-                let plan = plan_builder.build_with_metrics(&self.metrics);
-                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_batch_size(self.batch_size)
-                    .with_parquet_metadata(&self.metadata);
-                let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options: CacheOptions = cache_info.builder().consumer();
-                    array_reader_builder
-                        .with_cache_options(Some(&cache_options))
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                } else {
-                    array_reader_builder
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                }?;
-
-                let reader = ParquetRecordBatchReader::new_post_selection_filter(
-                    array_reader,
-                    plan,
-                    selection,
-                    self.metrics.clone(),
-                );
-
-                self.metrics
-                    .record_cost_model_row_group(RowGroupExecutionMode::PostFilter);
-
-                NextState::result(
-                    RowGroupDecoderState::Finished,
-                    RowGroupBuildResult::Data {
-                        batch_reader: Box::new(reader),
-                        remaining_budget: budget,
-                    },
-                )
-            }
-            // Waiting on data to proceed with reading the output
+            } => self.transition_waiting_on_post_selection_data(
+                row_group_info,
+                data_request,
+                selection,
+                cache_info,
+            ),
             RowGroupDecoderState::WaitingOnData {
                 row_group_info,
                 data_request,
                 cache_info,
-            } => {
-                match self.resolve_cost_model_transition(&row_group_info, cache_info.as_ref())? {
-                    CostModelTransition::ContinuePushdown
-                    | CostModelTransition::EnablePostFilter => {}
-                    CostModelTransition::StartPostSelection { selection } => {
-                        let column_chunks = data_request.into_dense_column_chunks();
-                        // The current row group already computed a pushdown selection. Apply that
-                        // selection after decode instead of evaluating the predicates again.
-                        //
-                        // Sparse predicate chunks may not cover the base selection. Dense chunks
-                        // are safe to reuse and preserve predicate-cache IO behavior.
-                        return self.start_post_selection_filter(
-                            row_group_info,
-                            selection,
-                            cache_info,
-                            column_chunks,
-                        );
-                    }
-                }
+            } => self.transition_waiting_on_data(row_group_info, data_request, cache_info),
+            RowGroupDecoderState::Finished => Err(ParquetError::General(String::from(
+                "Internal Error: try_build called without an active row group",
+            ))),
+        }
+    }
 
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
-                if !needed_ranges.is_empty() {
-                    // still need data
-                    return Ok(NextState::result(
-                        RowGroupDecoderState::WaitingOnData {
-                            row_group_info,
-                            data_request,
-                            cache_info,
-                        },
-                        RowGroupBuildResult::NeedsData(needed_ranges),
-                    ));
-                }
+    fn transition_start(
+        &mut self,
+        row_group_info: RowGroupInfo,
+    ) -> Result<NextState, ParquetError> {
+        debug_assert!(
+            !row_group_info.budget.is_exhausted(),
+            "RowGroupFrontier should not hand off row groups after the output limit is exhausted"
+        );
 
-                // otherwise we have all the data we need to proceed
-                let RowGroupInfo {
+        let column_chunks = None;
+
+        if let Some(filter) = self.post_filter.as_ref().cloned() {
+            return self.start_post_filter(row_group_info, filter);
+        }
+
+        let Some(filter) = self.filter.take() else {
+            return Ok(NextState::again(RowGroupDecoderState::StartData {
+                row_group_info,
+                column_chunks,
+                cache_info: None,
+            }));
+        };
+
+        if filter.predicates.is_empty() {
+            return Ok(NextState::again(RowGroupDecoderState::StartData {
+                row_group_info,
+                column_chunks,
+                cache_info: None,
+            }));
+        };
+
+        if self.should_start_with_post_filter_for_variable_width_predicate(
+            &filter,
+            row_group_info.row_group_idx,
+            row_group_info.budget,
+        ) {
+            let filter = Arc::new(Mutex::new(filter));
+            self.post_filter = Some(Arc::clone(&filter));
+            return self.start_post_filter(row_group_info, filter);
+        }
+
+        if self.should_use_post_filter_by_cost(row_group_info.budget) {
+            if self
+                .post_filter_read_projection(&filter, row_group_info.budget)
+                .is_some()
+            {
+                let filter = Arc::new(Mutex::new(filter));
+                self.post_filter = Some(Arc::clone(&filter));
+                return self.start_post_filter(row_group_info, filter);
+            }
+
+            self.cost_model_state = RowGroupCostModelState::UsePushdown;
+        }
+
+        let cache_projection = self.compute_cache_projection(row_group_info.row_group_idx, &filter);
+        let cache_info = CacheInfo::new(
+            cache_projection,
+            Arc::new(RwLock::new(RowGroupCache::new(
+                self.batch_size,
+                self.max_predicate_cache_size,
+            ))),
+        );
+        let filter_info = FilterInfo::new(filter, cache_info);
+
+        Ok(NextState::again(RowGroupDecoderState::Filters {
+            row_group_info,
+            filter_info,
+            column_chunks,
+        }))
+    }
+
+    fn transition_filters(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+        filter_info: FilterInfo,
+    ) -> Result<NextState, ParquetError> {
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection,
+            budget,
+        } = row_group_info;
+
+        if !plan_builder.selects_any() {
+            self.filter = Some(filter_info.into_filter());
+            return Ok(NextState::result(
+                RowGroupDecoderState::Finished,
+                RowGroupBuildResult::Finished {
+                    remaining_budget: budget,
+                },
+            ));
+        }
+
+        let predicate = filter_info.current();
+        let data_request =
+            self.metrics
+                .time_phase(ArrowReaderPhase::PredicateRangePlanning, || {
+                    DataRequestBuilder::new(
+                        row_group_idx,
+                        row_count,
+                        self.batch_size,
+                        &self.metadata,
+                        predicate.projection(),
+                    )
+                    .with_selection(plan_builder.selection())
+                    .with_cache_projection(Some(filter_info.cache_projection()))
+                    .with_column_chunks(column_chunks)
+                    .build()
+                });
+
+        let row_group_info = RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection,
+            budget,
+        };
+
+        Ok(NextState::again(
+            RowGroupDecoderState::WaitingOnFilterData {
+                row_group_info,
+                filter_info,
+                data_request,
+            },
+        ))
+    }
+
+    fn transition_waiting_on_filter_data(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        mut filter_info: FilterInfo,
+    ) -> Result<NextState, ParquetError> {
+        let needed_ranges = data_request.needed_ranges(&self.buffers);
+        if !needed_ranges.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::WaitingOnFilterData {
+                    row_group_info,
+                    filter_info,
+                    data_request,
+                },
+                RowGroupBuildResult::NeedsData(needed_ranges),
+            ));
+        }
+
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            mut plan_builder,
+            base_selection,
+            budget,
+        } = row_group_info;
+
+        let predicate = filter_info.current();
+        let row_group = data_request.try_into_in_memory_row_group(
+            row_group_idx,
+            row_count,
+            &self.metadata,
+            predicate.projection(),
+            &mut self.buffers,
+        )?;
+
+        let cache_options = filter_info.cache_builder().producer();
+        let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+            .with_batch_size(self.batch_size)
+            .with_cache_options(Some(&cache_options))
+            .with_parquet_metadata(&self.metadata)
+            .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+
+        plan_builder = self.resolve_output_selection_policy(
+            plan_builder,
+            predicate.projection(),
+            row_group_idx,
+            row_count,
+        );
+
+        let predicate_limit = filter_info
+            .is_last()
+            .then(|| budget.selected_row_limit())
+            .flatten();
+        let mut predicate_options = PredicateOptions::new(array_reader, filter_info.current_mut())
+            .with_metrics(self.metrics.clone());
+        if let Some(limit) = predicate_limit {
+            predicate_options = predicate_options.with_limit(limit, row_count);
+        }
+        plan_builder = plan_builder.with_predicate_options(predicate_options)?;
+
+        let row_group_info = RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection,
+            budget,
+        };
+        let column_chunks = Some(row_group.column_chunks);
+
+        Ok(match filter_info.advance() {
+            AdvanceResult::Continue(filter_info) => {
+                NextState::again(RowGroupDecoderState::Filters {
+                    row_group_info,
+                    column_chunks,
+                    filter_info,
+                })
+            }
+            AdvanceResult::Done(filter, cache_info) => {
+                assert!(self.filter.is_none());
+                self.filter = Some(filter);
+                NextState::again(RowGroupDecoderState::StartData {
+                    row_group_info,
+                    column_chunks,
+                    cache_info: Some(cache_info),
+                })
+            }
+        })
+    }
+
+    fn transition_start_data(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+        cache_info: Option<CacheInfo>,
+    ) -> Result<NextState, ParquetError> {
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection,
+            budget,
+        } = row_group_info;
+
+        let BudgetedReadPlan {
+            mut plan_builder,
+            rows_before_budget,
+            rows_after_budget,
+            remaining_budget,
+        } = budget.apply_to_plan(plan_builder, row_count);
+
+        if rows_before_budget == 0 || rows_after_budget == 0 {
+            return Ok(NextState::result(
+                RowGroupDecoderState::Finished,
+                RowGroupBuildResult::Finished { remaining_budget },
+            ));
+        }
+
+        let data_request = self
+            .metrics
+            .time_phase(ArrowReaderPhase::OutputRangePlanning, || {
+                DataRequestBuilder::new(
                     row_group_idx,
                     row_count,
-                    plan_builder,
-                    base_selection: _,
-                    budget,
-                } = row_group_info;
-
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
+                    self.batch_size,
                     &self.metadata,
                     &self.projection,
-                    &mut self.buffers,
-                )?;
-
-                let plan = plan_builder.build_with_metrics(&self.metrics);
-
-                // if we have any cached results, connect them up
-                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_batch_size(self.batch_size)
-                    .with_parquet_metadata(&self.metadata);
-                let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options: CacheOptions = cache_info.builder().consumer();
-                    array_reader_builder
-                        .with_cache_options(Some(&cache_options))
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                } else {
-                    array_reader_builder
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                }?;
-
-                let reader = ParquetRecordBatchReader::new_with_metrics(
-                    array_reader,
-                    plan,
-                    self.metrics.clone(),
-                );
-                NextState::result(
-                    RowGroupDecoderState::Finished,
-                    RowGroupBuildResult::Data {
-                        batch_reader: Box::new(reader),
-                        remaining_budget: budget,
-                    },
                 )
-            }
-            RowGroupDecoderState::Finished => {
-                return Err(ParquetError::General(String::from(
-                    "Internal Error: try_build called without an active row group",
-                )));
-            }
+                .with_selection(plan_builder.selection())
+                .with_column_chunks(column_chunks)
+                // Final projection fetch shouldn't expand selection for cache
+                // so don't call with_cache_projection here.
+                .build()
+            });
+
+        plan_builder = self
+            .metrics
+            .time_phase(ArrowReaderPhase::OutputSelectionResolve, || {
+                self.resolve_output_selection_policy(
+                    plan_builder,
+                    &self.projection,
+                    row_group_idx,
+                    row_count,
+                )
+            });
+
+        let row_group_info = RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection,
+            budget: remaining_budget,
         };
-        Ok(result)
+
+        Ok(NextState::again(RowGroupDecoderState::WaitingOnData {
+            row_group_info,
+            data_request,
+            cache_info,
+        }))
+    }
+
+    fn transition_waiting_on_post_filter_data(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        read_projection: ProjectionMask,
+        filter: Arc<Mutex<RowFilter>>,
+    ) -> Result<NextState, ParquetError> {
+        let needed_ranges = data_request.needed_ranges(&self.buffers);
+        if !needed_ranges.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::WaitingOnPostFilterData {
+                    row_group_info,
+                    data_request,
+                    read_projection,
+                    filter,
+                },
+                RowGroupBuildResult::NeedsData(needed_ranges),
+            ));
+        }
+
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection: _,
+            budget,
+        } = row_group_info;
+
+        let row_group = data_request.try_into_in_memory_row_group(
+            row_group_idx,
+            row_count,
+            &self.metadata,
+            &read_projection,
+            &mut self.buffers,
+        )?;
+        let plan = plan_builder.build_with_metrics(&self.metrics);
+        let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+            .with_batch_size(self.batch_size)
+            .with_parquet_metadata(&self.metadata)
+            .build_array_reader(self.fields.as_deref(), &read_projection)?;
+        let reader = ParquetRecordBatchReader::new_post_filter(
+            array_reader,
+            plan,
+            filter,
+            self.metadata.file_metadata().schema_descr(),
+            &read_projection,
+            &self.projection,
+            self.metrics.clone(),
+        )?;
+
+        self.metrics
+            .record_cost_model_row_group(RowGroupExecutionMode::PostFilter);
+        Ok(NextState::result(
+            RowGroupDecoderState::Finished,
+            RowGroupBuildResult::Data {
+                batch_reader: Box::new(reader),
+                remaining_budget: budget,
+            },
+        ))
+    }
+
+    fn transition_waiting_on_post_selection_data(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        selection: RowSelection,
+        cache_info: Option<CacheInfo>,
+    ) -> Result<NextState, ParquetError> {
+        let needed_ranges = data_request.needed_ranges(&self.buffers);
+        if !needed_ranges.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::WaitingOnPostSelectionData {
+                    row_group_info,
+                    data_request,
+                    selection,
+                    cache_info,
+                },
+                RowGroupBuildResult::NeedsData(needed_ranges),
+            ));
+        }
+
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection: _,
+            budget,
+        } = row_group_info;
+
+        let row_group = data_request.try_into_in_memory_row_group(
+            row_group_idx,
+            row_count,
+            &self.metadata,
+            &self.projection,
+            &mut self.buffers,
+        )?;
+        let plan = plan_builder.build_with_metrics(&self.metrics);
+        let array_reader = self.build_projection_reader(&row_group, cache_info.as_ref())?;
+        let reader = ParquetRecordBatchReader::new_post_selection_filter(
+            array_reader,
+            plan,
+            selection,
+            self.metrics.clone(),
+        );
+
+        self.metrics
+            .record_cost_model_row_group(RowGroupExecutionMode::PostFilter);
+        Ok(NextState::result(
+            RowGroupDecoderState::Finished,
+            RowGroupBuildResult::Data {
+                batch_reader: Box::new(reader),
+                remaining_budget: budget,
+            },
+        ))
+    }
+
+    fn transition_waiting_on_data(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        cache_info: Option<CacheInfo>,
+    ) -> Result<NextState, ParquetError> {
+        match self.resolve_cost_model_transition(&row_group_info, cache_info.as_ref())? {
+            CostModelTransition::ContinuePushdown => {}
+            CostModelTransition::StartPostSelection { selection } => {
+                let column_chunks = data_request.into_dense_column_chunks();
+                return self.start_post_selection_filter(
+                    row_group_info,
+                    selection,
+                    cache_info,
+                    column_chunks,
+                );
+            }
+        }
+
+        let needed_ranges = data_request.needed_ranges(&self.buffers);
+        if !needed_ranges.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::WaitingOnData {
+                    row_group_info,
+                    data_request,
+                    cache_info,
+                },
+                RowGroupBuildResult::NeedsData(needed_ranges),
+            ));
+        }
+
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection: _,
+            budget,
+        } = row_group_info;
+
+        let row_group = data_request.try_into_in_memory_row_group(
+            row_group_idx,
+            row_count,
+            &self.metadata,
+            &self.projection,
+            &mut self.buffers,
+        )?;
+        let plan = plan_builder.build_with_metrics(&self.metrics);
+        let array_reader = self.build_projection_reader(&row_group, cache_info.as_ref())?;
+        let reader =
+            ParquetRecordBatchReader::new_with_metrics(array_reader, plan, self.metrics.clone());
+
+        Ok(NextState::result(
+            RowGroupDecoderState::Finished,
+            RowGroupBuildResult::Data {
+                batch_reader: Box::new(reader),
+                remaining_budget: budget,
+            },
+        ))
+    }
+
+    fn resolve_cost_model_transition(
+        &mut self,
+        row_group_info: &RowGroupInfo,
+        cache_info: Option<&CacheInfo>,
+    ) -> Result<CostModelTransition, ParquetError> {
+        if cache_info.is_none()
+            || !matches!(
+                self.cost_model_state,
+                RowGroupCostModelState::Observing { .. }
+            )
+            || !self.post_filter_cost_model_supported(row_group_info.budget)
+        {
+            return Ok(CostModelTransition::ContinuePushdown);
+        }
+
+        let decision = row_group_info
+            .plan_builder
+            .resolve_selection_strategy_decision();
+        let observed_selection = row_group_info.plan_builder.selection().cloned();
+
+        self.observe_cost_model_candidate(
+            decision,
+            row_group_info.row_count,
+            row_group_info.budget,
+        );
+
+        if matches!(self.cost_model_state, RowGroupCostModelState::UsePostFilter) {
+            if row_group_info.base_selection.is_none() {
+                let selection = observed_selection.unwrap_or_else(|| {
+                    RowSelection::from(vec![RowSelector::select(row_group_info.row_count)])
+                });
+                return Ok(CostModelTransition::StartPostSelection { selection });
+            }
+
+            self.ensure_post_filter_state()?;
+            self.metrics
+                .record_cost_model_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
+            // This row group was already planned with a base selection, so keep
+            // its current pushdown path. The state above enables post-filter
+            // execution for later row groups.
+            return Ok(CostModelTransition::ContinuePushdown);
+        }
+
+        self.metrics
+            .record_cost_model_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
+        Ok(CostModelTransition::ContinuePushdown)
+    }
+
+    fn ensure_post_filter_state(&mut self) -> Result<(), ParquetError> {
+        if self.post_filter.is_some() {
+            return Ok(());
+        }
+
+        let filter = self.filter.take().ok_or_else(|| {
+            ParquetError::General(
+                "post-filter cost model selected without a row filter".to_string(),
+            )
+        })?;
+        self.post_filter = Some(Arc::new(Mutex::new(filter)));
+        Ok(())
+    }
+
+    fn resolve_output_selection_policy(
+        &self,
+        plan_builder: ReadPlanBuilder,
+        projection: &ProjectionMask,
+        row_group_idx: usize,
+        row_count: usize,
+    ) -> ReadPlanBuilder {
+        resolve_selection_policy_for_expensive_output(
+            plan_builder.with_row_selection_policy(self.row_selection_policy),
+            projection,
+            self.row_group_offset_index(row_group_idx),
+            row_count,
+            ExpensiveOutputProfile::from_row_group(
+                self.metadata.row_group(row_group_idx),
+                projection,
+                row_count,
+            ),
+        )
+    }
+
+    fn build_projection_reader(
+        &self,
+        row_group: &InMemoryRowGroup<'_>,
+        cache_info: Option<&CacheInfo>,
+    ) -> Result<Box<dyn ArrayReader>, ParquetError> {
+        let array_reader_builder = ArrayReaderBuilder::new(row_group, &self.metrics)
+            .with_batch_size(self.batch_size)
+            .with_parquet_metadata(&self.metadata);
+
+        if let Some(cache_info) = cache_info {
+            let cache_options: CacheOptions = cache_info.builder().consumer();
+            array_reader_builder
+                .with_cache_options(Some(&cache_options))
+                .build_array_reader(self.fields.as_deref(), &self.projection)
+        } else {
+            array_reader_builder.build_array_reader(self.fields.as_deref(), &self.projection)
+        }
     }
 
     fn start_post_filter(
@@ -1121,20 +1147,14 @@ impl RowGroupReaderBuilder {
             });
 
         if plan_builder.selection().is_some() {
-            plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
             plan_builder =
                 self.metrics
                     .time_phase(ArrowReaderPhase::OutputSelectionResolve, || {
-                        resolve_selection_policy_for_expensive_output(
+                        self.resolve_output_selection_policy(
                             plan_builder,
                             &read_projection,
-                            self.row_group_offset_index(row_group_idx),
+                            row_group_idx,
                             row_count,
-                            ExpensiveOutputProfile::from_row_group(
-                                self.metadata.row_group(row_group_idx),
-                                &read_projection,
-                                row_count,
-                            ),
                         )
                     });
         }
@@ -1252,357 +1272,6 @@ impl RowGroupReaderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::selection::LoadedRowRanges;
-    use crate::arrow::arrow_reader::{RowSelection, RowSelectionCursor, RowSelector};
-    use crate::file::page_index::offset_index::PageLocation;
-
-    #[test]
-    fn test_resolve_selection_policy_preserves_mask_choice() {
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(99),
-            RowSelector::select(1),
-        ]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-
-        assert_eq!(
-            resolve_selection_policy_for_projection(
-                plan_builder,
-                &ProjectionMask::all(),
-                None,
-                101
-            )
-            .row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-    }
-
-    #[test]
-    fn test_resolve_selection_policy_preserves_selector_choice() {
-        let selection = RowSelection::from(vec![RowSelector::select(128)]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
-
-        assert_eq!(
-            resolve_selection_policy_for_projection(
-                plan_builder,
-                &ProjectionMask::all(),
-                None,
-                128
-            )
-            .row_selection_policy(),
-            &RowSelectionPolicy::Selectors
-        );
-    }
-
-    #[test]
-    fn test_resolve_selection_policy_respects_explicit_policy() {
-        let selection = RowSelection::from(vec![RowSelector::select(1), RowSelector::skip(1)]);
-        let mask_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection.clone()))
-            .with_row_selection_policy(RowSelectionPolicy::Mask);
-        let selector_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Selectors);
-
-        assert_eq!(
-            resolve_selection_policy_for_projection(mask_builder, &ProjectionMask::all(), None, 2)
-                .row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-        assert_eq!(
-            resolve_selection_policy_for_projection(
-                selector_builder,
-                &ProjectionMask::all(),
-                None,
-                2
-            )
-            .row_selection_policy(),
-            &RowSelectionPolicy::Selectors
-        );
-    }
-
-    #[test]
-    fn test_auto_sparse_loaded_ranges_force_selectors() {
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(4),
-            RowSelector::select(1),
-        ]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let offset_index = sparse_test_offset_index();
-
-        let plan_builder = resolve_selection_policy_for_projection(
-            plan_builder,
-            &ProjectionMask::all(),
-            Some(&offset_index),
-            6,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Selectors
-        );
-    }
-
-    #[test]
-    fn test_auto_dense_loaded_ranges_preserve_mask() {
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(1),
-            RowSelector::select(1),
-            RowSelector::skip(1),
-            RowSelector::select(1),
-            RowSelector::skip(1),
-        ]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let offset_index = sparse_test_offset_index();
-
-        let plan_builder = resolve_selection_policy_for_projection(
-            plan_builder,
-            &ProjectionMask::all(),
-            Some(&offset_index),
-            6,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-    }
-
-    #[test]
-    fn test_explicit_mask_keeps_sparse_loaded_ranges() {
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(4),
-            RowSelector::select(1),
-        ]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Mask);
-        let offset_index = sparse_test_offset_index();
-
-        let plan_builder = resolve_selection_policy_for_projection(
-            plan_builder,
-            &ProjectionMask::all(),
-            Some(&offset_index),
-            6,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-
-        let mut plan = plan_builder.build();
-        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
-            panic!("expected mask cursor");
-        };
-        assert!(cursor.is_sparse());
-    }
-
-    #[test]
-    fn test_loaded_ranges_intersects_many_ranges_across_projected_columns() {
-        let selection = RowSelection::from(vec![
-            RowSelector::skip(10),
-            RowSelector::select(1),
-            RowSelector::skip(39),
-            RowSelector::select(1),
-            RowSelector::skip(39),
-            RowSelector::select(1),
-            RowSelector::skip(9),
-        ]);
-        let offset_index = vec![
-            offset_index_column(&[0, 20, 40, 60, 80]),
-            offset_index_column(&[0, 15, 35, 55, 75]),
-            offset_index_column(&[0, 10, 30, 50, 70, 90]),
-        ];
-
-        let loaded = loaded_ranges_for_projection(
-            Some(&selection),
-            &ProjectionMask::all(),
-            Some(&offset_index),
-            100,
-        );
-
-        assert_eq!(
-            loaded,
-            Some(LoadedRowRanges::new(vec![10..15, 50..55, 90..100], 100))
-        );
-    }
-
-    #[test]
-    fn test_auto_expensive_fragmented_output_prefers_selectors() {
-        let selection = q38_like_fragmented_selection();
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let profile = ExpensiveOutputProfile {
-            variable_width_columns: 1,
-            uncompressed_bytes_per_row: 64.0,
-        };
-
-        let plan_builder = resolve_selection_policy_for_expensive_output(
-            plan_builder,
-            &ProjectionMask::all(),
-            None,
-            7_800,
-            profile,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Selectors
-        );
-    }
-
-    #[test]
-    fn test_auto_expensive_fragmented_output_prefers_selectors_without_selector_count_gate() {
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(12),
-            RowSelector::select(1),
-            RowSelector::skip(12),
-            RowSelector::select(1),
-            RowSelector::skip(12),
-            RowSelector::select(1),
-            RowSelector::skip(12),
-        ]);
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let profile = ExpensiveOutputProfile {
-            variable_width_columns: 1,
-            uncompressed_bytes_per_row: 64.0,
-        };
-
-        let plan_builder = resolve_selection_policy_for_expensive_output(
-            plan_builder,
-            &ProjectionMask::all(),
-            None,
-            52,
-            profile,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Selectors
-        );
-    }
-
-    #[test]
-    fn test_auto_cheap_fragmented_output_keeps_mask() {
-        let selection = q38_like_fragmented_selection();
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let profile = ExpensiveOutputProfile {
-            variable_width_columns: 1,
-            uncompressed_bytes_per_row: 8.0,
-        };
-
-        let plan_builder = resolve_selection_policy_for_expensive_output(
-            plan_builder,
-            &ProjectionMask::all(),
-            None,
-            7_800,
-            profile,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-    }
-
-    #[test]
-    fn test_auto_moderate_selectivity_expensive_output_keeps_mask() {
-        let selection = q26_like_fragmented_selection();
-        let plan_builder = ReadPlanBuilder::new(1024)
-            .with_selection(Some(selection))
-            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
-        let profile = ExpensiveOutputProfile {
-            variable_width_columns: 1,
-            uncompressed_bytes_per_row: 64.0,
-        };
-
-        let plan_builder = resolve_selection_policy_for_expensive_output(
-            plan_builder,
-            &ProjectionMask::all(),
-            None,
-            7_200,
-            profile,
-        );
-
-        assert_eq!(
-            plan_builder.row_selection_policy(),
-            &RowSelectionPolicy::Mask
-        );
-    }
-
-    fn q38_like_fragmented_selection() -> RowSelection {
-        let mut selectors = Vec::new();
-        for _ in 0..600 {
-            selectors.push(RowSelector::select(1));
-            selectors.push(RowSelector::skip(12));
-        }
-        RowSelection::from(selectors)
-    }
-
-    fn q26_like_fragmented_selection() -> RowSelection {
-        let mut selectors = Vec::new();
-        for _ in 0..600 {
-            selectors.push(RowSelector::select(2));
-            selectors.push(RowSelector::skip(10));
-        }
-        RowSelection::from(selectors)
-    }
-
-    fn sparse_test_offset_index() -> Vec<OffsetIndexMetaData> {
-        vec![OffsetIndexMetaData {
-            page_locations: vec![
-                PageLocation {
-                    offset: 0,
-                    compressed_page_size: 10,
-                    first_row_index: 0,
-                },
-                PageLocation {
-                    offset: 10,
-                    compressed_page_size: 10,
-                    first_row_index: 2,
-                },
-                PageLocation {
-                    offset: 20,
-                    compressed_page_size: 10,
-                    first_row_index: 4,
-                },
-            ],
-            unencoded_byte_array_data_bytes: None,
-        }]
-    }
-
-    fn offset_index_column(first_rows: &[i64]) -> OffsetIndexMetaData {
-        OffsetIndexMetaData {
-            page_locations: first_rows
-                .iter()
-                .enumerate()
-                .map(|(idx, first_row_index)| PageLocation {
-                    offset: (idx * 10) as i64,
-                    compressed_page_size: 10,
-                    first_row_index: *first_row_index,
-                })
-                .collect(),
-            unencoded_byte_array_data_bytes: None,
-        }
-    }
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
