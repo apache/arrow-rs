@@ -72,8 +72,24 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
-pub use decimal::{DecimalCast, rescale_decimal};
+pub use decimal::{
+    DecimalCast, parse_string_to_decimal_native, rescale_decimal, single_float_to_decimal,
+};
 pub use string::cast_single_string_to_boolean_default;
+
+/// Lossy conversion from decimal to float.
+///
+/// Conversion is lossy and follows standard floating point semantics. Values
+/// that exceed the representable range become `INFINITY` or `-INFINITY` without
+/// returning an error.
+#[inline(always)]
+pub fn single_decimal_to_float_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f64
+where
+    D: DecimalType,
+    F: Fn(D::Native) -> f64,
+{
+    f(x) / 10_f64.powi(scale)
+}
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -913,9 +929,9 @@ pub fn cast_with_options(
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             Utf8View => value_to_string_view(array, cast_options),
-            _ => Err(ArrowError::CastError(
-                "Cannot cast list to non-list data types".to_string(),
-            )),
+            dt => Err(ArrowError::CastError(format!(
+                "Cannot cast LIST to non-list data type {dt}"
+            ))),
         },
         (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
@@ -1729,7 +1745,7 @@ pub fn cast_with_options(
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time32MillisecondType>()
-                .unary::<_, Time64NanosecondType>(|x| x as i64 * (MICROSECONDS / NANOSECONDS)),
+                .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
@@ -2314,10 +2330,11 @@ where
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            (as_float(x) / 10_f64.powi(*scale as i32)) as f32
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
+                as f32
         }),
         Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            as_float(x) / 10_f64.powi(*scale as i32)
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
         }),
         Utf8View => value_to_string_view(array, cast_options),
         Utf8 => value_to_string::<i32>(array, cast_options),
@@ -13275,6 +13292,52 @@ mod tests {
         assert_eq!(cast_array.value(0), 1000);
         assert_eq!(cast_array.value(1), 2000);
         assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_time64_nanosecond() {
+        let array =
+            Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
+        assert_eq!(c.value(0), 1_000_000_000);
+        assert_eq!(c.value(1), 2_000_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_time64_microsecond() {
+        let array =
+            Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
+        assert_eq!(c.value(0), 1_000_000);
+        assert_eq!(c.value(1), 2_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time64_nanosecond() {
+        let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
+        assert_eq!(c.value(0), 1_000_000_000);
+        assert_eq!(c.value(1), 60_000_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time64_microsecond() {
+        let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
+        assert_eq!(c.value(0), 1_000_000);
+        assert_eq!(c.value(1), 60_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000);
     }
 
     #[test]

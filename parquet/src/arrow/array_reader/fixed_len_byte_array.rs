@@ -40,10 +40,14 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
+///
+/// `batch_size` is used to pre-allocate internal buffers,
+/// avoiding reallocations when reading the first batch of data.
 pub fn make_fixed_len_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -126,6 +130,7 @@ pub fn make_fixed_len_byte_array_reader(
         column_desc,
         data_type,
         byte_length,
+        batch_size,
     )))
 }
 
@@ -144,14 +149,16 @@ impl FixedLenByteArrayReader {
         column_desc: ColumnDescPtr,
         data_type: ArrowType,
         byte_length: usize,
+        batch_size: usize,
     ) -> Self {
+        let record_reader = GenericRecordReader::new(column_desc, batch_size);
         Self {
             data_type,
             byte_length,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            record_reader: GenericRecordReader::new(column_desc),
+            record_reader,
         }
     }
 }
@@ -258,6 +265,9 @@ struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
+    /// Preserved value-count hint used to allocate `buffer` once `byte_length`
+    /// becomes known on the first decode.
+    values_capacity: Option<usize>,
 }
 
 #[inline]
@@ -284,6 +294,16 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        // `byte_length` is not known initially, so preserve the value-count
+        // hint so the first decode can allocate the exact byte capacity.
+        Self {
+            buffer: Vec::new(),
+            byte_length: None,
+            values_capacity: Some(capacity),
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -403,7 +423,19 @@ impl ColumnValueDecoder for ValueDecoder {
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match out.byte_length {
             Some(x) => assert_eq!(x, self.byte_length),
-            None => out.byte_length = Some(self.byte_length),
+            None => {
+                out.byte_length = Some(self.byte_length);
+                // TODO: collapse to a let-chain once MSRV ≥ 1.88
+                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
+                if out.buffer.is_empty() {
+                    if let Some(values_capacity) = out.values_capacity.take() {
+                        // now that the byte length per output element is known,
+                        // allocate the actual needed space.
+                        let byte_capacity = values_capacity.saturating_mul(self.byte_length);
+                        out.buffer = Vec::with_capacity(byte_capacity);
+                    }
+                }
+            }
         }
 
         match self.decoder.as_mut().unwrap() {

@@ -154,6 +154,12 @@ impl PushBuffers {
         self.ranges = new_ranges;
         self.buffers = new_buffers;
     }
+
+    /// Clear all buffered ranges and their corresponding data
+    pub fn clear_all_ranges(&mut self) {
+        self.ranges.clear();
+        self.buffers.clear();
+    }
 }
 
 impl Length for PushBuffers {

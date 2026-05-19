@@ -95,9 +95,13 @@ pub(crate) mod reader;
 pub(crate) mod thrift;
 mod writer;
 
-use crate::basic::{EncodingMask, PageType};
+use crate::basic::{
+    BoundaryOrder, ColumnOrder, Compression, CompressionCodec, Encoding, EncodingMask, PageType,
+    Type,
+};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
+use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
@@ -107,22 +111,15 @@ use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColum
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
 use crate::geospatial::statistics as geo_statistics;
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField,
+};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
 use crate::thrift_struct;
-use crate::{
-    basic::BoundaryOrder,
-    errors::{ParquetError, Result},
-};
-use crate::{
-    basic::{ColumnOrder, Compression, Encoding, Type},
-    parquet_thrift::{
-        ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
-        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
-    },
-};
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
 };
@@ -814,7 +811,7 @@ pub struct ColumnChunkMetaData {
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
-    compression: Compression,
+    compression: CompressionCodec,
     total_compressed_size: i64,
     total_uncompressed_size: i64,
     data_page_offset: i64,
@@ -919,14 +916,21 @@ impl LevelHistogram {
         }
     }
 
+    /// Increments the count for a level value by `count`.
+    #[inline]
+    pub fn increment_by(&mut self, level: i16, count: i64) {
+        self.inner[level as usize] += count;
+    }
+
     /// Updates histogram values using provided repetition levels
     ///
     /// # Panics
     /// if any of the levels is greater than the length of the histogram (
     /// the argument supplied to [`Self::try_new`])
+    #[deprecated(since = "58.2.0", note = "Use `increment_by` instead")]
     pub fn update_from_levels(&mut self, levels: &[i16]) {
         for &level in levels {
-            self.inner[level as usize] += 1;
+            self.increment_by(level, 1);
         }
     }
 }
@@ -1009,8 +1013,18 @@ impl ColumnChunkMetaData {
         self.num_values
     }
 
-    /// Compression for this column.
+    /// [`Compression`] for this column.
+    ///
+    /// This is a default value suitable for passing to [`WriterPropertiesBuilder::set_compression`].
+    /// It is constructed from the `codec` field of the Parquet `ColumnMetaData`
+    ///
+    /// [`WriterPropertiesBuilder::set_compression`]: crate::file::properties::WriterPropertiesBuilder
     pub fn compression(&self) -> Compression {
+        self.compression.into()
+    }
+
+    /// Returns the compression codec used when writing this column.
+    pub fn compression_codec(&self) -> CompressionCodec {
         self.compression
     }
 
@@ -1227,7 +1241,7 @@ impl ColumnChunkMetaDataBuilder {
             file_path: None,
             file_offset: 0,
             num_values: 0,
-            compression: Compression::UNCOMPRESSED,
+            compression: CompressionCodec::UNCOMPRESSED,
             total_compressed_size: 0,
             total_uncompressed_size: 0,
             data_page_offset: 0,
@@ -1278,8 +1292,14 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
-    /// Sets compression.
+    /// Sets compression codec given a [`Compression`] configuration value.
     pub fn set_compression(mut self, value: Compression) -> Self {
+        self.0.compression = value.into();
+        self
+    }
+
+    /// Sets compression codec.
+    pub fn set_compression_codec(mut self, value: CompressionCodec) -> Self {
         self.0.compression = value;
         self
     }
@@ -1733,6 +1753,14 @@ mod tests {
     };
 
     #[test]
+    #[allow(deprecated)]
+    fn test_level_histogram_update_from_levels_compat() {
+        let mut histogram = LevelHistogram::try_new(2).unwrap();
+        histogram.update_from_levels(&[0, 2, 1, 2, 2]);
+        assert_eq!(histogram.values(), &[1, 1, 3]);
+    }
+
+    #[test]
     fn test_row_group_metadata_thrift_conversion() {
         let schema_descr = get_test_schema_descr();
 
@@ -1853,7 +1881,7 @@ mod tests {
             ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
-            .set_compression(Compression::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
@@ -1893,7 +1921,7 @@ mod tests {
             ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
-            .set_compression(Compression::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
@@ -1936,7 +1964,7 @@ mod tests {
                 [Encoding::PLAIN, Encoding::RLE].iter(),
             ))
             .set_num_values(1000)
-            .set_compression(Compression::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
@@ -2067,9 +2095,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2830;
+        let base_expected_size = 2734;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2998;
+        let base_expected_size = 2902;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2098,9 +2126,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3280;
+        let bigger_expected_size = 3160;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3448;
+        let bigger_expected_size = 3328;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2147,7 +2175,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2090;
+        let base_expected_size = 2042;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -2173,7 +2201,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3104;
+        let expected_size_with_decryptor = 3056;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

@@ -62,6 +62,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     created_by: Option<String>,
     object_writer: MetadataObjectWriter,
     writer_version: i32,
+    write_path_in_schema: bool,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -254,6 +255,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let file_meta = FileMeta {
             file_metadata: &file_metadata,
             row_groups: &row_groups,
+            write_path_in_schema: self.write_path_in_schema,
         };
 
         // Write file metadata
@@ -288,6 +290,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         row_groups: Vec<RowGroupMetaData>,
         created_by: Option<String>,
         writer_version: i32,
+        write_path_in_schema: bool,
     ) -> Self {
         Self {
             buf,
@@ -299,6 +302,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             created_by,
             object_writer: Default::default(),
             writer_version,
+            write_path_in_schema,
         }
     }
 
@@ -410,6 +414,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 pub struct ParquetMetaDataWriter<'a, W: Write> {
     buf: TrackedWrite<W>,
     metadata: &'a ParquetMetaData,
+    write_path_in_schema: bool,
 }
 
 impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
@@ -431,7 +436,20 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     ///
     /// See example on the struct level documentation
     pub fn new_with_tracked(buf: TrackedWrite<W>, metadata: &'a ParquetMetaData) -> Self {
-        Self { buf, metadata }
+        Self {
+            buf,
+            metadata,
+            write_path_in_schema: true,
+        }
+    }
+
+    /// Set whether or not to write the `path_in_schema` field in the Thrift `ColumnMetaData`
+    /// struct.
+    pub fn with_write_path_in_schema(self, val: bool) -> Self {
+        Self {
+            write_path_in_schema: val,
+            ..self
+        }
     }
 
     /// Write the metadata to the buffer
@@ -455,6 +473,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             row_groups,
             created_by,
             file_metadata.version(),
+            self.write_path_in_schema,
         );
 
         if let Some(column_indexes) = column_indexes {

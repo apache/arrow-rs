@@ -38,14 +38,6 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
     Values { values: OffsetBuffer<V> },
 }
 
-impl<K: ArrowNativeType, V: OffsetSizeTrait> Default for DictionaryBuffer<K, V> {
-    fn default() -> Self {
-        Self::Values {
-            values: Default::default(),
-        }
-    }
-}
-
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     #[allow(unused)]
     pub fn len(&self) -> usize {
@@ -103,7 +95,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         match self {
             Self::Values { values } => Ok(values),
             Self::Dict { keys, values } => {
-                let mut spilled = OffsetBuffer::default();
+                let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
                 let dict_buffers = data.buffers();
                 let dict_offsets = dict_buffers[0].typed_data::<V>();
@@ -202,6 +194,12 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 }
 
 impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::Values {
+            values: OffsetBuffer::with_capacity(capacity),
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -288,7 +286,7 @@ mod tests {
 
         let d1: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
 
         // Read some data preserving the dictionary
         let values = &[1, 0, 3, 2, 4];
@@ -310,7 +308,7 @@ mod tests {
         buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
 
         assert_eq!(buffer.len(), 13);
-        let split = std::mem::take(&mut buffer);
+        let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
         let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -345,7 +343,7 @@ mod tests {
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
-        let array = std::mem::take(&mut buffer)
+        let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
             .into_array(None, &dict_type)
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -373,7 +371,7 @@ mod tests {
         let dict_type =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
@@ -384,7 +382,7 @@ mod tests {
             err
         );
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec![""])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 1, 0]);
 

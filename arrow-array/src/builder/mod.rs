@@ -341,6 +341,18 @@ pub trait ArrayBuilder: Any + Send + Sync {
     /// Builds the array without resetting the underlying builder.
     fn finish_cloned(&self) -> ArrayRef;
 
+    /// Builds the array without resetting the values builder.
+    ///
+    /// This is relevant for dictionary builders but also for composite builders.
+    /// Those are not affected directly, but will call the corresponding method
+    /// on their constituent builders.
+    ///
+    /// The default implementation just calls [`finish`][Self::finish] which is sufficient
+    /// for all but the above mentioned builders.
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        self.finish()
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -374,6 +386,10 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
 
     fn finish_cloned(&self) -> ArrayRef {
         (**self).finish_cloned()
+    }
+
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        (**self).finish_preserve_values()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -611,5 +627,47 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             }
         }
         t => unimplemented!("Data type {t} is not currently supported"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct PreserveValuesMock {
+        pub called: usize,
+        pub inner: Int32Builder,
+    }
+
+    impl ArrayBuilder for PreserveValuesMock {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+            self
+        }
+
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+
+        fn finish(&mut self) -> ArrayRef {
+            panic!("finish should never be called on PreserveValuesMock")
+        }
+
+        fn finish_cloned(&self) -> ArrayRef {
+            panic!("finish_cloned should never be called on PreserveValuesMock")
+        }
+
+        fn finish_preserve_values(&mut self) -> ArrayRef {
+            self.called += 1;
+            self.inner.finish_preserve_values()
+        }
     }
 }
