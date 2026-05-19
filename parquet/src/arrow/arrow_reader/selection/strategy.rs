@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Concepts used to choose how a [`RowSelection`](super::RowSelection) is executed.
+//! Concepts used to choose how a [`RowSelection`] is executed.
 //!
 //! The row-filter reader makes two related but separate decisions:
 //!
