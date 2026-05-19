@@ -868,6 +868,7 @@ mod tests {
             repetition_level_histograms: None,
             definition_level_histograms: None,
             boundary_order: BoundaryOrder::UNORDERED,
+            nan_counts: None,
         };
 
         // ColumnIndex arrays must align with the number of pages (null_pages.len()).
