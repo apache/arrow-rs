@@ -253,8 +253,11 @@ impl RowGroupReaderBuilder {
         };
 
         let selected_ratio = observation.shape.selected_ratio();
+        // Projected predicates can reuse decoded predicate values, but sparse
+        // filters can still win with page pruning. Use a higher bar than the
+        // fragmented-run threshold before switching this case to post-filter.
         if self.projection_includes_all(&self.projection, &predicate_projection)
-            && selected_ratio >= CostModelObservation::MODERATE_SELECTIVITY_MIN_RATIO
+            && selected_ratio >= CostModelObservation::PROJECTED_PREDICATE_MIN_RATIO
         {
             CostModelDecisionReason::ProjectedPredicateModerateSelectivity
         } else {
