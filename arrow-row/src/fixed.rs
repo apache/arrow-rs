@@ -51,6 +51,13 @@ pub trait FixedLengthEncoding: Copy {
 
     fn encode(self) -> Self::Encoded;
 
+    fn encode_desc(self) -> Self::Encoded {
+        let mut encoded = self.encode();
+        // Flip bits to reverse order
+        encoded.as_mut().iter_mut().for_each(|v| *v = !*v);
+        encoded
+    }
+
     fn decode(encoded: Self::Encoded) -> Self;
 }
 
@@ -59,6 +66,10 @@ impl FixedLengthEncoding for bool {
 
     fn encode(self) -> [u8; 1] {
         [self as u8]
+    }
+
+    fn encode_desc(self) -> [u8; 1] {
+        [!self as u8]
     }
 
     fn decode(encoded: Self::Encoded) -> Self {
@@ -71,8 +82,19 @@ macro_rules! encode_signed {
         impl FixedLengthEncoding for $t {
             type Encoded = [u8; $n];
 
+            #[inline]
             fn encode(self) -> [u8; $n] {
                 let mut b = self.to_be_bytes();
+                // Toggle top "sign" bit to ensure consistent sort order
+                b[0] ^= 0x80;
+                b
+            }
+
+            #[inline]
+            fn encode_desc(self) -> [u8; $n] {
+                // fast path for descending order
+                let b = !self;
+                let mut b = b.to_be_bytes();
                 // Toggle top "sign" bit to ensure consistent sort order
                 b[0] ^= 0x80;
                 b
@@ -99,8 +121,14 @@ macro_rules! encode_unsigned {
         impl FixedLengthEncoding for $t {
             type Encoded = [u8; $n];
 
+            // #[inline]
             fn encode(self) -> [u8; $n] {
                 self.to_be_bytes()
+            }
+
+            // #[inline]
+            fn encode_desc(self) -> [u8; $n] {
+                (!self).to_be_bytes()
             }
 
             fn decode(encoded: Self::Encoded) -> Self {
@@ -224,22 +252,38 @@ pub fn encode<T: FixedLengthEncoding>(
     nulls: &NullBuffer,
     opts: SortOptions,
 ) {
-    for (value_idx, is_valid) in nulls.iter().enumerate() {
-        let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + T::ENCODED_LEN;
-        if is_valid {
-            let to_write = &mut data[*offset..end_offset];
-            to_write[0] = 1;
-            let mut encoded = values[value_idx].encode();
-            if opts.descending {
-                // Flip bits to reverse order
-                encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+    #[inline]
+    fn encode<const DESC: bool, T: FixedLengthEncoding>(
+        data: &mut [u8],
+        offsets: &mut [usize],
+        values: &[T],
+        nulls: &NullBuffer,
+        opts: SortOptions,
+    ) {
+        let null_sentinel = null_sentinel(opts);
+        for ((is_valid, offset), val) in
+            nulls.iter().zip(offsets[1..].iter_mut()).zip(values.iter())
+        {
+            let end_offset = *offset + T::ENCODED_LEN;
+            if is_valid {
+                let to_write = &mut data[*offset..end_offset];
+                to_write[0] = 1;
+                let encoded = if DESC {
+                    val.encode_desc()
+                } else {
+                    val.encode()
+                };
+
+                to_write[1..].copy_from_slice(encoded.as_ref())
+            } else {
+                data[*offset] = null_sentinel;
             }
-            to_write[1..].copy_from_slice(encoded.as_ref())
-        } else {
-            data[*offset] = null_sentinel(opts);
+            *offset = end_offset;
         }
-        *offset = end_offset;
+    }
+    match opts.descending {
+        true => encode::<true, T>(data, offsets, values, nulls, opts),
+        false => encode::<false, T>(data, offsets, values, nulls, opts),
     }
 }
 
@@ -251,20 +295,27 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
     values: &[T],
     opts: SortOptions,
 ) {
-    for (value_idx, val) in values.iter().enumerate() {
-        let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + T::ENCODED_LEN;
-
-        let to_write = &mut data[*offset..end_offset];
-        to_write[0] = 1;
-        let mut encoded = val.encode();
-        if opts.descending {
-            // Flip bits to reverse order
-            encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+    #[inline]
+    fn encode<const DESC: bool, T: FixedLengthEncoding>(
+        data: &mut [u8],
+        offsets: &mut [usize],
+        values: &[T],
+    ) {
+        for (val, offset) in values.iter().zip(offsets[1..].iter_mut()) {
+            let to_write = &mut data[*offset..*offset + T::ENCODED_LEN];
+            to_write[0] = 1;
+            let encoded = if DESC {
+                val.encode_desc()
+            } else {
+                val.encode()
+            };
+            to_write[1..].copy_from_slice(encoded.as_ref());
+            *offset += T::ENCODED_LEN;
         }
-        to_write[1..].copy_from_slice(encoded.as_ref());
-
-        *offset = end_offset;
+    }
+    match opts.descending {
+        true => encode::<true, T>(data, offsets, values),
+        false => encode::<false, T>(data, offsets, values),
     }
 }
 
