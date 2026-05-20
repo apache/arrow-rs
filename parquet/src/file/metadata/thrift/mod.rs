@@ -621,12 +621,6 @@ fn read_column_chunk<'a>(
     Ok(col)
 }
 
-fn read_schema(prot: &mut ThriftSliceInputProtocol) -> Result<SchemaDescriptor> {
-    let schema = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut *prot)?;
-    let parquet_schema = parquet_schema_from_array(schema)?;
-    Ok(SchemaDescriptor::new(parquet_schema))
-}
-
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
@@ -730,8 +724,10 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
         }
         match field_ident.id {
             2 => {
-                // read schema and convert to SchemaDescriptor
-                return read_schema(&mut prot);
+                // read schema and convert to SchemaDescriptor for use when reading row groups
+                let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                let val = parquet_schema_from_array(val)?;
+                return Ok(SchemaDescriptor::new(val));
             }
             _ => prot.skip(field_ident.field_type)?,
         }
@@ -795,7 +791,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                     prot.skip(field_ident.field_type)?;
                 } else {
                     // read schema and convert to SchemaDescriptor for use when reading row groups
-                    schema_descr = Some(Arc::new(read_schema(&mut prot)?));
+                    let val =
+                        read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                    let val = parquet_schema_from_array(val)?;
+                    schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
             }
             3 => {
