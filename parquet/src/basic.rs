@@ -1028,7 +1028,7 @@ impl ColumnOrder {
                 LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Bson => {
                     SortOrder::UNSIGNED
                 }
-                LogicalType::Integer(int_type) => match int_type.is_signed {
+                LogicalType::Integer(int) => match int.is_signed {
                     true => SortOrder::SIGNED,
                     false => SortOrder::UNSIGNED,
                 },

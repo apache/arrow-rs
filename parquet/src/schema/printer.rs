@@ -296,18 +296,18 @@ fn print_logical_and_converted(
             LogicalType::Decimal(DecimalType { scale, precision }) => {
                 format!("DECIMAL({precision},{scale})")
             }
-            LogicalType::Timestamp(tt) => {
+            LogicalType::Timestamp(timestamp) => {
                 format!(
                     "TIMESTAMP({},{})",
-                    print_timeunit(&tt.unit),
-                    tt.is_adjusted_to_u_t_c
+                    print_timeunit(&timestamp.unit),
+                    timestamp.is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::Time(tt) => {
+            LogicalType::Time(time) => {
                 format!(
                     "TIME({},{})",
-                    print_timeunit(&tt.unit),
-                    tt.is_adjusted_to_u_t_c
+                    print_timeunit(&time.unit),
+                    time.is_adjusted_to_u_t_c
                 )
             }
             LogicalType::Date => "DATE".to_string(),

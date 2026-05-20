@@ -102,8 +102,8 @@ mod test {
         let column_descr = metadata.file_metadata().schema_descr().column(1);
         let logical_type = column_descr.logical_type_ref().unwrap();
 
-        if let LogicalType::Geometry(geo) = logical_type {
-            let crs = geo.crs.as_ref();
+        if let LogicalType::Geometry(geometry) = logical_type {
+            let crs = geometry.crs.as_ref();
             let crs_parsed: Value = serde_json::from_str(crs.unwrap()).unwrap();
             assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
         } else {

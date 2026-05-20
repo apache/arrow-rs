@@ -357,20 +357,20 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     ));
                 }
                 (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Decimal(dec), _) => {
+                (LogicalType::Decimal(decimal), _) => {
                     // Check that scale and precision are consistent with legacy values
-                    if dec.scale != self.scale {
+                    if decimal.scale != self.scale {
                         return Err(general_err!(
                             "DECIMAL logical type scale {} must match self.scale {} for field '{}'",
-                            dec.scale,
+                            decimal.scale,
                             self.scale,
                             self.name
                         ));
                     }
-                    if dec.precision != self.precision {
+                    if decimal.precision != self.precision {
                         return Err(general_err!(
                             "DECIMAL logical type precision {} must match self.precision {} for field '{}'",
-                            dec.precision,
+                            decimal.precision,
                             self.precision,
                             self.name
                         ));
@@ -385,8 +385,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     }),
                     PhysicalType::INT32,
                 ) => {}
-                (LogicalType::Time(tt), PhysicalType::INT64) => {
-                    if tt.unit == TimeUnit::MILLIS {
+                (LogicalType::Time(time), PhysicalType::INT64) => {
+                    if time.unit == TimeUnit::MILLIS {
                         return Err(general_err!(
                             "Cannot use millisecond unit on INT64 type for field '{}'",
                             self.name
