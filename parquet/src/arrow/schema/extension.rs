@@ -74,7 +74,10 @@ pub(crate) fn try_add_extension_type(
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography(geography) => {
-            let algorithm = geography.algorithm().map(|a| a.try_as_edges()).transpose()?;
+            let algorithm = geography
+                .algorithm()
+                .map(|a| a.try_as_edges())
+                .transpose()?;
             let md = parquet_geospatial::WkbMetadata::new(geography.crs.as_deref(), algorithm);
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
