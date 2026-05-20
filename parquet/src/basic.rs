@@ -226,7 +226,7 @@ pub struct VariantType {
 
 thrift_struct!(
 pub struct GeometryType {
-  /// A custom CRS. If unset the defaults to `OGC:CRS84`, which means that the geometries
+  /// A custom CRS. If unset the CRS `OGC:CRS84` should be used, which means that the geometries
   /// must be stored in longitude, latitude based on the WGS84 datum.
   1: optional string crs;
 }
@@ -234,7 +234,7 @@ pub struct GeometryType {
 
 thrift_struct!(
 pub struct GeographyType {
-  /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+  /// A custom CRS. If unset the CRS `OGC:CRS84` should be used.
   1: optional string crs;
   /// An optional algorithm can be set to correctly interpret edges interpolation
   /// of the geometries. If unset, the `SPHERICAL` algorithm should be used.
