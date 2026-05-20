@@ -353,7 +353,7 @@ impl Parser<'_> {
                             } else {
                                 scale = 0
                             }
-                            logical = Some(LogicalType::Decimal { scale, precision });
+                            logical = Some(LogicalType::decimal(scale, precision));
                             converted = ConvertedType::from(logical.clone());
                         }
                     }
@@ -371,10 +371,7 @@ impl Parser<'_> {
                                     "Failed to parse timezone info for TIME type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::Time {
-                                    is_adjusted_to_u_t_c,
-                                    unit,
-                                });
+                                logical = Some(LogicalType::time(is_adjusted_to_u_t_c, unit));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -396,10 +393,7 @@ impl Parser<'_> {
                                     "Failed to parse timezone info for TIMESTAMP type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::Timestamp {
-                                    is_adjusted_to_u_t_c,
-                                    unit,
-                                });
+                                logical = Some(LogicalType::timestamp(is_adjusted_to_u_t_c, unit));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -446,10 +440,7 @@ impl Parser<'_> {
                                     "Failed to parse is_signed for INTEGER type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::Integer {
-                                    bit_width,
-                                    is_signed,
-                                });
+                                logical = Some(LogicalType::integer(bit_width, is_signed));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -833,10 +824,7 @@ mod tests {
             .with_fields(vec![
                 Arc::new(
                     Type::primitive_type_builder("f1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                        .with_logical_type(Some(LogicalType::Decimal {
-                            precision: 9,
-                            scale: 3,
-                        }))
+                        .with_logical_type(Some(LogicalType::decimal(3, 9)))
                         .with_converted_type(ConvertedType::DECIMAL)
                         .with_length(5)
                         .with_precision(9)
@@ -846,10 +834,7 @@ mod tests {
                 ),
                 Arc::new(
                     Type::primitive_type_builder("f2", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                        .with_logical_type(Some(LogicalType::Decimal {
-                            precision: 38,
-                            scale: 18,
-                        }))
+                        .with_logical_type(Some(LogicalType::decimal(18, 38)))
                         .with_converted_type(ConvertedType::DECIMAL)
                         .with_length(16)
                         .with_precision(38)
@@ -1038,20 +1023,14 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::Integer {
-                        bit_width: 8,
-                        is_signed: true,
-                    }))
+                    .with_logical_type(Some(LogicalType::integer(8, true)))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_2", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::Integer {
-                        bit_width: 16,
-                        is_signed: false,
-                    }))
+                    .with_logical_type(Some(LogicalType::integer(16, false)))
                     .build()
                     .unwrap(),
             ),
@@ -1075,37 +1054,25 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_6", PhysicalType::INT32)
-                    .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS,
-                        is_adjusted_to_u_t_c: false,
-                    }))
+                    .with_logical_type(Some(LogicalType::time(false, TimeUnit::MILLIS)))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_7", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MICROS,
-                        is_adjusted_to_u_t_c: true,
-                    }))
+                    .with_logical_type(Some(LogicalType::time(true, TimeUnit::MICROS)))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_8", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::MILLIS,
-                        is_adjusted_to_u_t_c: true,
-                    }))
+                    .with_logical_type(Some(LogicalType::timestamp(true, TimeUnit::MILLIS)))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_9", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::NANOS,
-                        is_adjusted_to_u_t_c: false,
-                    }))
+                    .with_logical_type(Some(LogicalType::timestamp(false, TimeUnit::NANOS)))
                     .build()
                     .unwrap(),
             ),

@@ -199,9 +199,7 @@ mod tests {
         // data should have been written with the Variant logical type
         assert_eq!(
             field.get_basic_info().logical_type_ref(),
-            Some(&crate::basic::LogicalType::Variant {
-                specification_version: None
-            })
+            Some(&crate::basic::LogicalType::variant(None))
         );
     }
 

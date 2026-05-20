@@ -1449,10 +1449,7 @@ mod tests {
     #[test]
     fn test_primitive_type() {
         let mut result = Type::primitive_type_builder("foo", PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 32,
-                is_signed: true,
-            }))
+            .with_logical_type(Some(LogicalType::integer(32, true)))
             .with_id(Some(0))
             .build();
         assert!(result.is_ok());
@@ -1464,10 +1461,7 @@ mod tests {
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
                 basic_info.logical_type_ref(),
-                Some(&LogicalType::Integer {
-                    bit_width: 32,
-                    is_signed: true
-                })
+                Some(&LogicalType::integer(32, true))
             );
             assert_eq!(basic_info.converted_type(), ConvertedType::INT_32);
             assert_eq!(basic_info.id(), 0);
@@ -1482,10 +1476,7 @@ mod tests {
         // Test illegal inputs with logical type
         result = Type::primitive_type_builder("foo", PhysicalType::INT64)
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::Integer {
-                is_signed: true,
-                bit_width: 8,
-            }))
+            .with_logical_type(Some(LogicalType::integer(8, true)))
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
@@ -1524,10 +1515,7 @@ mod tests {
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::Decimal {
-                scale: 32,
-                precision: 12,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(32, 12)))
             .with_precision(-1)
             .with_scale(-1)
             .build();
