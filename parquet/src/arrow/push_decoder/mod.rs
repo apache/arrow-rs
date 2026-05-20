@@ -1443,6 +1443,42 @@ mod test {
     }
 
     #[test]
+    fn test_decoder_auto_cost_model_keeps_pushdown_for_high_selectivity_projected_predicate() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(first_rows_per_hundred_filter(&batch, 90)),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_a_c_first_rows_per_hundred(row_group_idx * 100, 100, 90)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_pushdown_still_preferred_count(), Some(1));
+    }
+
+    #[test]
     fn test_decoder_auto_cost_model_with_row_selection_does_not_evaluate_current_row_group_twice() {
         let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
