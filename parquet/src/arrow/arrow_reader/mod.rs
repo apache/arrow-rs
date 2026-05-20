@@ -1397,6 +1397,10 @@ impl ParquetRecordBatchReader {
             return Ok(buffered_batches.pop_front());
         }
 
+        if self.post_filter.is_none() && self.post_selection_filter.is_none() {
+            return self.next_inner_decoded();
+        }
+
         loop {
             let Some(batch) = self.next_inner_decoded()? else {
                 return Ok(None);

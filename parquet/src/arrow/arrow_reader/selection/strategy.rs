@@ -162,6 +162,10 @@ impl RowSelectionShape {
 pub(crate) enum CostModelDecisionReason {
     /// Predicate pushdown kept almost everything and did not produce useful pruning.
     HighSelectivityNoPruning,
+    /// Predicate columns are already part of the output projection, and the
+    /// observed selected-row ratio is high enough that sequential post-filtering
+    /// is likely cheaper than many selected output reads.
+    ProjectedPredicateModerateSelectivity,
     /// Fragmented runs with moderate selectivity often pay many small skip/read costs.
     FragmentedModerateSelectivity,
     /// Fragmented runs with high selectivity usually decode most rows plus pay pushdown overhead.
@@ -191,7 +195,7 @@ pub(crate) struct CostModelObservation {
 
 impl CostModelObservation {
     pub(crate) const OBSERVATION_ROW_GROUPS: usize = 1;
-    const FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO: f64 = 0.08;
+    pub(crate) const MODERATE_SELECTIVITY_MIN_RATIO: f64 = 0.08;
 
     pub(crate) fn trigger_reason(self) -> CostModelDecisionReason {
         if self.observed_row_groups < Self::OBSERVATION_ROW_GROUPS {
@@ -210,7 +214,7 @@ impl CostModelObservation {
         }
 
         let selected_ratio = shape.selected_ratio();
-        if (Self::FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO..0.50).contains(&selected_ratio) {
+        if (Self::MODERATE_SELECTIVITY_MIN_RATIO..0.50).contains(&selected_ratio) {
             return CostModelDecisionReason::FragmentedModerateSelectivity;
         }
         if selected_ratio < 0.50 {
@@ -224,6 +228,7 @@ impl CostModelObservation {
         matches!(
             self.trigger_reason(),
             CostModelDecisionReason::HighSelectivityNoPruning
+                | CostModelDecisionReason::ProjectedPredicateModerateSelectivity
                 | CostModelDecisionReason::FragmentedModerateSelectivity
                 | CostModelDecisionReason::FragmentedHighSelectivity
         )

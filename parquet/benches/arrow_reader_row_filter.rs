@@ -79,6 +79,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 const COLUMN_NAMES: [&str; 4] = ["int64", "float64", "utf8View", "ts"];
+const UTF8_VIEW_MISSING_VALUE: &str = "__arrow_rs_missing__";
 
 /// Generates a random string. Has a 50% chance to generate a short string (3–11 characters)
 /// or a long string (13–20 characters).
@@ -220,6 +221,7 @@ enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
     FilterColumnsOnly,
+    Float64Only,
     Utf8Only,
 }
 
@@ -229,6 +231,7 @@ impl std::fmt::Display for ProjectionCase {
             ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
             ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
+            ProjectionCase::Float64Only => write!(f, "float64_only"),
             ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
     }
@@ -381,6 +384,9 @@ enum FilterType {
     /// [ClickBench]: https://github.com/ClickHouse/ClickBench
     /// [Q21-Q27]: https://github.com/apache/datafusion/blob/b7177234e65cbbb2dcc04c252f6acd80bb026362/benchmarks/queries/clickbench/queries.sql#L22-L28
     Utf8ViewNonEmpty,
+    /// Sparse variable-width predicate shaped like TPC-DS Q83 dynamic
+    /// `i_item_id` filters, where the predicate column is also projected.
+    Utf8ViewMissing,
     /// Scalar-only part of ClickBench Q37:
     ///
     /// ```sql
@@ -396,6 +402,10 @@ enum FilterType {
     /// This synthetic predicate keeps that reader-level shape: cheap scalar
     /// filter columns protect an expensive `Utf8View` output column.
     ClickBenchQ37ScalarPrefix,
+    /// Scalar range predicate shaped like TPC-DS Q9 `ss_quantity BETWEEN ...`
+    /// subqueries. The selected rows are random and moderately selective, and
+    /// benchmark projections cover both count-only and numeric aggregate cases.
+    TpcdsQ9QuantityRange,
 }
 
 impl std::fmt::Display for FilterType {
@@ -409,7 +419,9 @@ impl std::fmt::Display for FilterType {
             FilterType::UnselectiveClustered => "ts < 9000",
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
+            FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
             FilterType::ClickBenchQ37ScalarPrefix => "int64 == 62 AND ts < 9000",
+            FilterType::TpcdsQ9QuantityRange => "int64 > 0 AND int64 < 21",
         };
         write!(f, "{s}")
     }
@@ -464,6 +476,11 @@ impl FilterType {
                 let scalar = StringViewArray::new_scalar("");
                 neq(array, &scalar)
             }
+            FilterType::Utf8ViewMissing => {
+                let array = batch.column(batch.schema().index_of("utf8View")?);
+                let scalar = StringViewArray::new_scalar(UTF8_VIEW_MISSING_VALUE);
+                eq(array, &scalar)
+            }
             // ClickBenchQ37ScalarPrefix: a cheap fragmented scalar predicate
             // evaluated before decoding a variable-width output column.
             FilterType::ClickBenchQ37ScalarPrefix => {
@@ -472,6 +489,12 @@ impl FilterType {
                 let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
                 let date_like_range = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
                 and(&counter_match, &date_like_range)
+            }
+            FilterType::TpcdsQ9QuantityRange => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let lower = gt(int64, &Int64Array::new_scalar(0))?;
+                let upper = lt(int64, &Int64Array::new_scalar(21))?;
+                and(&lower, &upper)
             }
         }
     }
@@ -486,8 +509,9 @@ impl FilterType {
             FilterType::UnselectiveUnclustered => &[1],
             FilterType::UnselectiveClustered => &[3],
             FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
-            FilterType::Utf8ViewNonEmpty => &[2],
+            FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewMissing => &[2],
             FilterType::ClickBenchQ37ScalarPrefix => &[0, 3],
+            FilterType::TpcdsQ9QuantityRange => &[0],
         }
     }
 }
@@ -843,9 +867,21 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
         ),
         AsyncFocusCase::new(
             "profile_q19_no_defer",
-            parquet_file,
+            parquet_file.clone(),
             FilterType::PointLookup,
             ProjectionCase::FilterColumnsOnly,
+        ),
+        AsyncFocusCase::new(
+            "profile_sparse_projected_fact_scan",
+            parquet_file.clone(),
+            FilterType::PointLookup,
+            ProjectionCase::AllColumns,
+        ),
+        AsyncFocusCase::new(
+            "profile_q83_sparse_utf8_projected",
+            parquet_file.clone(),
+            FilterType::Utf8ViewMissing,
+            ProjectionCase::AllColumns,
         ),
         AsyncFocusCase::new(
             "profile_small_scalar_no_defer",
@@ -858,6 +894,18 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
             small_parquet_file,
             FilterType::ClickBenchQ37ScalarPrefix,
             ProjectionCase::Utf8Only,
+        ),
+        AsyncFocusCase::new(
+            "profile_q9_quantity_count",
+            parquet_file.clone(),
+            FilterType::TpcdsQ9QuantityRange,
+            ProjectionCase::FilterColumnsOnly,
+        ),
+        AsyncFocusCase::new(
+            "profile_q9_quantity_avg",
+            parquet_file,
+            FilterType::TpcdsQ9QuantityRange,
+            ProjectionCase::Float64Only,
         ),
     ];
     let strategies = [
@@ -876,6 +924,48 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
 
     for case in cases {
         benchmark_async_focus_case(&mut group, &rt, case, &strategies);
+    }
+}
+
+/// Isolate projected scans that do not construct a [`RowFilter`].
+///
+/// This tracks the reader-level shape seen in TPC-DS Q83 return-table scans:
+/// a narrow primitive projection where row-level pushdown metrics are zero.
+/// It deliberately lives outside the cost-model matrix because there is no
+/// filter strategy to choose.
+fn benchmark_projection_scan_focus(c: &mut Criterion) {
+    let parquet_file = Bytes::from(write_parquet_file());
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("arrow_reader_projection_scan_focus");
+
+    for (case_name, projection) in [("profile_q83_return_scan_primitives", vec![0, 1, 3])] {
+        let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+        let metadata = Arc::clone(reader.metadata());
+        let schema_descr = metadata.file_metadata().schema_descr();
+        let projection_mask = ProjectionMask::roots(schema_descr, projection);
+
+        let bench_id = BenchmarkId::new(case_name, "async");
+        let rt_captured = rt.handle().clone();
+        group.bench_function(bench_id, |b| {
+            b.iter(|| {
+                let reader = reader.clone();
+                let projection_mask = projection_mask.clone();
+                rt_captured.block_on(benchmark_async_reader_projected(reader, projection_mask));
+            });
+        });
+
+        let bench_id = BenchmarkId::new(case_name, "sync");
+        group.bench_function(bench_id, |b| {
+            b.iter(|| {
+                let reader = reader.clone();
+                let projection_mask = projection_mask.clone();
+                benchmark_sync_reader_projected(reader, projection_mask);
+            });
+        });
     }
 }
 
@@ -1004,6 +1094,7 @@ fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCa
             })
             .collect(),
         ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
+        ProjectionCase::Float64Only => vec![1],
         ProjectionCase::Utf8Only => vec![2],
     }
 }
@@ -1097,6 +1188,20 @@ async fn benchmark_async_reader_post_filter(
     }
 }
 
+async fn benchmark_async_reader_projected(reader: InMemoryReader, projection_mask: ProjectionMask) {
+    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .build()
+        .unwrap();
+    while let Some(b) = stream.next().await {
+        let batch = b.unwrap();
+        std::hint::black_box(batch.num_rows());
+    }
+}
+
 /// Like [`benchmark_async_reader`] but also threads `with_limit(limit)` into
 /// the stream builder. Used by the `LIMIT` benchmark below.
 async fn benchmark_async_reader_with_limit(
@@ -1179,6 +1284,20 @@ fn benchmark_sync_reader_post_filter(
             .collect::<Vec<_>>();
         let output = filtered.project(&output_projection).unwrap();
         std::hint::black_box(output.num_rows());
+    }
+}
+
+fn benchmark_sync_reader_projected(reader: InMemoryReader, projection_mask: ProjectionMask) {
+    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .build()
+        .unwrap();
+
+    for b in stream {
+        let batch = b.unwrap();
+        std::hint::black_box(batch.num_rows());
     }
 }
 
@@ -1304,6 +1423,7 @@ criterion_group!(
     benchmark_sync_strategy_matrix,
     benchmark_async_strategy_matrix,
     benchmark_async_cost_model_focus,
+    benchmark_projection_scan_focus,
     benchmark_filters_with_limit,
 );
 criterion_main!(benches);

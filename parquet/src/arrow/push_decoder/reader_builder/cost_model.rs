@@ -20,11 +20,15 @@
 //! The cost model is intentionally adaptive rather than purely static. There
 //! are two ways to enter post-filter execution:
 //!
-//! * a narrow static rule starts there for variable-width predicate columns,
-//!   where building fragmented pushdown selections is commonly expensive
+//! * a narrow static rule starts there for variable-width predicate columns
+//!   that are not already part of the output projection, where building
+//!   fragmented pushdown selections is commonly expensive
 //! * the first eligible row group runs predicate pushdown, records the actual
-//!   `RowSelection` shape, and lets later row groups use post-filter if that
-//!   shape suggests pushdown is doing extra work without pruning enough rows
+//!   `RowSelection` shape, and lets later row groups use post-filter if the
+//!   shape suggests pushdown is doing extra work without pruning enough rows.
+//!   When predicate columns are already part of the output projection, the
+//!   observed selected-row ratio can also choose post-filter without requiring
+//!   fragmented selected runs.
 //!
 //! ```text
 //! Start
@@ -108,7 +112,7 @@ impl RowGroupReaderBuilder {
         self.build_post_filter_read_projection(filter)
     }
 
-    pub(super) fn should_start_with_post_filter_for_variable_width_predicate(
+    pub(super) fn should_start_with_post_filter_for_unprojected_variable_width_predicate(
         &self,
         filter: &RowFilter,
         row_group_idx: usize,
@@ -122,7 +126,11 @@ impl RowGroupReaderBuilder {
             return false;
         };
 
-        self.projection_has_variable_width_leaf(row_group_idx, &predicate_projection)
+        let predicate_already_projected =
+            self.projection_includes_all(&self.projection, &predicate_projection);
+
+        !predicate_already_projected
+            && self.projection_has_variable_width_leaf(row_group_idx, &predicate_projection)
     }
 
     fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
@@ -166,6 +174,12 @@ impl RowGroupReaderBuilder {
         })
     }
 
+    fn projection_includes_all(&self, projection: &ProjectionMask, other: &ProjectionMask) -> bool {
+        let schema = self.metadata.file_metadata().schema_descr();
+        (0..schema.num_columns())
+            .all(|leaf_idx| !other.leaf_included(leaf_idx) || projection.leaf_included(leaf_idx))
+    }
+
     pub(super) fn observe_cost_model_candidate(
         &mut self,
         decision: RowSelectionStrategyDecision,
@@ -176,41 +190,75 @@ impl RowGroupReaderBuilder {
             return;
         }
 
-        let RowGroupCostModelState::Observing { observation } = &mut self.cost_model_state else {
-            return;
-        };
-
-        let mut shape = decision.shape;
-        if shape.total_rows() == 0 {
-            // `None` selection means the predicate kept the whole row group.
-            // Represent it as one selected run so the cost model can
-            // treat "no pruning" as an observed high-selectivity case.
-            shape = RowSelectionShape {
-                selected_rows: row_count,
-                skipped_rows: 0,
-                selector_count: 1,
-                selected_run_count: 1,
-                skipped_run_count: 0,
+        let observation = {
+            let RowGroupCostModelState::Observing { observation } = &mut self.cost_model_state
+            else {
+                return;
             };
-        }
 
-        observation.observed_row_groups += 1;
-        observation.shape.add_assign(shape);
+            let mut shape = decision.shape;
+            if shape.total_rows() == 0 {
+                // `None` selection means the predicate kept the whole row group.
+                // Represent it as one selected run so the cost model can
+                // treat "no pruning" as an observed high-selectivity case.
+                shape = RowSelectionShape {
+                    selected_rows: row_count,
+                    skipped_rows: 0,
+                    selector_count: 1,
+                    selected_run_count: 1,
+                    skipped_run_count: 0,
+                };
+            }
+
+            observation.observed_row_groups += 1;
+            observation.shape.add_assign(shape);
+            *observation
+        };
         self.metrics.record_cost_model_observed_row_group();
 
-        let reason = observation.trigger_reason();
+        let reason = self.cost_model_reason_with_projection_context(observation);
         if matches!(reason, CostModelDecisionReason::ObservationIncomplete) {
             self.metrics.record_cost_model_trigger(reason);
             return;
         }
 
-        let prefers_post_filter = observation.prefers_post_filter();
+        let prefers_post_filter = observation.prefers_post_filter()
+            || matches!(
+                reason,
+                CostModelDecisionReason::ProjectedPredicateModerateSelectivity
+            );
         self.metrics.record_cost_model_trigger(reason);
 
         if prefers_post_filter && self.post_filter_cost_model_supported(budget) {
             self.cost_model_state = RowGroupCostModelState::UsePostFilter;
         } else {
             self.cost_model_state = RowGroupCostModelState::UsePushdown;
+        }
+    }
+
+    fn cost_model_reason_with_projection_context(
+        &self,
+        observation: CostModelObservation,
+    ) -> CostModelDecisionReason {
+        let reason = observation.trigger_reason();
+        if !matches!(reason, CostModelDecisionReason::PushdownStillPreferred) {
+            return reason;
+        }
+
+        let Some(filter) = self.filter.as_ref() else {
+            return reason;
+        };
+        let Some(predicate_projection) = filter.union_projection() else {
+            return reason;
+        };
+
+        let selected_ratio = observation.shape.selected_ratio();
+        if self.projection_includes_all(&self.projection, &predicate_projection)
+            && selected_ratio >= CostModelObservation::MODERATE_SELECTIVITY_MIN_RATIO
+        {
+            CostModelDecisionReason::ProjectedPredicateModerateSelectivity
+        } else {
+            reason
         }
     }
 

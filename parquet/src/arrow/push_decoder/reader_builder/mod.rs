@@ -559,7 +559,7 @@ impl RowGroupReaderBuilder {
             }));
         };
 
-        if self.should_start_with_post_filter_for_variable_width_predicate(
+        if self.should_start_with_post_filter_for_unprojected_variable_width_predicate(
             &filter,
             row_group_info.row_group_idx,
             row_group_info.budget,
