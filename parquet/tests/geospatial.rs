@@ -30,7 +30,7 @@ mod test {
             ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
             arrow_writer::ArrowWriterOptions,
         },
-        basic::{EdgeInterpolationAlgorithm, LogicalType},
+        basic::LogicalType,
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
@@ -77,7 +77,7 @@ mod test {
             ),
             (
                 "crs-geography.parquet",
-                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::SPHERICAL)),
+                LogicalType::geography(None, None),
                 WkbMetadata::new(None, Some(WkbEdges::Spherical)),
             ),
         ];

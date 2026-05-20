@@ -237,10 +237,21 @@ pub struct GeographyType {
   /// A custom CRS. If unset the defaults to `OGC:CRS84`.
   1: optional string crs;
   /// An optional algorithm can be set to correctly interpret edges interpolation
-  /// of the geometries. If unset, the algorithm defaults to `SPHERICAL`.
+  /// of the geometries. If unset, the `SPHERICAL` algorithm should be used.
   2: optional EdgeInterpolationAlgorithm algorithm;
 }
 );
+
+impl GeographyType {
+    /// Accessor for the `GeographyType::algorithm` field. If this field is not set, this
+    /// function returns the default value (currently [`EdgeInterpolationAlgorithm::SPHERICAL`]
+    /// per the Parquet [specification]).
+    ///
+    /// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
+    pub fn algorithm(&self) -> Option<EdgeInterpolationAlgorithm> {
+        self.algorithm.or(Some(Default::default()))
+    }
+}
 
 thrift_union_with_unknown!(
 /// Logical types used by version 2.4.0+ of the Parquet format.

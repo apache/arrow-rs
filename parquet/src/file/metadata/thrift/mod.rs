@@ -622,21 +622,7 @@ fn read_column_chunk<'a>(
 }
 
 fn read_schema(prot: &mut ThriftSliceInputProtocol) -> Result<SchemaDescriptor> {
-    let mut schema = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut *prot)?;
-    // An earlier version of this crate enforced this when decoding LogicalType. Now that
-    // the decoder is macro generated, we do this to preserve the original behavior.
-    // TODO: this was done due to a line in the spec saying an unset algorithm defaults
-    // to SPHERICAL. But there is no default in the Thrift, so it would be better to set the
-    // default when consumed.
-    // See https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
-    for se in schema.iter_mut() {
-        match se.logical_type.as_mut() {
-            Some(LogicalType::Geography(g)) if g.algorithm.is_none() => {
-                g.algorithm = Some(Default::default());
-            }
-            _ => {}
-        }
-    }
+    let schema = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut *prot)?;
     let parquet_schema = parquet_schema_from_array(schema)?;
     Ok(SchemaDescriptor::new(parquet_schema))
 }
