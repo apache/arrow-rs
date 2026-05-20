@@ -942,31 +942,31 @@ fn benchmark_projection_scan_focus(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("arrow_reader_projection_scan_focus");
 
-    for (case_name, projection) in [("profile_q83_return_scan_primitives", vec![0, 1, 3])] {
-        let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-        let metadata = Arc::clone(reader.metadata());
-        let schema_descr = metadata.file_metadata().schema_descr();
-        let projection_mask = ProjectionMask::roots(schema_descr, projection);
+    let case_name = "profile_q83_return_scan_primitives";
+    let projection = vec![0, 1, 3];
+    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+    let metadata = Arc::clone(reader.metadata());
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let projection_mask = ProjectionMask::roots(schema_descr, projection);
 
-        let bench_id = BenchmarkId::new(case_name, "async");
-        let rt_captured = rt.handle().clone();
-        group.bench_function(bench_id, |b| {
-            b.iter(|| {
-                let reader = reader.clone();
-                let projection_mask = projection_mask.clone();
-                rt_captured.block_on(benchmark_async_reader_projected(reader, projection_mask));
-            });
+    let bench_id = BenchmarkId::new(case_name, "async");
+    let rt_captured = rt.handle().clone();
+    group.bench_function(bench_id, |b| {
+        b.iter(|| {
+            let reader = reader.clone();
+            let projection_mask = projection_mask.clone();
+            rt_captured.block_on(benchmark_async_reader_projected(reader, projection_mask));
         });
+    });
 
-        let bench_id = BenchmarkId::new(case_name, "sync");
-        group.bench_function(bench_id, |b| {
-            b.iter(|| {
-                let reader = reader.clone();
-                let projection_mask = projection_mask.clone();
-                benchmark_sync_reader_projected(reader, projection_mask);
-            });
+    let bench_id = BenchmarkId::new(case_name, "sync");
+    group.bench_function(bench_id, |b| {
+        b.iter(|| {
+            let reader = reader.clone();
+            let projection_mask = projection_mask.clone();
+            benchmark_sync_reader_projected(reader, projection_mask);
         });
-    }
+    });
 }
 
 struct AsyncFocusCase {
