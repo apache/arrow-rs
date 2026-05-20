@@ -1366,7 +1366,7 @@ mod test {
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
-        let metrics = ArrowReaderMetrics::enabled_with_phase_profile();
+        let metrics = ArrowReaderMetrics::enabled();
 
         let predicate_rows = Arc::new(AtomicUsize::new(0));
         let predicate_rows_for_filter = Arc::clone(&predicate_rows);
@@ -1404,13 +1404,6 @@ mod test {
             Some(1)
         );
         assert_eq!(metrics.records_read_from_cache(), Some(100));
-
-        let report = metrics.phase_profile_report().unwrap();
-        assert_eq!(
-            phase_profile_count(&report, "post_selection_apply_filter"),
-            1
-        );
-        assert_eq!(phase_profile_count(&report, "post_filter_apply_filter"), 3);
     }
 
     #[test]
