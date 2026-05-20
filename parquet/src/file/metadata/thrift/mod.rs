@@ -621,6 +621,26 @@ fn read_column_chunk<'a>(
     Ok(col)
 }
 
+fn read_schema(prot: &mut ThriftSliceInputProtocol) -> Result<SchemaDescriptor> {
+    let mut schema = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut *prot)?;
+    // An earlier version of this crate enforced this when decoding LogicalType. Now that
+    // the decoder is macro generated, we do this to preserve the original behavior.
+    // TODO: this was done due to a line in the spec saying an unset algorithm defaults
+    // to SPHERICAL. But there is no default in the Thrift, so it would be better to set the
+    // default when consumed.
+    // See https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
+    for se in schema.iter_mut() {
+        match se.logical_type.as_mut() {
+            Some(LogicalType::Geography(g)) if g.algorithm.is_none() => {
+                g.algorithm = Some(Default::default());
+            }
+            _ => {}
+        }
+    }
+    let parquet_schema = parquet_schema_from_array(schema)?;
+    Ok(SchemaDescriptor::new(parquet_schema))
+}
+
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
@@ -724,10 +744,8 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
         }
         match field_ident.id {
             2 => {
-                // read schema and convert to SchemaDescriptor for use when reading row groups
-                let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
-                let val = parquet_schema_from_array(val)?;
-                return Ok(SchemaDescriptor::new(val));
+                // read schema and convert to SchemaDescriptor
+                return read_schema(&mut prot);
             }
             _ => prot.skip(field_ident.field_type)?,
         }
@@ -791,10 +809,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                     prot.skip(field_ident.field_type)?;
                 } else {
                     // read schema and convert to SchemaDescriptor for use when reading row groups
-                    let val =
-                        read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
-                    let val = parquet_schema_from_array(val)?;
-                    schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                    schema_descr = Some(Arc::new(read_schema(&mut prot)?));
                 }
             }
             3 => {

@@ -24,8 +24,8 @@ use crate::file::metadata::HeapSize;
 use crate::file::metadata::thrift::SchemaElement;
 
 use crate::basic::{
-    ColumnOrder, ConvertedType, EdgeInterpolationAlgorithm, GeographyType, IntType, LogicalType,
-    Repetition, SortOrder, TimeType, TimeUnit, Type as PhysicalType,
+    ColumnOrder, ConvertedType, IntType, LogicalType, Repetition, SortOrder, TimeType, TimeUnit,
+    Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -1278,7 +1278,7 @@ fn build_tree<'a>(
 }
 
 /// Checks if the logical type is valid.
-fn check_logical_type(logical_type: Option<&mut LogicalType>) -> Result<()> {
+fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
     if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type {
         if *bit_width != 8 && *bit_width != 16 && *bit_width != 32 && *bit_width != 64 {
             return Err(general_err!(
@@ -1286,14 +1286,6 @@ fn check_logical_type(logical_type: Option<&mut LogicalType>) -> Result<()> {
             ));
         }
     }
-    // FIXME(ets): we used to enforce this when parsing, but that's done in macros now
-    // need to find a better location to do this check
-    if let Some(LogicalType::Geography(GeographyType { algorithm, .. })) = logical_type {
-        if algorithm.is_none() {
-            *algorithm = Some(EdgeInterpolationAlgorithm::SPHERICAL);
-        }
-    }
-
     Ok(())
 }
 
@@ -1354,9 +1346,9 @@ fn schema_from_array_helper<'a>(
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
 
     // LogicalType is prefered to ConvertedType, but both may be present.
-    let mut logical_type = element.logical_type;
+    let logical_type = element.logical_type;
 
-    check_logical_type(logical_type.as_mut())?;
+    check_logical_type(&logical_type)?;
 
     let field_id = element.field_id;
     match element.num_children {
