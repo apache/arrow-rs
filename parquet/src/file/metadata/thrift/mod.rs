@@ -1957,6 +1957,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
 
         let err = super::convert_stats(&column_descr, Some(make_stats(Some(&invalid), None)))
