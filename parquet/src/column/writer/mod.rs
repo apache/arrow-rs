@@ -1515,8 +1515,9 @@ fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut 
         *min = Some(val.clone());
     } else {
         // safe to unwrap min since we've already tested for None
-        let is_min_nan = is_nan(descr, min.as_ref().unwrap());
-        let is_val_nan = is_nan(descr, val);
+        let logical_type = descr.logical_type_ref();
+        let is_min_nan = is_nan(logical_type, min.as_ref().unwrap());
+        let is_val_nan = is_nan(logical_type, val);
         match (is_min_nan, is_val_nan) {
             // current min is not NaN, but incoming is NaN: skip
             (false, true) => {}
@@ -1533,8 +1534,9 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
         *max = Some(val.clone());
     } else {
         // safe to unwrap max since we've already tested for None
-        let is_max_nan = is_nan(descr, max.as_ref().unwrap());
-        let is_val_nan = is_nan(descr, val);
+        let logical_type = descr.logical_type_ref();
+        let is_max_nan = is_nan(logical_type, max.as_ref().unwrap());
+        let is_val_nan = is_nan(logical_type, val);
         match (is_max_nan, is_val_nan) {
             // current max is not NaN, but incoming is NaN: skip
             (false, true) => {}
@@ -1548,13 +1550,15 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 
 #[inline]
 #[allow(clippy::eq_op)]
-fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
+fn is_nan<T: ParquetValueType>(logical_type: Option<&LogicalType>, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY if logical_type == Some(&LogicalType::Float16) => {
+            // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
-            let val = f16::from_le_bytes([val[0], val[1]]);
-            val.is_nan()
+            // Float16 is stored little endian
+            let uval = (val[1] as u16) << 8 | val[0] as u16;
+            uval & 0x7FFFu16 > 0x7C00u16
         }
         _ => false,
     }

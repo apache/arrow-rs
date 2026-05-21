@@ -164,7 +164,8 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
         {
             // Count NaN values for floating point types
             if self.is_floating_point_column() {
-                let nan_count = slice.iter().filter(|v| is_nan(&self.descr, *v)).count() as u64;
+                let logical_type = self.descr.logical_type_ref();
+                let nan_count = slice.iter().filter(|v| is_nan(logical_type, *v)).count() as u64;
                 *self.nan_count.get_or_insert(0) += nan_count;
             }
 
@@ -351,29 +352,37 @@ where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
+    // we only need the logical type for FLBA/Float16
+    let logical_type = match T::PHYSICAL_TYPE {
+        Type::FIXED_LEN_BYTE_ARRAY => descr.logical_type_ref(),
+        _ => None,
+    };
+
     let first = iter.next()?;
-    let mut min_max_nan = is_nan(descr, first);
+    let mut min_max_nan = is_nan(logical_type, first);
 
     let mut min = first;
     let mut max = first;
     for val in iter {
-        // skip NaNs if we've encounter non-NaN
-        if !min_max_nan && is_nan(descr, val) {
-            continue;
-        }
-        // if min/max are NaN, check for non-NaN and reset
-        if min_max_nan && !is_nan(descr, val) {
-            min = val;
-            max = val;
-            min_max_nan = false;
-            continue;
-        }
-        // both are NaN or non-NaN, so do the comparison
-        if compare_greater(descr, min, val) {
-            min = val;
-        }
-        if compare_greater(descr, val, max) {
-            max = val;
+        match (min_max_nan, is_nan(logical_type, val)) {
+            // skip NaNs if we've encounter non-NaN
+            (false, true) => continue,
+            // if min/max are NaN, check for non-NaN and reset
+            (true, false) => {
+                min = val;
+                max = val;
+                min_max_nan = false;
+                continue;
+            }
+            // both are NaN or non-NaN, so do the comparison
+            (_, _) => {
+                if compare_greater(descr, min, val) {
+                    min = val;
+                }
+                if compare_greater(descr, val, max) {
+                    max = val;
+                }
+            }
         }
     }
 
