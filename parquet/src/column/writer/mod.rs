@@ -1553,7 +1553,9 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 fn is_nan<T: ParquetValueType>(logical_type: Option<&LogicalType>, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if logical_type == Some(&LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY
+            if logical_type.is_some_and(|lt| matches!(lt, LogicalType::Float16)) =>
+        {
             // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
             // Float16 is stored little endian
