@@ -41,7 +41,7 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::column::chunker::CdcChunk;
-use crate::column::writer::LevelDataRef;
+use crate::column::writer::{LevelDataRef, ValueSelectionRef};
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
@@ -849,17 +849,6 @@ impl LevelData {
         }
     }
 
-    pub(crate) fn slice(&self, offset: usize, len: usize) -> Self {
-        match self {
-            Self::Absent => Self::Absent,
-            Self::Materialized(values) => Self::Materialized(values[offset..offset + len].to_vec()),
-            Self::Uniform { value, .. } => Self::Uniform {
-                value: *value,
-                count: len,
-            },
-        }
-    }
-
     fn append_run(&mut self, value: i16, count: usize) {
         if count == 0 {
             return;
@@ -917,6 +906,36 @@ impl LevelData {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ArrayLevelsView<'a> {
+    array: &'a (dyn Array + 'static),
+    def_levels: LevelDataRef<'a>,
+    rep_levels: LevelDataRef<'a>,
+    non_null_indices: &'a [usize],
+}
+
+impl<'a> ArrayLevelsView<'a> {
+    pub(crate) fn array(&self) -> &'a (dyn Array + 'static) {
+        self.array
+    }
+
+    pub(crate) fn def_level_data(&self) -> LevelDataRef<'a> {
+        self.def_levels
+    }
+
+    pub(crate) fn rep_level_data(&self) -> LevelDataRef<'a> {
+        self.rep_levels
+    }
+
+    pub(crate) fn value_selection(&self) -> ValueSelectionRef<'a> {
+        ValueSelectionRef::Sparse(self.non_null_indices)
+    }
+
+    pub(crate) fn with_array(self, array: &'a (dyn Array + 'static)) -> Self {
+        Self { array, ..self }
     }
 }
 
@@ -999,37 +1018,32 @@ impl ArrayLevels {
         &self.non_null_indices
     }
 
-    /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
+    pub(crate) fn view(&self) -> ArrayLevelsView<'_> {
+        ArrayLevelsView {
+            array: self.array.as_ref(),
+            def_levels: self.def_levels.as_ref(),
+            rep_levels: self.rep_levels.as_ref(),
+            non_null_indices: &self.non_null_indices,
+        }
+    }
+
+    /// Create a borrowed view of this `ArrayLevels` for a CDC chunk.
     ///
-    /// The chunk's `value_offset`/`num_values` select the relevant slice of
-    /// `non_null_indices`. The array is sliced to the range covered by
-    /// those indices, and they are shifted to be relative to the slice.
-    pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
-        let def_levels = self.def_levels.slice(chunk.level_offset, chunk.num_levels);
-        let rep_levels = self.rep_levels.slice(chunk.level_offset, chunk.num_levels);
-
-        // Select the non-null indices for this chunk.
-        let nni = &self.non_null_indices[chunk.value_offset..chunk.value_offset + chunk.num_values];
-        // Compute the array range spanned by the non-null indices.
-        // When nni is empty (all-null chunk), start=0, end=0 → zero-length
-        // array slice; write_batch_internal will process only the def/rep
-        // levels and write no values.
-        let start = nni.first().copied().unwrap_or(0);
-        let end = nni.last().map_or(0, |&i| i + 1);
-        // Shift indices to be relative to the sliced array.
-        let non_null_indices = nni.iter().map(|&idx| idx - start).collect();
-        // Slice the array to the computed range.
-        let array = self.array.slice(start, end - start);
-        let logical_nulls = array.logical_nulls();
-
-        Self {
-            def_levels,
-            rep_levels,
-            non_null_indices,
-            max_def_level: self.max_def_level,
-            max_rep_level: self.max_rep_level,
-            array,
-            logical_nulls,
+    /// Only the level streams and non-null index selection are sliced. The
+    /// Arrow leaf array remains the original array so value indices stay absolute.
+    pub(crate) fn chunk_view(&self, chunk: &CdcChunk) -> ArrayLevelsView<'_> {
+        ArrayLevelsView {
+            array: self.array.as_ref(),
+            def_levels: self
+                .def_levels
+                .as_ref()
+                .slice(chunk.level_offset, chunk.num_levels),
+            rep_levels: self
+                .rep_levels
+                .as_ref()
+                .slice(chunk.level_offset, chunk.num_levels),
+            non_null_indices: &self.non_null_indices
+                [chunk.value_offset..chunk.value_offset + chunk.num_values],
         }
     }
 
@@ -2348,11 +2362,10 @@ mod tests {
     }
 
     #[test]
-    fn test_slice_for_chunk_flat() {
+    fn test_chunk_view_flat() {
         // Case 1: required field (max_def_level=0, no def/rep levels stored).
         // Array has 6 values; all are non-null so non_null_indices covers every position.
-        // value_offset=2, num_values=3 → non_null_indices[2..5] = [2,3,4].
-        // Array is sliced (no def_levels → write_batch_internal uses values.len()).
+        // value_offset=2, num_values=3 selects non_null_indices[2..5] = [2, 3, 4].
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
@@ -2364,22 +2377,24 @@ mod tests {
             array,
             logical_nulls,
         };
-        let sliced = levels.slice_for_chunk(&CdcChunk {
+        let view = levels.chunk_view(&CdcChunk {
             level_offset: 0,
             num_levels: 0,
             value_offset: 2,
             num_values: 3,
         });
-        assert!(matches!(sliced.def_levels, LevelData::Absent));
-        assert!(matches!(sliced.rep_levels, LevelData::Absent));
-        assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
-        assert_eq!(sliced.array.len(), 3);
+        assert_eq!(view.def_level_data(), LevelDataRef::Absent);
+        assert_eq!(view.rep_level_data(), LevelDataRef::Absent);
+        assert_eq!(
+            view.value_selection(),
+            ValueSelectionRef::Sparse(&[2, 3, 4])
+        );
+        assert_eq!(view.array().len(), 6);
 
         // Case 2: optional field (max_def_level=1, def levels present, no rep levels).
         // Array: [Some(1), None, Some(3), None, Some(5), Some(6)]
         // non_null_indices: [0, 2, 4, 5]
-        // value_offset=1, num_values=1 → non_null_indices[1..2] = [2].
-        // Array is not sliced (def_levels present → num_levels from def_levels.len()).
+        // value_offset=1, num_values=1 selects non_null_indices[1..2] = [2].
         let array: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -2398,20 +2413,23 @@ mod tests {
             array,
             logical_nulls,
         };
-        let sliced = levels.slice_for_chunk(&CdcChunk {
+        let view = levels.chunk_view(&CdcChunk {
             level_offset: 1,
             num_levels: 3,
             value_offset: 1,
             num_values: 1,
         });
-        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 1, 0]));
-        assert!(matches!(sliced.rep_levels, LevelData::Absent));
-        assert_eq!(sliced.non_null_indices, vec![0]); // [2] shifted by -2 (nni[0])
-        assert_eq!(sliced.array.len(), 1);
+        assert_eq!(
+            view.def_level_data(),
+            LevelDataRef::Materialized(&[0, 1, 0])
+        );
+        assert_eq!(view.rep_level_data(), LevelDataRef::Absent);
+        assert_eq!(view.value_selection(), ValueSelectionRef::Sparse(&[2]));
+        assert_eq!(view.array().len(), 6);
     }
 
     #[test]
-    fn test_slice_for_chunk_nested_with_nulls() {
+    fn test_chunk_view_nested_with_nulls() {
         // Regression test for https://github.com/apache/arrow-rs/issues/9637
         //
         // Simulates a List<Int32?> where null list entries have non-zero child
@@ -2453,40 +2471,52 @@ mod tests {
             logical_nulls,
         };
 
-        // Chunk 0: rows 0-1, nni=[0] → array sliced to [0..1]
-        let chunk0 = levels.slice_for_chunk(&CdcChunk {
+        // Chunk 0: rows 0-1, value selection is [0].
+        let chunk0 = levels.chunk_view(&CdcChunk {
             level_offset: 0,
             num_levels: 2,
             value_offset: 0,
             num_values: 1,
         });
-        assert_eq!(chunk0.non_null_indices, vec![0]);
-        assert_eq!(chunk0.array.len(), 1);
+        assert_eq!(chunk0.value_selection(), ValueSelectionRef::Sparse(&[0]));
+        assert_eq!(chunk0.def_level_data(), LevelDataRef::Materialized(&[3, 0]));
+        assert_eq!(chunk0.rep_level_data(), LevelDataRef::Materialized(&[0, 0]));
+        assert_eq!(chunk0.array().len(), 10);
 
-        // Chunk 1: rows 2-3, nni=[3] → array sliced to [3..4]
-        let chunk1 = levels.slice_for_chunk(&CdcChunk {
+        // Chunk 1: rows 2-3, value selection is [3].
+        let chunk1 = levels.chunk_view(&CdcChunk {
             level_offset: 2,
             num_levels: 3,
             value_offset: 1,
             num_values: 1,
         });
-        assert_eq!(chunk1.non_null_indices, vec![0]);
-        assert_eq!(chunk1.array.len(), 1);
+        assert_eq!(chunk1.value_selection(), ValueSelectionRef::Sparse(&[3]));
+        assert_eq!(
+            chunk1.def_level_data(),
+            LevelDataRef::Materialized(&[3, 2, 0])
+        );
+        assert_eq!(
+            chunk1.rep_level_data(),
+            LevelDataRef::Materialized(&[0, 1, 0])
+        );
+        assert_eq!(chunk1.array().len(), 10);
 
-        // Chunk 2: row 4, nni=[8, 9] → array sliced to [8..10]
-        let chunk2 = levels.slice_for_chunk(&CdcChunk {
+        // Chunk 2: row 4, value selection is [8, 9].
+        let chunk2 = levels.chunk_view(&CdcChunk {
             level_offset: 5,
             num_levels: 2,
             value_offset: 2,
             num_values: 2,
         });
-        assert_eq!(chunk2.non_null_indices, vec![0, 1]);
-        assert_eq!(chunk2.array.len(), 2);
+        assert_eq!(chunk2.value_selection(), ValueSelectionRef::Sparse(&[8, 9]));
+        assert_eq!(chunk2.def_level_data(), LevelDataRef::Materialized(&[3, 3]));
+        assert_eq!(chunk2.rep_level_data(), LevelDataRef::Materialized(&[0, 1]));
+        assert_eq!(chunk2.array().len(), 10);
     }
 
     #[test]
-    fn test_slice_for_chunk_all_null() {
-        // All-null chunk: num_values=0 → empty nni slice → zero-length array.
+    fn test_chunk_view_all_null() {
+        // All-null chunk: num_values=0 yields an empty sparse value selection.
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
@@ -2499,15 +2529,16 @@ mod tests {
             logical_nulls,
         };
         // Chunk covering only the two null rows (levels 1..3), zero non-null values.
-        let sliced = levels.slice_for_chunk(&CdcChunk {
+        let view = levels.chunk_view(&CdcChunk {
             level_offset: 1,
             num_levels: 2,
             value_offset: 1,
             num_values: 0,
         });
-        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 0]));
-        assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
-        assert_eq!(sliced.array.len(), 0);
+        assert_eq!(view.def_level_data(), LevelDataRef::Materialized(&[0, 0]));
+        let expected: &[usize] = &[];
+        assert_eq!(view.value_selection(), ValueSelectionRef::Sparse(expected));
+        assert_eq!(view.array().len(), 4);
     }
 
     #[test]

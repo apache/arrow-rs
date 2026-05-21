@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "arrow")]
-use crate::column::writer::LevelDataRef;
+use crate::column::writer::{LevelDataRef, ValueSelectionRef};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::CdcOptions;
 use crate::schema::types::ColumnDescriptor;
@@ -90,9 +89,6 @@ pub(crate) struct ContentDefinedChunker {
     max_def_level: i16,
     /// Maximum repetition level for this column.
     max_rep_level: i16,
-    /// Definition level at the nearest REPEATED ancestor.
-    repeated_ancestor_def_level: i16,
-
     /// Minimum chunk size in bytes.
     /// The rolling hash will not be updated until this size is reached for each chunk.
     /// All data sent through the hash function counts towards the chunk size, including
@@ -129,7 +125,6 @@ impl ContentDefinedChunker {
         Ok(Self {
             max_def_level: desc.max_def_level(),
             max_rep_level: desc.max_rep_level(),
-            repeated_ancestor_def_level: desc.repeated_ancestor_def_level(),
             min_chunk_size: options.min_chunk_size as i64,
             max_chunk_size: options.max_chunk_size as i64,
             rolling_hash_mask,
@@ -279,6 +274,7 @@ impl ContentDefinedChunker {
         &mut self,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
+        value_selection: ValueSelectionRef<'_>,
         num_levels: usize,
         mut roll_value: F,
     ) -> Vec<CdcChunk>
@@ -302,7 +298,10 @@ impl ContentDefinedChunker {
             //   level:         0   1   2
             //   value_offset:  0   1   2
             for offset in 0..num_levels {
-                roll_value(self, offset);
+                let array_index = value_selection
+                    .index_at(offset)
+                    .expect("value selection required for non-null values");
+                roll_value(self, array_index);
                 if self.need_new_chunk() {
                     chunks.push(CdcChunk {
                         level_offset: prev_offset,
@@ -331,10 +330,10 @@ impl ContentDefinedChunker {
                     .expect("def_levels required when max_def_level > 0");
                 self.roll_level(def_level);
                 if def_level == self.max_def_level {
-                    // For non-nested data, the leaf array has one slot per
-                    // level (nulls are array elements), so `offset` (the
-                    // level index) is the correct array index for hashing.
-                    roll_value(self, offset);
+                    let array_index = value_selection
+                        .index_at(value_offset)
+                        .expect("value selection required for non-null values");
+                    roll_value(self, array_index);
                 }
                 // Check boundary before incrementing value_offset so that
                 // num_values reflects only entries in the completed chunk.
@@ -353,18 +352,11 @@ impl ContentDefinedChunker {
                 }
             }
         } else {
-            // Nested data with nulls. Two counters are needed:
+            // Nested data with nulls. `value_offset` is the index into the
+            // logical Parquet value stream, and `value_selection` maps it to
+            // the corresponding Arrow leaf-array index.
             //
-            //   leaf_offset: index into the leaf values array for hashing,
-            //     incremented for all leaf slots (def >= repeated_ancestor_def_level),
-            //     including null elements.
-            //
-            //   value_offset: index into non_null_indices for chunk boundaries,
-            //     incremented only for non-null leaf values (def == max_def_level).
-            //
-            // These diverge when nullable elements exist inside lists.
-            //
-            // Example: List<Int32?> with repeated_ancestor_def_level=2, max_def=3
+            // Example: List<Int32?> with max_def=3
             //   row 0: [1, null, 2]   (3 leaf slots, 2 non-null)
             //   row 1: [3]            (1 leaf slot, 1 non-null)
             //
@@ -372,18 +364,13 @@ impl ContentDefinedChunker {
             //   def_levels:    [3,  2,   3, 3]
             //   rep_levels:    [0,  1,   1, 0]
             //
-            //   level  def  leaf_offset  value_offset  action
-            //   ─────  ───  ───────────  ────────────  ──────────────────────────
-            //     0     3       0             0        roll_value(0), value++, leaf++
-            //     1     2       1             1        leaf++ only (null element)
-            //     2     3       2             1        roll_value(2), value++, leaf++
-            //     3     3       3             2        roll_value(3), value++, leaf++
-            //
-            // roll_value(2) correctly indexes leaf array position 2 (value "2").
-            // Using value_offset=1 would index position 1 (the null slot).
-            //
-            // Using value_offset for roll_value would hash the wrong array slot.
-            let mut leaf_offset: usize = 0;
+            //   value_selection: [0, 2, 3]
+            //   level  def  value_offset  action
+            //   -----  ---  ------------  -------------------------
+            //     0     3       0         roll_value(selection[0])
+            //     1     2       1         null element, no value
+            //     2     3       1         roll_value(selection[1])
+            //     3     3       2         roll_value(selection[2])
 
             for offset in 0..num_levels {
                 let def_level = def_levels
@@ -396,7 +383,10 @@ impl ContentDefinedChunker {
                 self.roll_level(def_level);
                 self.roll_level(rep_level);
                 if def_level == self.max_def_level {
-                    roll_value(self, leaf_offset);
+                    let array_index = value_selection
+                        .index_at(value_offset)
+                        .expect("value selection required for non-null values");
+                    roll_value(self, array_index);
                 }
 
                 // Check boundary before incrementing value_offset so that
@@ -416,9 +406,6 @@ impl ContentDefinedChunker {
                 }
                 if def_level == self.max_def_level {
                     value_offset += 1;
-                }
-                if def_level >= self.repeated_ancestor_def_level {
-                    leaf_offset += 1;
                 }
             }
         }
@@ -446,6 +433,7 @@ impl ContentDefinedChunker {
         &mut self,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
+        value_selection: ValueSelectionRef<'_>,
         array: &dyn arrow_array::Array,
     ) -> Result<Vec<CdcChunk>> {
         use arrow_array::cast::AsArray;
@@ -456,7 +444,7 @@ impl ContentDefinedChunker {
         // levels.  Always drive the loop by the level count; fall back to the
         // array length only when there are no levels at all.
         let num_levels = match (def_levels.len(), rep_levels.len()) {
-            (0, 0) => array.len(),
+            (0, 0) => value_selection.len(),
             (d, r) => d.max(r),
         };
 
@@ -465,31 +453,55 @@ impl ContentDefinedChunker {
                 let data = array.to_data();
                 let buffer = data.buffers()[0].as_slice();
                 let values = &buffer[data.offset() * $N..];
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    let offset = i * $N;
-                    let slice = &values[offset..offset + $N];
-                    c.roll_fixed::<$N>(slice.try_into().unwrap());
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    value_selection,
+                    num_levels,
+                    |c, i| {
+                        let offset = i * $N;
+                        let slice = &values[offset..offset + $N];
+                        c.roll_fixed::<$N>(slice.try_into().unwrap());
+                    },
+                )
             }};
         }
 
         macro_rules! binary_like {
             ($a:expr) => {{
                 let a = $a;
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll(a.value(i).as_ref());
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    value_selection,
+                    num_levels,
+                    |c, i| {
+                        c.roll(a.value(i).as_ref());
+                    },
+                )
             }};
         }
 
         let dtype = array.data_type();
         let chunks = match dtype {
-            DataType::Null => self.calculate(def_levels, rep_levels, num_levels, |_, _| {}),
+            DataType::Null => self.calculate(
+                def_levels,
+                rep_levels,
+                value_selection,
+                num_levels,
+                |_, _| {},
+            ),
             DataType::Boolean => {
                 let a = array.as_boolean();
-                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll_fixed(&[a.value(i) as u8]);
-                })
+                self.calculate(
+                    def_levels,
+                    rep_levels,
+                    value_selection,
+                    num_levels,
+                    |c, i| {
+                        c.roll_fixed(&[a.value(i) as u8]);
+                    },
+                )
             }
             DataType::Int8 | DataType::UInt8 => fixed_width!(1),
             DataType::Int16 | DataType::UInt16 | DataType::Float16 => fixed_width!(2),
@@ -521,7 +533,7 @@ impl ContentDefinedChunker {
             DataType::Utf8View => binary_like!(array.as_string_view()),
             DataType::Dictionary(_, _) => {
                 let dict = array.as_any_dictionary();
-                self.get_arrow_chunks(def_levels, rep_levels, dict.keys())?
+                self.get_arrow_chunks(def_levels, rep_levels, value_selection, dict.keys())?
             }
             _ => {
                 return Err(ParquetError::General(format!(
@@ -575,8 +587,7 @@ impl ContentDefinedChunker {
 mod tests {
     use super::*;
     use crate::basic::Type as PhysicalType;
-    #[cfg(feature = "arrow")]
-    use crate::column::writer::LevelDataRef;
+    use crate::column::writer::{LevelDataRef, ValueSelectionRef};
     use crate::schema::types::{ColumnPath, Type};
     use std::sync::Arc;
 
@@ -629,6 +640,10 @@ mod tests {
         let chunks = chunker.calculate(
             LevelDataRef::Absent,
             LevelDataRef::Absent,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: num_values,
+            },
             num_values,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
@@ -655,6 +670,10 @@ mod tests {
         let chunks = chunker.calculate(
             LevelDataRef::Absent,
             LevelDataRef::Absent,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: num_values,
+            },
             num_values,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
@@ -689,10 +708,28 @@ mod tests {
         };
 
         let mut chunker1 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks1 = chunker1.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
+        let chunks1 = chunker1.calculate(
+            LevelDataRef::Absent,
+            LevelDataRef::Absent,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: 200,
+            },
+            200,
+            roll,
+        );
 
         let mut chunker2 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks2 = chunker2.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
+        let chunks2 = chunker2.calculate(
+            LevelDataRef::Absent,
+            LevelDataRef::Absent,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: 200,
+            },
+            200,
+            roll,
+        );
 
         assert_eq!(chunks1.len(), chunks2.len());
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
@@ -719,10 +756,13 @@ mod tests {
             .map(|i| if i % 3 == 0 { 0 } else { 1 })
             .collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
-
         let chunks = chunker.calculate(
             LevelDataRef::Materialized(&def_levels),
             LevelDataRef::Absent,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: expected_non_null,
+            },
             num_levels,
             |c, i| {
                 c.roll_fixed::<4>(&(i as i32).to_le_bytes());
@@ -755,7 +795,7 @@ mod arrow_tests {
 
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_writer::ArrowWriter;
-    use crate::column::writer::LevelDataRef;
+    use crate::column::writer::{LevelDataRef, ValueSelectionRef};
     use crate::file::properties::{CdcOptions, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
 
@@ -2239,13 +2279,26 @@ mod arrow_tests {
         let array: Int32Array = (0..n).map(|i| test_hash(0, i as u64) as i32).collect();
         let mut chunker = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks = chunker
-            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &array)
+            .get_arrow_chunks(
+                LevelDataRef::Absent,
+                LevelDataRef::Absent,
+                ValueSelectionRef::Dense { offset: 0, len: n },
+                &array,
+            )
             .unwrap();
 
         let sliced = array.slice(offset, n - offset);
         let mut chunker2 = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks2 = chunker2
-            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &sliced)
+            .get_arrow_chunks(
+                LevelDataRef::Absent,
+                LevelDataRef::Absent,
+                ValueSelectionRef::Dense {
+                    offset: 0,
+                    len: n - offset,
+                },
+                &sliced,
+            )
             .unwrap();
 
         let values: Vec<usize> = chunks.iter().map(|c| c.num_values).collect();
