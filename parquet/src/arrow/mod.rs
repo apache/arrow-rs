@@ -381,6 +381,53 @@ impl ProjectionMask {
         self.mask.as_ref().map(|m| m[leaf_idx]).unwrap_or(true)
     }
 
+    /// Returns top-level root column indices that have at least one included
+    /// leaf, preserving their physical order in the parquet schema.
+    pub(crate) fn included_root_column_indices(&self, schema: &SchemaDescriptor) -> Vec<usize> {
+        let num_roots = schema.root_schema().get_fields().len();
+        let mut seen = vec![false; num_roots];
+        let mut roots = Vec::new();
+
+        for leaf_idx in 0..schema.num_columns() {
+            if !self.leaf_included(leaf_idx) {
+                continue;
+            }
+            let root_idx = schema.get_column_root_idx(leaf_idx);
+            if !seen[root_idx] {
+                seen[root_idx] = true;
+                roots.push(root_idx);
+            }
+        }
+
+        roots
+    }
+
+    /// Returns true if each top-level root column is either fully selected or
+    /// fully skipped.
+    ///
+    /// This is useful for code paths that project decoded [`RecordBatch`]
+    /// values by top-level Arrow field index. A full `struct` root can be moved
+    /// as one batch column, but selecting only `struct.child` would require
+    /// recursively trimming the nested array.
+    pub(crate) fn selects_whole_root_columns(&self, schema: &SchemaDescriptor) -> bool {
+        let num_roots = schema.root_schema().get_fields().len();
+        let mut root_leaf_counts = vec![0usize; num_roots];
+        let mut included_leaf_counts = vec![0usize; num_roots];
+
+        for leaf_idx in 0..schema.num_columns() {
+            let root_idx = schema.get_column_root_idx(leaf_idx);
+            root_leaf_counts[root_idx] += 1;
+            if self.leaf_included(leaf_idx) {
+                included_leaf_counts[root_idx] += 1;
+            }
+        }
+
+        included_leaf_counts
+            .into_iter()
+            .zip(root_leaf_counts)
+            .all(|(included, total)| included == 0 || included == total)
+    }
+
     /// Union two projection masks
     ///
     /// Example:

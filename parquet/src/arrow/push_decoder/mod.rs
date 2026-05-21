@@ -646,9 +646,12 @@ mod test {
     use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
-    use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
+    use arrow_array::{
+        ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray, StructArray,
+    };
     #[cfg(feature = "async")]
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Field};
     use arrow_select::concat::concat_batches;
     use arrow_select::filter::filter_record_batch;
     use bytes::Bytes;
@@ -1242,6 +1245,97 @@ mod test {
 
         let report = metrics.phase_profile_report().unwrap();
         assert_eq!(phase_profile_count(&report, "output_selection_resolve"), 0);
+    }
+
+    #[test]
+    fn test_decoder_post_filter_supports_whole_nested_output_projection() {
+        let data = &NESTED_COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let predicate_rows = Arc::new(AtomicUsize::new(0));
+        let predicate_rows_for_filter = Arc::clone(&predicate_rows);
+        let row_filter_tag = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["tag"]),
+            move |batch: RecordBatch| {
+                predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["payload"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_tag)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                NESTED_TEST_BATCH
+                    .slice(row_group_idx * 100, 100)
+                    .project(&[1])
+                    .unwrap()
+            );
+        }
+
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_post_filter_keeps_partial_nested_predicate_on_pushdown() {
+        let data = &NESTED_COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_payload_label = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["payload.label"]),
+            move |batch: RecordBatch| {
+                let payload = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap();
+                assert_eq!(payload.num_columns(), 1);
+                Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["payload"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_payload_label)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                NESTED_TEST_BATCH
+                    .slice(row_group_idx * 100, 100)
+                    .project(&[1])
+                    .unwrap()
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
@@ -2096,8 +2190,45 @@ mod test {
 
     static COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(100, 50));
 
+    static NESTED_TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
+        let tag: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            (0..400).map(|idx| format!("tag_{}", idx % 7)),
+        ));
+        let payload = StructArray::from(vec![
+            (
+                Arc::new(Field::new("id", DataType::Int64, false)),
+                Arc::new(Int64Array::from_iter_values(1_000..1_400)) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("label", DataType::Utf8View, false)),
+                Arc::new(StringViewArray::from_iter_values(
+                    (0..400).map(|idx| format!("payload_{idx}")),
+                )) as ArrayRef,
+            ),
+        ]);
+        let payload: ArrayRef = Arc::new(payload);
+        let value: ArrayRef = Arc::new(Int64Array::from_iter_values(10_000..10_400));
+
+        RecordBatch::try_from_iter(vec![("tag", tag), ("payload", payload), ("value", value)])
+            .unwrap()
+    });
+
+    static NESTED_COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> =
+        LazyLock::new(|| write_batch_test_file(&NESTED_TEST_BATCH, 100, 50));
+
     fn write_test_file(max_row_group_row_count: usize, data_page_row_count_limit: usize) -> Bytes {
-        let input_batch = &TEST_BATCH;
+        write_batch_test_file(
+            &TEST_BATCH,
+            max_row_group_row_count,
+            data_page_row_count_limit,
+        )
+    }
+
+    fn write_batch_test_file(
+        input_batch: &RecordBatch,
+        max_row_group_row_count: usize,
+        data_page_row_count_limit: usize,
+    ) -> Bytes {
         let mut output = Vec::new();
 
         let writer_options = WriterProperties::builder()

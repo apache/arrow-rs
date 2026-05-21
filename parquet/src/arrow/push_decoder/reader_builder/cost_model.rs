@@ -144,22 +144,23 @@ impl RowGroupReaderBuilder {
         let mut read_projection = self.projection.clone();
         read_projection.union(&filter.union_projection()?);
 
-        if self.post_filter_supports_projection(&read_projection) {
+        if self.post_filter_supports_batch_projection(&read_projection) {
             Some(read_projection)
         } else {
             None
         }
     }
 
-    fn post_filter_supports_projection(&self, projection: &ProjectionMask) -> bool {
-        // The post-filter reader currently projects record batches by parquet
-        // leaf column position. Nested roots can span multiple leaves and need
-        // the existing array-reader projection machinery, so allow the
-        // post-filter cost path for primitive roots only.
+    fn post_filter_supports_batch_projection(&self, projection: &ProjectionMask) -> bool {
+        // Post-filter projects decoded record batches by top-level Arrow field
+        // index. A nested root is safe when it is selected as a whole root:
+        // the decoded batch then contains exactly one top-level field for that
+        // root and can be projected without recursively trimming children.
+        //
+        // Partial nested projections, such as `struct.a` without `struct.b`,
+        // still need recursive array projection and remain on the pushdown path.
         let schema = self.metadata.file_metadata().schema_descr();
-        (0..schema.num_columns()).all(|leaf_idx| {
-            !projection.leaf_included(leaf_idx) || schema.get_column_root(leaf_idx).is_primitive()
-        })
+        projection.selects_whole_root_columns(schema)
     }
 
     fn projection_has_variable_width_leaf(
@@ -279,6 +280,15 @@ impl RowGroupReaderBuilder {
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && budget.is_unbounded()
             && !self.has_virtual_columns()
+            && self.post_filter_supports_batch_projection(&self.projection)
+            // The combined read projection may be whole-root even when an
+            // individual predicate asks for one nested child that is completed
+            // by the output projection. Check every batch projection that
+            // `PostFilterState` will materialize, not only their union.
+            && filter
+                .predicates()
+                .iter()
+                .all(|predicate| self.post_filter_supports_batch_projection(predicate.projection()))
             && self.build_post_filter_read_projection(filter).is_some()
     }
 

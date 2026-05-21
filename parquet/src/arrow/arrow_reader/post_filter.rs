@@ -242,36 +242,59 @@ fn projection_indices(
     read_projection: &ProjectionMask,
     target_projection: &ProjectionMask,
 ) -> Result<Vec<usize>> {
-    // Convert parquet leaf positions to RecordBatch column positions after the
-    // larger read projection has been decoded. For example:
+    validate_post_filter_projection(parquet_schema, read_projection, target_projection)?;
+
+    // Convert parquet projection masks to top-level RecordBatch column
+    // positions after the larger read projection has been decoded. For example:
     //
     // ```text
-    // parquet leaves:   a b c d
-    // read projection:  a   c d      => batch columns [a, c, d]
-    // target:               c        => target index [1]
+    // parquet leaves:   a  b.aa b.bb  c
+    // read projection:  a  b.aa b.bb     => batch columns [a, b]
+    // target:              b.aa b.bb     => target index [1]
     // ```
-    let mut indices = Vec::new();
-    let mut read_idx = 0;
+    let read_roots = read_projection.included_root_column_indices(parquet_schema);
+    target_projection
+        .included_root_column_indices(parquet_schema)
+        .into_iter()
+        .map(|target_root| {
+            read_roots
+                .iter()
+                .position(|read_root| *read_root == target_root)
+                .ok_or_else(|| {
+                    general_err!(
+                        "post-filter target root column {target_root} not present in read projection"
+                    )
+                })
+        })
+        .collect()
+}
+
+fn validate_post_filter_projection(
+    parquet_schema: &SchemaDescriptor,
+    read_projection: &ProjectionMask,
+    target_projection: &ProjectionMask,
+) -> Result<()> {
+    // Post-filter only projects already-decoded batches by top-level Arrow
+    // field index. It can keep or drop a whole nested root, but it cannot
+    // recursively project nested children such as `b.aa` without `b.bb`.
+    if !read_projection.selects_whole_root_columns(parquet_schema) {
+        return Err(general_err!(
+            "post-filter cost model does not support partial nested read projections"
+        ));
+    }
+    if !target_projection.selects_whole_root_columns(parquet_schema) {
+        return Err(general_err!(
+            "post-filter cost model does not support partial nested target projections"
+        ));
+    }
 
     for leaf_idx in 0..parquet_schema.num_columns() {
-        if read_projection.leaf_included(leaf_idx) {
-            let root = parquet_schema.get_column_root(leaf_idx);
-            if !root.is_primitive() {
-                return Err(general_err!(
-                    "post-filter cost model does not support nested read column {}",
-                    root.name()
-                ));
-            }
-            if target_projection.leaf_included(leaf_idx) {
-                indices.push(read_idx);
-            }
-            read_idx += 1;
-        } else if target_projection.leaf_included(leaf_idx) {
+        if target_projection.leaf_included(leaf_idx) && !read_projection.leaf_included(leaf_idx) {
             return Err(general_err!(
                 "post-filter target projection includes leaf column {leaf_idx} not present in read projection"
             ));
         }
     }
 
-    Ok(indices)
+    Ok(())
 }

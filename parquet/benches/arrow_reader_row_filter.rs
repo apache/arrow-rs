@@ -52,7 +52,9 @@
 //!   - unsel_clustered: for Unselective Clustered – in each 10K-row block, rows with an offset >= 1000 are "unsel_clustered".
 //!
 
-use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, TimestampMillisecondArray};
+use arrow::array::{
+    ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
+};
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -200,6 +202,10 @@ fn write_parquet_file() -> Vec<u8> {
 /// returning the buffer.
 fn write_parquet_file_with_rows(total_rows: usize, row_group_size: usize) -> Vec<u8> {
     let batch = create_record_batch(total_rows);
+    write_record_batch_to_parquet(&batch, row_group_size)
+}
+
+fn write_record_batch_to_parquet(batch: &RecordBatch, row_group_size: usize) -> Vec<u8> {
     let schema = batch.schema();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
@@ -212,6 +218,37 @@ fn write_parquet_file_with_rows(total_rows: usize, row_group_size: usize) -> Vec
         writer.close().unwrap();
     }
     buffer
+}
+
+fn create_nested_record_batch(size: usize) -> RecordBatch {
+    let tag = Arc::new(StringViewArray::from_iter_values(
+        (0..size).map(|idx| format!("tag_{}", idx % 7)),
+    )) as ArrayRef;
+    let payload = StructArray::from(vec![
+        (
+            Arc::new(Field::new("id", DataType::Int64, false)),
+            Arc::new(Int64Array::from_iter_values(
+                (0..size).map(|idx| idx as i64 + 1_000),
+            )) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("label", DataType::Utf8View, false)),
+            Arc::new(StringViewArray::from_iter_values(
+                (0..size).map(|idx| format!("payload_{idx}")),
+            )) as ArrayRef,
+        ),
+    ]);
+    let payload = Arc::new(payload) as ArrayRef;
+    let value = Arc::new(Int64Array::from_iter_values(
+        (0..size).map(|idx| idx as i64 + 10_000),
+    )) as ArrayRef;
+
+    RecordBatch::try_from_iter(vec![("tag", tag), ("payload", payload), ("value", value)]).unwrap()
+}
+
+fn write_nested_parquet_file_with_rows(total_rows: usize, row_group_size: usize) -> Vec<u8> {
+    let batch = create_nested_record_batch(total_rows);
+    write_record_batch_to_parquet(&batch, row_group_size)
 }
 
 /// ProjectionCase defines the projection mode for the benchmark:
@@ -1122,6 +1159,39 @@ fn row_filter_for(filter_type: FilterType, pred_mask: ProjectionMask) -> RowFilt
     RowFilter::new(vec![Box::new(filter)])
 }
 
+#[derive(Clone, Copy)]
+enum NestedFilterType {
+    AlwaysTrueTag,
+    TagNotZero,
+}
+
+impl std::fmt::Display for NestedFilterType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlwaysTrueTag => write!(f, "always_true_tag"),
+            Self::TagNotZero => write!(f, "tag_not_zero"),
+        }
+    }
+}
+
+impl NestedFilterType {
+    fn filter_batch(self, batch: &RecordBatch) -> arrow::error::Result<BooleanArray> {
+        match self {
+            Self::AlwaysTrueTag => Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+            Self::TagNotZero => {
+                let tag = batch.column(batch.schema().index_of("tag")?);
+                let scalar = StringViewArray::new_scalar("tag_0");
+                neq(tag, &scalar)
+            }
+        }
+    }
+}
+
+fn nested_row_filter_for(filter_type: NestedFilterType, pred_mask: ProjectionMask) -> RowFilter {
+    let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
+    RowFilter::new(vec![Box::new(filter)])
+}
+
 /// Use async API
 async fn benchmark_async_reader(
     reader: InMemoryReader,
@@ -1166,6 +1236,33 @@ async fn benchmark_async_reader_post_filter(
     read_projection: ProjectionMask,
     output_column_names: Vec<&'static str>,
     filter_type: FilterType,
+) {
+    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(read_projection)
+        .build()
+        .unwrap();
+
+    while let Some(b) = stream.next().await {
+        let batch = b.unwrap();
+        let filter = filter_type.filter_batch(&batch).unwrap();
+        let filtered = arrow_select::filter::filter_record_batch(&batch, &filter).unwrap();
+        let output_projection = output_column_names
+            .iter()
+            .map(|name| filtered.schema().index_of(name).unwrap())
+            .collect::<Vec<_>>();
+        let output = filtered.project(&output_projection).unwrap();
+        std::hint::black_box(output.num_rows());
+    }
+}
+
+async fn benchmark_async_reader_post_filter_nested(
+    reader: InMemoryReader,
+    read_projection: ProjectionMask,
+    output_column_names: &[&str],
+    filter_type: NestedFilterType,
 ) {
     let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
         .await
@@ -1417,6 +1514,100 @@ fn benchmark_filters_with_limit(c: &mut Criterion) {
     }
 }
 
+/// Focused nested-output case for post-filter cost modeling.
+///
+/// The predicate column is an unprojected variable-width scalar column, and the
+/// output is a whole nested `Struct` root. This isolates the reader case enabled
+/// by root-aware post-filter projection without requiring recursive nested-child
+/// projection.
+fn benchmark_async_nested_post_filter_focus(c: &mut Criterion) {
+    let parquet_file = Bytes::from(write_nested_parquet_file_with_rows(
+        TOTAL_ROWS,
+        ROW_GROUP_SIZE,
+    ));
+    let strategies = [
+        AsyncStrategy::FullPostFilter,
+        AsyncStrategy::PushdownAutoCostModel,
+        AsyncStrategy::PushdownMask,
+        AsyncStrategy::PushdownSelectors,
+    ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("arrow_reader_row_filter_async_nested_post_filter_focus");
+    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+    let metadata = Arc::clone(reader.metadata());
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let output_projection = ProjectionMask::columns(schema_descr, ["payload"]);
+    let read_projection = ProjectionMask::columns(schema_descr, ["tag", "payload"]);
+    let pred_mask = ProjectionMask::columns(schema_descr, ["tag"]);
+    let filter_cases = [
+        NestedFilterType::AlwaysTrueTag,
+        NestedFilterType::TagNotZero,
+    ];
+
+    for filter_case in filter_cases {
+        for strategy in strategies {
+            let bench_id = BenchmarkId::new(
+                format!("whole_struct_output/{filter_case}"),
+                strategy.to_string(),
+            );
+            let rt_captured = rt.handle().clone();
+            group.bench_function(bench_id, |b| {
+                b.iter(|| {
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let output_projection = output_projection.clone();
+                    let read_projection = read_projection.clone();
+                    rt_captured.block_on(async {
+                        match strategy {
+                            AsyncStrategy::FullPostFilter => {
+                                benchmark_async_reader_post_filter_nested(
+                                    reader,
+                                    read_projection,
+                                    &["payload"],
+                                    filter_case,
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownAutoCostModel => {
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    output_projection,
+                                    nested_row_filter_for(filter_case, pred_mask),
+                                    RowSelectionPolicy::default(),
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownSelectors => {
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    output_projection,
+                                    nested_row_filter_for(filter_case, pred_mask),
+                                    RowSelectionPolicy::Selectors,
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownMask => {
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    output_projection,
+                                    nested_row_filter_for(filter_case, pred_mask),
+                                    RowSelectionPolicy::Mask,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                });
+            });
+        }
+    }
+}
+
 criterion_group!(
     benches,
     benchmark_filters_and_projections,
@@ -1425,5 +1616,6 @@ criterion_group!(
     benchmark_async_cost_model_focus,
     benchmark_projection_scan_focus,
     benchmark_filters_with_limit,
+    benchmark_async_nested_post_filter_focus,
 );
 criterion_main!(benches);
