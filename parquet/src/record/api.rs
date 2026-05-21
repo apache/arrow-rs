@@ -141,7 +141,7 @@ impl<'a> Iterator for RowColumnIter<'a> {
 /// Trait for type-safe convenient access to fields within a Row.
 pub trait RowAccessor {
     /// Check if the field at the index is null.
-    fn is_null(&self, i: usize) -> bool;
+    fn is_null(&self, i: usize) -> Result<bool>;
     /// Try to get a boolean value at the given index.
     fn get_bool(&self, i: usize) -> Result<bool>;
     /// Try to get a byte value at the given index.
@@ -212,11 +212,12 @@ pub trait RowFormatter {
 macro_rules! row_primitive_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<$TY> {
-            match self.fields[i].1 {
-                Field::$VARIANT(v) => Ok(v),
+            match self.fields.get(i) {
+                Some((_, Field::$VARIANT(v))) => Ok(*v),
+                None => Err(ParquetError::IndexOutOfBound(i, self.fields.len())),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
-                    self.fields[i].1.get_type_name(),
+                    self.fields[i].1.get_type_name(), // Safe access as None is
                     stringify!($VARIANT)
                 )),
             }
@@ -229,11 +230,13 @@ macro_rules! row_primitive_accessor {
 macro_rules! row_complex_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<&$TY> {
-            match self.fields[i].1 {
-                Field::$VARIANT(ref v) => Ok(v),
+            match self.fields.get(i) {
+                Some((_, Field::$VARIANT(v))) => Ok(v),
+                None => Err(ParquetError::IndexOutOfBound(i, self.fields.len())),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
-                    self.fields[i].1.get_type_name(),
+                    self.fields[i].1.get_type_name(), // Safe access as None is
+                    // just checked.
                     stringify!($VARIANT)
                 )),
             }
@@ -244,15 +247,20 @@ macro_rules! row_complex_accessor {
 impl RowFormatter for Row {
     /// Get Display reference for a given field.
     fn fmt(&self, i: usize) -> &dyn fmt::Display {
-        &self.fields[i].1
+        if let Some((_, v)) = self.fields.get(i) {
+            v
+        } else {
+            &"<IndexOutOfBound>"
+        }
     }
 }
 
 impl RowAccessor for Row {
-    fn is_null(&self, i: usize) -> bool {
-        match self.fields[i].1 {
-            Field::Null => true,
-            _ => false,
+    fn is_null(&self, i: usize) -> Result<bool> {
+        match self.fields.get(i) {
+            Some((_, Field::Null)) => Ok(true),
+            None => Err(ParquetError::IndexOutOfBound(i, self.len())),
+            _ => Ok(false),
         }
     }
 
@@ -1660,8 +1668,8 @@ mod tests {
             ("p".to_string(), Field::Float16(f16::from_f32(9.1))),
         ]);
 
-        assert!(row.is_null(0));
-        assert!(!row.is_null(1));
+        assert!(row.is_null(0).unwrap());
+        assert!(!row.is_null(1).unwrap());
         assert!(!row.get_bool(1).unwrap());
         assert_eq!(3, row.get_byte(2).unwrap());
         assert_eq!(4, row.get_short(3).unwrap());
@@ -1677,6 +1685,71 @@ mod tests {
         assert_eq!(5, row.get_bytes(13).unwrap().len());
         assert_eq!(7, row.get_decimal(14).unwrap().precision());
         assert!((f16::from_f32(9.1) - row.get_float16(15).unwrap()).abs() < f16::EPSILON);
+
+        assert!(matches!(
+            row.is_null(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_bool(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_byte(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_short(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_int(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_long(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ubyte(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ushort(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_uint(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ulong(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_float(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_double(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_string(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_bytes(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_decimal(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_float16(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
     }
 
     #[test]
