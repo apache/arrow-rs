@@ -275,6 +275,14 @@ pub struct ProjectionMask {
     mask: Option<Vec<bool>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootColumnSelection {
+    /// Top-level root column indices with at least one selected leaf.
+    pub(crate) included_indices: Vec<usize>,
+    /// True when every top-level root is either entirely selected or skipped.
+    pub(crate) selects_whole_roots: bool,
+}
+
 impl ProjectionMask {
     /// Create a [`ProjectionMask`] which selects all columns
     pub fn all() -> Self {
@@ -381,27 +389,6 @@ impl ProjectionMask {
         self.mask.as_ref().map(|m| m[leaf_idx]).unwrap_or(true)
     }
 
-    /// Returns top-level root column indices that have at least one included
-    /// leaf, preserving their physical order in the parquet schema.
-    pub(crate) fn included_root_column_indices(&self, schema: &SchemaDescriptor) -> Vec<usize> {
-        let num_roots = schema.root_schema().get_fields().len();
-        let mut seen = vec![false; num_roots];
-        let mut roots = Vec::new();
-
-        for leaf_idx in 0..schema.num_columns() {
-            if !self.leaf_included(leaf_idx) {
-                continue;
-            }
-            let root_idx = schema.get_column_root_idx(leaf_idx);
-            if !seen[root_idx] {
-                seen[root_idx] = true;
-                roots.push(root_idx);
-            }
-        }
-
-        roots
-    }
-
     /// Returns true if each top-level root column is either fully selected or
     /// fully skipped.
     ///
@@ -410,22 +397,42 @@ impl ProjectionMask {
     /// as one batch column, but selecting only `struct.child` would require
     /// recursively trimming the nested array.
     pub(crate) fn selects_whole_root_columns(&self, schema: &SchemaDescriptor) -> bool {
+        self.root_column_selection(schema).selects_whole_roots
+    }
+
+    /// Summarizes this leaf mask at top-level parquet root-column granularity.
+    ///
+    /// This intentionally combines the included-root list and whole-root check
+    /// in one leaf scan. Post-filter planning needs both values when converting
+    /// parquet projection masks to decoded [`RecordBatch`] column indices.
+    pub(crate) fn root_column_selection(&self, schema: &SchemaDescriptor) -> RootColumnSelection {
         let num_roots = schema.root_schema().get_fields().len();
         let mut root_leaf_counts = vec![0usize; num_roots];
         let mut included_leaf_counts = vec![0usize; num_roots];
+        let mut included_root_seen = vec![false; num_roots];
+        let mut included_indices = Vec::new();
 
         for leaf_idx in 0..schema.num_columns() {
             let root_idx = schema.get_column_root_idx(leaf_idx);
             root_leaf_counts[root_idx] += 1;
             if self.leaf_included(leaf_idx) {
                 included_leaf_counts[root_idx] += 1;
+                if !included_root_seen[root_idx] {
+                    included_root_seen[root_idx] = true;
+                    included_indices.push(root_idx);
+                }
             }
         }
 
-        included_leaf_counts
+        let selects_whole_roots = included_leaf_counts
             .into_iter()
             .zip(root_leaf_counts)
-            .all(|(included, total)| included == 0 || included == total)
+            .all(|(included, total)| included == 0 || included == total);
+
+        RootColumnSelection {
+            included_indices,
+            selects_whole_roots,
+        }
     }
 
     /// Union two projection masks
@@ -840,6 +847,40 @@ mod test {
         let mask2 = ProjectionMask { mask: None };
         mask1.union(&mask2);
         assert_eq!(mask1.mask, None);
+    }
+
+    #[test]
+    fn test_projection_mask_root_column_selection() {
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY tag (UTF8);
+                OPTIONAL group payload {
+                    REQUIRED INT64 id;
+                    REQUIRED BYTE_ARRAY label (UTF8);
+                }
+                REQUIRED INT64 value;
+            }
+            ",
+        );
+
+        let selection = ProjectionMask::all().root_column_selection(&schema);
+        assert_eq!(selection.included_indices, [0, 1, 2]);
+        assert!(selection.selects_whole_roots);
+
+        let selection = ProjectionMask::none(schema.num_columns()).root_column_selection(&schema);
+        assert!(selection.included_indices.is_empty());
+        assert!(selection.selects_whole_roots);
+
+        let selection =
+            ProjectionMask::columns(&schema, ["payload"]).root_column_selection(&schema);
+        assert_eq!(selection.included_indices, [1]);
+        assert!(selection.selects_whole_roots);
+
+        let selection = ProjectionMask::columns(&schema, ["tag", "payload.label"])
+            .root_column_selection(&schema);
+        assert_eq!(selection.included_indices, [0, 1]);
+        assert!(!selection.selects_whole_roots);
     }
 
     #[test]

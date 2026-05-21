@@ -38,9 +38,9 @@
 //! This is profitable for shapes where row-level pushdown has high overhead
 //! and little pruning, especially fragmented high-selectivity selections.
 
-use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::metrics::{ArrowReaderMetrics, ArrowReaderPhase};
 use crate::arrow::arrow_reader::{RowFilter, RowSelection};
+use crate::arrow::{ProjectionMask, RootColumnSelection};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::{BooleanArray, RecordBatch};
@@ -242,7 +242,15 @@ fn projection_indices(
     read_projection: &ProjectionMask,
     target_projection: &ProjectionMask,
 ) -> Result<Vec<usize>> {
-    validate_post_filter_projection(parquet_schema, read_projection, target_projection)?;
+    let read_roots = read_projection.root_column_selection(parquet_schema);
+    let target_roots = target_projection.root_column_selection(parquet_schema);
+    validate_post_filter_projection(
+        parquet_schema,
+        read_projection,
+        target_projection,
+        &read_roots,
+        &target_roots,
+    )?;
 
     // Convert parquet projection masks to top-level RecordBatch column
     // positions after the larger read projection has been decoded. For example:
@@ -252,19 +260,20 @@ fn projection_indices(
     // read projection:  a  b.aa b.bb     => batch columns [a, b]
     // target:              b.aa b.bb     => target index [1]
     // ```
-    let read_roots = read_projection.included_root_column_indices(parquet_schema);
-    target_projection
-        .included_root_column_indices(parquet_schema)
+    let mut read_root_to_batch_idx = vec![None; parquet_schema.root_schema().get_fields().len()];
+    for (batch_idx, root_idx) in read_roots.included_indices.iter().copied().enumerate() {
+        read_root_to_batch_idx[root_idx] = Some(batch_idx);
+    }
+
+    target_roots
+        .included_indices
         .into_iter()
         .map(|target_root| {
-            read_roots
-                .iter()
-                .position(|read_root| *read_root == target_root)
-                .ok_or_else(|| {
-                    general_err!(
-                        "post-filter target root column {target_root} not present in read projection"
-                    )
-                })
+            read_root_to_batch_idx[target_root].ok_or_else(|| {
+                general_err!(
+                    "post-filter target root column {target_root} not present in read projection"
+                )
+            })
         })
         .collect()
 }
@@ -273,16 +282,18 @@ fn validate_post_filter_projection(
     parquet_schema: &SchemaDescriptor,
     read_projection: &ProjectionMask,
     target_projection: &ProjectionMask,
+    read_roots: &RootColumnSelection,
+    target_roots: &RootColumnSelection,
 ) -> Result<()> {
     // Post-filter only projects already-decoded batches by top-level Arrow
     // field index. It can keep or drop a whole nested root, but it cannot
     // recursively project nested children such as `b.aa` without `b.bb`.
-    if !read_projection.selects_whole_root_columns(parquet_schema) {
+    if !read_roots.selects_whole_roots {
         return Err(general_err!(
             "post-filter cost model does not support partial nested read projections"
         ));
     }
-    if !target_projection.selects_whole_root_columns(parquet_schema) {
+    if !target_roots.selects_whole_roots {
         return Err(general_err!(
             "post-filter cost model does not support partial nested target projections"
         ));
