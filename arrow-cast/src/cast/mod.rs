@@ -9045,7 +9045,6 @@ mod tests {
         let metadata: HashMap<String, String> =
             HashMap::from([("PARQUET:field_id".to_string(), "89".to_string())]);
 
-        // FixedSizeList<Float32, 2> -> List<Float32> with metadata on target field
         let src = Arc::new(
             FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
                 [[1.0_f32, 2.0].map(Some), [3.0, 4.0].map(Some)].map(Some),
@@ -9056,63 +9055,21 @@ mod tests {
         let target_field = Arc::new(
             Field::new("element", DataType::Float32, true).with_metadata(metadata.clone()),
         );
-        let target_type = DataType::List(target_field.clone());
 
-        let result = cast(&src, &target_type).unwrap();
-        let result_list = result.as_list::<i32>();
+        let target_types = [
+            DataType::List(target_field.clone()),
+            DataType::LargeList(target_field.clone()),
+            DataType::ListView(target_field.clone()),
+            DataType::LargeListView(target_field.clone()),
+        ];
 
-        // Verify the inner field metadata is preserved
-        match result_list.data_type() {
-            DataType::List(field) => {
-                assert_eq!(
-                    field.metadata(),
-                    &metadata,
-                    "Field metadata should be preserved after cast"
-                );
-            }
-            other => panic!("Expected List, got {other:?}"),
-        }
-
-        // Also test LargeList
-        let target_type = DataType::LargeList(target_field.clone());
-        let result = cast(&src, &target_type).unwrap();
-        match result.data_type() {
-            DataType::LargeList(field) => {
-                assert_eq!(
-                    field.metadata(),
-                    &metadata,
-                    "Field metadata should be preserved after cast to LargeList"
-                );
-            }
-            other => panic!("Expected LargeList, got {other:?}"),
-        }
-
-        // Also test ListView
-        let target_type = DataType::ListView(target_field.clone());
-        let result = cast(&src, &target_type).unwrap();
-        match result.data_type() {
-            DataType::ListView(field) => {
-                assert_eq!(
-                    field.metadata(),
-                    &metadata,
-                    "Field metadata should be preserved after cast to ListView"
-                );
-            }
-            other => panic!("Expected ListView, got {other:?}"),
-        }
-
-        // Also test LargeListView
-        let target_type = DataType::LargeListView(target_field.clone());
-        let result = cast(&src, &target_type).unwrap();
-        match result.data_type() {
-            DataType::LargeListView(field) => {
-                assert_eq!(
-                    field.metadata(),
-                    &metadata,
-                    "Field metadata should be preserved after cast to LargeListView"
-                );
-            }
-            other => panic!("Expected LargeListView, got {other:?}"),
+        for target_type in &target_types {
+            let result = cast(&src, target_type).unwrap();
+            assert_eq!(
+                result.data_type(),
+                target_type,
+                "Cast to {target_type:?} should preserve field metadata"
+            );
         }
     }
 
