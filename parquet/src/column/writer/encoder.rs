@@ -20,7 +20,8 @@ use bytes::Bytes;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
+    compare_greater_internal, fallback_encoding, has_dictionary_support, is_nan, update_max,
+    update_min,
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
@@ -352,11 +353,8 @@ where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
-    // we only need the logical type for FLBA/Float16
-    let logical_type = match T::PHYSICAL_TYPE {
-        Type::FIXED_LEN_BYTE_ARRAY => descr.logical_type_ref(),
-        _ => None,
-    };
+    let logical_type = descr.logical_type_ref();
+    let converted_type = descr.converted_type();
 
     let first = iter.next()?;
     let mut min_max_nan = is_nan(logical_type, first);
@@ -376,10 +374,10 @@ where
             }
             // both are NaN or non-NaN, so do the comparison
             (_, _) => {
-                if compare_greater(descr, min, val) {
+                if compare_greater_internal(logical_type, converted_type, min, val) {
                     min = val;
                 }
-                if compare_greater(descr, val, max) {
+                if compare_greater_internal(logical_type, converted_type, val, max) {
                     max = val;
                 }
             }

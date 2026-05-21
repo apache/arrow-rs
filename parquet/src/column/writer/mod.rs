@@ -1581,6 +1581,15 @@ where
 
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+    compare_greater_internal(descr.logical_type_ref(), descr.converted_type(), a, b)
+}
+
+fn compare_greater_internal<T: ParquetValueType>(
+    logical_type: Option<&LogicalType>,
+    converted_type: ConvertedType,
+    a: &T,
+    b: &T,
+) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT => {
             let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
@@ -1595,31 +1604,36 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer {
                 is_signed: false, ..
-            }) = descr.logical_type_ref()
+            }) = logical_type
             {
                 // need to compare unsigned
                 return compare_greater_unsigned_int(a, b);
             }
 
-            match descr.converted_type() {
+            if matches!(
+                converted_type,
                 ConvertedType::UINT_8
-                | ConvertedType::UINT_16
-                | ConvertedType::UINT_32
-                | ConvertedType::UINT_64 => {
-                    return compare_greater_unsigned_int(a, b);
-                }
-                _ => {}
-            };
+                    | ConvertedType::UINT_16
+                    | ConvertedType::UINT_32
+                    | ConvertedType::UINT_64
+            ) {
+                return compare_greater_unsigned_int(a, b);
+            }
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal { .. }) = descr.logical_type_ref() {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+            if let Some(logical_type) = logical_type {
+                match logical_type {
+                    LogicalType::Decimal { .. } => {
+                        return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                    }
+                    LogicalType::Float16 => {
+                        return compare_greater_f16(a.as_bytes(), b.as_bytes());
+                    }
+                    _ => {}
+                }
             }
-            if let ConvertedType::DECIMAL = descr.converted_type() {
+            if matches!(converted_type, ConvertedType::DECIMAL) {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            if let Some(LogicalType::Float16) = descr.logical_type_ref() {
-                return compare_greater_f16(a.as_bytes(), b.as_bytes());
             }
         }
 
