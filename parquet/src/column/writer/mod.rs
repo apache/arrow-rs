@@ -4667,10 +4667,7 @@ mod tests {
         let path = ColumnPath::from("col");
         let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
-            .with_logical_type(Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 3,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(2, 3)))
             .with_scale(2)
             .with_precision(3)
             .build()

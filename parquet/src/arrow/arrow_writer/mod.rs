@@ -1387,7 +1387,7 @@ fn write_leaf(
         }
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
-            let values = get_bool_array_slice(array, indices);
+            let values = get_bool_array_slice(array, indices.iter().copied());
             typed.write_batch_internal(
                 values.as_slice(),
                 None,
@@ -1504,11 +1504,11 @@ fn write_leaf(
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
                     IntervalUnit::YearMonth => {
                         let array = column.as_primitive::<IntervalYearMonthType>();
-                        get_interval_ym_array_slice(array, indices)
+                        get_interval_ym_array_slice(array, indices.iter().copied())
                     }
                     IntervalUnit::DayTime => {
                         let array = column.as_primitive::<IntervalDayTimeType>();
-                        get_interval_dt_array_slice(array, indices)
+                        get_interval_dt_array_slice(array, indices.iter().copied())
                     }
                     _ => {
                         return Err(ParquetError::NYI(format!(
@@ -1518,27 +1518,27 @@ fn write_leaf(
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
                     let array = column.as_fixed_size_binary();
-                    get_fsb_array_slice(array, indices)
+                    get_fsb_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column.as_primitive::<Decimal32Type>();
-                    get_decimal_32_array_slice(array, indices)
+                    get_decimal_32_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column.as_primitive::<Decimal64Type>();
-                    get_decimal_64_array_slice(array, indices)
+                    get_decimal_64_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_128_array_slice(array, indices)
+                    get_decimal_128_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal256(_, _) => {
                     let array = column.as_primitive::<Decimal256Type>();
-                    get_decimal_256_array_slice(array, indices)
+                    get_decimal_256_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Float16 => {
                     let array = column.as_primitive::<Float16Type>();
-                    get_float_16_array_slice(array, indices)
+                    get_float_16_array_slice(array, indices.iter().copied())
                 }
                 _ => {
                     return Err(ParquetError::NYI(
@@ -1575,10 +1575,13 @@ fn write_primitive<E: ColumnValueEncoder>(
     )
 }
 
-fn get_bool_array_slice(array: &arrow_array::BooleanArray, indices: &[usize]) -> Vec<bool> {
+fn get_bool_array_slice(
+    array: &arrow_array::BooleanArray,
+    indices: impl ExactSizeIterator<Item = usize>,
+) -> Vec<bool> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        values.push(array.value(*i))
+        values.push(array.value(i))
     }
     values
 }
@@ -1587,11 +1590,11 @@ fn get_bool_array_slice(array: &arrow_array::BooleanArray, indices: &[usize]) ->
 /// An Arrow YearMonth interval only stores months, thus only the first 4 bytes are populated.
 fn get_interval_ym_array_slice(
     array: &arrow_array::IntervalYearMonthArray,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        let mut value = array.value(*i).to_le_bytes().to_vec();
+        let mut value = array.value(i).to_le_bytes().to_vec();
         let mut suffix = vec![0; 8];
         value.append(&mut suffix);
         values.push(FixedLenByteArray::from(ByteArray::from(value)))
@@ -1603,12 +1606,12 @@ fn get_interval_ym_array_slice(
 /// An Arrow DayTime interval only stores days and millis, thus the first 4 bytes are not populated.
 fn get_interval_dt_array_slice(
     array: &arrow_array::IntervalDayTimeArray,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
         let mut out = [0; 12];
-        let value = array.value(*i);
+        let value = array.value(i);
         out[4..8].copy_from_slice(&value.days.to_le_bytes());
         out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
         values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
@@ -1618,12 +1621,12 @@ fn get_interval_dt_array_slice(
 
 fn get_decimal_32_array_slice(
     array: &arrow_array::Decimal32Array,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
+        let as_be_bytes = array.value(i).to_be_bytes();
         let resized_value = as_be_bytes[(4 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
@@ -1632,12 +1635,12 @@ fn get_decimal_32_array_slice(
 
 fn get_decimal_64_array_slice(
     array: &arrow_array::Decimal64Array,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
+        let as_be_bytes = array.value(i).to_be_bytes();
         let resized_value = as_be_bytes[(8 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
@@ -1646,12 +1649,12 @@ fn get_decimal_64_array_slice(
 
 fn get_decimal_128_array_slice(
     array: &arrow_array::Decimal128Array,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
+        let as_be_bytes = array.value(i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
@@ -1660,12 +1663,12 @@ fn get_decimal_128_array_slice(
 
 fn get_decimal_256_array_slice(
     array: &arrow_array::Decimal256Array,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
+        let as_be_bytes = array.value(i).to_be_bytes();
         let resized_value = as_be_bytes[(32 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
@@ -1674,11 +1677,11 @@ fn get_decimal_256_array_slice(
 
 fn get_float_16_array_slice(
     array: &arrow_array::Float16Array,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        let value = array.value(*i).to_le_bytes().to_vec();
+        let value = array.value(i).to_le_bytes().to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(value)));
     }
     values
@@ -1686,11 +1689,11 @@ fn get_float_16_array_slice(
 
 fn get_fsb_array_slice(
     array: &arrow_array::FixedSizeBinaryArray,
-    indices: &[usize],
+    indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
-        let value = array.value(*i).to_vec();
+        let value = array.value(i).to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(value)))
     }
     values
