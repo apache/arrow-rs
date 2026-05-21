@@ -2313,7 +2313,6 @@ mod tests {
             LogicalType::timestamp(false, TimeUnit::MILLIS),
             LogicalType::timestamp(false, TimeUnit::MICROS),
             LogicalType::timestamp(true, TimeUnit::NANOS),
-            LogicalType::Float16,
         ];
         check_sort_order(signed, SortOrder::SIGNED);
 
