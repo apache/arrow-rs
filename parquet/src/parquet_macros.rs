@@ -271,6 +271,7 @@ macro_rules! thrift_union {
 /// This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
 ///
 /// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_with_unknown {
