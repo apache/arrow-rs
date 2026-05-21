@@ -112,9 +112,7 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
     use parquet_variant_compute::VariantType;
     if field.has_valid_extension_type::<VariantType>() {
-        Some(LogicalType::Variant {
-            specification_version: None,
-        })
+        Some(LogicalType::variant(None))
     } else {
         None
     }
@@ -167,13 +165,13 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
     match field.extension_type_name() {
         Some(n) if n == WkbType::NAME => match field.try_extension_type::<WkbType>() {
             Ok(wkb_type) => match wkb_type.metadata().type_hint() {
-                WkbTypeHint::Geometry => Some(LogicalType::Geometry {
-                    crs: wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
-                }),
-                WkbTypeHint::Geography => Some(LogicalType::Geography {
-                    crs: wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
-                    algorithm: wkb_type.metadata().algorithm.map(|a| a.into()),
-                }),
+                WkbTypeHint::Geometry => Some(LogicalType::geometry(
+                    wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
+                )),
+                WkbTypeHint::Geography => Some(LogicalType::geography(
+                    wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
+                    wkb_type.metadata().algorithm.map(|a| a.into()),
+                )),
             },
             Err(_e) => None,
         },
