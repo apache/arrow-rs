@@ -171,8 +171,7 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
 }
 
 fn check_decimal_length(type_length: i32) -> Result<()> {
-    // Arrow's widest decimal is Decimal256, which needs at most 32 bytes.
-    if !(1..=32).contains(&type_length) {
+    if type_length < 1 || type_length > 32 {
         return Err(ParquetError::General(format!(
             "DECIMAL must be a Fixed Length Byte Array with length 1 to 32, got {type_length}"
         )));
@@ -306,6 +305,7 @@ fn from_fixed_len_byte_array(
     match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::Decimal(decimal)), _) => {
             check_decimal_length(type_length)?;
+            // lengths 1..=16 map to Decimal128, 17..=32 to Decimal256
             if type_length <= 16 {
                 decimal_128_type(decimal.scale, decimal.precision)
             } else {
