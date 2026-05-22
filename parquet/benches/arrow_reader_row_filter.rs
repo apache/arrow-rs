@@ -258,6 +258,7 @@ enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
     FilterColumnsOnly,
+    FixedColumns,
     Float64Only,
     Utf8Only,
 }
@@ -268,6 +269,7 @@ impl std::fmt::Display for ProjectionCase {
             ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
             ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
+            ProjectionCase::FixedColumns => write!(f, "fixed_columns"),
             ProjectionCase::Float64Only => write!(f, "float64_only"),
             ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
@@ -443,6 +445,9 @@ enum FilterType {
     /// subqueries. The selected rows are random and moderately selective, and
     /// benchmark projections cover both count-only and numeric aggregate cases.
     TpcdsQ9QuantityRange,
+    /// Very sparse projected fixed-width scan shaped like TPC-DS fact-table
+    /// filters where the predicate column is also needed in the output projection.
+    TpcdsSparseProjectedFactScan,
 }
 
 impl std::fmt::Display for FilterType {
@@ -459,6 +464,7 @@ impl std::fmt::Display for FilterType {
             FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
             FilterType::ClickBenchQ37ScalarPrefix => "int64 == 62 AND ts < 9000",
             FilterType::TpcdsQ9QuantityRange => "int64 > 0 AND int64 < 21",
+            FilterType::TpcdsSparseProjectedFactScan => "ts % 1000 == 0",
         };
         write!(f, "{s}")
     }
@@ -533,6 +539,19 @@ impl FilterType {
                 let upper = lt(int64, &Int64Array::new_scalar(21))?;
                 and(&lower, &upper)
             }
+            FilterType::TpcdsSparseProjectedFactScan => {
+                let ts = batch
+                    .column(batch.schema().index_of("ts")?)
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .unwrap();
+                Ok(BooleanArray::from(
+                    ts.values()
+                        .iter()
+                        .map(|value| value % 1000 == 0)
+                        .collect::<Vec<_>>(),
+                ))
+            }
         }
     }
 
@@ -549,6 +568,7 @@ impl FilterType {
             FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewMissing => &[2],
             FilterType::ClickBenchQ37ScalarPrefix => &[0, 3],
             FilterType::TpcdsQ9QuantityRange => &[0],
+            FilterType::TpcdsSparseProjectedFactScan => &[3],
         }
     }
 }
@@ -915,10 +935,10 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
             ProjectionCase::Float64Only,
         ),
         AsyncFocusCase::new(
-            "profile_sparse_projected_fact_scan",
+            "profile_tpcds_sparse_projected_fact_scan",
             parquet_file.clone(),
-            FilterType::PointLookup,
-            ProjectionCase::AllColumns,
+            FilterType::TpcdsSparseProjectedFactScan,
+            ProjectionCase::FixedColumns,
         ),
         AsyncFocusCase::new(
             "profile_q83_sparse_utf8_projected",
@@ -1137,6 +1157,7 @@ fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCa
             })
             .collect(),
         ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
+        ProjectionCase::FixedColumns => vec![0, 1, 3],
         ProjectionCase::Float64Only => vec![1],
         ProjectionCase::Utf8Only => vec![2],
     }

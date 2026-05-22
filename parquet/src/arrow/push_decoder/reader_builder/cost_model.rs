@@ -168,6 +168,13 @@ impl RowGroupReaderBuilder {
             return false;
         }
 
+        // Cacheable predicate columns need one pushdown row group to reveal
+        // whether selection is sparse. Starting post-filter here bypasses the
+        // predicate cache before the adaptive model can observe that shape.
+        if self.has_cacheable_projected_predicate(filter) {
+            return false;
+        }
+
         let Some(read_projection) = self.build_post_filter_read_projection(filter) else {
             return false;
         };
@@ -192,6 +199,15 @@ impl RowGroupReaderBuilder {
 
         projected_uncompressed_bytes as f64 / row_group.num_rows() as f64
             <= Self::CHEAP_FIXED_WIDTH_READ_BYTES_PER_ROW
+    }
+
+    fn has_cacheable_projected_predicate(&self, filter: &RowFilter) -> bool {
+        let Some(cache_projection) = self.compute_cache_projection_inner(filter) else {
+            return false;
+        };
+
+        let schema = self.metadata.file_metadata().schema_descr();
+        (0..schema.num_columns()).any(|leaf_idx| cache_projection.leaf_included(leaf_idx))
     }
 
     fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {

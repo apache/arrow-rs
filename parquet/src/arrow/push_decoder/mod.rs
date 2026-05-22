@@ -1501,7 +1501,7 @@ mod test {
     }
 
     #[test]
-    fn test_decoder_auto_cost_model_starts_post_filter_for_fixed_width_read_projection() {
+    fn test_decoder_auto_cost_model_uses_post_filter_after_observing_fixed_width_read_projection() {
         let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
@@ -1530,10 +1530,49 @@ mod test {
             );
         }
 
-        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
         assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
         assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
         assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_cost_model_keeps_pushdown_for_sparse_fixed_width_read_projection() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(first_rows_per_hundred_filter(&batch, 1)),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_a_first_rows_per_hundred(row_group_idx * 100, 100, 1)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .is_some_and(|records| records > 0),
+            "sparse projected pushdown should consume the predicate cache"
+        );
     }
 
     #[test]
@@ -1606,6 +1645,58 @@ mod test {
         assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(1));
         assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
         assert_eq!(metrics.cost_model_pushdown_still_preferred_count(), Some(1));
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .is_some_and(|records| records > 0),
+            "sparse projected pushdown should consume the predicate cache"
+        );
+    }
+
+    #[test]
+    fn test_decoder_auto_cost_model_reuses_cache_for_very_sparse_projected_predicate_chain() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let sparse_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(first_rows_per_hundred_filter(&batch, 1)),
+        );
+        let cache_reusing_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(sparse_filter_a),
+                Box::new(cache_reusing_filter_a),
+            ]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_a_c_first_rows_per_hundred(row_group_idx * 100, 100, 1)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .is_some_and(|records| records > 0),
+            "projected predicate chains should reuse cached predicate data"
+        );
     }
 
     #[test]
@@ -2530,6 +2621,17 @@ mod test {
     fn expected_a_not_multiple_of_three(offset: usize, len: usize) -> RecordBatch {
         let batch = TEST_BATCH.slice(offset, len);
         let filter = not_multiple_of_three_filter(&batch);
+        let projected = batch.project(&[0]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn expected_a_first_rows_per_hundred(
+        offset: usize,
+        len: usize,
+        rows_per_hundred: i64,
+    ) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = first_rows_per_hundred_filter(&batch, rows_per_hundred);
         let projected = batch.project(&[0]).unwrap();
         filter_record_batch(&projected, &filter).unwrap()
     }
