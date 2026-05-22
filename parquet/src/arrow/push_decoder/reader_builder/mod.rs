@@ -68,6 +68,16 @@ enum CostModelTransition {
     },
 }
 
+enum FilterExecutionPlan {
+    /// No predicate work remains for this row group; proceed to output planning.
+    ReadOutput,
+    /// Decode the union of output and predicate columns once, then evaluate
+    /// predicates on decoded batches.
+    PostFilter { filter: Arc<Mutex<RowFilter>> },
+    /// Decode predicate columns first, build a RowSelection, then read output.
+    Pushdown { filter_info: FilterInfo },
+}
+
 /// This is the inner state machine for reading a single row group.
 ///
 /// The top-level flow is:
@@ -621,22 +631,44 @@ impl RowGroupReaderBuilder {
             }));
         };
 
+        match self.plan_filter_execution(&row_group_info, filter) {
+            FilterExecutionPlan::ReadOutput => {
+                Ok(NextState::again(RowGroupDecoderState::StartData {
+                    row_group_info,
+                    column_chunks,
+                    cache_info: None,
+                }))
+            }
+            FilterExecutionPlan::PostFilter { filter } => {
+                self.start_post_filter(row_group_info, filter)
+            }
+            FilterExecutionPlan::Pushdown { filter_info } => {
+                Ok(NextState::again(RowGroupDecoderState::Filters {
+                    row_group_info,
+                    filter_info,
+                    column_chunks,
+                }))
+            }
+        }
+    }
+
+    fn plan_filter_execution(
+        &mut self,
+        row_group_info: &RowGroupInfo,
+        filter: RowFilter,
+    ) -> FilterExecutionPlan {
         if filter.predicates.is_empty() {
-            return Ok(NextState::again(RowGroupDecoderState::StartData {
-                row_group_info,
-                column_chunks,
-                cache_info: None,
-            }));
-        };
+            return FilterExecutionPlan::ReadOutput;
+        }
 
         if self.should_start_with_post_filter(
             &filter,
             row_group_info.row_group_idx,
             row_group_info.budget,
         ) {
-            let filter = Arc::new(Mutex::new(filter));
-            self.post_filter = Some(Arc::clone(&filter));
-            return self.start_post_filter(row_group_info, filter);
+            return FilterExecutionPlan::PostFilter {
+                filter: self.install_post_filter(filter),
+            };
         }
 
         if self.should_use_post_filter_by_cost(row_group_info.budget) {
@@ -644,9 +676,9 @@ impl RowGroupReaderBuilder {
                 .post_filter_read_projection(&filter, row_group_info.budget)
                 .is_some()
             {
-                let filter = Arc::new(Mutex::new(filter));
-                self.post_filter = Some(Arc::clone(&filter));
-                return self.start_post_filter(row_group_info, filter);
+                return FilterExecutionPlan::PostFilter {
+                    filter: self.install_post_filter(filter),
+                };
             }
 
             self.cost_model_state = RowGroupCostModelState::UsePushdown;
@@ -661,12 +693,13 @@ impl RowGroupReaderBuilder {
             ))),
         );
         let filter_info = FilterInfo::new(filter, cache_info);
+        FilterExecutionPlan::Pushdown { filter_info }
+    }
 
-        Ok(NextState::again(RowGroupDecoderState::Filters {
-            row_group_info,
-            filter_info,
-            column_chunks,
-        }))
+    fn install_post_filter(&mut self, filter: RowFilter) -> Arc<Mutex<RowFilter>> {
+        let filter = Arc::new(Mutex::new(filter));
+        self.post_filter = Some(Arc::clone(&filter));
+        filter
     }
 
     fn transition_filters(

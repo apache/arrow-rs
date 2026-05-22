@@ -72,10 +72,25 @@ impl Default for RowGroupCostModelState {
     }
 }
 
+#[derive(Debug)]
+struct PostFilterProjectionRoles {
+    /// Columns required to evaluate all predicates.
+    predicate_projection: ProjectionMask,
+    /// Columns decoded by post-filter execution.
+    read_projection: ProjectionMask,
+    /// True when predicate columns are already part of the caller output.
+    predicate_already_projected: bool,
+}
+
 impl RowGroupReaderBuilder {
     const CHEAP_FIXED_WIDTH_READ_BYTES_PER_ROW: f64 = 24.0;
 
     pub(super) fn should_use_post_filter_by_cost(&self, budget: RowBudget) -> bool {
+        matches!(self.cost_model_state, RowGroupCostModelState::UsePostFilter)
+            && self.post_filter_context_supported(budget)
+    }
+
+    fn post_filter_context_supported(&self, budget: RowBudget) -> bool {
         // Keep the runtime switch narrow:
         //
         // * `Auto` means the caller allowed the reader to choose.
@@ -83,8 +98,7 @@ impl RowGroupReaderBuilder {
         //   predicates after decode changes where short-circuiting can happen.
         // * virtual columns are not read from Parquet pages and need their
         //   existing projection path.
-        matches!(self.cost_model_state, RowGroupCostModelState::UsePostFilter)
-            && self.post_filter_cost_model_enabled
+        self.post_filter_cost_model_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && budget.is_unbounded()
             && !self.has_virtual_columns()
@@ -99,7 +113,7 @@ impl RowGroupReaderBuilder {
             return None;
         }
 
-        self.build_post_filter_read_projection(filter)
+        Some(self.post_filter_projection_roles(filter)?.read_projection)
     }
 
     pub(super) fn post_filter_read_projection_for_filter(
@@ -107,11 +121,11 @@ impl RowGroupReaderBuilder {
         filter: &RowFilter,
         budget: RowBudget,
     ) -> Option<ProjectionMask> {
-        if !self.post_filter_supports_filter(filter, budget) {
+        if !self.post_filter_context_supported(budget) {
             return None;
         }
 
-        self.build_post_filter_read_projection(filter)
+        Some(self.post_filter_projection_roles(filter)?.read_projection)
     }
 
     pub(super) fn should_start_with_post_filter(
@@ -120,41 +134,40 @@ impl RowGroupReaderBuilder {
         row_group_idx: usize,
         budget: RowBudget,
     ) -> bool {
-        if !self.post_filter_supports_filter(filter, budget) {
+        if !self.post_filter_context_supported(budget) {
             return false;
         }
 
-        let Some(predicate_projection) = filter.union_projection() else {
+        let Some(projections) = self.post_filter_projection_roles(filter) else {
             return false;
         };
-        let predicate_already_projected =
-            self.projection_includes_all(&self.projection, &predicate_projection);
 
         self.should_start_with_post_filter_for_unprojected_variable_width_predicate(
-            &predicate_projection,
-            predicate_already_projected,
+            &projections,
             row_group_idx,
         ) || self.should_start_with_post_filter_for_cheap_fixed_width_read(
             filter,
-            predicate_already_projected,
+            &projections,
             row_group_idx,
         )
     }
 
     fn should_start_with_post_filter_for_unprojected_variable_width_predicate(
         &self,
-        predicate_projection: &ProjectionMask,
-        predicate_already_projected: bool,
+        projections: &PostFilterProjectionRoles,
         row_group_idx: usize,
     ) -> bool {
-        !predicate_already_projected
-            && self.projection_has_variable_width_leaf(row_group_idx, predicate_projection)
+        !projections.predicate_already_projected
+            && self.projection_has_variable_width_leaf(
+                row_group_idx,
+                &projections.predicate_projection,
+            )
     }
 
     fn should_start_with_post_filter_for_cheap_fixed_width_read(
         &self,
         filter: &RowFilter,
-        predicate_already_projected: bool,
+        projections: &PostFilterProjectionRoles,
         row_group_idx: usize,
     ) -> bool {
         // If predicate columns are already in the output projection, pushdown
@@ -164,7 +177,7 @@ impl RowGroupReaderBuilder {
         //
         // Do not apply this to deferred output columns: sparse predicates can
         // still win by reading only a handful of output values.
-        if !predicate_already_projected {
+        if !projections.predicate_already_projected {
             return false;
         }
 
@@ -175,10 +188,6 @@ impl RowGroupReaderBuilder {
             return false;
         }
 
-        let Some(read_projection) = self.build_post_filter_read_projection(filter) else {
-            return false;
-        };
-
         let row_group = self.metadata.row_group(row_group_idx);
         if row_group.num_rows() == 0 {
             return false;
@@ -186,7 +195,7 @@ impl RowGroupReaderBuilder {
 
         let mut projected_uncompressed_bytes = 0u64;
         for leaf_idx in 0..row_group.num_columns() {
-            if !read_projection.leaf_included(leaf_idx) {
+            if !projections.read_projection.leaf_included(leaf_idx) {
                 continue;
             }
 
@@ -210,7 +219,10 @@ impl RowGroupReaderBuilder {
         (0..schema.num_columns()).any(|leaf_idx| cache_projection.leaf_included(leaf_idx))
     }
 
-    fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+    fn post_filter_projection_roles(
+        &self,
+        filter: &RowFilter,
+    ) -> Option<PostFilterProjectionRoles> {
         // Post-filter execution decodes each row once, so it needs both:
         //
         // * output columns, which will be returned to the caller
@@ -218,14 +230,38 @@ impl RowGroupReaderBuilder {
         //
         // The final reader projects back to the original output projection
         // after predicate evaluation.
+        let predicate_projection = filter.union_projection()?;
         let mut read_projection = self.projection.clone();
-        read_projection.union(&filter.union_projection()?);
+        read_projection.union(&predicate_projection);
 
-        if self.post_filter_supports_batch_projection(&read_projection) {
-            Some(read_projection)
-        } else {
-            None
+        if !self.post_filter_supports_batch_projection(&self.projection) {
+            return None;
         }
+
+        // The combined read projection may be whole-root even when an individual
+        // predicate asks for one nested child that is completed by the output
+        // projection. Check every batch projection that `PostFilterState` will
+        // materialize, not only their union.
+        if !filter
+            .predicates()
+            .iter()
+            .all(|predicate| self.post_filter_supports_batch_projection(predicate.projection()))
+        {
+            return None;
+        }
+
+        if !self.post_filter_supports_batch_projection(&read_projection) {
+            return None;
+        }
+
+        let predicate_already_projected =
+            self.projection_includes_all(&self.projection, &predicate_projection);
+
+        Some(PostFilterProjectionRoles {
+            predicate_projection,
+            read_projection,
+            predicate_already_projected,
+        })
     }
 
     fn post_filter_supports_batch_projection(&self, projection: &ProjectionMask) -> bool {
@@ -353,20 +389,8 @@ impl RowGroupReaderBuilder {
     }
 
     fn post_filter_supports_filter(&self, filter: &RowFilter, budget: RowBudget) -> bool {
-        self.post_filter_cost_model_enabled
-            && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
-            && budget.is_unbounded()
-            && !self.has_virtual_columns()
-            && self.post_filter_supports_batch_projection(&self.projection)
-            // The combined read projection may be whole-root even when an
-            // individual predicate asks for one nested child that is completed
-            // by the output projection. Check every batch projection that
-            // `PostFilterState` will materialize, not only their union.
-            && filter
-                .predicates()
-                .iter()
-                .all(|predicate| self.post_filter_supports_batch_projection(predicate.projection()))
-            && self.build_post_filter_read_projection(filter).is_some()
+        self.post_filter_context_supported(budget)
+            && self.post_filter_projection_roles(filter).is_some()
     }
 
     fn has_virtual_columns(&self) -> bool {
