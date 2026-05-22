@@ -1083,7 +1083,6 @@ impl ColumnOrder {
                         SortOrder::TOTAL_ORDER
                     }
                 }
-                LogicalType::Float16 => SortOrder::SIGNED,
                 LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)

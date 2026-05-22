@@ -1605,7 +1605,7 @@ fn compare_greater_internal<T: ParquetValueType>(
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer(IntType {
                 is_signed: false, ..
-            }) = logical_type
+            })) = logical_type
             {
                 // need to compare unsigned
                 return compare_greater_unsigned_int(a, b);
