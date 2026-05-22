@@ -163,6 +163,16 @@ impl RowBudget {
         self.offset.is_none() && self.limit.is_none()
     }
 
+    /// The offset still to be skipped before the next readable row group.
+    pub(crate) fn offset(self) -> Option<usize> {
+        self.offset
+    }
+
+    /// The number of output rows still permitted across the remaining row groups.
+    pub(crate) fn limit(self) -> Option<usize> {
+        self.limit
+    }
+
     /// Returns how many selected rows remain after applying this budget.
     pub(crate) fn rows_after(self, rows_before_budget: usize) -> usize {
         let rows_after_offset = rows_before_budget.saturating_sub(self.offset.unwrap_or(0));
@@ -331,6 +341,25 @@ pub(crate) struct RowGroupReaderBuilder {
     buffers: PushBuffers,
 }
 
+/// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
+/// [`RowGroupReaderBuilder::into_parts`].
+///
+/// `metadata` is not included: it is a whole-file property carried alongside
+/// `schema` in `RemainingRowGroupsParts`.
+#[derive(Debug)]
+pub(crate) struct RowGroupReaderBuilderParts {
+    pub batch_size: usize,
+    pub projection: ProjectionMask,
+    pub fields: Option<Arc<ParquetField>>,
+    pub filter: Option<RowFilter>,
+    pub max_predicate_cache_size: usize,
+    pub metrics: ArrowReaderMetrics,
+    pub row_selection_policy: RowSelectionPolicy,
+    /// Bytes already pushed into the decoder, carried across a rebuild so they
+    /// are not re-requested.
+    pub buffers: PushBuffers,
+}
+
 impl RowGroupReaderBuilder {
     /// Create a new RowGroupReaderBuilder
     #[expect(clippy::too_many_arguments)]
@@ -362,9 +391,50 @@ impl RowGroupReaderBuilder {
         }
     }
 
+    /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
+    /// reconstructed. The runtime decode `state` is discarded; `metadata` is
+    /// recovered from the frontier instead (see `RemainingRowGroups::into_parts`).
+    pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
+        // If a new field is added to `RowGroupReaderBuilder`, it must be added here and in `RowGroupReaderBuilderParts`,
+        // or at least evaluate how it should be handled in the decomposition and reconstruction of the builder.
+        let Self {
+            batch_size,
+            projection,
+            metadata: _,
+            fields,
+            filter,
+            post_filter: _,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
+            cost_model_state: _,
+            post_filter_cost_model_enabled: _,
+            state: _,
+            buffers,
+        } = self;
+        RowGroupReaderBuilderParts {
+            batch_size,
+            projection,
+            fields,
+            filter,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
+            buffers,
+        }
+    }
+
     /// Push new data buffers that can be used to satisfy pending requests
     pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
         self.buffers.push_ranges(ranges, buffers);
+    }
+
+    /// True iff the inner state is `Finished`. This is the only state in
+    /// which it is safe to decompose the builder via [`Self::into_parts`],
+    /// because no `RowGroupInfo`, `FilterInfo`, or in-flight `DataRequest`
+    /// is referencing the row-group-scoped decode state.
+    pub(crate) fn is_finished(&self) -> bool {
+        matches!(self.state, Some(RowGroupDecoderState::Finished))
     }
 
     /// Returns the total number of buffered bytes available

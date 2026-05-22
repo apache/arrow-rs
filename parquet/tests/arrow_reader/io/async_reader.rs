@@ -178,8 +178,9 @@ async fn test_read_single_row_filter() {
         .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
         .with_row_filter(filter_b_575_625(&schema_descr));
 
-    // Expect to see I/O for column b in both row groups to evaluate filter,
-    // then a single pages for the "a" column in each row group
+    // Auto starts with post-filter for this cheap fixed-width projected
+    // predicate, so each row group reads the projected "a" and "b" columns
+    // together.
     insta::assert_debug_snapshot!(run(
         &test_file,
         builder).await, @r#"
@@ -188,15 +189,11 @@ async fn test_read_single_row_filter() {
             "Event: Builder Configured",
             "Event: Reader Built",
             "Read Multi:",
+            "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 0, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "Read Multi:",
-            "  Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Read Multi:",
+            "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "Read Multi:",
-            "  Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
         ]
     "#);
 }
@@ -215,10 +212,9 @@ async fn test_read_single_row_filter_no_page_index() {
         .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
         .with_row_filter(filter_b_575_625(&schema_descr));
 
-    // Since we don't have the page index, expect to see:
-    // 1. I/O for all pages of column b to evaluate the filter
-    // 2. IO for all pages of column a as the reader doesn't know where the page
-    //    boundaries are so needs to scan them.
+    // Auto starts with post-filter for this cheap fixed-width projected
+    // predicate, so without page indexes each row group reads all pages for
+    // both projected columns together.
     insta::assert_debug_snapshot!(run(
         &test_file,
         builder).await, @r#"
@@ -227,13 +223,11 @@ async fn test_read_single_row_filter_no_page_index() {
             "Event: Builder Configured",
             "Event: Reader Built",
             "Read Multi:",
+            "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 0, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "Read Multi:",
-            "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "Read Multi:",
-            "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "Read Multi:",
             "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
+            "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
         ]
     "#);
 }
@@ -295,8 +289,9 @@ async fn test_read_single_row_filter_all() {
         .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
         .with_row_filter(filter_b_false(&schema_descr));
 
-    // Expect to see reads for column "b" to evaluate the filter, but no reads
-    // for column "a" as no rows pass the filter
+    // Auto starts with post-filter for this cheap fixed-width projected
+    // predicate, so it reads both projected columns even though the filter
+    // later rejects all rows.
     insta::assert_debug_snapshot!(run(
         &test_file,
         builder).await, @r#"
@@ -305,8 +300,10 @@ async fn test_read_single_row_filter_all() {
             "Event: Builder Configured",
             "Event: Reader Built",
             "Read Multi:",
+            "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 0, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "Read Multi:",
+            "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
         ]
     "#);

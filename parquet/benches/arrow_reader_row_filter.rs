@@ -214,7 +214,7 @@ fn write_record_batch_to_parquet(batch: &RecordBatch, row_group_size: usize) -> 
     let mut buffer = vec![];
     {
         let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
-        writer.write(&batch).unwrap();
+        writer.write(batch).unwrap();
         writer.close().unwrap();
     }
     buffer

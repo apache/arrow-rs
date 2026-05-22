@@ -9039,6 +9039,41 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_fixed_size_list_to_list_preserves_field_metadata() {
+        use std::collections::HashMap;
+
+        let metadata: HashMap<String, String> =
+            HashMap::from([("PARQUET:field_id".to_string(), "89".to_string())]);
+
+        let src = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                [[1.0_f32, 2.0].map(Some), [3.0, 4.0].map(Some)].map(Some),
+                2,
+            ),
+        ) as ArrayRef;
+
+        let target_field = Arc::new(
+            Field::new("element", DataType::Float32, true).with_metadata(metadata.clone()),
+        );
+
+        let target_types = [
+            DataType::List(target_field.clone()),
+            DataType::LargeList(target_field.clone()),
+            DataType::ListView(target_field.clone()),
+            DataType::LargeListView(target_field.clone()),
+        ];
+
+        for target_type in &target_types {
+            let result = cast(&src, target_type).unwrap();
+            assert_eq!(
+                result.data_type(),
+                target_type,
+                "Cast to {target_type:?} should preserve field metadata"
+            );
+        }
+    }
+
+    #[test]
     fn test_cast_utf8_to_list() {
         // DataType::List
         let array = Arc::new(StringArray::from(vec!["5"])) as ArrayRef;

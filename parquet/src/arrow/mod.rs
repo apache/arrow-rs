@@ -392,7 +392,7 @@ impl ProjectionMask {
     /// Returns true if each top-level root column is either fully selected or
     /// fully skipped.
     ///
-    /// This is useful for code paths that project decoded [`RecordBatch`]
+    /// This is useful for code paths that project decoded [`arrow_array::RecordBatch`]
     /// values by top-level Arrow field index. A full `struct` root can be moved
     /// as one batch column, but selecting only `struct.child` would require
     /// recursively trimming the nested array.
@@ -404,7 +404,7 @@ impl ProjectionMask {
     ///
     /// This intentionally combines the included-root list and whole-root check
     /// in one leaf scan. Post-filter planning needs both values when converting
-    /// parquet projection masks to decoded [`RecordBatch`] column indices.
+    /// parquet projection masks to decoded [`arrow_array::RecordBatch`] column indices.
     pub(crate) fn root_column_selection(&self, schema: &SchemaDescriptor) -> RootColumnSelection {
         let num_roots = schema.root_schema().get_fields().len();
         let mut root_leaf_counts = vec![0usize; num_roots];

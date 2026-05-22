@@ -18,10 +18,11 @@
 use crate::DecodeResult;
 use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
 use crate::arrow::push_decoder::reader_builder::{
-    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
+    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -185,6 +186,11 @@ impl RowGroupFrontier {
 /// work item. [`RowGroupReaderBuilder`] owns decoding for the active row group.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroups {
+    /// The arrow schema of the decoded output. Carried only so
+    /// [`Self::into_parts`] can hand it to a rebuilt builder; unused while
+    /// decoding.
+    schema: SchemaRef,
+
     /// Cross-row-group scan state for queued work.
     frontier: RowGroupFrontier,
 
@@ -192,8 +198,30 @@ pub(crate) struct RemainingRowGroups {
     row_group_reader_builder: RowGroupReaderBuilder,
 }
 
+/// The state recovered from a [`RemainingRowGroups`] by
+/// [`RemainingRowGroups::into_parts`], describing the row groups *not* yet
+/// decoded so a builder reconstructed from it resumes where the decoder left off.
+#[derive(Debug)]
+pub(crate) struct RemainingRowGroupsParts {
+    /// The arrow schema of the decoded output.
+    pub schema: SchemaRef,
+    /// The Parquet file metadata.
+    pub metadata: Arc<ParquetMetaData>,
+    /// Row groups not yet handed to the reader builder.
+    pub row_groups: Vec<usize>,
+    /// The not-yet-consumed slice of the global row selection.
+    pub selection: Option<RowSelection>,
+    /// Offset still to be skipped before the next readable row group.
+    pub offset: Option<usize>,
+    /// Output rows still permitted across the remaining row groups.
+    pub limit: Option<usize>,
+    /// Builder-configurable parts of the inner row-group reader builder.
+    pub reader_builder: RowGroupReaderBuilderParts,
+}
+
 impl RemainingRowGroups {
     pub fn new(
+        schema: SchemaRef,
         parquet_metadata: Arc<ParquetMetaData>,
         row_groups: Vec<usize>,
         selection: Option<RowSelection>,
@@ -202,6 +230,7 @@ impl RemainingRowGroups {
         row_group_reader_builder: RowGroupReaderBuilder,
     ) -> Self {
         Self {
+            schema,
             frontier: RowGroupFrontier::new(
                 parquet_metadata,
                 row_groups,
@@ -210,6 +239,36 @@ impl RemainingRowGroups {
                 has_predicates,
             ),
             row_group_reader_builder,
+        }
+    }
+
+    /// Decompose into [`RemainingRowGroupsParts`].
+    ///
+    /// Must be called at a row-group boundary (see
+    /// [`Self::is_at_row_group_boundary`]). The inner reader builder's runtime
+    /// decode state is discarded; its buffered bytes are carried through.
+    pub(crate) fn into_parts(self) -> RemainingRowGroupsParts {
+        let Self {
+            schema,
+            frontier,
+            row_group_reader_builder,
+        } = self;
+        // `has_predicates` is recomputed by `build()` from the filter.
+        let RowGroupFrontier {
+            parquet_metadata,
+            row_groups,
+            selection,
+            budget,
+            has_predicates: _,
+        } = frontier;
+        RemainingRowGroupsParts {
+            schema,
+            metadata: parquet_metadata,
+            row_groups: Vec::from(row_groups),
+            selection,
+            offset: budget.offset(),
+            limit: budget.limit(),
+            reader_builder: row_group_reader_builder.into_parts(),
         }
     }
 
@@ -233,6 +292,18 @@ impl RemainingRowGroups {
     pub(crate) fn disable_post_filter_cost_model(&mut self) {
         self.row_group_reader_builder
             .disable_post_filter_cost_model();
+    }
+
+    /// True iff the inner row-group reader is between row groups (state
+    /// `Finished`). Forward to [`RowGroupReaderBuilder::is_finished`].
+    pub fn is_at_row_group_boundary(&self) -> bool {
+        self.row_group_reader_builder.is_finished()
+    }
+
+    /// Number of row groups remaining (not including the one currently
+    /// being decoded).
+    pub fn row_groups_remaining(&self) -> usize {
+        self.frontier.row_groups.len()
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

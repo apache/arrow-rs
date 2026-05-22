@@ -29,7 +29,9 @@ use arrow_schema::{DataType, Field};
 use bytes::Bytes;
 use futures::StreamExt;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelectionPolicy,
+};
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::properties::WriterProperties;
@@ -49,7 +51,15 @@ async fn test_default_read() {
 #[tokio::test]
 async fn test_async_cache_with_filters() {
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(49);
-    let async_builder = test.async_builder().await.add_project_ab_and_filter_b();
+    let async_builder = test
+        .async_builder()
+        .await
+        .add_project_ab_and_filter_b()
+        // The default Auto policy may choose post-filter execution for this
+        // cheap projected predicate, which avoids the predicate cache entirely.
+        // Use an explicit pushdown policy so this test continues to exercise
+        // predicate cache reads.
+        .with_row_selection_policy(RowSelectionPolicy::Selectors);
     test.run_async(async_builder).await;
 }
 
