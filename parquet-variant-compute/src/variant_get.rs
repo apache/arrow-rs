@@ -29,7 +29,6 @@ use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
 use crate::VariantArray;
-use crate::variant_array::ShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
