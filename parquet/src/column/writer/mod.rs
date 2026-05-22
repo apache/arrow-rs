@@ -28,7 +28,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, IntType, LogicalType,
+    PageType, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -1602,7 +1603,7 @@ fn compare_greater_internal<T: ParquetValueType>(
             return a.total_cmp(&b) == Ordering::Greater;
         }
         Type::INT32 | Type::INT64 => {
-            if let Some(LogicalType::Integer {
+            if let Some(LogicalType::Integer(IntType {
                 is_signed: false, ..
             }) = logical_type
             {
@@ -1623,7 +1624,7 @@ fn compare_greater_internal<T: ParquetValueType>(
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
             if let Some(logical_type) = logical_type {
                 match logical_type {
-                    LogicalType::Decimal { .. } => {
+                    LogicalType::Decimal(_) => {
                         return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
                     }
                     LogicalType::Float16 => {
