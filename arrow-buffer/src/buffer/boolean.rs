@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_chunk_iterator::BitChunks;
+use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::bit_util::read_u64;
 use crate::{
@@ -611,6 +611,11 @@ impl BooleanBuffer {
         self.into_iter()
     }
 
+    /// Returns an [`UnalignedBitChunk`] over this buffer's values.
+    fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
+        UnalignedBitChunk::new(self.values(), self.offset(), self.len())
+    }
+
     /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
     pub fn set_indices(&self) -> BitIndexIterator<'_> {
         BitIndexIterator::new(self.values(), self.bit_offset, self.bit_len)
@@ -624,6 +629,61 @@ impl BooleanBuffer {
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
+    }
+
+    /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
+    /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
+    /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
+    const CHUNK_FOLD_BLOCK_SIZE: usize = 16;
+
+    /// Returns whether there is at least one `true` value in this buffer.
+    ///
+    /// This is more efficient than `count_set_bits() > 0` because it can short-circuit
+    /// as soon as a `true` value is found, without counting all set bits.
+    ///
+    /// Returns `false` for empty buffer.
+    pub fn has_true(&self) -> bool {
+        let bit_chunks = self.unaligned_bit_chunks();
+        let chunks = bit_chunks.chunks();
+        let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+        let found = bit_chunks.prefix().unwrap_or(0) != 0
+            || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
+        found || exact.remainder().iter().any(|&c| c != 0) || bit_chunks.suffix().unwrap_or(0) != 0
+    }
+
+    /// Returns whether there is at least one `false` value in this buffer.
+    ///
+    /// This is more efficient than `len() > count_set_bits()` because it can short-circuit
+    /// as soon as a `false` value is found, without counting all set bits.
+    ///
+    /// Returns `false` for empty buffer.
+    pub fn has_false(&self) -> bool {
+        let bit_chunks = self.unaligned_bit_chunks();
+        // UnalignedBitChunk zeros padding bits; fill them with 1s so
+        // they don't appear as false values.
+        let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
+        let trail_mask = if bit_chunks.trailing_padding() == 0 {
+            u64::MAX
+        } else {
+            (1u64 << (64 - bit_chunks.trailing_padding())) - 1
+        };
+        let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
+            (Some(_), Some(_)) => (!lead_mask, !trail_mask),
+            (Some(_), None) => (!lead_mask | !trail_mask, 0),
+            (None, Some(_)) => (0, !trail_mask),
+            (None, None) => (0, 0),
+        };
+        let chunks = bit_chunks.chunks();
+        let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+        let found = bit_chunks
+            .prefix()
+            .is_some_and(|v| (v | prefix_fill) != u64::MAX)
+            || exact.any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
+        found
+            || exact.remainder().iter().any(|&c| c != u64::MAX)
+            || bit_chunks
+                .suffix()
+                .is_some_and(|v| (v | suffix_fill) != u64::MAX)
     }
 }
 
@@ -1244,5 +1304,108 @@ mod tests {
     fn test_find_nth_set_bit_position_none_set() {
         let buffer = BooleanBuffer::new_unset(100);
         assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 100);
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_true() {
+        let arr = BooleanBuffer::from(vec![true, true, true]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_false() {
+        let arr = BooleanBuffer::from(vec![false, false, false]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_mixed() {
+        let arr = BooleanBuffer::from(vec![true, false, true]);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_empty() {
+        let arr = BooleanBuffer::from(Vec::<bool>::new());
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_aligned_suffix_all_true() {
+        let arr = BooleanBuffer::from(vec![true; 129]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_all_true() {
+        // 65 elements: exercises the remainder path in has_false
+        let arr = BooleanBuffer::from(vec![true; 65]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_last_false() {
+        // 64 trues + 1 false: remainder path should find the false
+        let mut values = vec![true; 64];
+        values.push(false);
+        let arr = BooleanBuffer::from(values);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_exact_64_all_true() {
+        // Exactly 64 elements, no remainder
+        let arr = BooleanBuffer::from(vec![true; 64]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_unaligned_slices() {
+        let cases = [
+            (1, 129, true, false),
+            (3, 130, true, false),
+            (5, 65, true, false),
+            (7, 64, true, false),
+        ];
+
+        let base = BooleanBuffer::from(vec![true; 300]);
+
+        for (offset, len, expected_has_true, expected_has_false) in cases {
+            let arr = base.slice(offset, len);
+            assert_eq!(
+                arr.has_true(),
+                expected_has_true,
+                "offset={offset} len={len}"
+            );
+            assert_eq!(
+                arr.has_false(),
+                expected_has_false,
+                "offset={offset} len={len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_true_has_false_exact_multiples_of_64() {
+        let cases = [
+            (64, true, false),
+            (128, true, false),
+            (192, true, false),
+            (256, true, false),
+        ];
+
+        for (len, expected_has_true, expected_has_false) in cases {
+            let arr = BooleanBuffer::from(vec![true; len]);
+            assert_eq!(arr.has_true(), expected_has_true, "len={len}");
+            assert_eq!(arr.has_false(), expected_has_false, "len={len}");
+        }
     }
 }

@@ -29,6 +29,7 @@ use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
 use crate::VariantArray;
+use crate::variant_array::ShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
@@ -441,10 +442,11 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+        ListArray, ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::CastOptions;
@@ -4450,10 +4452,26 @@ mod test {
             (
                 DataType::LargeListView(field.clone()),
                 Arc::new(LargeListViewArray::new(
-                    field,
+                    field.clone(),
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
                     element_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::FixedSizeList(field.clone(), 3),
+                Arc::new(FixedSizeListArray::new(
+                    field,
+                    3,
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        Some(3),
+                        None,
+                        None,
+                        None,
+                    ])),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
@@ -4619,7 +4637,8 @@ mod test {
             DataType::List(item_field.clone()),
             DataType::LargeList(item_field.clone()),
             DataType::ListView(item_field.clone()),
-            DataType::LargeListView(item_field),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field, 2),
         ];
 
         for data_type in data_types {
@@ -4636,28 +4655,47 @@ mod test {
     }
 
     #[test]
-    fn test_variant_get_fixed_size_list_not_implemented() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+    fn test_variant_get_fixed_size_list_wrong_size() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
-        for safe in [true, false] {
-            let options = GetOptions::new()
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    DataType::FixedSizeList(item_field.clone(), 2),
-                    true,
-                ))))
-                .with_cast_options(CastOptions {
-                    safe,
-                    ..Default::default()
-                });
 
-            let err = variant_get(&variant_array, options).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
-            );
-        }
+        // With `safe` set to true, size mismatch should return Null.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: true,
+                ..Default::default()
+            });
+        let result = variant_get(&variant_array, options).unwrap();
+        let fixed_size_list = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+        assert_eq!(fixed_size_list.len(), 1);
+        assert!(fixed_size_list.is_null(0));
+
+        // With `safe` set to false, error should be raised on wrong sized fixed list.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
+        );
     }
 
     macro_rules! perfectly_shredded_preserves_top_level_nulls_test {

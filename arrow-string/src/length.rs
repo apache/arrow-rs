@@ -17,25 +17,12 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
+use arrow_array::ree_map;
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
-macro_rules! ree_length {
-    ($array:expr, $run_type:ty, $k:expr, $v:expr) => {{
-        let ree = $array.as_run_opt::<$run_type>().unwrap();
-        let inner_value_lengths = length(ree.values().as_ref())?;
-        let out_ree = unsafe {
-            RunArray::<$run_type>::new_unchecked(
-                DataType::RunEndEncoded(Arc::clone($k), Arc::clone($v)),
-                ree.run_ends().clone(),
-                inner_value_lengths,
-            )
-        };
-        Ok(Arc::new(out_ree) as ArrayRef)
-    }};
-}
 
 fn length_impl<P: ArrowPrimitiveType>(
     offsets: &OffsetBuffer<P::Native>,
@@ -130,10 +117,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 list.nulls().cloned(),
             )?))
         }
-        DataType::RunEndEncoded(k, v) => match k.data_type() {
-            DataType::Int16 => ree_length!(array, Int16Type, &k, &v),
-            DataType::Int32 => ree_length!(array, Int32Type, &k, &v),
-            DataType::Int64 => ree_length!(array, Int64Type, &k, &v),
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => ree_map!(array, Int16Type, length),
+            DataType::Int32 => ree_map!(array, Int32Type, length),
+            DataType::Int64 => ree_map!(array, Int64Type, length),
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid run-end type: {:?}",
                 k.data_type()
@@ -149,7 +136,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 ///
 /// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, StringViewArray/Utf8View,
 ///   BinaryArray, LargeBinaryArray, BinaryViewArray, and FixedSizeBinaryArray,
-///   or DictionaryArray with above Arrays as values
+///   or DictionaryArray/REE with above Arrays as values
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
@@ -203,6 +190,15 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 array.nulls().cloned(),
             )?))
         }
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => ree_map!(array, Int16Type, bit_length),
+            DataType::Int32 => ree_map!(array, Int32Type, bit_length),
+            DataType::Int64 => ree_map!(array, Int64Type, bit_length),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid run-end type: {:?}",
+                k.data_type()
+            ))),
+        },
         other => Err(ArrowError::ComputeError(format!(
             "bit_length not supported for {other:?}"
         ))),
@@ -902,5 +898,28 @@ mod tests {
         let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &uint64_values).unwrap();
 
         assert!(length(&ree_array).is_err());
+    }
+
+    #[test]
+    fn bit_length_test_ree_utf8() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let strings = StringArray::from(vec!["hello", "world", "test"]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![1i32, 2, 3]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &strings).unwrap();
+
+        let result = bit_length(&ree_array).unwrap();
+        let result_values = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap()
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let expected: Int32Array = vec![40, 40, 32].into();
+        assert_eq!(&expected, result_values);
     }
 }

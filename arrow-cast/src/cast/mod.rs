@@ -72,8 +72,24 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
-pub use decimal::{DecimalCast, rescale_decimal};
+pub use decimal::{
+    DecimalCast, parse_string_to_decimal_native, rescale_decimal, single_float_to_decimal,
+};
 pub use string::cast_single_string_to_boolean_default;
+
+/// Lossy conversion from decimal to float.
+///
+/// Conversion is lossy and follows standard floating point semantics. Values
+/// that exceed the representable range become `INFINITY` or `-INFINITY` without
+/// returning an error.
+#[inline(always)]
+pub fn single_decimal_to_float_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f64
+where
+    D: DecimalType,
+    F: Fn(D::Native) -> f64,
+{
+    f(x) / 10_f64.powi(scale)
+}
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2314,10 +2330,11 @@ where
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            (as_float(x) / 10_f64.powi(*scale as i32)) as f32
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
+                as f32
         }),
         Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            as_float(x) / 10_f64.powi(*scale as i32)
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
         }),
         Utf8View => value_to_string_view(array, cast_options),
         Utf8 => value_to_string::<i32>(array, cast_options),
@@ -9017,6 +9034,41 @@ mod tests {
                 list_array.as_ref(),
                 &expected,
                 "Incorrect result from casting {array:?} to {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_to_list_preserves_field_metadata() {
+        use std::collections::HashMap;
+
+        let metadata: HashMap<String, String> =
+            HashMap::from([("PARQUET:field_id".to_string(), "89".to_string())]);
+
+        let src = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                [[1.0_f32, 2.0].map(Some), [3.0, 4.0].map(Some)].map(Some),
+                2,
+            ),
+        ) as ArrayRef;
+
+        let target_field = Arc::new(
+            Field::new("element", DataType::Float32, true).with_metadata(metadata.clone()),
+        );
+
+        let target_types = [
+            DataType::List(target_field.clone()),
+            DataType::LargeList(target_field.clone()),
+            DataType::ListView(target_field.clone()),
+            DataType::LargeListView(target_field.clone()),
+        ];
+
+        for target_type in &target_types {
+            let result = cast(&src, target_type).unwrap();
+            assert_eq!(
+                result.data_type(),
+                target_type,
+                "Cast to {target_type:?} should preserve field metadata"
             );
         }
     }
