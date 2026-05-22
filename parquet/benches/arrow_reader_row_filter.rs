@@ -909,6 +909,12 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
             ProjectionCase::FilterColumnsOnly,
         ),
         AsyncFocusCase::new(
+            "profile_sparse_fixed_deferred_output",
+            parquet_file.clone(),
+            FilterType::PointLookup,
+            ProjectionCase::Float64Only,
+        ),
+        AsyncFocusCase::new(
             "profile_sparse_projected_fact_scan",
             parquet_file.clone(),
             FilterType::PointLookup,

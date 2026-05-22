@@ -73,6 +73,8 @@ impl Default for RowGroupCostModelState {
 }
 
 impl RowGroupReaderBuilder {
+    const CHEAP_FIXED_WIDTH_READ_BYTES_PER_ROW: f64 = 24.0;
+
     pub(super) fn should_use_post_filter_by_cost(&self, budget: RowBudget) -> bool {
         // Keep the runtime switch narrow:
         //
@@ -112,7 +114,7 @@ impl RowGroupReaderBuilder {
         self.build_post_filter_read_projection(filter)
     }
 
-    pub(super) fn should_start_with_post_filter_for_unprojected_variable_width_predicate(
+    pub(super) fn should_start_with_post_filter(
         &self,
         filter: &RowFilter,
         row_group_idx: usize,
@@ -125,12 +127,71 @@ impl RowGroupReaderBuilder {
         let Some(predicate_projection) = filter.union_projection() else {
             return false;
         };
-
         let predicate_already_projected =
             self.projection_includes_all(&self.projection, &predicate_projection);
 
+        self.should_start_with_post_filter_for_unprojected_variable_width_predicate(
+            &predicate_projection,
+            predicate_already_projected,
+            row_group_idx,
+        ) || self.should_start_with_post_filter_for_cheap_fixed_width_read(
+            filter,
+            predicate_already_projected,
+            row_group_idx,
+        )
+    }
+
+    fn should_start_with_post_filter_for_unprojected_variable_width_predicate(
+        &self,
+        predicate_projection: &ProjectionMask,
+        predicate_already_projected: bool,
+        row_group_idx: usize,
+    ) -> bool {
         !predicate_already_projected
-            && self.projection_has_variable_width_leaf(row_group_idx, &predicate_projection)
+            && self.projection_has_variable_width_leaf(row_group_idx, predicate_projection)
+    }
+
+    fn should_start_with_post_filter_for_cheap_fixed_width_read(
+        &self,
+        filter: &RowFilter,
+        predicate_already_projected: bool,
+        row_group_idx: usize,
+    ) -> bool {
+        // If predicate columns are already in the output projection, pushdown
+        // cannot save a deferred output read for those columns. For cheap
+        // fixed-width reads, starting directly with post-filter avoids building
+        // a row selection just to decode the same values again.
+        //
+        // Do not apply this to deferred output columns: sparse predicates can
+        // still win by reading only a handful of output values.
+        if !predicate_already_projected {
+            return false;
+        }
+
+        let Some(read_projection) = self.build_post_filter_read_projection(filter) else {
+            return false;
+        };
+
+        let row_group = self.metadata.row_group(row_group_idx);
+        if row_group.num_rows() == 0 {
+            return false;
+        }
+
+        let mut projected_uncompressed_bytes = 0u64;
+        for leaf_idx in 0..row_group.num_columns() {
+            if !read_projection.leaf_included(leaf_idx) {
+                continue;
+            }
+
+            let column = row_group.column(leaf_idx);
+            if column.column_type() == PhysicalType::BYTE_ARRAY {
+                return false;
+            }
+            projected_uncompressed_bytes += column.uncompressed_size().max(0) as u64;
+        }
+
+        projected_uncompressed_bytes as f64 / row_group.num_rows() as f64
+            <= Self::CHEAP_FIXED_WIDTH_READ_BYTES_PER_ROW
     }
 
     fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {

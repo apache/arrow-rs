@@ -1501,6 +1501,78 @@ mod test {
     }
 
     #[test]
+    fn test_decoder_auto_cost_model_starts_post_filter_for_fixed_width_read_projection() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(not_multiple_of_three_filter(&batch)),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_a_not_multiple_of_three(row_group_idx * 100, 100)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_cost_model_observes_fixed_width_deferred_output() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(not_multiple_of_three_filter(&batch)),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["b"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_b_not_multiple_of_three(row_group_idx * 100, 100)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
     fn test_decoder_auto_cost_model_keeps_pushdown_for_sparse_projected_predicate() {
         let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
@@ -2452,6 +2524,20 @@ mod test {
         let batch = TEST_BATCH.slice(offset, len);
         let filter = not_multiple_of_three_filter(&batch);
         let projected = batch.project(&[2]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn expected_a_not_multiple_of_three(offset: usize, len: usize) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = not_multiple_of_three_filter(&batch);
+        let projected = batch.project(&[0]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn expected_b_not_multiple_of_three(offset: usize, len: usize) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = not_multiple_of_three_filter(&batch);
+        let projected = batch.project(&[1]).unwrap();
         filter_record_batch(&projected, &filter).unwrap()
     }
 
