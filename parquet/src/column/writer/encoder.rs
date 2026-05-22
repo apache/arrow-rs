@@ -151,30 +151,19 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             || self.descr.logical_type_ref() == Some(&LogicalType::Float16)
     }
 
-    fn min_max(&self, values: &[T::T], value_indices: Option<&[usize]>) -> Option<(T::T, T::T)> {
-        match value_indices {
-            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
-            None => get_min_max(&self.descr, values.iter()),
-        }
-    }
-
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
             // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
-            // Count NaN values for floating point types
-            if self.is_floating_point_column() {
-                let logical_type = self.descr.logical_type_ref();
-                let nan_count = slice.iter().filter(|v| is_nan(logical_type, *v)).count() as u64;
-                *self.nan_count.get_or_insert(0) += nan_count;
-            }
-
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());
-            } else if let Some((min, max)) = self.min_max(slice, None) {
+            } else if let Some((min, max, nan_count)) = get_min_max(&self.descr, slice.iter()) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
+                if self.is_floating_point_column() {
+                    *self.nan_count.get_or_insert(0) += nan_count;
+                }
             }
 
             if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
@@ -348,7 +337,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 // value which then becomes the new min/max. After this, only non-NaN values are
 // evaluated. If all values are NaN, then the min/max NaNs as determined by
 // IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
+fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T, u64)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
@@ -358,13 +347,17 @@ where
 
     let first = iter.next()?;
     let mut min_max_nan = is_nan(logical_type, first);
+    let mut nan_count = min_max_nan as u64;
 
     let mut min = first;
     let mut max = first;
     for val in iter {
         match (min_max_nan, is_nan(logical_type, val)) {
             // skip NaNs if we've encounter non-NaN
-            (false, true) => continue,
+            (false, true) => {
+                nan_count += 1;
+                continue;
+            }
             // if min/max are NaN, check for non-NaN and reset
             (true, false) => {
                 min = val;
@@ -373,18 +366,20 @@ where
                 continue;
             }
             // both are NaN or non-NaN, so do the comparison
-            (_, _) => {
+            (_, val_is_nan) => {
+                nan_count += val_is_nan as u64;
+                // we've already initialized min and max, so a single value can't be both
+                // extremes
                 if compare_greater_internal(logical_type, converted_type, min, val) {
                     min = val;
-                }
-                if compare_greater_internal(logical_type, converted_type, val, max) {
+                } else if compare_greater_internal(logical_type, converted_type, val, max) {
                     max = val;
                 }
             }
         }
     }
 
-    Some((min.clone(), max.clone()))
+    Some((min.clone(), max.clone(), nan_count))
 }
 
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter
