@@ -28,8 +28,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, IntType, LogicalType,
-    PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
+    SortOrder, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -48,7 +48,7 @@ use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 pub(crate) mod encoder;
 
@@ -948,10 +948,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     let new_min = stat.min_opt().unwrap();
                     let new_max = stat.max_opt().unwrap();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
+                        let basic_info = self.descr.get_basic_info();
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
-                                || compare_greater(&self.descr, last_max, new_max);
+                            let not_ascending = compare_greater(basic_info, last_min, new_min)
+                                || compare_greater(basic_info, last_max, new_max);
                             if not_ascending {
                                 self.data_page_boundary_ascending = false;
                             }
@@ -959,8 +960,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                         if self.data_page_boundary_descending {
                             // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = compare_greater(&self.descr, new_min, last_min)
-                                || compare_greater(&self.descr, new_max, last_max);
+                            let not_descending = compare_greater(basic_info, new_min, last_min)
+                                || compare_greater(basic_info, new_max, last_max);
                             if not_descending {
                                 self.data_page_boundary_descending = false;
                             }
@@ -1516,16 +1517,16 @@ fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut 
         *min = Some(val.clone());
     } else {
         // safe to unwrap min since we've already tested for None
-        let logical_type = descr.logical_type_ref();
-        let is_min_nan = is_nan(logical_type, min.as_ref().unwrap());
-        let is_val_nan = is_nan(logical_type, val);
+        let basic_type_info = descr.get_basic_info();
+        let is_min_nan = is_nan(basic_type_info, min.as_ref().unwrap());
+        let is_val_nan = is_nan(basic_type_info, val);
         match (is_min_nan, is_val_nan) {
             // current min is not NaN, but incoming is NaN: skip
             (false, true) => {}
             // current min is NaN, but incoming is not: assign val to min
             (true, false) => *min = Some(val.clone()),
             // both NaN or non-NaN, safe to call update_stat()
-            _ => update_stat::<T, _>(val, min, |cur| compare_greater(descr, cur, val)),
+            _ => update_stat::<T, _>(val, min, |cur| compare_greater(basic_type_info, cur, val)),
         }
     }
 }
@@ -1535,27 +1536,27 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
         *max = Some(val.clone());
     } else {
         // safe to unwrap max since we've already tested for None
-        let logical_type = descr.logical_type_ref();
-        let is_max_nan = is_nan(logical_type, max.as_ref().unwrap());
-        let is_val_nan = is_nan(logical_type, val);
+        let basic_type_info = descr.get_basic_info();
+        let is_max_nan = is_nan(basic_type_info, max.as_ref().unwrap());
+        let is_val_nan = is_nan(basic_type_info, val);
         match (is_max_nan, is_val_nan) {
             // current max is not NaN, but incoming is NaN: skip
             (false, true) => {}
             // current max is NaN, but incoming is not: assign val to max
             (true, false) => *max = Some(val.clone()),
             // both NaN or non-NaN, safe to call update_stat()
-            _ => update_stat::<T, _>(val, max, |cur| compare_greater(descr, val, cur)),
+            _ => update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, cur, val)),
         }
     }
 }
 
 #[inline]
 #[allow(clippy::eq_op)]
-fn is_nan<T: ParquetValueType>(logical_type: Option<&LogicalType>, val: &T) -> bool {
+fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
         Type::FIXED_LEN_BYTE_ARRAY
-            if logical_type.is_some_and(|lt| matches!(lt, LogicalType::Float16)) =>
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
         {
             // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
@@ -1581,16 +1582,7 @@ where
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
-    compare_greater_internal(descr.logical_type_ref(), descr.converted_type(), a, b)
-}
-
-fn compare_greater_internal<T: ParquetValueType>(
-    logical_type: Option<&LogicalType>,
-    converted_type: ConvertedType,
-    a: &T,
-    b: &T,
-) -> bool {
+fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, b: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT => {
             let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
@@ -1602,38 +1594,23 @@ fn compare_greater_internal<T: ParquetValueType>(
             let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
             return a.total_cmp(&b) == Ordering::Greater;
         }
-        Type::INT32 | Type::INT64 => {
-            if let Some(LogicalType::Integer(IntType {
-                is_signed: false, ..
-            })) = logical_type
-            {
-                // need to compare unsigned
-                return compare_greater_unsigned_int(a, b);
-            }
-
-            if matches!(
-                converted_type,
-                ConvertedType::UINT_8
-                    | ConvertedType::UINT_16
-                    | ConvertedType::UINT_32
-                    | ConvertedType::UINT_64
-            ) {
-                return compare_greater_unsigned_int(a, b);
-            }
+        Type::INT32 | Type::INT64
+            if matches!(basic_type_info.sort_order(), SortOrder::UNSIGNED) =>
+        {
+            return compare_greater_unsigned_int(a, b);
+        }
+        Type::FIXED_LEN_BYTE_ARRAY
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
+        {
+            return compare_greater_f16(a.as_bytes(), b.as_bytes());
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(logical_type) = logical_type {
-                match logical_type {
-                    LogicalType::Decimal(_) => {
-                        return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-                    }
-                    LogicalType::Float16 => {
-                        return compare_greater_f16(a.as_bytes(), b.as_bytes());
-                    }
-                    _ => {}
-                }
-            }
-            if matches!(converted_type, ConvertedType::DECIMAL) {
+            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
+                || matches!(
+                    basic_type_info.logical_type_ref(),
+                    Some(LogicalType::Decimal(_))
+                )
+            {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
         }

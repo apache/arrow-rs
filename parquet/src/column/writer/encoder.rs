@@ -20,8 +20,7 @@ use bytes::Bytes;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
-    compare_greater_internal, fallback_encoding, has_dictionary_support, is_nan, update_max,
-    update_min,
+    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
@@ -30,7 +29,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr};
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -158,7 +157,9 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
         {
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());
-            } else if let Some((min, max, nan_count)) = get_min_max(&self.descr, slice.iter()) {
+            } else if let Some((min, max, nan_count)) =
+                get_min_max(self.descr.get_basic_info(), slice.iter())
+            {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
                 if self.is_floating_point_column() {
@@ -337,22 +338,19 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 // value which then becomes the new min/max. After this, only non-NaN values are
 // evaluated. If all values are NaN, then the min/max NaNs as determined by
 // IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T, u64)>
+fn get_min_max<'a, T, I>(basic_type_info: &BasicTypeInfo, mut iter: I) -> Option<(T, T, u64)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
-    let logical_type = descr.logical_type_ref();
-    let converted_type = descr.converted_type();
-
     let first = iter.next()?;
-    let mut min_max_nan = is_nan(logical_type, first);
+    let mut min_max_nan = is_nan(basic_type_info, first);
     let mut nan_count = min_max_nan as u64;
 
     let mut min = first;
     let mut max = first;
     for val in iter {
-        match (min_max_nan, is_nan(logical_type, val)) {
+        match (min_max_nan, is_nan(basic_type_info, val)) {
             // skip NaNs if we've encounter non-NaN
             (false, true) => {
                 nan_count += 1;
@@ -370,9 +368,9 @@ where
                 nan_count += val_is_nan as u64;
                 // we've already initialized min and max, so a single value can't be both
                 // extremes
-                if compare_greater_internal(logical_type, converted_type, min, val) {
+                if compare_greater(basic_type_info, min, val) {
                     min = val;
-                } else if compare_greater_internal(logical_type, converted_type, val, max) {
+                } else if compare_greater(basic_type_info, val, max) {
                     max = val;
                 }
             }
