@@ -847,10 +847,21 @@ where
             self.values_left -= 1;
         }
 
-        let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
-            Type::INT32 => 32,
-            Type::INT64 => 64,
-            _ => unreachable!(),
+        // See https://github.com/apache/arrow-rs/pull/9794.
+        // The parquet spec actually allows for miniblock sizes other than 32 or 64, but
+        // no current writers use anything else. Using values_per_mini_block directly
+        // for the skip_buffer doesn't allow stack allocation and leads to a significant
+        // drop in performance. We'll settle for erroring out here and come up with a
+        // better fix if writers ever start getting creative with block sizes.
+        let mini_block_batch_size = match self.values_per_mini_block {
+            32 => 32,
+            64 => 64,
+            _ => {
+                return Err(general_err!(
+                    "cannot skip miniblock of size {}",
+                    self.values_per_mini_block
+                ));
+            }
         };
 
         let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
@@ -863,10 +874,13 @@ where
             self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
 
+            // see commentary in self.get() above regarding optimizations
             let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
                 // All remainders are zero: every delta equals min_delta exactly.
                 // Advance last_value by n * min_delta with no bit reads.
+                // When min_delta == 0 there is nothing to do: last_value is
+                // unchanged and no bytes are consumed from the bit reader.
                 if min_delta != 0 {
                     let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
                     let step = T::T::from_i64(total)
