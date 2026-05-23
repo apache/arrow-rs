@@ -1545,7 +1545,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
             // current max is NaN, but incoming is not: assign val to max
             (true, false) => *max = Some(val.clone()),
             // both NaN or non-NaN, safe to call update_stat()
-            _ => update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, cur, val)),
+            _ => update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, val, cur)),
         }
     }
 }
