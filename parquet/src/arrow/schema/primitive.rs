@@ -170,6 +170,7 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
     Ok(DataType::Decimal256(precision, scale))
 }
 
+#[allow(clippy::manual_range_contains)]
 fn check_decimal_length(type_length: i32) -> Result<()> {
     if type_length < 1 || type_length > 32 {
         return Err(ParquetError::General(format!(
