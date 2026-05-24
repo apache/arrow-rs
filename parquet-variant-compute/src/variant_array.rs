@@ -31,7 +31,7 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::Result;
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
@@ -327,7 +327,7 @@ impl VariantArray {
             builder = builder.with_field("value", value, true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+            builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -713,7 +713,7 @@ impl ShreddedVariantFieldArray {
             builder = builder.with_field("value", value, true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+            builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -868,6 +868,20 @@ impl TryFrom<&StructArray> for ShreddingState {
     }
 }
 
+/// Build the `typed_value` [`FieldRef`] for a shredded column.
+///
+/// The Variant spec maps `FixedSizeBinary(16)` exclusively to UUID, so any
+/// shredded column of that type must carry the canonical [`UuidExtension`]
+/// extension metadata on its field.
+fn typed_value_field(array: &ArrayRef) -> FieldRef {
+    let field = Field::new("typed_value", array.data_type().clone(), true);
+    let field = match array.data_type() {
+        DataType::FixedSizeBinary(16) => field.with_extension_type(UuidExtension),
+        _ => field,
+    };
+    Arc::new(field)
+}
+
 /// Builds struct arrays from component fields
 ///
 /// TODO: move to arrow crate
@@ -887,6 +901,16 @@ impl StructArrayBuilder {
     pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
         let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
+        self.arrays.push(array);
+        self
+    }
+
+    /// Add an array to this struct array using a caller-supplied [`FieldRef`].
+    ///
+    /// Use this when the field carries metadata (e.g. an extension type) that
+    /// would be lost if the field were synthesized from the array's data type alone.
+    pub fn with_field_ref(mut self, field: FieldRef, array: ArrayRef) -> Self {
+        self.fields.push(field);
         self.arrays.push(array);
         self
     }

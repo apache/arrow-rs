@@ -1189,19 +1189,14 @@ mod tests {
 
         let variant_array = shred_variant(&input, &DataType::FixedSizeBinary(16)).unwrap();
 
-        // // inspect the typed_value Field and make sure it contains the canonical Uuid extension type
-        // let typed_value_field = variant_array
-        //     .inner()
-        //     .fields()
-        //     .into_iter()
-        //     .find(|f| f.name() == "typed_value")
-        //     .unwrap();
+        let typed_value_field = variant_array
+            .inner()
+            .fields()
+            .into_iter()
+            .find(|f| f.name() == "typed_value")
+            .unwrap();
 
-        // assert!(
-        //     typed_value_field
-        //         .try_extension_type::<extension::Uuid>()
-        //         .is_ok()
-        // );
+        assert!(typed_value_field.has_valid_extension_type::<arrow_schema::extension::Uuid>());
 
         // probe the downcasted typed_value array to make sure uuids are shredded correctly
         let uuids = variant_array
