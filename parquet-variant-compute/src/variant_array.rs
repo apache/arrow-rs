@@ -64,7 +64,7 @@ pub(crate) fn variant_from_arrays_at<'m, 'v>(
 }
 
 /// Validates that an array has a binary-like data type.
-fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
+pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
     match array.data_type() {
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
         _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -843,14 +843,6 @@ impl ShreddingState {
         self.typed_value.as_ref()
     }
 
-    /// Returns a borrowed version of this shredding state
-    pub fn borrow(&self) -> BorrowedShreddingState<'_> {
-        BorrowedShreddingState {
-            value: self.value_field(),
-            typed_value: self.typed_value_field(),
-        }
-    }
-
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
@@ -860,74 +852,19 @@ impl ShreddingState {
     }
 }
 
-/// Similar to [`ShreddingState`] except it holds borrowed references of the target arrays. Useful
-/// for avoiding clone operations when the caller does not need a self-standing shredding state.
-#[derive(Clone, Debug)]
-pub struct BorrowedShreddingState<'a> {
-    value: Option<&'a ArrayRef>,
-    typed_value: Option<&'a ArrayRef>,
-}
-
-impl<'a> BorrowedShreddingState<'a> {
-    /// Create a new `BorrowedShreddingState` from the given `value` and `typed_value` fields
-    ///
-    /// Note you can create a `BorrowedShreddingState` from a &[`StructArray`] using
-    /// `BorrowedShreddingState::try_from(&struct_array)`, for example:
-    ///
-    /// ```no_run
-    /// # use arrow::array::StructArray;
-    /// # use parquet_variant_compute::BorrowedShreddingState;
-    /// # fn get_struct_array() -> StructArray {
-    /// #   unimplemented!()
-    /// # }
-    /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
-    /// ```
-    pub fn new(value: Option<&'a ArrayRef>, typed_value: Option<&'a ArrayRef>) -> Self {
-        Self { value, typed_value }
-    }
-
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&'a ArrayRef> {
-        self.value
-    }
-
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&'a ArrayRef> {
-        self.typed_value
-    }
-}
-
-impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
-    type Error = ArrowError;
-
-    fn try_from(inner_struct: &'a StructArray) -> Result<Self> {
-        // The `value` column need not exist, but if it does it must be a binary type.
-        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
-            validate_binary_array(value_col.as_ref(), "value")?;
-            Some(value_col)
-        } else {
-            None
-        };
-        let typed_value = inner_struct.column_by_name("typed_value");
-        Ok(BorrowedShreddingState::new(value, typed_value))
-    }
-}
-
 impl TryFrom<&StructArray> for ShreddingState {
     type Error = ArrowError;
 
     fn try_from(inner_struct: &StructArray) -> Result<Self> {
-        Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
-    }
-}
-
-impl From<BorrowedShreddingState<'_>> for ShreddingState {
-    fn from(state: BorrowedShreddingState<'_>) -> Self {
-        ShreddingState {
-            value: state.value_field().cloned(),
-            typed_value: state.typed_value_field().cloned(),
-        }
+        // The `value` column need not exist, but if it does it must be a binary type.
+        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
+            validate_binary_array(value_col.as_ref(), "value")?;
+            Some(value_col.clone())
+        } else {
+            None
+        };
+        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+        Ok(ShreddingState::new(value, typed_value))
     }
 }
 

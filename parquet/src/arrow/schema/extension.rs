@@ -48,7 +48,7 @@ pub(crate) fn try_add_extension_type(
     };
     Ok(match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
-        LogicalType::Variant { .. } => {
+        LogicalType::Variant(_) => {
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
             arrow_field
@@ -66,16 +66,19 @@ pub(crate) fn try_add_extension_type(
             arrow_field
         }
         #[cfg(feature = "geospatial")]
-        LogicalType::Geometry { crs } => {
-            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), None);
+        LogicalType::Geometry(geometry) => {
+            let md = parquet_geospatial::WkbMetadata::new(geometry.crs.as_deref(), None);
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
             arrow_field
         }
         #[cfg(feature = "geospatial")]
-        LogicalType::Geography { crs, algorithm } => {
-            let algorithm = algorithm.map(|a| a.try_as_edges()).transpose()?;
-            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
+        LogicalType::Geography(geography) => {
+            let algorithm = geography
+                .algorithm()
+                .map(|a| a.try_as_edges())
+                .transpose()?;
+            let md = parquet_geospatial::WkbMetadata::new(geography.crs.as_deref(), algorithm);
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
             arrow_field
