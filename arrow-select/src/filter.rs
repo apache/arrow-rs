@@ -409,6 +409,22 @@ impl FilterPredicate {
     pub fn count(&self) -> usize {
         self.count
     }
+
+    /// Filters the given `nulls` buffer using this predicate.
+    ///
+    /// Returns `None` when there is nothing to track in the output, either
+    /// because the input `nulls` was `None`, the input had no nulls, or the
+    /// filtered result has no nulls. Otherwise returns the filtered
+    /// [`NullBuffer`] with its precomputed null count.
+    pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
+        let (null_count, nulls) = filter_null_mask(nulls, self)?;
+        let buffer = BooleanBuffer::new(nulls, 0, self.count);
+
+        debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
+        // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
+        // matches the number of unset bits as required by `new_unchecked`.
+        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
+    }
 }
 
 fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
@@ -580,17 +596,6 @@ fn filter_null_mask(
     Some((null_count, nulls))
 }
 
-/// Filters `nulls` and reuses the computed `null_count` to avoid scanning the bitmap.
-fn filter_nulls(nulls: Option<&NullBuffer>, predicate: &FilterPredicate) -> Option<NullBuffer> {
-    let (null_count, nulls) = filter_null_mask(nulls, predicate)?;
-    let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
-
-    debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
-    // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
-    // matches the number of unset bits as required by `new_unchecked`.
-    Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
-}
-
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
@@ -638,7 +643,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
     let buffer = filter_bits(array.values(), predicate);
     let values = BooleanBuffer::new(buffer, 0, predicate.count);
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
 
     BooleanArray::new(values, nulls)
 }
@@ -688,7 +693,7 @@ where
 {
     let buffer = filter_native(array.values(), predicate);
     let values = ScalarBuffer::new(buffer, 0, predicate.count);
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
     let filtered = PrimitiveArray::new(values, nulls);
 
     // Avoid the compatibility check when the physical type already matches.
@@ -831,7 +836,7 @@ where
     // SAFETY: `dst_offsets` starts at `[0]` and only grows by the running
     // `cur_offset`, so it is monotonically non-decreasing.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: `offsets` index into `dst_values` by construction, and each slot
     // is a byte-for-byte copy from `array`, so UTF-8 validity (if any) is preserved.
@@ -847,7 +852,7 @@ fn filter_byte_view<T: ByteViewType>(
     let new_view_buffer = filter_native(array.views(), predicate);
     let views = ScalarBuffer::new(new_view_buffer, 0, predicate.count);
     let buffers = array.data_buffers().to_vec();
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: each view is copied unchanged from `array.views()` and `buffers`
     // is the same buffer list, so every view still points to an in-bounds
@@ -902,7 +907,7 @@ fn filter_fixed_size_binary(
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
 
     FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
 }
@@ -992,7 +997,7 @@ fn filter_list_view<OffsetType: OffsetSizeTrait>(
     let offsets = ScalarBuffer::new(filtered_offsets, 0, predicate.count);
     let sizes = ScalarBuffer::new(filtered_sizes, 0, predicate.count);
     let values = array.values().clone();
-    let nulls = filter_nulls(array.nulls(), predicate);
+    let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: each `(offset, size)` pair is copied unchanged from `array` and
     // indexes into the same `values` child, so every range stays in-bounds.
