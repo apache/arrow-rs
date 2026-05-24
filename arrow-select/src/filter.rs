@@ -585,6 +585,9 @@ fn filter_nulls(nulls: Option<&NullBuffer>, predicate: &FilterPredicate) -> Opti
     let (null_count, nulls) = filter_null_mask(nulls, predicate)?;
     let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
 
+    debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
+    // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
+    // matches the number of unset bits as required by `new_unchecked`.
     Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
 }
 
@@ -825,9 +828,14 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
+    // SAFETY: `dst_offsets` starts at `[0]` and only grows by the running
+    // `cur_offset`, so it is monotonically non-decreasing.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = filter_nulls(array.nulls(), predicate);
 
+    // SAFETY: `offsets` index into `dst_values` by construction, and each slot
+    // is a byte-for-byte copy from `array`, so UTF-8 validity (if any) is preserved.
+    // Length invariant: `offsets.len() - 1 == predicate.count == nulls.len()`.
     unsafe { GenericByteArray::new_unchecked(offsets, filter.dst_values.into(), nulls) }
 }
 
@@ -841,6 +849,9 @@ fn filter_byte_view<T: ByteViewType>(
     let buffers = array.data_buffers().to_vec();
     let nulls = filter_nulls(array.nulls(), predicate);
 
+    // SAFETY: each view is copied unchanged from `array.views()` and `buffers`
+    // is the same buffer list, so every view still points to an in-bounds
+    // (and, for strings, UTF-8 valid) range.
     unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
 }
 
@@ -983,6 +994,9 @@ fn filter_list_view<OffsetType: OffsetSizeTrait>(
     let values = array.values().clone();
     let nulls = filter_nulls(array.nulls(), predicate);
 
+    // SAFETY: each `(offset, size)` pair is copied unchanged from `array` and
+    // indexes into the same `values` child, so every range stays in-bounds.
+    // `field` and `values`' data type are unchanged from `array`.
     unsafe { GenericListViewArray::new_unchecked(field, offsets, sizes, values, nulls) }
 }
 
