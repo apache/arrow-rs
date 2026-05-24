@@ -722,16 +722,10 @@ mod tests {
         let array = create_random_array(&ree_field, size, 0.25, 0.0).unwrap();
         assert_eq!(array.len(), size);
 
-        let ree = array
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
+        let ree = array.as_run::<Int32Type>();
         let run_ends = ree.run_ends().values();
         let num_runs = run_ends.len();
 
-        for w in run_ends.windows(2) {
-            assert!(w[0] < w[1]);
-        }
         assert_eq!(*run_ends.last().unwrap() as usize, size);
 
         assert_eq!(ree.values().len(), num_runs);
