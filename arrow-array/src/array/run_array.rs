@@ -257,8 +257,7 @@ impl<R: RunEndIndexType> RunArray<R> {
             }
             _ => unreachable!("RunArray should have type RunEndEncoded"),
         };
-        let data_type =
-            DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(&values_field));
+        let data_type = DataType::RunEndEncoded(Arc::clone(run_ends_field), values_field);
 
         Self {
             data_type,
@@ -794,9 +793,6 @@ where
 /// This can be used to efficiently implement kernels for all possible run end
 /// types without needing to create specialized implementations for each key type.
 pub trait AnyRunEndArray: Array {
-    /// Returns the run ends of this array as a primitive array.
-    fn run_ends(&self) -> ArrayRef;
-
     /// Returns the values of this array.
     fn values(&self) -> &Arc<dyn Array>;
 
@@ -806,12 +802,6 @@ pub trait AnyRunEndArray: Array {
 }
 
 impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
-    fn run_ends(&self) -> ArrayRef {
-        let values = self.run_ends.inner().clone();
-        let nulls = None;
-        Arc::new(PrimitiveArray::<R>::new(values, nulls))
-    }
-
     fn values(&self) -> &Arc<dyn Array> {
         &self.values
     }
