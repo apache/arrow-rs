@@ -368,7 +368,7 @@ mod test {
         Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::compute::CastOptions;
+    use arrow::compute::{CastOptions, cast};
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
     use arrow::util::display::FormatOptions;
@@ -3909,6 +3909,84 @@ mod test {
                     .contains("Casting Variant to duration/interval types is not supported")
             );
         }
+    }
+
+    #[test]
+    fn get_variant_as_dictionary() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from("apple")),
+            Some(Variant::from("banana")),
+            None,
+            Some(Variant::from("apple")),
+        ]));
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "dict",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Utf8).unwrap();
+        let expected = StringArray::from(vec![Some("apple"), Some("banana"), None, Some("apple")]);
+        assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_numeric_dictionary() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from(42)),
+            Some(Variant::from(7)),
+            None,
+            Some(Variant::from(42)),
+        ]));
+        let data_type = DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Int32));
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "dict",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Int32).unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(7), None, Some(42)]);
+        assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_run_end_encoded() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from("apple")),
+            Some(Variant::from("apple")),
+            None,
+            Some(Variant::from("banana")),
+            Some(Variant::from("banana")),
+        ]));
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::Utf8, true));
+        let data_type = DataType::RunEndEncoded(run_ends, values);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "ree",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Utf8).unwrap();
+        let expected = StringArray::from(vec![
+            Some("apple"),
+            Some("apple"),
+            None,
+            Some("banana"),
+            Some("banana"),
+        ]);
+        assert_eq!(decoded.as_ref(), &expected);
     }
 
     fn invalid_time_variant_array() -> ArrayRef {
