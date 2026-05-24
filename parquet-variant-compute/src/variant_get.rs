@@ -25,15 +25,15 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::VariantArray;
-use crate::variant_array::BorrowedShreddingState;
+use crate::variant_array::ShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep<'a> {
+pub(crate) enum ShreddedPathStep {
     /// Path step succeeded, return the new shredding state
-    Success(BorrowedShreddingState<'a>),
+    Success(ShreddingState),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -49,11 +49,11 @@ pub(crate) enum ShreddedPathStep<'a> {
 /// a missing-path step (`Missing` or `NotShredded` depending on whether `value` exists).
 ///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element<'a>(
-    shredding_state: &BorrowedShreddingState<'a>,
+pub(crate) fn follow_shredded_path_element(
+    shredding_state: &ShreddingState,
     path_element: &VariantPathElement<'_>,
     _cast_options: &CastOptions,
-) -> Result<ShreddedPathStep<'a>> {
+) -> Result<ShreddedPathStep> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
     let missing_path_step = || match shredding_state.value_field() {
@@ -90,7 +90,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 ))
             })?;
 
-            let state = BorrowedShreddingState::try_from(struct_array)?;
+            let state = ShreddingState::try_from(struct_array)?;
             Ok(ShreddedPathStep::Success(state))
         }
         VariantPathElement::Index { .. } => {
@@ -154,7 +154,7 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().borrow();
+    let mut shredding_state = input.shredding_state().clone();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
@@ -361,10 +361,11 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+        ListArray, ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::CastOptions;
@@ -4138,10 +4139,26 @@ mod test {
             (
                 DataType::LargeListView(field.clone()),
                 Arc::new(LargeListViewArray::new(
-                    field,
+                    field.clone(),
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
                     element_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::FixedSizeList(field.clone(), 3),
+                Arc::new(FixedSizeListArray::new(
+                    field,
+                    3,
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        Some(3),
+                        None,
+                        None,
+                        None,
+                    ])),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
@@ -4307,7 +4324,8 @@ mod test {
             DataType::List(item_field.clone()),
             DataType::LargeList(item_field.clone()),
             DataType::ListView(item_field.clone()),
-            DataType::LargeListView(item_field),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field, 2),
         ];
 
         for data_type in data_types {
@@ -4324,28 +4342,47 @@ mod test {
     }
 
     #[test]
-    fn test_variant_get_fixed_size_list_not_implemented() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+    fn test_variant_get_fixed_size_list_wrong_size() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
-        for safe in [true, false] {
-            let options = GetOptions::new()
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    DataType::FixedSizeList(item_field.clone(), 2),
-                    true,
-                ))))
-                .with_cast_options(CastOptions {
-                    safe,
-                    ..Default::default()
-                });
 
-            let err = variant_get(&variant_array, options).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
-            );
-        }
+        // With `safe` set to true, size mismatch should return Null.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: true,
+                ..Default::default()
+            });
+        let result = variant_get(&variant_array, options).unwrap();
+        let fixed_size_list = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+        assert_eq!(fixed_size_list.len(), 1);
+        assert!(fixed_size_list.is_null(0));
+
+        // With `safe` set to false, error should be raised on wrong sized fixed list.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
+        );
     }
 
     macro_rules! perfectly_shredded_preserves_top_level_nulls_test {
