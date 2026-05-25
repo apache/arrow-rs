@@ -55,8 +55,8 @@
 use arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
 };
-use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
+use arrow::compute::{and, or};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
@@ -258,8 +258,11 @@ enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
     FilterColumnsOnly,
+    CountOnly,
     FixedColumns,
+    Float64AndTs,
     Float64Only,
+    Int64AndFloat64,
     Utf8Only,
 }
 
@@ -269,8 +272,11 @@ impl std::fmt::Display for ProjectionCase {
             ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
             ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
+            ProjectionCase::CountOnly => write!(f, "count_only"),
             ProjectionCase::FixedColumns => write!(f, "fixed_columns"),
+            ProjectionCase::Float64AndTs => write!(f, "float64_and_ts"),
             ProjectionCase::Float64Only => write!(f, "float64_only"),
+            ProjectionCase::Int64AndFloat64 => write!(f, "int64_and_float64"),
             ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
     }
@@ -441,6 +447,34 @@ enum FilterType {
     /// This synthetic predicate keeps that reader-level shape: cheap scalar
     /// filter columns protect an expensive `Utf8View` output column.
     ClickBenchQ37ScalarPrefix,
+    /// Shape of ClickBench extended Q6 under DataFusion row-filter pushdown:
+    /// an early cheap fixed-width predicate can prune almost all rows before a
+    /// later unprojected variable-width predicate is decoded.
+    ClickBenchQ6MixedPredicates,
+    /// Shape of ClickBench Q41-like fixed-width filters: sparse fragmented
+    /// scalar predicates with a cheap fixed-width output projection.
+    ClickBenchQ41SparseFixedOutput,
+    /// Shape of ClickBench Q40: multiple cheap scalar predicates, very small
+    /// output, and one projected predicate column used later by grouping.
+    ClickBenchQ40ScalarGroupBy,
+    /// Shape of TPC-DS Q41: a complex OR predicate over dictionary/string-like
+    /// and scalar columns where predicate evaluation dominates reader time.
+    TpcdsQ41ComplexOr,
+    /// Shape of TPC-DS Q20 catalog_sales after dynamic filters: multiple
+    /// fixed-width predicates where predicate columns are also projected.
+    TpcdsQ20ProjectedDynamicFilters,
+    /// Shape of TPC-DS Q21 after dynamic-filter pruning: sparse fragmented
+    /// fixed-width predicates where the final projection still includes the
+    /// predicate columns. This protects against choosing selectors for columns
+    /// that were already decoded/cached by predicate evaluation.
+    TpcdsQ21ProjectedFixedOutput,
+    /// Shape of TPC-DS Q2 fact scans: the dynamic filter applies to the date
+    /// key, the same date key is projected, and an additional fixed-width sales
+    /// value can still be deferred by predicate pushdown.
+    TpcdsQ2ProjectedPredicate10Pct,
+    TpcdsQ2ProjectedPredicate20Pct,
+    TpcdsQ2ProjectedPredicate30Pct,
+    TpcdsQ2ProjectedPredicate40Pct,
     /// Scalar range predicate shaped like TPC-DS Q9 `ss_quantity BETWEEN ...`
     /// subqueries. The selected rows are random and moderately selective, and
     /// benchmark projections cover both count-only and numeric aggregate cases.
@@ -463,6 +497,32 @@ impl std::fmt::Display for FilterType {
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
             FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
             FilterType::ClickBenchQ37ScalarPrefix => "int64 == 62 AND ts < 9000",
+            FilterType::ClickBenchQ6MixedPredicates => "int64 == 9999 AND utf8View <> ''",
+            FilterType::ClickBenchQ41SparseFixedOutput => "int64 < 8 AND ts < 9000",
+            FilterType::ClickBenchQ40ScalarGroupBy => {
+                "int64 == 62 AND float64 > 10.0 AND ts < 9000"
+            }
+            FilterType::TpcdsQ41ComplexOr => {
+                "(utf8View <> '' AND int64 < 8) OR (ts < 100 AND float64 > 95.0)"
+            }
+            FilterType::TpcdsQ20ProjectedDynamicFilters => {
+                "int64 < 12 AND ts < 9000 projected dynamic filters"
+            }
+            FilterType::TpcdsQ21ProjectedFixedOutput => {
+                "int64 < 8 AND ts < 9000 projected predicates"
+            }
+            FilterType::TpcdsQ2ProjectedPredicate10Pct => {
+                "int64 < 10 projected predicate with fixed output"
+            }
+            FilterType::TpcdsQ2ProjectedPredicate20Pct => {
+                "int64 < 20 projected predicate with fixed output"
+            }
+            FilterType::TpcdsQ2ProjectedPredicate30Pct => {
+                "int64 < 30 projected predicate with fixed output"
+            }
+            FilterType::TpcdsQ2ProjectedPredicate40Pct => {
+                "int64 < 40 projected predicate with fixed output"
+            }
             FilterType::TpcdsQ9QuantityRange => "int64 > 0 AND int64 < 21",
             FilterType::TpcdsSparseProjectedFactScan => "ts % 1000 == 0",
         };
@@ -533,6 +593,66 @@ impl FilterType {
                 let date_like_range = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
                 and(&counter_match, &date_like_range)
             }
+            FilterType::ClickBenchQ6MixedPredicates => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let utf8 = batch.column(batch.schema().index_of("utf8View")?);
+                let cheap_prefix = eq(int64, &Int64Array::new_scalar(9999))?;
+                let string_suffix = neq(utf8, &StringViewArray::new_scalar(""))?;
+                and(&cheap_prefix, &string_suffix)
+            }
+            FilterType::ClickBenchQ41SparseFixedOutput
+            | FilterType::TpcdsQ21ProjectedFixedOutput => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                let counter_like = lt(int64, &Int64Array::new_scalar(8))?;
+                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
+                and(&counter_like, &date_like)
+            }
+            FilterType::ClickBenchQ40ScalarGroupBy => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let float64 = batch.column(batch.schema().index_of("float64")?);
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
+                let width_match = gt(float64, &Float64Array::new_scalar(10.0))?;
+                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
+                and(&and(&counter_match, &width_match)?, &date_like)
+            }
+            FilterType::TpcdsQ41ComplexOr => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let float64 = batch.column(batch.schema().index_of("float64")?);
+                let utf8 = batch.column(batch.schema().index_of("utf8View")?);
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                let string_branch = and(
+                    &neq(utf8, &StringViewArray::new_scalar(""))?,
+                    &lt(int64, &Int64Array::new_scalar(8))?,
+                )?;
+                let scalar_branch = and(
+                    &lt(ts, &TimestampMillisecondArray::new_scalar(100))?,
+                    &gt(float64, &Float64Array::new_scalar(95.0))?,
+                )?;
+                or(&string_branch, &scalar_branch)
+            }
+            FilterType::TpcdsQ20ProjectedDynamicFilters => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                let item_like = lt(int64, &Int64Array::new_scalar(12))?;
+                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
+                and(&item_like, &date_like)
+            }
+            FilterType::TpcdsQ2ProjectedPredicate10Pct
+            | FilterType::TpcdsQ2ProjectedPredicate20Pct
+            | FilterType::TpcdsQ2ProjectedPredicate30Pct
+            | FilterType::TpcdsQ2ProjectedPredicate40Pct => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let threshold = match self {
+                    FilterType::TpcdsQ2ProjectedPredicate10Pct => 10,
+                    FilterType::TpcdsQ2ProjectedPredicate20Pct => 20,
+                    FilterType::TpcdsQ2ProjectedPredicate30Pct => 30,
+                    FilterType::TpcdsQ2ProjectedPredicate40Pct => 40,
+                    _ => unreachable!(),
+                };
+                lt(int64, &Int64Array::new_scalar(threshold))
+            }
             FilterType::TpcdsQ9QuantityRange => {
                 let int64 = batch.column(batch.schema().index_of("int64")?);
                 let lower = gt(int64, &Int64Array::new_scalar(0))?;
@@ -567,6 +687,16 @@ impl FilterType {
             FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
             FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewMissing => &[2],
             FilterType::ClickBenchQ37ScalarPrefix => &[0, 3],
+            FilterType::ClickBenchQ6MixedPredicates => &[0, 2],
+            FilterType::ClickBenchQ40ScalarGroupBy => &[0, 1, 3],
+            FilterType::ClickBenchQ41SparseFixedOutput
+            | FilterType::TpcdsQ20ProjectedDynamicFilters
+            | FilterType::TpcdsQ21ProjectedFixedOutput => &[0, 3],
+            FilterType::TpcdsQ41ComplexOr => &[0, 1, 2, 3],
+            FilterType::TpcdsQ2ProjectedPredicate10Pct
+            | FilterType::TpcdsQ2ProjectedPredicate20Pct
+            | FilterType::TpcdsQ2ProjectedPredicate30Pct
+            | FilterType::TpcdsQ2ProjectedPredicate40Pct => &[0],
             FilterType::TpcdsQ9QuantityRange => &[0],
             FilterType::TpcdsSparseProjectedFactScan => &[3],
         }
@@ -923,6 +1053,72 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
             ProjectionCase::Utf8Only,
         ),
         AsyncFocusCase::new(
+            "profile_q6_mixed_predicates",
+            parquet_file.clone(),
+            FilterType::ClickBenchQ6MixedPredicates,
+            ProjectionCase::Float64Only,
+        ),
+        AsyncFocusCase::new(
+            "profile_q40_scalar_group_by",
+            parquet_file.clone(),
+            FilterType::ClickBenchQ40ScalarGroupBy,
+            ProjectionCase::Float64AndTs,
+        ),
+        AsyncFocusCase::new(
+            "profile_q41_sparse_fixed_output",
+            parquet_file.clone(),
+            FilterType::ClickBenchQ41SparseFixedOutput,
+            ProjectionCase::Float64Only,
+        ),
+        AsyncFocusCase::new(
+            "profile_tpcds_q41_complex_or",
+            parquet_file.clone(),
+            FilterType::TpcdsQ41ComplexOr,
+            ProjectionCase::Float64Only,
+        ),
+        AsyncFocusCase::new(
+            "profile_tpcds_q20_projected_dynamic_filters",
+            parquet_file.clone(),
+            FilterType::TpcdsQ20ProjectedDynamicFilters,
+            ProjectionCase::FixedColumns,
+        ),
+        AsyncFocusCase::new(
+            "profile_q21_projected_predicate_fixed_output",
+            parquet_file.clone(),
+            FilterType::TpcdsQ21ProjectedFixedOutput,
+            ProjectionCase::FixedColumns,
+        ),
+        AsyncFocusCase::new(
+            "profile_q2_projected_predicate_10pct",
+            parquet_file.clone(),
+            FilterType::TpcdsQ2ProjectedPredicate10Pct,
+            ProjectionCase::Int64AndFloat64,
+        ),
+        AsyncFocusCase::new(
+            "profile_q2_projected_predicate_20pct",
+            parquet_file.clone(),
+            FilterType::TpcdsQ2ProjectedPredicate20Pct,
+            ProjectionCase::Int64AndFloat64,
+        ),
+        AsyncFocusCase::new(
+            "profile_q2_projected_predicate_30pct",
+            parquet_file.clone(),
+            FilterType::TpcdsQ2ProjectedPredicate30Pct,
+            ProjectionCase::Int64AndFloat64,
+        ),
+        AsyncFocusCase::new(
+            "profile_q2_projected_predicate_40pct",
+            parquet_file.clone(),
+            FilterType::TpcdsQ2ProjectedPredicate40Pct,
+            ProjectionCase::Int64AndFloat64,
+        ),
+        AsyncFocusCase::new(
+            "profile_q1_count_only",
+            parquet_file.clone(),
+            FilterType::ClickBenchQ41SparseFixedOutput,
+            ProjectionCase::CountOnly,
+        ),
+        AsyncFocusCase::new(
             "profile_q19_no_defer",
             parquet_file.clone(),
             FilterType::PointLookup,
@@ -1080,6 +1276,11 @@ fn benchmark_async_focus_case(
         schema_descr,
         filter_type.filter_projection().iter().copied(),
     );
+    let q6_int64_pred_mask = ProjectionMask::roots(schema_descr, [0]);
+    let q6_utf8_pred_mask = ProjectionMask::roots(schema_descr, [2]);
+    let q41_int64_pred_mask = ProjectionMask::roots(schema_descr, [0]);
+    let q41_ts_pred_mask = ProjectionMask::roots(schema_descr, [3]);
+    let q40_float64_pred_mask = ProjectionMask::roots(schema_descr, [1]);
 
     for strategy in strategies.iter().copied() {
         let bench_id = BenchmarkId::new(
@@ -1092,6 +1293,11 @@ fn benchmark_async_focus_case(
             b.iter(|| {
                 let reader = reader.clone();
                 let pred_mask = pred_mask.clone();
+                let q6_int64_pred_mask = q6_int64_pred_mask.clone();
+                let q6_utf8_pred_mask = q6_utf8_pred_mask.clone();
+                let q41_int64_pred_mask = q41_int64_pred_mask.clone();
+                let q41_ts_pred_mask = q41_ts_pred_mask.clone();
+                let q40_float64_pred_mask = q40_float64_pred_mask.clone();
                 let projection_mask = projection_mask.clone();
                 let read_projection_mask = read_projection_mask.clone();
                 let output_column_names = output_column_names.clone();
@@ -1108,7 +1314,15 @@ fn benchmark_async_focus_case(
                             .await
                         }
                         AsyncStrategy::PushdownAutoCostModel => {
-                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                q6_int64_pred_mask,
+                                q6_utf8_pred_mask,
+                                q41_int64_pred_mask,
+                                q41_ts_pred_mask,
+                                q40_float64_pred_mask,
+                            );
                             benchmark_async_reader_with_policy(
                                 reader,
                                 projection_mask,
@@ -1118,7 +1332,15 @@ fn benchmark_async_focus_case(
                             .await
                         }
                         AsyncStrategy::PushdownSelectors => {
-                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                q6_int64_pred_mask,
+                                q6_utf8_pred_mask,
+                                q41_int64_pred_mask,
+                                q41_ts_pred_mask,
+                                q40_float64_pred_mask,
+                            );
                             benchmark_async_reader_with_policy(
                                 reader,
                                 projection_mask,
@@ -1128,7 +1350,15 @@ fn benchmark_async_focus_case(
                             .await
                         }
                         AsyncStrategy::PushdownMask => {
-                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                q6_int64_pred_mask,
+                                q6_utf8_pred_mask,
+                                q41_int64_pred_mask,
+                                q41_ts_pred_mask,
+                                q40_float64_pred_mask,
+                            );
                             benchmark_async_reader_with_policy(
                                 reader,
                                 projection_mask,
@@ -1157,8 +1387,11 @@ fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCa
             })
             .collect(),
         ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
+        ProjectionCase::CountOnly => vec![],
         ProjectionCase::FixedColumns => vec![0, 1, 3],
+        ProjectionCase::Float64AndTs => vec![1, 3],
         ProjectionCase::Float64Only => vec![1],
+        ProjectionCase::Int64AndFloat64 => vec![0, 1],
         ProjectionCase::Utf8Only => vec![2],
     }
 }
@@ -1184,6 +1417,75 @@ fn projection_names(projection: &[usize]) -> Vec<&'static str> {
 fn row_filter_for(filter_type: FilterType, pred_mask: ProjectionMask) -> RowFilter {
     let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
     RowFilter::new(vec![Box::new(filter)])
+}
+
+fn row_filter_for_focus_case(
+    filter_type: FilterType,
+    pred_mask: ProjectionMask,
+    q6_int64_pred_mask: ProjectionMask,
+    q6_utf8_pred_mask: ProjectionMask,
+    q41_int64_pred_mask: ProjectionMask,
+    q41_ts_pred_mask: ProjectionMask,
+    q40_float64_pred_mask: ProjectionMask,
+) -> RowFilter {
+    match filter_type {
+        FilterType::ClickBenchQ6MixedPredicates => {
+            let int64_filter =
+                ArrowPredicateFn::new(q6_int64_pred_mask, move |batch: RecordBatch| {
+                    let int64 = batch.column(batch.schema().index_of("int64")?);
+                    eq(int64, &Int64Array::new_scalar(9999))
+                });
+            let utf8_filter =
+                ArrowPredicateFn::new(q6_utf8_pred_mask, move |batch: RecordBatch| {
+                    let utf8 = batch.column(batch.schema().index_of("utf8View")?);
+                    neq(utf8, &StringViewArray::new_scalar(""))
+                });
+
+            RowFilter::new(vec![Box::new(int64_filter), Box::new(utf8_filter)])
+        }
+        FilterType::ClickBenchQ40ScalarGroupBy => {
+            let int64_filter =
+                ArrowPredicateFn::new(q41_int64_pred_mask, move |batch: RecordBatch| {
+                    let int64 = batch.column(batch.schema().index_of("int64")?);
+                    eq(int64, &Int64Array::new_scalar(62))
+                });
+            let float64_filter =
+                ArrowPredicateFn::new(q40_float64_pred_mask, move |batch: RecordBatch| {
+                    let float64 = batch.column(batch.schema().index_of("float64")?);
+                    gt(float64, &Float64Array::new_scalar(10.0))
+                });
+            let ts_filter = ArrowPredicateFn::new(q41_ts_pred_mask, move |batch: RecordBatch| {
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                lt(ts, &TimestampMillisecondArray::new_scalar(9000))
+            });
+
+            RowFilter::new(vec![
+                Box::new(int64_filter),
+                Box::new(float64_filter),
+                Box::new(ts_filter),
+            ])
+        }
+        FilterType::ClickBenchQ41SparseFixedOutput
+        | FilterType::TpcdsQ20ProjectedDynamicFilters
+        | FilterType::TpcdsQ21ProjectedFixedOutput => {
+            let int64_filter =
+                ArrowPredicateFn::new(q41_int64_pred_mask, move |batch: RecordBatch| {
+                    let int64 = batch.column(batch.schema().index_of("int64")?);
+                    let scalar = match filter_type {
+                        FilterType::TpcdsQ20ProjectedDynamicFilters => 12,
+                        _ => 8,
+                    };
+                    lt(int64, &Int64Array::new_scalar(scalar))
+                });
+            let ts_filter = ArrowPredicateFn::new(q41_ts_pred_mask, move |batch: RecordBatch| {
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                lt(ts, &TimestampMillisecondArray::new_scalar(9000))
+            });
+
+            RowFilter::new(vec![Box::new(int64_filter), Box::new(ts_filter)])
+        }
+        _ => row_filter_for(filter_type, pred_mask),
+    }
 }
 
 #[derive(Clone, Copy)]

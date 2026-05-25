@@ -370,6 +370,11 @@ impl RowGroupReaderBuilder {
         // Projected predicates can reuse decoded predicate values, but sparse
         // or clustered filters can still win with page pruning. Keep this
         // shortcut to moderate selectivity before switching to post-filter.
+        //
+        // A TPC-DS Q2-shaped projected predicate plus one deferred fixed-width
+        // output column still favors post-filter once selectivity is moderate:
+        // the saved output decode is smaller than the row-selection and cache
+        // overhead. Sparse projected predicates stay below this range.
         if self.projection_includes_all(&self.projection, &predicate_projection)
             && (CostModelObservation::PROJECTED_PREDICATE_MIN_RATIO
                 ..CostModelObservation::PROJECTED_PREDICATE_MAX_RATIO)
