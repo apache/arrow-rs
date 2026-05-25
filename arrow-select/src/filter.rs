@@ -1281,7 +1281,7 @@ mod tests {
         let v2 = [3_u8, 4];
         let v3 = [5_u8, 6];
         let v = vec![&v1, &v2, &v3];
-        let a = FixedSizeBinaryArray::from(v);
+        let a = FixedSizeBinaryArray::try_from(v).unwrap();
         let b = BooleanArray::from(vec![true, false, true]);
         let c = filter(&a, &b).unwrap();
         let d = c
