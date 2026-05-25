@@ -483,7 +483,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 /// let mut builder = VariantBuilder::new();
 /// builder.append_value(Variant::Int8(42));
 /// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// // use the Variant API to verify the result
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// assert_eq!(variant, Variant::Int8(42));
@@ -508,7 +508,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 /// object_builder.insert("last_name", "Li");
 /// object_builder.finish(); // call finish to finalize the object
 /// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// // use the Variant API to verify the result
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_object = variant.as_object().unwrap();
@@ -533,7 +533,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 ///   .with_field("first_name", "Jiaying")
 ///   .with_field("last_name", "Li")
 ///   .finish();
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_object = variant.as_object().unwrap();
 /// assert_eq!(
@@ -559,7 +559,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 /// // call finish to finalize the list
 ///  list_builder.finish();
 /// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// // use the Variant API to verify the result
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_list = variant.as_list().unwrap();
@@ -579,7 +579,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 ///      .with_value(2i8)
 ///      .with_value(3i8)
 ///      .finish();
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_list = variant.as_list().unwrap();
 /// assert_eq!(variant_list.get(0).unwrap(), Variant::Int8(1));
@@ -625,7 +625,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 ///
 /// list_builder.finish();
 /// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// // use the Variant API to verify the result
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_list = variant.as_list().unwrap();
@@ -689,7 +689,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 /// obj.insert("score", 95.5);
 /// obj.finish();
 ///
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// ```
 ///
@@ -707,7 +707,7 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 /// obj.insert("score", 88.0);
 /// obj.finish();
 ///
-/// let (metadata, value) = builder.finish();
+/// let (metadata, value) = builder.finish().unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// ```
 #[derive(Default, Debug)]
@@ -792,10 +792,41 @@ impl VariantBuilder {
         self.metadata_builder.upsert_field_name(field_name);
     }
 
+    /// Returns true if a top-level variant value has already been written to this builder.
+    ///
+    /// A [`VariantBuilder`] holds exactly one top-level variant value. Any committed top-level
+    /// value leaves bytes in the value buffer; a child builder dropped without `finish()` has
+    /// its bytes rolled back by [`ParentState`], so the offset is a faithful indicator.
+    fn has_top_level_value(&self) -> bool {
+        self.value_builder.offset() != 0
+    }
+
+    fn ensure_no_top_level_value(&self) {
+        assert!(
+            !self.has_top_level_value(),
+            "VariantBuilder already contains a top-level variant value; only one is allowed"
+        );
+    }
+
+    fn check_no_top_level_value(&self) -> Result<(), ArrowError> {
+        if self.has_top_level_value() {
+            return Err(ArrowError::InvalidArgumentError(
+                "VariantBuilder already contains a top-level variant value; only one is allowed"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder.
     pub fn new_list(&mut self) -> ListBuilder<'_, ()> {
+        self.ensure_no_top_level_value();
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ListBuilder::new(parent_state, self.validate_unique_fields)
@@ -804,7 +835,12 @@ impl VariantBuilder {
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder.
     pub fn new_object(&mut self) -> ObjectBuilder<'_, ()> {
+        self.ensure_no_top_level_value();
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ObjectBuilder::new(parent_state, self.validate_unique_fields)
@@ -814,8 +850,9 @@ impl VariantBuilder {
     ///
     /// # Panics
     ///
-    /// This method will panic if the variant contains duplicate field names in objects
-    /// when validation is enabled. For a fallible version, use [`VariantBuilder::try_append_value`]
+    /// Panics if a top-level variant value has already been written to this builder, or if the
+    /// variant contains duplicate field names in objects when validation is enabled. For a
+    /// fallible version, use [`VariantBuilder::try_append_value`].
     ///
     /// # Example
     /// ```
@@ -825,15 +862,19 @@ impl VariantBuilder {
     /// builder.append_value(42i8);
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.ensure_no_top_level_value();
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::append_variant(state, value.into())
     }
 
     /// Append a value to the builder.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
     pub fn try_append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
+        self.check_no_top_level_value()?;
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::try_append_variant(state, value.into())
     }
@@ -846,18 +887,30 @@ impl VariantBuilder {
     ///
     /// The caller must ensure that the metadata dictionary entries are already built and correct for
     /// any objects or lists being appended.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder.
     pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        self.ensure_no_top_level_value();
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::append_variant_bytes(state, value.into());
     }
 
     /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
+    ///
+    /// Returns an error if no top-level variant value has been appended.
+    pub fn finish(mut self) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
+        if !self.has_top_level_value() {
+            return Err(ArrowError::InvalidArgumentError(
+                "VariantBuilder is empty; append a top-level value before calling finish()".into(),
+            ));
+        }
         self.metadata_builder.finish();
-        (
+        Ok((
             self.metadata_builder.into_inner(),
             self.value_builder.into_inner(),
-        )
+        ))
     }
 }
 
@@ -915,10 +968,12 @@ impl VariantBuilderExt for VariantBuilder {
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.check_no_top_level_value()?;
         Ok(self.new_list())
     }
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.check_no_top_level_value()?;
         Ok(self.new_object())
     }
 }
@@ -957,7 +1012,7 @@ mod tests {
     fn test_variant_roundtrip<'m, 'd, T: Into<Variant<'m, 'd>>>(input: T, expected: Variant) {
         let mut builder = VariantBuilder::new();
         builder.append_value(input);
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap_or_else(|_| {
             panic!("Failed to create variant from metadata and value: {metadata:?}, {value:?}")
         });
@@ -994,7 +1049,7 @@ mod tests {
             outer_object_builder.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
@@ -1044,20 +1099,18 @@ mod tests {
             variant2.add_field_name("a");
             assert!(!variant2.metadata_builder.is_sorted);
 
-            // per the spec, make sure the variant will fail to build if only metadata is provided
-            let (m, v) = variant2.finish();
-            let res = Variant::try_new(&m, &v);
-            assert!(res.is_err());
-
-            // since it is not sorted, make sure the metadata says so
-            let header = VariantMetadata::try_new(&m).unwrap();
-            assert!(!header.is_sorted());
+            // per the spec, a variant must have a top-level value; finish() rejects empty
+            let err = variant2.finish().unwrap_err();
+            assert!(
+                err.to_string().contains("empty"),
+                "unexpected error: {err}"
+            );
         }
 
         // write out variant1 and make sure the sorted flag is properly encoded
         variant1.append_value(false);
 
-        let (m, v) = variant1.finish();
+        let (m, v) = variant1.finish().unwrap();
         let res = Variant::try_new(&m, &v);
         assert!(res.is_ok());
 
@@ -1083,7 +1136,7 @@ mod tests {
         obj.insert("d", 2);
         obj.finish();
 
-        let (metadata, value) = variant1.finish();
+        let (metadata, value) = variant1.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -1117,7 +1170,7 @@ mod tests {
         obj.insert("a", 2);
         obj.finish();
 
-        let (metadata, value) = variant1.finish();
+        let (metadata, value) = variant1.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -1165,7 +1218,7 @@ mod tests {
         builder.append_value(42i8);
 
         // The original builder should be unchanged
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty());
 
@@ -1184,7 +1237,7 @@ mod tests {
         builder.append_value(42i8);
 
         // The original builder should be unchanged
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty()); // rolled back
 
@@ -1207,7 +1260,7 @@ mod tests {
 
         // The parent list should only contain the original values
         list_builder.finish();
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty());
 
@@ -1235,7 +1288,7 @@ mod tests {
         builder.append_value(2i8);
 
         // Only the second attempt should appear in the final variant
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty());
 
@@ -1258,7 +1311,7 @@ mod tests {
 
         // The parent list should only contain the original values
         list_builder.finish();
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty());
 
@@ -1286,7 +1339,7 @@ mod tests {
         builder.append_value(2i8);
 
         // Only the second attempt should appear in the final variant
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty()); // rolled back
 
@@ -1309,7 +1362,7 @@ mod tests {
 
         // The parent object should only contain the original fields
         object_builder.finish();
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 2);
@@ -1340,7 +1393,7 @@ mod tests {
         builder.append_value(2i8);
 
         // Only the second attempt should appear in the final variant
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty()); // rolled back
 
@@ -1363,7 +1416,7 @@ mod tests {
 
         // The parent object should only contain the original fields
         object_builder.finish();
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 2); // the fields of nested_object_builder has been rolled back
@@ -1394,7 +1447,7 @@ mod tests {
         builder.append_value(2i8);
 
         // Only the second attempt should appear in the final variant
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 0); // rolled back
 
@@ -1439,10 +1492,10 @@ mod tests {
             }
             list.finish();
         }
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let v1 = Variant::try_new(&metadata, &value).unwrap();
 
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish().unwrap();
         let v2 = Variant::try_new(&metadata, &value).unwrap();
 
         assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
@@ -1471,7 +1524,7 @@ mod tests {
             }
             obj.finish();
         }
-        let (metadata, value1) = builder.finish();
+        let (metadata, value1) = builder.finish().unwrap();
         let variant1 = Variant::try_new(&metadata, &value1).unwrap();
 
         // Copy using the new bytes API
@@ -1498,7 +1551,7 @@ mod tests {
             obj.insert("field4", "value4");
             obj.finish();
         }
-        let (metadata1, value1) = builder.finish();
+        let (metadata1, value1) = builder.finish().unwrap();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_obj = original_variant.as_object().unwrap();
 
@@ -1601,7 +1654,7 @@ mod tests {
             root_obj.insert("total_count", 3i32);
             root_obj.finish();
         }
-        let (metadata1, value1) = builder.finish();
+        let (metadata1, value1) = builder.finish().unwrap();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_obj = original_variant.as_object().unwrap();
         let original_users = original_obj.get("users").unwrap();

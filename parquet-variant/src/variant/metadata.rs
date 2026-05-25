@@ -621,7 +621,7 @@ mod tests {
 
         o.finish();
 
-        let (m, _) = b.finish();
+        let (m, _) = b.finish().unwrap();
 
         let m1 = VariantMetadata::new(&m);
         assert!(m1.is_sorted());
@@ -656,7 +656,7 @@ mod tests {
 
         o.finish();
 
-        let (m, _) = b.finish();
+        let (m, _) = b.finish().unwrap();
 
         let m1 = VariantMetadata::new(&m);
         let m2 = VariantMetadata::new(&m);

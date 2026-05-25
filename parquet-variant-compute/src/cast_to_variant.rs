@@ -1342,7 +1342,7 @@ mod tests {
             list.append_value(1);
             list.append_value(2);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1367,7 +1367,7 @@ mod tests {
             list.append_value(4);
             list.append_value(5);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1388,7 +1388,7 @@ mod tests {
             list.append_value(1i64);
             list.append_value(2i64);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1413,7 +1413,7 @@ mod tests {
             list.append_value(4i64);
             list.append_value(5i64);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1441,7 +1441,7 @@ mod tests {
             list.append_null();
             list.append_value(2i32);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant0 = Variant::new(&metadata, &value);
 
@@ -1451,7 +1451,7 @@ mod tests {
             list.append_value(3i32);
             list.append_value(4i32);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant1 = Variant::new(&metadata, &value);
 
@@ -1461,7 +1461,7 @@ mod tests {
             list.append_null();
             list.append_null();
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant3 = Variant::new(&metadata, &value);
 
@@ -1487,7 +1487,7 @@ mod tests {
             list.append_value(3i32);
             list.append_null();
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1515,7 +1515,7 @@ mod tests {
             list.append_null();
             list.append_value(2i64);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant0 = Variant::new(&metadata, &value);
 
@@ -1525,7 +1525,7 @@ mod tests {
             list.append_value(3i64);
             list.append_value(4i64);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant1 = Variant::new(&metadata, &value);
 
@@ -1535,7 +1535,7 @@ mod tests {
             list.append_null();
             list.append_null();
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant3 = Variant::new(&metadata, &value);
 
@@ -1561,7 +1561,7 @@ mod tests {
             list.append_value(3i64);
             list.append_null();
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 
@@ -1598,7 +1598,7 @@ mod tests {
             list.append_value(0i32);
             list.append_value(1i32);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant0 = Variant::new(&metadata, &value);
 
@@ -1608,7 +1608,7 @@ mod tests {
             list.append_null();
             list.append_value(3i32);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant1 = Variant::new(&metadata, &value);
 
@@ -1618,7 +1618,7 @@ mod tests {
             list.append_null();
             list.append_null();
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant3 = Variant::new(&metadata, &value);
 
@@ -1653,7 +1653,7 @@ mod tests {
             list.append_null();
             list.append_value(3i64);
             list.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
         let variant = Variant::new(&metadata, &value);
 

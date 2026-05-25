@@ -359,11 +359,12 @@ mod test {
     #[test]
     fn test_read_only_metadata_builder() {
         // First create some metadata with a few field names
-        let mut default_builder = VariantBuilder::new();
-        default_builder.add_field_name("name");
-        default_builder.add_field_name("age");
-        default_builder.add_field_name("active");
-        let (metadata_bytes, _) = default_builder.finish();
+        let mut default_builder = WritableMetadataBuilder::default();
+        default_builder.upsert_field_name("name");
+        default_builder.upsert_field_name("age");
+        default_builder.upsert_field_name("active");
+        default_builder.finish();
+        let metadata_bytes = default_builder.into_inner();
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
@@ -394,9 +395,10 @@ mod test {
     #[test]
     fn test_read_only_metadata_builder_fails_on_unknown_field() {
         // Create metadata with only one field
-        let mut default_builder = VariantBuilder::new();
-        default_builder.add_field_name("known_field");
-        let (metadata_bytes, _) = default_builder.finish();
+        let mut default_builder = WritableMetadataBuilder::default();
+        default_builder.upsert_field_name("known_field");
+        default_builder.finish();
+        let metadata_bytes = default_builder.into_inner();
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();

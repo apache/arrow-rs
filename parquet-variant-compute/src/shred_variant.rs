@@ -2105,7 +2105,7 @@ mod tests {
             .new_object()
             .with_field("email", "bob@example.com")
             .finish();
-        let (m, v) = builder.finish();
+        let (m, v) = builder.finish().unwrap();
         let expected_value = Variant::new(&m, &v);
 
         expect(

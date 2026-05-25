@@ -68,7 +68,7 @@ pub trait VariantToJson {
     /// object_builder.insert("last_name", "Li");
     /// object_builder.finish();
     /// // Finish the builder to get the metadata and value
-    /// let (metadata, value) = builder.finish();
+    /// let (metadata, value) = builder.finish().unwrap();
     /// // Create the Variant and convert to JSON
     /// let variant = Variant::try_new(&metadata, &value)?;
     /// let mut writer = Vec::new();
@@ -126,7 +126,7 @@ pub trait VariantToJson {
     /// object_builder.insert("last_name", "Li");
     /// object_builder.finish();
     /// // Finish the builder to get the metadata and value
-    /// let (metadata, value) = builder.finish();
+    /// let (metadata, value) = builder.finish().unwrap();
     /// // Create the Variant and convert to JSON
     /// let variant = Variant::try_new(&metadata, &value)?;
     /// let json = variant.to_json_string()?;
@@ -968,7 +968,7 @@ mod tests {
             .with_field("score", 95.5f64)
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 
@@ -999,7 +999,7 @@ mod tests {
             obj.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
         assert_eq!(json, "{}");
@@ -1023,7 +1023,7 @@ mod tests {
             .with_field("unicode", "😀 Smiley")
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 
@@ -1054,7 +1054,7 @@ mod tests {
             .with_value(5i32)
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
         assert_eq!(json, "[1,2,3,4,5]");
@@ -1079,7 +1079,7 @@ mod tests {
             list.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
         assert_eq!(json, "[]");
@@ -1105,7 +1105,7 @@ mod tests {
             .with_value(std::f64::consts::PI)
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 
@@ -1136,7 +1136,7 @@ mod tests {
             obj.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 
@@ -1168,7 +1168,7 @@ mod tests {
             .with_value(100i64)
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 
@@ -1203,7 +1203,7 @@ mod tests {
             obj.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
 

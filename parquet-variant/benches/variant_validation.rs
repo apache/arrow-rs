@@ -44,7 +44,7 @@ fn generate_large_object() -> (Vec<u8>, Vec<u8>) {
     }
     outer_object.finish();
 
-    variant_builder.finish()
+    variant_builder.finish().unwrap()
 }
 
 fn generate_complex_object() -> (Vec<u8>, Vec<u8>) {
@@ -76,7 +76,7 @@ fn generate_complex_object() -> (Vec<u8>, Vec<u8>) {
 
     object_builder.finish();
 
-    variant_builder.finish()
+    variant_builder.finish().unwrap()
 }
 
 fn generate_large_nested_list() -> (Vec<u8>, Vec<u8>) {
@@ -97,7 +97,7 @@ fn generate_large_nested_list() -> (Vec<u8>, Vec<u8>) {
         list_builder_inner.finish();
     }
     list_builder.finish();
-    variant_builder.finish()
+    variant_builder.finish().unwrap()
 }
 
 // Generates a large object and performs full validation

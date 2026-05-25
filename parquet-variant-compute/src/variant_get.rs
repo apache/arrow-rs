@@ -1796,7 +1796,7 @@ mod test {
             obj.insert("x", Variant::Int32(42));
             obj.insert("y", Variant::from("foo"));
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         // Create metadata array (same for both rows)
@@ -1810,7 +1810,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
@@ -2175,7 +2175,7 @@ mod test {
             let mut obj = builder.new_object();
             obj.insert("x", Variant::from("foo"));
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         // Metadata array (same for both rows)
@@ -2188,7 +2188,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
@@ -2247,7 +2247,7 @@ mod test {
 
             obj.insert("b", Variant::Int32(42));
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 2));
@@ -2258,7 +2258,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
@@ -2269,7 +2269,7 @@ mod test {
             let mut obj = builder.new_object();
             obj.insert("fallback", Variant::from("data"));
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
@@ -2295,7 +2295,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
         let a_value_array = BinaryViewArray::from(vec![
@@ -2360,7 +2360,7 @@ mod test {
             a_obj.finish();
 
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
@@ -2370,7 +2370,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
@@ -2396,7 +2396,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
         let b_value_array = BinaryViewArray::from(vec![
@@ -2425,7 +2425,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
         let a_value_array = BinaryViewArray::from(vec![
@@ -3173,7 +3173,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         // Create null buffer for top-level nulls
@@ -3309,7 +3309,7 @@ mod test {
             let mut obj = builder.new_object();
             obj.insert("y", Variant::from(42));
             obj.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
@@ -3323,14 +3323,14 @@ mod test {
         let empty_object_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             builder.new_object().finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 
         let y_null_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             builder.new_object().with_field("y", Variant::Null).finish();
-            let (_, value) = builder.finish();
+            let (_, value) = builder.finish().unwrap();
             value
         };
 

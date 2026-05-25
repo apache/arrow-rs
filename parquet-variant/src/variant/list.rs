@@ -624,7 +624,7 @@ mod tests {
 
         list_builder.finish();
         // Finish the builder to get the metadata and value
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         // use the Variant API to verify the result
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
@@ -716,7 +716,7 @@ mod tests {
             let (metadata3, value3) = make_listi32(10i32..20i32);
             object_builder.insert("list3", Variant::new(&metadata3, &value3));
             object_builder.finish();
-            builder.finish()
+            builder.finish().unwrap()
         };
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -733,7 +733,7 @@ mod tests {
         let mut list_builder = variant_builder.new_list();
         list_builder.extend(range);
         list_builder.finish();
-        variant_builder.finish()
+        variant_builder.finish().unwrap()
     }
 
     /// return metadata/value for a simple variant list with values in a range
@@ -742,6 +742,6 @@ mod tests {
         let mut list_builder = variant_builder.new_list();
         list_builder.extend(range);
         list_builder.finish();
-        variant_builder.finish()
+        variant_builder.finish().unwrap()
     }
 }

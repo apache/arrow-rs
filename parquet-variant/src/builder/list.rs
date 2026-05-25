@@ -294,7 +294,7 @@ mod tests {
             .with_value("test")
             .finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         assert!(!metadata.is_empty());
         assert!(!value.is_empty());
 
@@ -332,7 +332,7 @@ mod tests {
 
         outer_list_builder.finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_list = variant.as_list().unwrap();
@@ -382,7 +382,7 @@ mod tests {
             list_builder1.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let list1 = variant.as_list().unwrap();
@@ -422,7 +422,7 @@ mod tests {
             list.append_value(1.234f64);
             list.finish();
         }
-        let (metadata1, value1) = builder.finish();
+        let (metadata1, value1) = builder.finish().unwrap();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_list = original_variant.as_list().unwrap();
 
@@ -470,7 +470,7 @@ mod tests {
         let variant = Variant::new(&m1, &v1);
         let mut builder = VariantBuilder::new();
         builder.append_value(variant.clone());
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
 
@@ -484,7 +484,7 @@ mod tests {
             .with_value("a string value")
             .finish();
 
-        builder.finish()
+        builder.finish().unwrap()
     }
 
     #[test]
@@ -493,7 +493,7 @@ mod tests {
         let variant = Variant::new(&m1, &v1);
         let mut builder = VariantBuilder::new();
         builder.append_value(variant.clone());
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
 
@@ -509,7 +509,7 @@ mod tests {
 
         list.finish();
 
-        builder.finish()
+        builder.finish().unwrap()
     }
 
     #[test]
@@ -532,7 +532,7 @@ mod tests {
 
         list_builder.finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
@@ -571,7 +571,7 @@ mod tests {
 
         list_builder.finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
@@ -628,7 +628,7 @@ mod tests {
 
         list_builder.finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
@@ -717,7 +717,7 @@ mod tests {
             outer_list_builder.finish();
         }
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
 
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_list = variant.as_list().unwrap();

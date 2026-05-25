@@ -78,7 +78,7 @@ fn bench_object_field_names_reverse_order(c: &mut Criterion) {
             }
 
             object_builder.finish();
-            hint::black_box(variant.finish());
+            hint::black_box(variant.finish().unwrap());
         })
     });
 }
@@ -115,7 +115,7 @@ fn bench_object_same_schema(c: &mut Criterion) {
                 inner_list_builder.finish();
                 object_builder.finish();
 
-                hint::black_box(variant.finish());
+                hint::black_box(variant.finish().unwrap());
             }
         })
     });
@@ -158,7 +158,7 @@ fn bench_object_list_same_schema(c: &mut Criterion) {
             }
 
             list_builder.finish();
-            hint::black_box(variant.finish());
+            hint::black_box(variant.finish().unwrap());
         })
     });
 }
@@ -203,7 +203,7 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
                     inner_list_builder.finish();
                 }
                 object_builder.finish();
-                hint::black_box(variant.finish());
+                hint::black_box(variant.finish().unwrap());
             }
         })
     });
@@ -258,7 +258,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
             }
 
             list_builder.finish();
-            hint::black_box(variant.finish());
+            hint::black_box(variant.finish().unwrap());
         })
     });
 }
@@ -318,7 +318,7 @@ fn bench_object_partially_same_schema(c: &mut Criterion) {
                 }
 
                 object_builder.finish();
-                hint::black_box(variant.finish());
+                hint::black_box(variant.finish().unwrap());
             }
         })
     });
@@ -383,7 +383,7 @@ fn bench_object_list_partially_same_schema(c: &mut Criterion) {
             }
 
             list_builder.finish();
-            hint::black_box(variant.finish());
+            hint::black_box(variant.finish().unwrap());
         })
     });
 }
@@ -409,7 +409,7 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
         list.finish();
 
         obj.finish();
-        test_data.push(builder.finish());
+        test_data.push(builder.finish().unwrap());
     }
 
     let mut group = c.benchmark_group("validation");
@@ -466,7 +466,7 @@ fn bench_iteration_performance(c: &mut Criterion) {
     }
     list.finish();
 
-    let (metadata, value) = builder.finish();
+    let (metadata, value) = builder.finish().unwrap();
     let validated = Variant::try_new(&metadata, &value).unwrap();
     let unvalidated = Variant::new(&metadata, &value);
 

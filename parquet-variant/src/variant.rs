@@ -1459,7 +1459,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// #   let mut obj = builder.new_object();
     /// #   obj.insert("name", "John");
     /// #   obj.finish();
-    /// #   builder.finish()
+    /// #   builder.finish().unwrap()
     /// # };
     /// // object that is {"name": "John"}
     ///  let variant = Variant::new(&metadata, &value);
@@ -1487,7 +1487,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # let mut obj = builder.new_object();
     /// # obj.insert("name", "John");
     /// # obj.finish();
-    /// # let (metadata, value) = builder.finish();
+    /// # let (metadata, value) = builder.finish().unwrap();
     /// // object that is {"name": "John"}
     ///  let variant = Variant::new(&metadata, &value);
     /// // use the `get_object_field` method to access the object
@@ -1519,7 +1519,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// #   list.append_value("John");
     /// #   list.append_value("Doe");
     /// #   list.finish();
-    /// #   builder.finish()
+    /// #   builder.finish().unwrap()
     /// # };
     /// // list that is ["John", "Doe"]
     /// let variant = Variant::new(&metadata, &value);
@@ -1578,7 +1578,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # list.append_value("John");
     /// # list.append_value("Doe");
     /// # list.finish();
-    /// # let (metadata, value) = builder.finish();
+    /// # let (metadata, value) = builder.finish().unwrap();
     /// // list that is ["John", "Doe"]
     /// let variant = Variant::new(&metadata, &value);
     /// // use the `get_list_element` method to access the list
@@ -1616,7 +1616,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # list.append_value("baz");
     /// # list.finish();
     /// # obj.finish();
-    /// # let (metadata, value) = builder.finish();
+    /// # let (metadata, value) = builder.finish().unwrap();
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
     /// // Accessing a non existent path returns None
@@ -2070,7 +2070,7 @@ mod tests {
 
         root_obj.finish();
 
-        let (metadata, value) = builder.finish();
+        let (metadata, value) = builder.finish().unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         // Test Debug formatter (?)
