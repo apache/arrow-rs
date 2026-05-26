@@ -47,7 +47,7 @@ use serde_json::{Number, Value};
 /// + "\"additional_info\": null}";
 /// variant_builder.append_json(&person_string)?;
 ///
-/// let (metadata, value) = variant_builder.finish().unwrap();
+/// let (metadata, value) = variant_builder.finish();
 ///
 /// let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
 ///
@@ -147,7 +147,7 @@ mod test {
         fn run(self) -> Result<(), ArrowError> {
             let mut variant_builder = VariantBuilder::new();
             variant_builder.append_json(self.json)?;
-            let (metadata, value) = variant_builder.finish().unwrap();
+            let (metadata, value) = variant_builder.finish();
             let variant = Variant::try_new(&metadata, &value)?;
             assert_eq!(variant, self.expected);
             Ok(())
@@ -451,7 +451,7 @@ mod test {
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::Int32(-32767431));
         list_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
         JsonToVariantTest {
@@ -471,7 +471,7 @@ mod test {
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::BooleanFalse);
         list_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
         JsonToVariantTest {
@@ -491,7 +491,7 @@ mod test {
         }
         list_builder.append_value(Variant::BooleanTrue);
         list_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
         JsonToVariantTest {
@@ -514,7 +514,7 @@ mod test {
             list_builder_inner.finish();
         }
         list_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         let intermediate = format!("[{}]", vec!["null"; 255].join(", "));
         let json = format!("[{}]", vec![intermediate; 256].join(", "));
@@ -532,7 +532,7 @@ mod test {
         object_builder.insert("a", Variant::Int8(3));
         object_builder.insert("b", Variant::Int8(2));
         object_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
             json: "{\"b\": 2, \"a\": 1, \"a\": 3}",
@@ -556,7 +556,7 @@ mod test {
         inner_list_builder.append_value(Variant::Double(1001e-3));
         inner_list_builder.finish();
         object_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
             json: "{\"numbers\": [4, -3e0, 1001e-3], \"null\": null, \"booleans\": [true, false]}",
@@ -598,7 +598,7 @@ mod test {
         // Manually verify raw JSON value size
         let mut variant_builder = VariantBuilder::new();
         variant_builder.append_json(&json)?;
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
         let output_string = v.to_json_string()?;
         assert_eq!(output_string, json);
@@ -624,7 +624,7 @@ mod test {
             inner_object_builder.finish();
         });
         object_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
         JsonToVariantTest {
@@ -639,7 +639,7 @@ mod test {
         let json = "{\"爱\":\"अ\",\"a\":1}";
         let mut variant_builder = VariantBuilder::new();
         variant_builder.append_json(json)?;
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
         let output_string = v.to_json_string()?;
         assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
@@ -648,7 +648,7 @@ mod test {
         object_builder.insert("a", Variant::Int8(1));
         object_builder.insert("爱", Variant::ShortString(ShortString::try_new("अ")?));
         object_builder.finish();
-        let (metadata, value) = variant_builder.finish().unwrap();
+        let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
         assert_eq!(

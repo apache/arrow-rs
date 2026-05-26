@@ -551,7 +551,7 @@ mod tests {
     fn test_variant_object_empty_fields() {
         let mut builder = VariantBuilder::new();
         builder.new_object().with_field("", 42).finish();
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
 
         // Resulting object is valid and has a single empty field
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -677,7 +677,7 @@ mod tests {
         }
 
         obj.finish();
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
         if let Variant::Object(obj) = variant {
@@ -738,7 +738,7 @@ mod tests {
         }
 
         obj.finish();
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
         if let Variant::Object(obj) = variant {
@@ -785,7 +785,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
         let v2 = Variant::try_new(&m, &v).unwrap();
@@ -802,7 +802,7 @@ mod tests {
         o.insert("b", false);
 
         o.finish();
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
 
@@ -813,7 +813,7 @@ mod tests {
         o.insert("b", false);
 
         o.finish();
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
@@ -830,7 +830,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
         inner_o.finish();
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
@@ -868,7 +868,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
 
@@ -881,7 +881,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
         let v2 = Variant::try_new(&m, &v).unwrap();
 
         assert_ne!(v1, v2);
@@ -897,7 +897,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
         assert!(!v1.metadata().is_sorted());
@@ -912,7 +912,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
@@ -932,7 +932,7 @@ mod tests {
 
         o.finish();
 
-        let (meta1, value1) = b.finish().unwrap();
+        let (meta1, value1) = b.finish();
 
         let v1 = Variant::try_new(&meta1, &value1).unwrap();
         // v1 is sorted
@@ -947,7 +947,7 @@ mod tests {
 
         o.finish();
 
-        let (meta2, value2) = b.finish().unwrap();
+        let (meta2, value2) = b.finish();
 
         let v2 = Variant::try_new(&meta2, &value2).unwrap();
         // v2 is not sorted
@@ -971,7 +971,7 @@ mod tests {
 
         o.finish();
 
-        let (m, v) = b.finish().unwrap();
+        let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
 

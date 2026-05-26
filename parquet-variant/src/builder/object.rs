@@ -446,7 +446,7 @@ mod tests {
             .with_field("age", 42i8)
             .finish();
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
         assert!(!value.is_empty());
     }
@@ -462,7 +462,7 @@ mod tests {
             .with_field("banana", "yellow")
             .finish();
 
-        let (_, value) = builder.finish().unwrap();
+        let (_, value) = builder.finish();
 
         let header = value[0];
         assert_eq!(header & 0x03, VariantBasicType::Object as u8);
@@ -486,7 +486,7 @@ mod tests {
             .with_field("name", "Metta World Peace") // Duplicate field
             .finish();
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         let obj = variant.as_object().unwrap();
@@ -545,7 +545,7 @@ mod tests {
 
         builder.append_value(variant.clone());
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
 
@@ -558,7 +558,7 @@ mod tests {
         obj.insert("b", true);
         obj.insert("a", false);
         obj.finish();
-        builder.finish().unwrap()
+        builder.finish()
     }
 
     #[test]
@@ -570,7 +570,7 @@ mod tests {
         let mut builder = VariantBuilder::new().with_metadata(VariantMetadata::new(&m1));
         builder.append_value(variant.clone());
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let result_variant = Variant::new(&metadata, &value);
 
         assert_eq!(variant, result_variant);
@@ -592,7 +592,7 @@ mod tests {
             outer_obj.finish();
         }
 
-        builder.finish().unwrap()
+        builder.finish()
     }
 
     #[test]
@@ -618,7 +618,7 @@ mod tests {
             outer_object_builder.finish();
         }
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
@@ -661,7 +661,7 @@ mod tests {
             outer_object_builder.finish();
         }
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
@@ -752,7 +752,7 @@ mod tests {
             outer_object_builder.finish();
         }
 
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
 
         // note, object fields are now sorted lexigraphically by field name
         /*
@@ -852,7 +852,7 @@ mod tests {
         outer_list.finish();
 
         // Verify the nested object is built correctly -- the nested object "x" should have "won"
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_element = variant.get_list_element(0).unwrap();
         let inner_element = outer_element.get_list_element(0).unwrap();

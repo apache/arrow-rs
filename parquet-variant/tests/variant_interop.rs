@@ -310,7 +310,7 @@ fn variant_array_builder() {
     arr.append_value(9i8);
     arr.finish();
 
-    let (built_metadata, built_value) = builder.finish().unwrap();
+    let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
     let case = Case::load("array_primitive");
     let expected = case.variant();
@@ -339,7 +339,7 @@ fn variant_object_builder() {
 
     obj.finish();
 
-    let (built_metadata, built_value) = builder.finish().unwrap();
+    let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
     let case = Case::load("object_primitive");
     let expected = case.variant();
@@ -378,7 +378,7 @@ fn test_validation_fuzz_integration() {
 fn generate_random_variant(rng: &mut StdRng) -> (Vec<u8>, Vec<u8>) {
     let mut builder = VariantBuilder::new();
     generate_random_value(rng, &mut builder, 3); // Max depth of 3
-    builder.finish().unwrap()
+    builder.finish()
 }
 
 fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_depth: u32) {

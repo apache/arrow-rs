@@ -187,7 +187,7 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     for _ in 0..size {
         let mut builder = VariantBuilder::new();
         builder.append_value(rng.random::<i64>());
-        let (metadata, value) = builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
         variant_builder.append_variant(Variant::try_new(&metadata, &value).unwrap());
     }
 
