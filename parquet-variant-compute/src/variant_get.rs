@@ -377,7 +377,7 @@ fn try_perfect_shredding(
 
     // Use Arrow's vectorized cast when it cleanly matches the shredded representation. If not,
     // fall back to row-wise extraction to preserve the existing variant-specific semantics.
-    Ok(cast_with_options(target_array.as_ref(), as_field.data_type(), cast_options).ok())
+    cast_with_options(target_array.as_ref(), as_field.data_type(), cast_options).map(Some)
 }
 
 fn can_use_perfect_shredding_arrow_cast(from_type: &DataType, to_type: &DataType) -> bool {
@@ -397,12 +397,13 @@ fn can_use_perfect_shredding_arrow_cast(from_type: &DataType, to_type: &DataType
                     Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..)
                 )
         }
-        Float32 | Float64 => is_non_decimal_numeric_or_bool(to_type),
+        Float16 | Float32 | Float64 => {
+            is_non_decimal_numeric_or_bool(to_type) || to_type.is_decimal()
+        }
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => {
-            matches!(
-                to_type,
-                Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..)
-            )
+            to_type.is_decimal()
+                || (is_decimal_with_non_negative_scale(from_type)
+                    && is_non_decimal_numeric(to_type))
         }
         Date32 => matches!(to_type, Date32 | Date64),
         Time64(TimeUnit::Microsecond) => matches!(
@@ -418,7 +419,10 @@ fn can_use_perfect_shredding_arrow_cast(from_type: &DataType, to_type: &DataType
             to_type,
             Timestamp(TimeUnit::Nanosecond, to_tz) if from_tz.is_some() == to_tz.is_some()
         ),
-        Utf8 | LargeUtf8 | Utf8View => matches!(to_type, Utf8 | LargeUtf8 | Utf8View),
+        Utf8 | LargeUtf8 | Utf8View => {
+            matches!(to_type, Utf8 | LargeUtf8 | Utf8View)
+                || is_decimal_with_non_negative_scale(to_type)
+        }
         Binary | LargeBinary | BinaryView => matches!(to_type, Binary | LargeBinary | BinaryView),
         FixedSizeBinary(16) => matches!(to_type, FixedSizeBinary(16)),
         List(_) | LargeList(_) | ListView(_) | LargeListView(_) => match (from_type, to_type) {
@@ -433,6 +437,34 @@ fn can_use_perfect_shredding_arrow_cast(from_type: &DataType, to_type: &DataType
         },
         _ => false,
     }
+}
+
+fn is_decimal_with_non_negative_scale(data_type: &DataType) -> bool {
+    use DataType::*;
+
+    matches!(
+        data_type,
+        Decimal32(_, scale) | Decimal64(_, scale) | Decimal128(_, scale) | Decimal256(_, scale)
+            if *scale >= 0
+    )
+}
+
+fn is_non_decimal_numeric(data_type: &DataType) -> bool {
+    use DataType::*;
+
+    matches!(
+        data_type,
+        Int8 | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+    )
 }
 
 fn is_non_decimal_numeric_or_bool(data_type: &DataType) -> bool {
@@ -542,7 +574,7 @@ mod test {
         Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::compute::CastOptions;
+    use arrow::compute::{CastOptions, can_cast_types};
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
     use arrow::util::display::FormatOptions;
@@ -4641,6 +4673,145 @@ mod test {
         assert!(can_use_perfect_shredding_arrow_cast(
             &DataType::List(int32_item),
             &DataType::List(int64_item),
+        ));
+    }
+
+    #[test]
+    fn test_perfect_shredding_cast_gate_allows_supported_variant_casts() {
+        use DataType::*;
+
+        let supported_casts = vec![
+            (Null, Utf8),
+            (Boolean, Int64),
+            (Boolean, Float64),
+            (Int32, UInt64),
+            (Int64, Decimal128(38, 2)),
+            (Float64, Decimal128(38, 2)),
+            (Date32, Date64),
+            (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)),
+            (
+                Timestamp(TimeUnit::Microsecond, None),
+                Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+                Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+            ),
+            (Utf8, LargeUtf8),
+            (Utf8View, Decimal128(38, 2)),
+            (Binary, LargeBinary),
+            (FixedSizeBinary(16), FixedSizeBinary(16)),
+            (
+                List(Arc::new(Field::new("item", Int32, true))),
+                LargeList(Arc::new(Field::new("item", Int64, true))),
+            ),
+        ];
+
+        for (from_type, to_type) in supported_casts {
+            assert!(
+                can_cast_types(&from_type, &to_type),
+                "Arrow should support cast from {from_type} to {to_type}"
+            );
+            assert!(
+                can_use_perfect_shredding_arrow_cast(&from_type, &to_type),
+                "perfect shredding should use Arrow cast from {from_type} to {to_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_perfect_shredding_cast_gate_rejects_arrow_casts_without_variant_semantics() {
+        use DataType::*;
+
+        let unsupported_arrow_casts = vec![
+            (Boolean, Utf8),
+            (Int64, Utf8),
+            (UInt64, Decimal128(38, 2)),
+            (Utf8, Int64),
+            (Utf8, Date32),
+            (Utf8, Timestamp(TimeUnit::Microsecond, None)),
+            (Date32, Int64),
+            (Time64(TimeUnit::Microsecond), Int64),
+            (
+                Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+                Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (Timestamp(TimeUnit::Microsecond, None), Int64),
+            (
+                Timestamp(TimeUnit::Second, None),
+                Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (Binary, Utf8),
+            (FixedSizeBinary(16), Binary),
+            (Dictionary(Box::new(Int32), Box::new(Utf8)), Utf8),
+            (List(Arc::new(Field::new("item", Int64, true))), Utf8),
+            (
+                List(Arc::new(Field::new("item", Int64, true))),
+                List(Arc::new(Field::new("item", Utf8, true))),
+            ),
+            (Decimal32(9, 2), Utf8),
+            (Decimal32(9, -1), Int64),
+            (Utf8, Decimal32(9, -1)),
+        ];
+
+        for (from_type, to_type) in unsupported_arrow_casts {
+            assert!(
+                can_cast_types(&from_type, &to_type),
+                "Arrow should support cast from {from_type} to {to_type}"
+            );
+            assert!(
+                !can_use_perfect_shredding_arrow_cast(&from_type, &to_type),
+                "perfect shredding should fall back for {from_type} to {to_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_perfect_shredding_cast_gate_matches_decimal_semantics() {
+        use DataType::*;
+
+        let decimal_targets = [
+            Decimal32(9, 2),
+            Decimal64(18, 2),
+            Decimal128(38, 2),
+            Decimal256(76, 2),
+        ];
+        for from_type in [Float16, Float32, Float64, Utf8, LargeUtf8, Utf8View] {
+            for to_type in &decimal_targets {
+                assert!(
+                    can_use_perfect_shredding_arrow_cast(&from_type, to_type),
+                    "{from_type} should use Arrow cast to {to_type}"
+                );
+            }
+        }
+
+        for from_type in [
+            Decimal32(9, 2),
+            Decimal64(18, 2),
+            Decimal128(38, 2),
+            Decimal256(76, 2),
+        ] {
+            for to_type in [
+                Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64,
+            ] {
+                assert!(
+                    can_use_perfect_shredding_arrow_cast(&from_type, &to_type),
+                    "{from_type} should use Arrow cast to {to_type}"
+                );
+            }
+        }
+
+        assert!(!can_use_perfect_shredding_arrow_cast(
+            &Utf8,
+            &Decimal32(9, -1),
+        ));
+        assert!(!can_use_perfect_shredding_arrow_cast(
+            &Decimal32(9, -1),
+            &Int64,
+        ));
+        assert!(!can_use_perfect_shredding_arrow_cast(
+            &Decimal32(9, 2),
+            &Utf8,
         ));
     }
 
