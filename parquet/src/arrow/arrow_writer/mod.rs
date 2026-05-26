@@ -1163,7 +1163,10 @@ impl ArrowRowGroupWriterFactory {
     /// Set the [`PageStoreFactory`] used to allocate the buffer for each column
     /// chunk, e.g. to spill completed pages to a temp file or object storage
     /// instead of the heap. Defaults to [`InMemoryPageStoreFactory`].
-    pub fn with_page_store_factory(mut self, page_store_factory: Arc<dyn PageStoreFactory>) -> Self {
+    pub fn with_page_store_factory(
+        mut self,
+        page_store_factory: Arc<dyn PageStoreFactory>,
+    ) -> Self {
         self.page_store_factory = page_store_factory;
         self
     }
@@ -1245,7 +1248,10 @@ impl ArrowColumnWriterFactory {
     }
 
     /// Use `page_store_factory` to allocate the buffer for each column chunk.
-    pub fn with_page_store_factory(mut self, page_store_factory: Arc<dyn PageStoreFactory>) -> Self {
+    pub fn with_page_store_factory(
+        mut self,
+        page_store_factory: Arc<dyn PageStoreFactory>,
+    ) -> Self {
         self.page_store_factory = page_store_factory;
         self
     }
@@ -1833,13 +1839,13 @@ mod tests {
             self.next += 1;
             self.puts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.blobs.insert(id, value);
-            Ok(PageKey(id))
+            Ok(PageKey::new(id))
         }
 
         fn take(&mut self, key: PageKey) -> Result<Bytes> {
             self.blobs
-                .remove(&key.0)
-                .ok_or_else(|| ParquetError::General(format!("missing key {}", key.0)))
+                .remove(&key.get())
+                .ok_or_else(|| ParquetError::General(format!("missing key {}", key.get())))
         }
     }
 
@@ -1900,7 +1906,9 @@ mod tests {
         let default_bytes = write(None);
 
         let puts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let custom_bytes = write(Some(Arc::new(RecordingPageStoreFactory { puts: puts.clone() })));
+        let custom_bytes = write(Some(Arc::new(RecordingPageStoreFactory {
+            puts: puts.clone(),
+        })));
 
         assert!(
             puts.load(std::sync::atomic::Ordering::Relaxed) > 0,

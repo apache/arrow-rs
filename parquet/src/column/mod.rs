@@ -120,11 +120,11 @@
 #[cfg(feature = "arrow")]
 pub(crate) mod chunker;
 pub mod page;
-pub mod page_store;
 #[cfg(feature = "encryption")]
 pub(crate) mod page_encryption;
 #[cfg(not(feature = "encryption"))]
 #[path = "page_encryption_disabled.rs"]
 pub(crate) mod page_encryption;
+pub mod page_store;
 pub mod reader;
 pub mod writer;

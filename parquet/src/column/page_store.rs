@@ -45,7 +45,24 @@ use crate::errors::{ParquetError, Result};
 /// in-memory backend uses the handle as an index into a `Vec`, a temp-file
 /// backend as an index into a `Vec<(offset, len)>`, and so on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PageKey(pub(crate) u64);
+pub struct PageKey(u64);
+
+impl PageKey {
+    /// Create a handle wrapping `raw`.
+    ///
+    /// A [`PageStore`] implementation calls this to mint the handle it returns
+    /// from [`put`](PageStore::put). The value is opaque to the caller, so a
+    /// store is free to use a dense counter, a packed locator, or anything else
+    /// it can later resolve in [`take`](PageStore::take).
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// The raw value passed to [`new`](Self::new).
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// A pluggable store for completed, serialized page blobs.
 ///

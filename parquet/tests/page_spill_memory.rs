@@ -29,12 +29,16 @@
 //!
 //! [`PageStore`]: parquet::arrow::arrow_writer::PageStore
 
+use std::fs::File;
+use std::io::{Read as _, Seek, SeekFrom, Write as _};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_writer::ArrowWriterOptions;
+use parquet::arrow::arrow_writer::{ArrowWriterOptions, PageKey, PageStore, PageStoreFactory};
+use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
 
 #[global_allocator]
@@ -121,8 +125,60 @@ fn write_skewed_dataset(options: ArrowWriterOptions) {
     writer.close().unwrap();
 }
 
+/// A spilling [`PageStore`]: one temp file per column chunk. `put` appends the
+/// blob and records its `(offset, len)`; `take` seeks and reads it back. The
+/// file is unlinked on creation (via [`tempfile::tempfile`]) so it is cleaned up
+/// when the store is dropped. This is the canonical "spill completed pages off
+/// the heap" backend the design targets.
+struct TempFilePageStore {
+    file: File,
+    end: u64,
+    locs: Vec<(u64, usize)>,
+}
+
+impl TempFilePageStore {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            file: tempfile::tempfile()?,
+            end: 0,
+            locs: Vec::new(),
+        })
+    }
+}
+
+impl PageStore for TempFilePageStore {
+    fn put(&mut self, value: Bytes) -> Result<PageKey> {
+        // Always append at the logical end (a prior `take` may have moved the
+        // OS file cursor).
+        self.file.seek(SeekFrom::Start(self.end))?;
+        self.file.write_all(&value)?;
+        let key = PageKey::new(self.locs.len() as u64);
+        self.locs.push((self.end, value.len()));
+        self.end += value.len() as u64;
+        Ok(key)
+    }
+
+    fn take(&mut self, key: PageKey) -> Result<Bytes> {
+        let (offset, len) = self.locs[key.get() as usize];
+        let mut buf = vec![0u8; len];
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.read_exact(&mut buf)?;
+        Ok(Bytes::from(buf))
+    }
+}
+
+#[derive(Debug, Default)]
+struct TempFilePageStoreFactory;
+
+impl PageStoreFactory for TempFilePageStoreFactory {
+    fn create(&self, _column_index: usize) -> Result<Box<dyn PageStore>> {
+        Ok(Box::new(TempFilePageStore::new()?))
+    }
+}
+
 /// Run `f` under a fresh dhat profiler and return the peak live heap (bytes)
-/// observed during it.
+/// observed during it. dhat's profiler is process-global, so callers must run
+/// sequentially (a single `#[test]`, not parallel tests).
 fn peak_heap_bytes(f: impl FnOnce()) -> usize {
     let profiler = dhat::Profiler::builder().testing().build();
     f();
@@ -131,28 +187,57 @@ fn peak_heap_bytes(f: impl FnOnce()) -> usize {
     stats.max_bytes
 }
 
+/// The whole test runs in one function because dhat allows only one live
+/// profiler at a time; running the two measurements as separate parallel tests
+/// would race on the global profiler.
 #[test]
-fn in_memory_store_buffers_whole_row_group() {
-    // Baseline: with the default in-memory page store, peak heap while writing a
-    // single large row group is at least the size of the buffered column data —
-    // memory grows with the row group, unbounded. A spilling backend (added in a
-    // later commit) is measured against this.
+fn page_store_bounds_write_memory() {
     let props = single_row_group_props();
-    let peak = peak_heap_bytes(|| {
+
+    // Baseline: the default in-memory store buffers the whole row group, so peak
+    // heap is at least the size of the buffered column data.
+    let in_memory_peak = peak_heap_bytes(|| {
         let opts = ArrowWriterOptions::new().with_properties(props.clone());
         write_skewed_dataset(opts);
     });
 
+    // Spilling: the temp-file store keeps completed pages off the heap, so peak
+    // heap stays bounded by the in-flight encoder/dictionary buffers plus a page
+    // or two in flight — independent of the row group size.
+    let spill_peak = peak_heap_bytes(|| {
+        let opts = ArrowWriterOptions::new()
+            .with_properties(props.clone())
+            .with_page_store_factory(Arc::new(TempFilePageStoreFactory));
+        write_skewed_dataset(opts);
+    });
+
     eprintln!(
-        "in-memory peak heap: {peak} bytes ({:.1} MiB); total fat payload {TOTAL_FAT_BYTES} bytes",
-        peak as f64 / (1024.0 * 1024.0)
+        "peak heap — in-memory: {:.1} MiB, temp-file spill: {:.1} MiB (total fat payload {:.1} MiB)",
+        in_memory_peak as f64 / (1024.0 * 1024.0),
+        spill_peak as f64 / (1024.0 * 1024.0),
+        TOTAL_FAT_BYTES as f64 / (1024.0 * 1024.0),
     );
 
-    // The fat column alone is ~16 MiB and must be fully resident in the page
-    // buffer at flush. Allow generous headroom below the total to stay robust.
-    let floor = TOTAL_FAT_BYTES * 3 / 4;
+    // The in-memory store must hold most of the ~16 MiB of buffered data.
+    let in_memory_floor = TOTAL_FAT_BYTES * 3 / 4;
     assert!(
-        peak >= floor,
-        "expected in-memory peak heap >= {floor} bytes (3/4 of buffered data), got {peak}"
+        in_memory_peak >= in_memory_floor,
+        "expected in-memory peak >= {in_memory_floor} bytes, got {in_memory_peak}"
+    );
+
+    // The spilling store must stay near the per-column bound — roughly
+    // (data_page_size + dict_page_size) per leaf column, ~2 MiB × 9 columns —
+    // and far below the in-memory baseline. We assert a generous 8 MiB ceiling
+    // (well under the ~16 MiB row group) to stay robust across platforms.
+    const SPILL_CEILING: usize = 8 * 1024 * 1024;
+    assert!(
+        spill_peak < SPILL_CEILING,
+        "expected spilling peak < {SPILL_CEILING} bytes (bounded by page/dict size × columns), \
+         got {spill_peak}"
+    );
+    assert!(
+        spill_peak * 2 < in_memory_peak,
+        "expected spilling peak ({spill_peak}) to be far below the in-memory baseline \
+         ({in_memory_peak})"
     );
 }
