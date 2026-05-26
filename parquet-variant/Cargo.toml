@@ -29,15 +29,18 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-arrow = { workspace = true , features = ["canonical_extension_types"] }
+arrow = { workspace = true, features = ["canonical_extension_types"] }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"
 num-traits = { version = "0.2", default-features = false }
-uuid = { version = "1.18.0", features = ["v4"]}
+uuid = { version = "1.18.0", features = ["v4"] }
+simdutf8 = { workspace = true, optional = true }
 
-simdutf8 = { workspace = true , optional = true }
+# uuid requires the `js` feature to run on wasm
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1.18.0", features = ["v4", "js"] }
 
 [lib]
 name = "parquet_variant"

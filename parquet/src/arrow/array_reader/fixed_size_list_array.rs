@@ -226,7 +226,7 @@ mod tests {
     use super::*;
     use crate::arrow::{
         ArrowWriter,
-        array_reader::{ListArrayReader, test_util::InMemoryArrayReader},
+        array_reader::{ListArrayReader, test_util::make_int32_page_reader},
         arrow_reader::{ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader},
     };
     use arrow::datatypes::{Field, Int32Type};
@@ -254,28 +254,16 @@ mod tests {
             3,
         );
 
-        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-            None,
-            Some(1),
-            None,
-            Some(2),
-            None,
-            Some(3),
-            Some(4),
-            Some(5),
-            None,
-            None,
-            None,
-        ]));
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![0, 3, 2, 3, 0, 3, 3, 3, 2, 2, 2]),
-            Some(vec![0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1]),
+        let item_array_reader = make_int32_page_reader(
+            &[1, 2, 3, 4, 5],
+            &[0, 3, 2, 3, 0, 3, 3, 3, 2, 2, 2],
+            &[0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1],
+            3,
+            1,
         );
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
-            Box::new(item_array_reader),
+            item_array_reader,
             3,
             ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 3),
             2,
@@ -303,25 +291,16 @@ mod tests {
             2,
         );
 
-        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-            Some(1),
-            None,
-            Some(2),
-            Some(3),
-            None,
-            None,
-            Some(4),
-            Some(5),
-        ]));
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![2, 1, 2, 2, 1, 1, 2, 2]),
-            Some(vec![0, 1, 0, 1, 0, 1, 0, 1]),
+        let item_array_reader = make_int32_page_reader(
+            &[1, 2, 3, 4, 5],
+            &[2, 1, 2, 2, 1, 1, 2, 2],
+            &[0, 1, 0, 1, 0, 1, 0, 1],
+            2,
+            1,
         );
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
-            Box::new(item_array_reader),
+            item_array_reader,
             2,
             ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2),
             1,
@@ -381,28 +360,15 @@ mod tests {
 
         let expected = FixedSizeListArray::from(l1);
 
-        let values = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-            None,
-            Some(1),
-            Some(2),
-            None,
-            Some(3),
-            None,
-            Some(4),
-            Some(5),
-            None,
-            None,
-        ]));
-
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            values,
-            Some(vec![0, 5, 5, 4, 5, 0, 5, 5, 4, 4]),
-            Some(vec![0, 0, 2, 0, 2, 0, 0, 2, 0, 2]),
+        let item_array_reader = make_int32_page_reader(
+            &[1, 2, 3, 4, 5],
+            &[0, 5, 5, 4, 5, 0, 5, 5, 4, 4],
+            &[0, 0, 2, 0, 2, 0, 0, 2, 0, 2],
+            5,
+            2,
         );
 
-        let l2 =
-            FixedSizeListArrayReader::new(Box::new(item_array_reader), 2, l2_type, 4, 2, false);
+        let l2 = FixedSizeListArrayReader::new(item_array_reader, 2, l2_type, 4, 2, false);
         let mut l1 = FixedSizeListArrayReader::new(Box::new(l2), 1, l1_type, 3, 1, true);
 
         let expected_1 = expected.slice(0, 2);
@@ -423,18 +389,10 @@ mod tests {
             0,
         );
 
-        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-            None, None, None, None,
-        ]));
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![0, 1, 0, 1]),
-            Some(vec![0, 0, 0, 0]),
-        );
+        let item_array_reader = make_int32_page_reader(&[], &[0, 1, 0, 1], &[0, 0, 0, 0], 2, 1);
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
-            Box::new(item_array_reader),
+            item_array_reader,
             0,
             ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 0),
             2,
@@ -467,33 +425,20 @@ mod tests {
         builder.append(false);
         let expected = builder.finish();
 
-        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-            Some(1),
-            None,
-            Some(3),
-            None,
-            Some(4),
-            None,
-            Some(5),
-            Some(6),
-            None,
-            None,
-            None,
-        ]));
-
         let inner_type = ArrowType::List(Arc::new(Field::new_list_field(ArrowType::Int32, true)));
         let list_type =
             ArrowType::FixedSizeList(Arc::new(Field::new_list_field(inner_type.clone(), true)), 2);
 
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
-            Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
+        let item_array_reader = make_int32_page_reader(
+            &[1, 3, 4, 5, 6],
+            &[5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0],
+            &[0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0],
+            5,
+            2,
         );
 
         let inner_array_reader =
-            ListArrayReader::<i32>::new(Box::new(item_array_reader), inner_type, 4, 2, true);
+            ListArrayReader::<i32>::new(item_array_reader, inner_type, 4, 2, true);
 
         let mut list_array_reader =
             FixedSizeListArrayReader::new(Box::new(inner_array_reader), 2, list_type, 2, 1, true);
