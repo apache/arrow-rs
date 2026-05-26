@@ -1803,7 +1803,8 @@ mod test {
     }
 
     #[test]
-    fn test_decoder_auto_cost_model_switches_for_projected_predicate_after_observation() {
+    fn test_decoder_auto_cost_model_keeps_pushdown_for_projected_predicate_with_deferred_variable_width_output()
+     {
         let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
@@ -1839,13 +1840,68 @@ mod test {
 
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
         assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
-        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
         assert_eq!(
             metrics.cost_model_projected_predicate_moderate_selectivity_count(),
-            Some(1)
+            Some(0)
         );
-        assert_eq!(metrics.records_read_from_cache(), Some(100));
+        assert_eq!(metrics.cost_model_pushdown_still_preferred_count(), Some(1));
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .is_some_and(|records| records > 0),
+            "deferred variable-width output should keep projected predicate pushdown"
+        );
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_cost_model_keeps_pushdown_for_projected_predicate_with_expensive_deferred_fixed_output(
+    ) {
+        let data = &WIDE_FIXED_COST_MODEL_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| Ok(first_rows_per_hundred_filter(&batch, 20)),
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b", "c", "d", "e"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                batch,
+                expected_wide_fixed_first_rows_per_hundred(row_group_idx * 100, 100, 20)
+            );
+        }
+
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
+        assert_eq!(
+            metrics.cost_model_projected_predicate_moderate_selectivity_count(),
+            Some(0)
+        );
+        assert_eq!(metrics.cost_model_pushdown_still_preferred_count(), Some(1));
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .is_some_and(|records| records > 0),
+            "expensive deferred fixed-width output should keep projected predicate pushdown"
+        );
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
@@ -3011,6 +3067,26 @@ mod test {
 
     static COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(100, 50));
 
+    static WIDE_FIXED_TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
+        let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..400));
+        let b: ArrayRef = Arc::new(Int64Array::from_iter_values(400..800));
+        let c: ArrayRef = Arc::new(Int64Array::from_iter_values(800..1200));
+        let d: ArrayRef = Arc::new(Int64Array::from_iter_values(1200..1600));
+        let e: ArrayRef = Arc::new(Int64Array::from_iter_values(1600..2000));
+
+        RecordBatch::try_from_iter(vec![
+            ("a", a),
+            ("b", b),
+            ("c", c),
+            ("d", d),
+            ("e", e),
+        ])
+        .unwrap()
+    });
+
+    static WIDE_FIXED_COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> =
+        LazyLock::new(|| write_batch_test_file(&WIDE_FIXED_TEST_BATCH, 100, 50));
+
     static NESTED_TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
         let tag: ArrayRef = Arc::new(StringViewArray::from_iter_values(
             (0..400).map(|idx| format!("tag_{}", idx % 7)),
@@ -3388,6 +3464,16 @@ mod test {
         let filter = first_rows_per_hundred_filter(&batch, rows_per_hundred);
         let projected = batch.project(&[0, 1]).unwrap();
         filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn expected_wide_fixed_first_rows_per_hundred(
+        offset: usize,
+        len: usize,
+        rows_per_hundred: i64,
+    ) -> RecordBatch {
+        let batch = WIDE_FIXED_TEST_BATCH.slice(offset, len);
+        let filter = first_rows_per_hundred_filter(&batch, rows_per_hundred);
+        filter_record_batch(&batch, &filter).unwrap()
     }
 
     fn expected_c_every_other(offset: usize, len: usize) -> RecordBatch {

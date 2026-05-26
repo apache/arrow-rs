@@ -1118,6 +1118,7 @@ impl RowGroupReaderBuilder {
 
         self.observe_cost_model_candidate(
             decision,
+            row_group_info.row_group_idx,
             row_group_info.row_count,
             row_group_info.budget,
         );

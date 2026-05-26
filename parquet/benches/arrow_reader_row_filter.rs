@@ -263,6 +263,8 @@ enum ProjectionCase {
     Float64AndTs,
     Float64Only,
     Int64AndFloat64,
+    Int64AndUtf8,
+    TsAndUtf8,
     Utf8Only,
 }
 
@@ -277,6 +279,8 @@ impl std::fmt::Display for ProjectionCase {
             ProjectionCase::Float64AndTs => write!(f, "float64_and_ts"),
             ProjectionCase::Float64Only => write!(f, "float64_only"),
             ProjectionCase::Int64AndFloat64 => write!(f, "int64_and_float64"),
+            ProjectionCase::Int64AndUtf8 => write!(f, "int64_and_utf8"),
+            ProjectionCase::TsAndUtf8 => write!(f, "ts_and_utf8"),
             ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
     }
@@ -479,6 +483,10 @@ enum FilterType {
     /// subqueries. The selected rows are random and moderately selective, and
     /// benchmark projections cover both count-only and numeric aggregate cases.
     TpcdsQ9QuantityRange,
+    /// Exact shape for the projected-predicate moderate-selectivity gate:
+    /// a clustered 20% timestamp predicate where the predicate column is
+    /// projected and the deferred output is variable-width.
+    ProjectedTs20PctClustered,
     /// Very sparse projected fixed-width scan shaped like TPC-DS fact-table
     /// filters where the predicate column is also needed in the output projection.
     TpcdsSparseProjectedFactScan,
@@ -524,6 +532,9 @@ impl std::fmt::Display for FilterType {
                 "int64 < 40 projected predicate with fixed output"
             }
             FilterType::TpcdsQ9QuantityRange => "int64 > 0 AND int64 < 21",
+            FilterType::ProjectedTs20PctClustered => {
+                "ts < 2000 projected predicate with utf8 output"
+            }
             FilterType::TpcdsSparseProjectedFactScan => "ts % 1000 == 0",
         };
         write!(f, "{s}")
@@ -659,6 +670,10 @@ impl FilterType {
                 let upper = lt(int64, &Int64Array::new_scalar(21))?;
                 and(&lower, &upper)
             }
+            FilterType::ProjectedTs20PctClustered => {
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                lt(ts, &TimestampMillisecondArray::new_scalar(2000))
+            }
             FilterType::TpcdsSparseProjectedFactScan => {
                 let ts = batch
                     .column(batch.schema().index_of("ts")?)
@@ -698,6 +713,7 @@ impl FilterType {
             | FilterType::TpcdsQ2ProjectedPredicate30Pct
             | FilterType::TpcdsQ2ProjectedPredicate40Pct => &[0],
             FilterType::TpcdsQ9QuantityRange => &[0],
+            FilterType::ProjectedTs20PctClustered => &[3],
             FilterType::TpcdsSparseProjectedFactScan => &[3],
         }
     }
@@ -1101,6 +1117,18 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
             ProjectionCase::Int64AndFloat64,
         ),
         AsyncFocusCase::new(
+            "profile_q2_projected_predicate_20pct_varwidth_output",
+            parquet_file.clone(),
+            FilterType::TpcdsQ2ProjectedPredicate20Pct,
+            ProjectionCase::Int64AndUtf8,
+        ),
+        AsyncFocusCase::new(
+            "profile_projected_ts_20pct_varwidth_output",
+            parquet_file.clone(),
+            FilterType::ProjectedTs20PctClustered,
+            ProjectionCase::TsAndUtf8,
+        ),
+        AsyncFocusCase::new(
             "profile_q2_projected_predicate_30pct",
             parquet_file.clone(),
             FilterType::TpcdsQ2ProjectedPredicate30Pct,
@@ -1392,6 +1420,8 @@ fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCa
         ProjectionCase::Float64AndTs => vec![1, 3],
         ProjectionCase::Float64Only => vec![1],
         ProjectionCase::Int64AndFloat64 => vec![0, 1],
+        ProjectionCase::Int64AndUtf8 => vec![0, 2],
+        ProjectionCase::TsAndUtf8 => vec![2, 3],
         ProjectionCase::Utf8Only => vec![2],
     }
 }

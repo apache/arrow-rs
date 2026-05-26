@@ -297,6 +297,7 @@ impl RowGroupReaderBuilder {
     pub(super) fn observe_cost_model_candidate(
         &mut self,
         decision: RowSelectionStrategyDecision,
+        row_group_idx: usize,
         row_count: usize,
         budget: RowBudget,
     ) {
@@ -330,7 +331,7 @@ impl RowGroupReaderBuilder {
         };
         self.metrics.record_cost_model_observed_row_group();
 
-        let reason = self.cost_model_reason_with_projection_context(observation);
+        let reason = self.cost_model_reason_with_projection_context(observation, row_group_idx);
         if matches!(reason, CostModelDecisionReason::ObservationIncomplete) {
             self.metrics.record_cost_model_trigger(reason);
             return;
@@ -353,6 +354,7 @@ impl RowGroupReaderBuilder {
     fn cost_model_reason_with_projection_context(
         &self,
         observation: CostModelObservation,
+        row_group_idx: usize,
     ) -> CostModelDecisionReason {
         let reason = observation.trigger_reason();
         if !matches!(reason, CostModelDecisionReason::PushdownStillPreferred) {
@@ -376,6 +378,8 @@ impl RowGroupReaderBuilder {
         // the saved output decode is smaller than the row-selection and cache
         // overhead. Sparse projected predicates stay below this range.
         if self.projection_includes_all(&self.projection, &predicate_projection)
+            && self
+                .projected_predicate_deferred_output_is_cheap(row_group_idx, &predicate_projection)
             && (CostModelObservation::PROJECTED_PREDICATE_MIN_RATIO
                 ..CostModelObservation::PROJECTED_PREDICATE_MAX_RATIO)
                 .contains(&selected_ratio)
@@ -384,6 +388,38 @@ impl RowGroupReaderBuilder {
         } else {
             reason
         }
+    }
+
+    fn projected_predicate_deferred_output_is_cheap(
+        &self,
+        row_group_idx: usize,
+        predicate_projection: &ProjectionMask,
+    ) -> bool {
+        let row_group = self.metadata.row_group(row_group_idx);
+        if row_group.num_rows() == 0 {
+            return true;
+        }
+
+        let mut deferred_uncompressed_bytes = 0u64;
+        let mut has_deferred_output = false;
+        for leaf_idx in 0..row_group.num_columns() {
+            if !self.projection.leaf_included(leaf_idx)
+                || predicate_projection.leaf_included(leaf_idx)
+            {
+                continue;
+            }
+
+            has_deferred_output = true;
+            let column = row_group.column(leaf_idx);
+            if column.column_type() == PhysicalType::BYTE_ARRAY {
+                return false;
+            }
+            deferred_uncompressed_bytes += column.uncompressed_size().max(0) as u64;
+        }
+
+        !has_deferred_output
+            || deferred_uncompressed_bytes as f64 / row_group.num_rows() as f64
+                <= Self::CHEAP_FIXED_WIDTH_READ_BYTES_PER_ROW
     }
 
     pub(super) fn post_filter_cost_model_supported(&self, budget: RowBudget) -> bool {
