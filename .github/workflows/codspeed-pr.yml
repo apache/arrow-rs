@@ -80,60 +80,27 @@ jobs:
         id: gen
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          # Keep this list in sync with codspeed.yml — bench targets that
-          # currently panic/error at runtime and should not be benched
-          # until fixed in their respective crates.
-          EXCLUDED_BENCHES: |
-            arrow merge_kernels
-            arrow buffer_bit_ops
-            arrow buffer_create
-            arrow sort_kernel
-            arrow string_run_builder
-            arrow primitive_run_accessor
-            arrow-array union_array
-            arrow-cast parse_date
-            parquet row_selection_cursor
-            parquet-variant-compute variant_kernels
+        # Discovery + the known-broken exclusion list live in the shared
+        # codspeed-matrix.sh (also used by codspeed.yml). `bench:all` passes
+        # no crate args (every crate); otherwise each `bench:<crate>` suffix
+        # is forwarded as an arg and validated against the workspace members
+        # by the script.
         run: |
-          all_crates="arrow arrow-array arrow-avro arrow-buffer arrow-cast arrow-ipc arrow-json arrow-schema parquet parquet-variant parquet-variant-compute"
+          suffixes="$(jq -r '.[] | select(startswith("bench:")) | sub("^bench:"; "")' <<<"$LABELS")"
 
-          suffixes=$(jq -r '.[] | select(startswith("bench:")) | sub("^bench:"; "")' <<<"$LABELS")
-
-          if echo "$suffixes" | grep -qx "all"; then
-            selected_crates="$all_crates"
+          if grep -qx "all" <<<"$suffixes"; then
             scope="full workspace (bench:all)"
+            matrix="$(bash .github/workflows/codspeed-matrix.sh)"
           else
-            for pkg in $suffixes; do
-              if ! [[ "$pkg" =~ ^[a-z][a-z0-9_-]*$ ]]; then
-                echo "::error::Invalid bench label suffix 'bench:$pkg'"
-                exit 1
-              fi
-            done
-            selected_crates="$(echo $suffixes | tr '\n' ' ')"
-            scope="$selected_crates"
+            scope="$(echo $suffixes | tr '\n' ' ')"
+            # Intentionally unquoted: each whitespace-separated suffix is a
+            # separate crate argument.
+            matrix="$(bash .github/workflows/codspeed-matrix.sh $suffixes)"
           fi
 
-          {
-            for crate in $selected_crates; do
-              if [ ! -f "$crate/Cargo.toml" ]; then
-                echo "::warning::No Cargo.toml found for '$crate' (bench:$crate); skipping"
-                continue
-              fi
-              awk -v crate="$crate" '
-                /^\[\[bench\]\]/ { in_bench=1; next }
-                /^\[/             { in_bench=0 }
-                in_bench && /^name = / {
-                  sub(/^name = "/, ""); sub(/"$/, "");
-                  printf "%s %s\n", crate, $0
-                }
-              ' "$crate/Cargo.toml"
-            done
-          } | grep -vxF -f <(printf '%s\n' "$EXCLUDED_BENCHES" | sed '/^$/d') \
-            | jq -Rcs 'split("\n") | map(select(length>0) | split(" ") | {crate: .[0], bench: .[1]})' > matrix.json
-
-          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "scope=$scope" >> "$GITHUB_OUTPUT"
-          echo "::notice::Scope: $scope ($(jq length matrix.json) bench shards after excluding known-broken targets)"
+          echo "::notice::Scope: $scope ($(jq length <<<"$matrix") bench shards, known-broken targets excluded)"
 
   build:
     # Gate on the same label condition as setup so we don't build when

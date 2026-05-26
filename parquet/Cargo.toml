@@ -98,6 +98,11 @@ sysinfo = { version = "0.38.1", default-features = false, features = ["system"] 
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.codspeed.benches]
+# Skipped on CodSpeed (read by .github/workflows/codspeed-matrix.sh):
+# currently fails at runtime. Fix the bench and remove this entry.
+row_selection_cursor = { skip = true }
+
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
