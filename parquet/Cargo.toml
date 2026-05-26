@@ -161,6 +161,10 @@ name = "arrow_writer_layout"
 required-features = ["arrow"]
 
 [[test]]
+name = "page_spill_memory"
+required-features = ["arrow"]
+
+[[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
