@@ -258,12 +258,10 @@ fn shredded_get_path(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let struct_nulls = target.nulls().cloned();
-
             return Ok(Arc::new(StructArray::try_new(
                 fields.clone(),
                 children,
-                struct_nulls,
+                target.nulls().cloned(),
             )?));
         }
     }
