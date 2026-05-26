@@ -1,0 +1,158 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Pluggable storage for completed, serialized page blobs.
+//!
+//! While a row group is being written the [`ArrowWriter`] must buffer every
+//! column's encoded pages, because Parquet requires each column chunk to be
+//! contiguous on disk while record batches arrive with all columns interleaved.
+//! By default that buffer lives on the heap, so the writer's peak memory grows
+//! with the row group size. A [`PageStore`] lets the buffer live somewhere else
+//! — a local temp file, object storage, etc. — bounding peak write memory
+//! independently of the row group size.
+//!
+//! [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+
+use std::fmt::Debug;
+
+use bytes::Bytes;
+
+use crate::errors::{ParquetError, Result};
+
+/// An opaque, store-allocated handle to a blob held by a [`PageStore`].
+///
+/// Handles are allocated by the store — densely and sequentially — and are only
+/// meaningful to the store that produced them. The caller treats them as opaque
+/// tokens and decides what they *mean* (ordering, which one is the dictionary
+/// page, etc.).
+///
+/// Letting the store allocate the handle (rather than the caller choosing keys)
+/// lets each backend pick the cheapest possible locator with no hashing: an
+/// in-memory backend uses the handle as an index into a `Vec`, a temp-file
+/// backend as an index into a `Vec<(offset, len)>`, and so on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PageKey(pub(crate) u64);
+
+/// A pluggable store for completed, serialized page blobs.
+///
+/// The store is intentionally "dumb": it only maps an opaque [`PageKey`] to a
+/// blob of bytes. It knows nothing about pages, dictionaries, ordering, or
+/// offsets. The caller keeps the handles it gets back from [`put`](Self::put)
+/// and decides what they mean.
+///
+/// Each store instance is owned by a single column writer and mutated by one
+/// thread at a time (both methods take `&mut self`), so it needs no internal
+/// synchronization — hence only `Send`, not `Sync`.
+///
+/// The default ([`InMemoryPageStore`]) keeps blobs on the heap. Configure a
+/// different backend via
+/// [`ArrowWriterOptions::with_page_store_factory`](crate::arrow::arrow_writer::ArrowWriterOptions::with_page_store_factory).
+pub trait PageStore: Send {
+    /// Store `value`, returning a handle that can later be passed to
+    /// [`take`](Self::take).
+    fn put(&mut self, value: Bytes) -> Result<PageKey>;
+
+    /// Take back the blob previously stored under `key`.
+    ///
+    /// The caller takes ownership of the returned bytes and will **not** request
+    /// `key` again, so the store may release any resources backing it — eagerly
+    /// here, or when the store is dropped.
+    fn take(&mut self, key: PageKey) -> Result<Bytes>;
+}
+
+/// Creates a fresh [`PageStore`] for each column chunk.
+///
+/// See
+/// [`ArrowWriterOptions::with_page_store_factory`](crate::arrow::arrow_writer::ArrowWriterOptions::with_page_store_factory).
+pub trait PageStoreFactory: Send + Sync + Debug {
+    /// Create a new, empty [`PageStore`] for the leaf column at `column_index`.
+    ///
+    /// `column_index` is a hint a backend may use to e.g. name spill files or
+    /// shard across a bounded pool; it carries no ordering or coordination
+    /// requirement.
+    fn create(&self, column_index: usize) -> Result<Box<dyn PageStore>>;
+}
+
+/// The default [`PageStore`], holding blobs on the heap in a `Vec<Bytes>`.
+///
+/// This is byte-for-byte equivalent to the writer's historical buffering
+/// behavior and adds no overhead: peak memory still grows with the row group
+/// size. Use a spilling backend to bound it.
+#[derive(Debug, Default)]
+pub struct InMemoryPageStore {
+    blobs: Vec<Bytes>,
+}
+
+impl PageStore for InMemoryPageStore {
+    fn put(&mut self, value: Bytes) -> Result<PageKey> {
+        let key = PageKey(self.blobs.len() as u64);
+        self.blobs.push(value);
+        Ok(key)
+    }
+
+    fn take(&mut self, key: PageKey) -> Result<Bytes> {
+        // Replace the slot with an empty `Bytes` so the stored blob is released
+        // as soon as it is taken, keeping memory bounded while the chunk is
+        // streamed into the output file.
+        self.blobs
+            .get_mut(key.0 as usize)
+            .map(std::mem::take)
+            .ok_or_else(|| ParquetError::General(format!("invalid page key {}", key.0)))
+    }
+}
+
+/// Factory for [`InMemoryPageStore`] — the default used by
+/// [`ArrowWriter`](crate::arrow::arrow_writer::ArrowWriter).
+#[derive(Debug, Default)]
+pub struct InMemoryPageStoreFactory;
+
+impl PageStoreFactory for InMemoryPageStoreFactory {
+    fn create(&self, _column_index: usize) -> Result<Box<dyn PageStore>> {
+        Ok(Box::new(InMemoryPageStore::default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_memory_round_trips_blobs_in_handle_order() {
+        let mut store = InMemoryPageStore::default();
+        let k0 = store.put(Bytes::from_static(b"hello")).unwrap();
+        let k1 = store.put(Bytes::from_static(b"world")).unwrap();
+        assert_ne!(k0, k1);
+        assert_eq!(&store.take(k0).unwrap()[..], b"hello");
+        assert_eq!(&store.take(k1).unwrap()[..], b"world");
+    }
+
+    #[test]
+    fn in_memory_take_releases_the_slot() {
+        let mut store = InMemoryPageStore::default();
+        let k = store.put(Bytes::from_static(b"abc")).unwrap();
+        assert_eq!(&store.take(k).unwrap()[..], b"abc");
+        // A second take yields the emptied placeholder rather than the blob,
+        // confirming the bytes were released on the first take.
+        assert!(store.take(k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn in_memory_invalid_key_errors() {
+        let mut store = InMemoryPageStore::default();
+        assert!(store.take(PageKey(99)).is_err());
+    }
+}

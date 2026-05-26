@@ -58,6 +58,11 @@ use levels::{ArrayLevels, calculate_array_levels};
 mod byte_array;
 mod levels;
 
+#[doc(inline)]
+pub use crate::column::page_store::{
+    InMemoryPageStore, InMemoryPageStoreFactory, PageKey, PageStore, PageStoreFactory,
+};
+
 /// Encodes [`RecordBatch`] to parquet
 ///
 /// Writes Arrow `RecordBatch`es to a Parquet writer. Multiple [`RecordBatch`] will be encoded
@@ -263,8 +268,12 @@ impl<W: Write + Send> ArrowWriter<W> {
         let file_writer =
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
-        let row_group_writer_factory =
+        let mut row_group_writer_factory =
             ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
+        if let Some(page_store_factory) = options.page_store_factory {
+            row_group_writer_factory =
+                row_group_writer_factory.with_page_store_factory(page_store_factory);
+        }
 
         let cdc_chunkers = props_ptr
             .content_defined_chunking()
@@ -556,6 +565,7 @@ pub struct ArrowWriterOptions {
     skip_arrow_metadata: bool,
     schema_root: Option<String>,
     schema_descr: Option<SchemaDescriptor>,
+    page_store_factory: Option<Arc<dyn PageStoreFactory>>,
 }
 
 impl ArrowWriterOptions {
@@ -567,6 +577,21 @@ impl ArrowWriterOptions {
     /// Sets the [`WriterProperties`] for writing parquet files.
     pub fn with_properties(self, properties: WriterProperties) -> Self {
         Self { properties, ..self }
+    }
+
+    /// Sets the [`PageStoreFactory`] used to buffer completed pages while a row
+    /// group is being written.
+    ///
+    /// By default (an [`InMemoryPageStore`] per column chunk) completed pages
+    /// are buffered on the heap until the row group is flushed, so peak memory
+    /// grows with the row group size. Supplying a factory that spills to a temp
+    /// file or object storage instead bounds peak write memory, decoupling it
+    /// from the row group size while keeping large, read-optimal row groups.
+    pub fn with_page_store_factory(self, page_store_factory: Arc<dyn PageStoreFactory>) -> Self {
+        Self {
+            page_store_factory: Some(page_store_factory),
+            ..self
+        }
     }
 
     /// Skip encoding the embedded arrow metadata (defaults to `false`)
@@ -603,20 +628,67 @@ impl ArrowWriterOptions {
     }
 }
 
-/// A single column chunk produced by [`ArrowColumnWriter`]
-#[derive(Default)]
+/// A single column chunk produced by [`ArrowColumnWriter`].
+///
+/// Holds the serialized page blobs (each page's header ‖ compressed data, in
+/// write order) in a [`PageStore`], plus the handles needed to read them back,
+/// in order, when the chunk is spliced into the output file.
 struct ArrowColumnChunkData {
+    length: usize,
+    store: Box<dyn PageStore>,
+    keys: Vec<PageKey>,
+}
+
+impl ArrowColumnChunkData {
+    fn new(store: Box<dyn PageStore>) -> Self {
+        Self {
+            length: 0,
+            store,
+            keys: Vec::new(),
+        }
+    }
+
+    /// Append a serialized blob to the store, recording its handle in write
+    /// order.
+    fn push(&mut self, value: Bytes) -> Result<()> {
+        let key = self.store.put(value)?;
+        self.keys.push(key);
+        Ok(())
+    }
+
+    /// Take every buffered blob back out of the store, in write order, ready to
+    /// splice into the output file.
+    ///
+    /// TODO(spill): stream blobs one at a time into the splice instead of
+    /// collecting them, so the splice phase is also bounded for spilling
+    /// backends (it currently materializes one column chunk at a time).
+    fn drain(&mut self) -> Result<MaterializedColumnChunk> {
+        let mut data = Vec::with_capacity(self.keys.len());
+        for key in std::mem::take(&mut self.keys) {
+            data.push(self.store.take(key)?);
+        }
+        Ok(MaterializedColumnChunk {
+            length: self.length,
+            data,
+        })
+    }
+}
+
+/// The buffered pages of one column chunk, taken back out of the [`PageStore`]
+/// in write order and ready to be spliced into the output file via
+/// [`SerializedRowGroupWriter::append_column`].
+struct MaterializedColumnChunk {
     length: usize,
     data: Vec<Bytes>,
 }
 
-impl Length for ArrowColumnChunkData {
+impl Length for MaterializedColumnChunk {
     fn len(&self) -> u64 {
         self.length as _
     }
 }
 
-impl ChunkReader for ArrowColumnChunkData {
+impl ChunkReader for MaterializedColumnChunk {
     type T = ArrowColumnChunkReader;
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
@@ -631,7 +703,7 @@ impl ChunkReader for ArrowColumnChunkData {
     }
 }
 
-/// A [`Read`] for [`ArrowColumnChunkData`]
+/// A [`Read`] for [`MaterializedColumnChunk`]
 struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
 
 impl Read for ArrowColumnChunkReader {
@@ -660,7 +732,6 @@ impl Read for ArrowColumnChunkReader {
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
 type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
 
-#[derive(Default)]
 struct ArrowPageWriter {
     buffer: SharedColumnChunk,
     #[cfg(feature = "encryption")]
@@ -668,6 +739,15 @@ struct ArrowPageWriter {
 }
 
 impl ArrowPageWriter {
+    /// Create a page writer that buffers completed pages in `store`.
+    fn new(store: Box<dyn PageStore>) -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(ArrowColumnChunkData::new(store))),
+            #[cfg(feature = "encryption")]
+            page_encryptor: None,
+        }
+    }
+
     #[cfg(feature = "encryption")]
     pub fn with_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
         self.page_encryptor = page_encryptor;
@@ -726,8 +806,8 @@ impl PageWriter for ArrowPageWriter {
         spec.bytes_written = compressed_size as u64;
 
         buf.length += compressed_size;
-        buf.data.push(header);
-        buf.data.push(data);
+        buf.push(header)?;
+        buf.push(data)?;
 
         Ok(spec)
     }
@@ -787,10 +867,11 @@ impl ArrowColumnChunk {
 
     /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
     pub fn append_to_row_group<W: Write + Send>(
-        self,
+        mut self,
         writer: &mut SerializedRowGroupWriter<'_, W>,
     ) -> Result<()> {
-        writer.append_column(&self.data, self.close)
+        let materialized = self.data.drain()?;
+        writer.append_column(&materialized, self.close)
     }
 }
 
@@ -1082,6 +1163,7 @@ pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
+    page_store_factory: Arc<dyn PageStoreFactory>,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
@@ -1098,9 +1180,18 @@ impl ArrowRowGroupWriterFactory {
             schema,
             arrow_schema,
             props,
+            page_store_factory: Arc::new(InMemoryPageStoreFactory),
             #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
         }
+    }
+
+    /// Set the [`PageStoreFactory`] used to allocate the buffer for each column
+    /// chunk, e.g. to spill completed pages to a temp file or object storage
+    /// instead of the heap. Defaults to [`InMemoryPageStoreFactory`].
+    pub fn with_page_store_factory(mut self, page_store_factory: Arc<dyn PageStoreFactory>) -> Self {
+        self.page_store_factory = page_store_factory;
+        self
     }
 
     fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
@@ -1127,12 +1218,13 @@ impl ArrowRowGroupWriterFactory {
     #[cfg(feature = "encryption")]
     fn column_writer_factory(&self, row_group_idx: usize) -> ArrowColumnWriterFactory {
         ArrowColumnWriterFactory::new()
+            .with_page_store_factory(self.page_store_factory.clone())
             .with_file_encryptor(row_group_idx, self.file_encryptor.clone())
     }
 
     #[cfg(not(feature = "encryption"))]
     fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
-        ArrowColumnWriterFactory::new()
+        ArrowColumnWriterFactory::new().with_page_store_factory(self.page_store_factory.clone())
     }
 }
 
@@ -1159,6 +1251,8 @@ pub fn get_column_writers(
 
 /// Creates [`ArrowColumnWriter`] instances
 struct ArrowColumnWriterFactory {
+    /// Allocates the per-column-chunk [`PageStore`] backing each page writer.
+    page_store_factory: Arc<dyn PageStoreFactory>,
     #[cfg(feature = "encryption")]
     row_group_index: usize,
     #[cfg(feature = "encryption")]
@@ -1168,11 +1262,18 @@ struct ArrowColumnWriterFactory {
 impl ArrowColumnWriterFactory {
     pub fn new() -> Self {
         Self {
+            page_store_factory: Arc::new(InMemoryPageStoreFactory),
             #[cfg(feature = "encryption")]
             row_group_index: 0,
             #[cfg(feature = "encryption")]
             file_encryptor: None,
         }
+    }
+
+    /// Use `page_store_factory` to allocate the buffer for each column chunk.
+    pub fn with_page_store_factory(mut self, page_store_factory: Arc<dyn PageStoreFactory>) -> Self {
+        self.page_store_factory = page_store_factory;
+        self
     }
 
     #[cfg(feature = "encryption")]
@@ -1199,8 +1300,9 @@ impl ArrowColumnWriterFactory {
             column_index,
             &column_path,
         )?;
+        let store = self.page_store_factory.create(column_index)?;
         Ok(Box::new(
-            ArrowPageWriter::default().with_encryptor(page_encryptor),
+            ArrowPageWriter::new(store).with_encryptor(page_encryptor),
         ))
     }
 
@@ -1208,9 +1310,10 @@ impl ArrowColumnWriterFactory {
     fn create_page_writer(
         &self,
         _column_descriptor: &ColumnDescPtr,
-        _column_index: usize,
+        column_index: usize,
     ) -> Result<Box<ArrowPageWriter>> {
-        Ok(Box::<ArrowPageWriter>::default())
+        let store = self.page_store_factory.create(column_index)?;
+        Ok(Box::new(ArrowPageWriter::new(store)))
     }
 
     /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
@@ -1737,6 +1840,103 @@ mod tests {
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
     };
+
+    /// A [`PageStore`] that allocates *sparse, non-contiguous* handles and keeps
+    /// blobs in a `HashMap` — nothing like the default `Vec<Bytes>`. Used to
+    /// prove the writer relies only on the opaque-handle contract and never on
+    /// handles being dense `Vec` indices. Records how many blobs were stored.
+    #[derive(Debug, Default)]
+    struct RecordingPageStore {
+        next: u64,
+        blobs: HashMap<u64, Bytes>,
+        puts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PageStore for RecordingPageStore {
+        fn put(&mut self, value: Bytes) -> Result<PageKey> {
+            // Deliberately non-sequential, never-zero handles.
+            let id = 100 + self.next * 7;
+            self.next += 1;
+            self.puts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.blobs.insert(id, value);
+            Ok(PageKey(id))
+        }
+
+        fn take(&mut self, key: PageKey) -> Result<Bytes> {
+            self.blobs
+                .remove(&key.0)
+                .ok_or_else(|| ParquetError::General(format!("missing key {}", key.0)))
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingPageStoreFactory {
+        puts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PageStoreFactory for RecordingPageStoreFactory {
+        fn create(&self, _column_index: usize) -> Result<Box<dyn PageStore>> {
+            Ok(Box::new(RecordingPageStore {
+                puts: self.puts.clone(),
+                ..Default::default()
+            }))
+        }
+    }
+
+    /// A custom [`PageStore`] must produce byte-identical files to the in-memory
+    /// default, across dictionary and non-dictionary columns and multiple row
+    /// groups (so multiple store instances are exercised).
+    #[test]
+    fn custom_page_store_is_byte_identical_to_default() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            // A low-cardinality string column to exercise the dictionary path.
+            Field::new("s", DataType::Utf8, true),
+        ]));
+        let i = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5), Some(6)]);
+        let s = StringArray::from(vec![
+            Some("a"),
+            Some("bb"),
+            Some("a"),
+            None,
+            Some("bb"),
+            Some("ccc"),
+        ]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(i), Arc::new(s)]).unwrap();
+
+        // Small row groups so multiple column chunks (hence multiple store
+        // instances) are produced.
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+
+        let write = |factory: Option<Arc<dyn PageStoreFactory>>| {
+            let mut buffer = Vec::new();
+            let mut opts = ArrowWriterOptions::new().with_properties(props.clone());
+            if let Some(factory) = factory {
+                opts = opts.with_page_store_factory(factory);
+            }
+            let mut writer =
+                ArrowWriter::try_new_with_options(&mut buffer, schema.clone(), opts).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            buffer
+        };
+
+        let default_bytes = write(None);
+
+        let puts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let custom_bytes = write(Some(Arc::new(RecordingPageStoreFactory { puts: puts.clone() })));
+
+        assert!(
+            puts.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "custom PageStore was never written to"
+        );
+        assert_eq!(
+            default_bytes, custom_bytes,
+            "a custom PageStore must produce byte-identical output to the default"
+        );
+    }
 
     #[test]
     fn arrow_writer() {
