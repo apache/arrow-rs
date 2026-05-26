@@ -21,7 +21,6 @@ use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::{Read, Write};
-use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
@@ -49,7 +48,6 @@ use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, ParquetMetaData, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
-use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
@@ -655,72 +653,46 @@ impl ArrowColumnChunkData {
         self.keys.push(key);
         Ok(())
     }
+}
 
-    /// Take every buffered blob back out of the store, in write order, ready to
-    /// splice into the output file.
-    ///
-    /// TODO(spill): stream blobs one at a time into the splice instead of
-    /// collecting them, so the splice phase is also bounded for spilling
-    /// backends (it currently materializes one column chunk at a time).
-    fn drain(&mut self) -> Result<MaterializedColumnChunk> {
-        let mut data = Vec::with_capacity(self.keys.len());
-        for key in std::mem::take(&mut self.keys) {
-            data.push(self.store.take(key)?);
+/// A streaming [`Read`] over one column chunk's buffered pages.
+///
+/// Takes each blob back out of the [`PageStore`] in write order *as it is
+/// consumed*, releasing it immediately afterwards, so splicing a chunk into the
+/// output file never materializes more than a single page in memory at a time.
+/// This is what keeps the splice phase within the memory bound for a spilling
+/// backend (an in-memory store already holds the bytes, so it is unaffected).
+struct StreamingColumnChunkReader {
+    store: Box<dyn PageStore>,
+    keys: IntoIter<PageKey>,
+    /// The blob currently being drained into the output; emptied as it is read.
+    current: Bytes,
+}
+
+impl StreamingColumnChunkReader {
+    fn new(data: ArrowColumnChunkData) -> Self {
+        Self {
+            store: data.store,
+            keys: data.keys.into_iter(),
+            current: Bytes::new(),
         }
-        Ok(MaterializedColumnChunk {
-            length: self.length,
-            data,
-        })
     }
 }
 
-/// The buffered pages of one column chunk, taken back out of the [`PageStore`]
-/// in write order and ready to be spliced into the output file via
-/// [`SerializedRowGroupWriter::append_column`].
-struct MaterializedColumnChunk {
-    length: usize,
-    data: Vec<Bytes>,
-}
-
-impl Length for MaterializedColumnChunk {
-    fn len(&self) -> u64 {
-        self.length as _
-    }
-}
-
-impl ChunkReader for MaterializedColumnChunk {
-    type T = ArrowColumnChunkReader;
-
-    fn get_read(&self, start: u64) -> Result<Self::T> {
-        assert_eq!(start, 0); // Assume append_column writes all data in one-shot
-        Ok(ArrowColumnChunkReader(
-            self.data.clone().into_iter().peekable(),
-        ))
-    }
-
-    fn get_bytes(&self, _start: u64, _length: usize) -> Result<Bytes> {
-        unimplemented!()
-    }
-}
-
-/// A [`Read`] for [`MaterializedColumnChunk`]
-struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
-
-impl Read for ArrowColumnChunkReader {
+impl Read for StreamingColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        let buffer = loop {
-            match self.0.peek_mut() {
-                Some(b) if b.is_empty() => {
-                    self.0.next();
-                    continue;
+        // Refill from the next stored blob whenever the current one is drained.
+        while self.current.is_empty() {
+            match self.keys.next() {
+                Some(key) => {
+                    self.current = self.store.take(key).map_err(std::io::Error::other)?;
                 }
-                Some(b) => break b,
                 None => return Ok(0),
             }
-        };
+        }
 
-        let len = buffer.len().min(out.len());
-        let b = buffer.split_to(len);
+        let len = self.current.len().min(out.len());
+        let b = self.current.split_to(len);
         out[..len].copy_from_slice(&b);
         Ok(len)
     }
@@ -865,13 +837,15 @@ impl ArrowColumnChunk {
         &mut self.close
     }
 
-    /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
+    /// Splices this column's buffered pages into the row group, streaming them
+    /// back out of the [`PageStore`] one page at a time.
     pub fn append_to_row_group<W: Write + Send>(
-        mut self,
+        self,
         writer: &mut SerializedRowGroupWriter<'_, W>,
     ) -> Result<()> {
-        let materialized = self.data.drain()?;
-        writer.append_column(&materialized, self.close)
+        let ArrowColumnChunk { data, close } = self;
+        let reader = StreamingColumnChunkReader::new(data);
+        writer.append_column_from_read(reader, close)
     }
 }
 
