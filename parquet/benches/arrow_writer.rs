@@ -32,7 +32,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use arrow_array::RecordBatchOptions;
+use arrow_array::{RecordBatchOptions, StringArray};
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
@@ -98,6 +98,29 @@ fn create_string_bench_batch(
         null_density,
         true_density,
     )?)
+}
+
+/// 1 M short, fixed-width 8-byte strings. Exercises the BYTE_ARRAY hot path
+/// for the case where individual values are small enough that the byte-budget
+/// based sub-batch sizing in `write_batch_internal` should always resolve to
+/// the full chunk (no granular splitting, no regression vs. current behavior).
+fn create_short_string_bench_batch(size: usize) -> Result<RecordBatch> {
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{i:08}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings. Exercises the BYTE_ARRAY path
+/// where individual values are large enough that batching the default
+/// `write_batch_size` of them would blow the page byte limit by orders of
+/// magnitude — the case the page-size fix targets.
+fn create_large_string_bench_batch(size: usize, value_size: usize) -> Result<RecordBatch> {
+    let value = "x".repeat(value_size);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|_| value.as_str()),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
 
 fn create_string_and_binary_view_bench_batch(
@@ -391,6 +414,16 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_string_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string", batch));
+
+    let batch = create_short_string_bench_batch(BATCH_SIZE).unwrap();
+    batches.push(("short_string_non_null", batch));
+
+    // 1024 rows × 256 KiB = 256 MiB total. With the default 1 MiB page byte
+    // limit, this is the case where the page-size fix kicks in: each value
+    // needs its own page, and `write_batch_size = 1024` would otherwise
+    // buffer all 256 MiB before the post-write check runs.
+    let batch = create_large_string_bench_batch(1024, 256 * 1024).unwrap();
+    batches.push(("large_string_non_null", batch));
 
     let batch = create_string_and_binary_view_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_and_binary_view", batch));
