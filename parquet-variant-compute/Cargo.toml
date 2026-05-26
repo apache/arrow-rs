@@ -27,6 +27,11 @@ keywords = ["arrow", "parquet", "variant"]
 edition = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.codspeed.benches]
+# Skipped on CodSpeed (read by .github/workflows/codspeed-matrix.sh):
+# intermittently fails at runtime. Fix the bench and remove this entry.
+variant_kernels = { skip = true }
+
 [dependencies]
 arrow = { workspace = true, features = ["canonical_extension_types"] }
 arrow-schema = { workspace = true }

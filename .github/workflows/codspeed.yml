@@ -28,11 +28,12 @@
 # Topology:
 #
 #   setup ─┐
-#          ├──→ bench (matrix, ~88 jobs)
+#          ├──→ bench (matrix, ~78 jobs)
 #   build ─┘
 #
-# `setup` parses every workspace Cargo.toml's `[[bench]]` entries and
-# emits a {crate, bench} matrix. `build` does the full-workspace
+# `setup` discovers every `[[bench]]` target via `cargo metadata` (see
+# codspeed-matrix.sh) and emits a {crate, bench} matrix. `build` does the
+# full-workspace
 # `cargo codspeed build` exactly once and uploads
 # `target/codspeed/<mode>/` as an artifact. `bench` shards download the
 # artifact and run a single bench target each via the CodSpeed action;
@@ -74,46 +75,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Generate matrix of {crate, bench} from workspace Cargo.tomls
+      - name: Generate {crate, bench} matrix across the workspace
         id: gen
-        env:
-          # Bench targets known to panic / error at runtime as of writing.
-          # These are pre-existing issues in the bench targets themselves,
-          # not the CodSpeed integration; they should be fixed and removed
-          # from this list one by one.
-          #   - arrow / merge_kernels:           panics at arrow-data/src/transform/primitive.rs:31
-          #   - arrow / buffer_bit_ops, buffer_create, sort_kernel,
-          #     string_run_builder, primitive_run_accessor:  fail at runtime
-          #   - arrow-array / union_array, arrow-cast / parse_date:        fail at runtime
-          #   - parquet / row_selection_cursor:                            fails at runtime
-          #   - parquet-variant-compute / variant_kernels:                 intermittent
-          EXCLUDED_BENCHES: |
-            arrow merge_kernels
-            arrow buffer_bit_ops
-            arrow buffer_create
-            arrow sort_kernel
-            arrow string_run_builder
-            arrow primitive_run_accessor
-            arrow-array union_array
-            arrow-cast parse_date
-            parquet row_selection_cursor
-            parquet-variant-compute variant_kernels
+        # Discovery + the known-broken exclusion list live in the shared
+        # codspeed-matrix.sh (also used by codspeed-pr.yml) so they stay in
+        # one place. No args = every workspace crate.
         run: |
-          {
-            for crate in arrow arrow-array arrow-avro arrow-buffer arrow-cast arrow-ipc arrow-json arrow-schema parquet parquet-variant parquet-variant-compute; do
-              awk -v crate="$crate" '
-                /^\[\[bench\]\]/ { in_bench=1; next }
-                /^\[/             { in_bench=0 }
-                in_bench && /^name = / {
-                  sub(/^name = "/, ""); sub(/"$/, "");
-                  printf "%s %s\n", crate, $0
-                }
-              ' "$crate/Cargo.toml"
-            done
-          } | grep -vxF -f <(printf '%s\n' "$EXCLUDED_BENCHES" | sed '/^$/d') \
-            | jq -Rcs 'split("\n") | map(select(length>0) | split(" ") | {crate: .[0], bench: .[1]})' > matrix.json
-          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
-          echo "::notice::Generated $(jq length matrix.json) bench shards (after excluding known-broken targets)"
+          matrix="$(bash .github/workflows/codspeed-matrix.sh)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "::notice::Generated $(jq length <<<"$matrix") bench shards (one per bench target, known-broken targets excluded)"
 
   build:
     name: Build workspace benchmarks
