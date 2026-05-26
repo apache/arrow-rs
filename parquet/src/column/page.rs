@@ -430,6 +430,40 @@ pub trait PageWriter: Send {
     /// either data page or dictionary page.
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec>;
 
+    /// Whether this writer resolves the final page layout itself (at flush)
+    /// rather than committing bytes to their final position as pages arrive.
+    ///
+    /// The dictionary page of a column chunk must be written *first*, but it is
+    /// not finalized until every value has been seen. A writer that commits
+    /// bytes live (e.g. straight to a file) therefore relies on the column
+    /// writer buffering the dictionary-encoded data pages in memory until the
+    /// dictionary page is ready — see [`GenericColumnWriter`]'s `data_pages`.
+    ///
+    /// A writer that instead buffers the whole chunk and splices it later (the
+    /// [`ArrowWriter`] path) can accept data pages *before* the dictionary page
+    /// and order them itself at flush. Returning `true` tells the column writer
+    /// to skip that in-memory buffering and stream dictionary-column data pages
+    /// straight through, bounding the column writer's memory.
+    ///
+    /// [`GenericColumnWriter`]: crate::column::writer::GenericColumnWriter
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    fn defers_dictionary_ordering(&self) -> bool {
+        false
+    }
+
+    /// The number of bytes this writer is currently holding **in memory** for
+    /// pages it has been handed (i.e. completed pages not yet committed to their
+    /// final destination).
+    ///
+    /// Used by the column writer to report its memory footprint. The default is
+    /// `0`: a writer that streams pages straight to their destination retains
+    /// nothing. A writer that buffers pages should report what it actually holds
+    /// on the heap — which, when it spills to a backing store, can be far less
+    /// than the bytes written.
+    fn buffered_memory_size(&self) -> usize {
+        0
+    }
+
     /// Closes resources and flushes underlying sink.
     /// Page writer should not be used after this method is called.
     fn close(&mut self) -> Result<()>;

@@ -89,6 +89,18 @@ pub trait PageStore: Send {
     /// `key` again, so the store may release any resources backing it — eagerly
     /// here, or when the store is dropped.
     fn take(&mut self, key: PageKey) -> Result<Bytes>;
+
+    /// The number of bytes this store currently holds **in memory** (resident
+    /// on the heap), used to report the writer's memory footprint.
+    ///
+    /// The default is `0`, which is exactly right for a backend that moves
+    /// every blob off-heap (a temp file, object storage): the bytes it has been
+    /// handed no longer occupy heap. The in-memory backend overrides this to
+    /// report its resident blobs. A backend that keeps a partial in-memory
+    /// buffer should report that buffer's size.
+    fn memory_size(&self) -> usize {
+        0
+    }
 }
 
 /// Creates a fresh [`PageStore`] for each column chunk.
@@ -112,11 +124,14 @@ pub trait PageStoreFactory: Send + Sync + Debug {
 #[derive(Debug, Default)]
 pub struct InMemoryPageStore {
     blobs: Vec<Bytes>,
+    /// Running total of resident blob bytes, kept in step with `put`/`take`.
+    resident: usize,
 }
 
 impl PageStore for InMemoryPageStore {
     fn put(&mut self, value: Bytes) -> Result<PageKey> {
         let key = PageKey(self.blobs.len() as u64);
+        self.resident += value.len();
         self.blobs.push(value);
         Ok(key)
     }
@@ -125,10 +140,17 @@ impl PageStore for InMemoryPageStore {
         // Replace the slot with an empty `Bytes` so the stored blob is released
         // as soon as it is taken, keeping memory bounded while the chunk is
         // streamed into the output file.
-        self.blobs
+        let blob = self
+            .blobs
             .get_mut(key.0 as usize)
             .map(std::mem::take)
-            .ok_or_else(|| ParquetError::General(format!("invalid page key {}", key.0)))
+            .ok_or_else(|| ParquetError::General(format!("invalid page key {}", key.0)))?;
+        self.resident -= blob.len();
+        Ok(blob)
+    }
+
+    fn memory_size(&self) -> usize {
+        self.resident
     }
 }
 
@@ -171,5 +193,34 @@ mod tests {
     fn in_memory_invalid_key_errors() {
         let mut store = InMemoryPageStore::default();
         assert!(store.take(PageKey(99)).is_err());
+    }
+
+    #[test]
+    fn in_memory_reports_resident_bytes() {
+        let mut store = InMemoryPageStore::default();
+        assert_eq!(store.memory_size(), 0);
+        let k0 = store.put(Bytes::from_static(b"hello")).unwrap();
+        let k1 = store.put(Bytes::from_static(b"!")).unwrap();
+        assert_eq!(store.memory_size(), 6);
+        store.take(k0).unwrap();
+        assert_eq!(store.memory_size(), 1);
+        store.take(k1).unwrap();
+        assert_eq!(store.memory_size(), 0);
+    }
+
+    #[test]
+    fn default_store_memory_size_is_zero() {
+        // A spilling backend that does not override `memory_size` reports 0,
+        // reflecting that its blobs no longer occupy the heap.
+        struct OffHeap;
+        impl PageStore for OffHeap {
+            fn put(&mut self, _value: Bytes) -> Result<PageKey> {
+                Ok(PageKey::new(0))
+            }
+            fn take(&mut self, _key: PageKey) -> Result<Bytes> {
+                Ok(Bytes::new())
+            }
+        }
+        assert_eq!(OffHeap.memory_size(), 0);
     }
 }

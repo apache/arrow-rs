@@ -632,7 +632,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// of the current memory usage and not the final anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
-        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
+        // In-flight encoder buffers, plus any completed pages still held on the
+        // heap: the dictionary-column data pages buffered here (column-at-a-time
+        // path), plus whatever the page writer keeps resident. A page writer
+        // that spills completed pages off-heap reports far less than the bytes
+        // it was handed, so this tracks real memory rather than bytes written.
+        self.encoder.estimated_memory_size()
+            + self
+                .data_pages
+                .iter()
+                .map(|page| page.data().len())
+                .sum::<usize>()
+            + self.page_writer.buffered_memory_size()
     }
 
     /// Returns total number of bytes written by this column writer so far.
@@ -1271,7 +1282,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         // Check if we need to buffer data page or flush it to the sink directly.
-        if self.encoder.has_dictionary() {
+        //
+        // For dictionary-encoded columns the dictionary page must be written
+        // first, but it is not final until all values are seen, so completed
+        // data pages are normally buffered here until `close`. A page writer
+        // that defers final layout (the Arrow path) instead orders pages itself
+        // at flush, so we stream the data pages straight through and never let
+        // them accumulate in memory.
+        if self.encoder.has_dictionary() && !self.page_writer.defers_dictionary_ordering() {
             self.data_pages.push_back(compressed_page);
         } else {
             self.write_data_page(compressed_page)?;

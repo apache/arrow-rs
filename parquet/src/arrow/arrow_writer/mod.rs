@@ -36,6 +36,7 @@ use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_pr
 
 use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
@@ -635,6 +636,17 @@ struct ArrowColumnChunkData {
     length: usize,
     store: Box<dyn PageStore>,
     keys: Vec<PageKey>,
+    /// The dictionary page's serialized blobs (header ‖ data), held in memory
+    /// rather than the store.
+    ///
+    /// A dictionary page is produced at most once and bounded by
+    /// `dict_page_size_limit`, but it must be written *first* in the chunk even
+    /// though the data pages reach the writer before it (see
+    /// [`PageWriter::defers_dictionary_ordering`]). Spilling it would only
+    /// round-trip ~1 page to the backend and straight back, so it is kept here
+    /// and emitted ahead of the data pages at splice. Empty for non-dictionary
+    /// columns.
+    dictionary: Vec<Bytes>,
 }
 
 impl ArrowColumnChunkData {
@@ -643,26 +655,47 @@ impl ArrowColumnChunkData {
             length: 0,
             store,
             keys: Vec::new(),
+            dictionary: Vec::new(),
         }
     }
 
-    /// Append a serialized blob to the store, recording its handle in write
+    /// Append a data-page blob to the store, recording its handle in write
     /// order.
     fn push(&mut self, value: Bytes) -> Result<()> {
         let key = self.store.put(value)?;
         self.keys.push(key);
         Ok(())
     }
+
+    /// Retain a dictionary-page blob in memory (emitted first at splice).
+    fn push_dictionary(&mut self, value: Bytes) {
+        self.dictionary.push(value);
+    }
+
+    /// Total serialized size of the in-memory dictionary page, in bytes.
+    fn dictionary_len(&self) -> usize {
+        self.dictionary.iter().map(Bytes::len).sum()
+    }
+
+    /// Bytes this chunk currently holds on the heap: whatever the store keeps
+    /// resident (zero for a spilling backend) plus the in-memory dictionary
+    /// page.
+    fn memory_size(&self) -> usize {
+        self.store.memory_size() + self.dictionary_len()
+    }
 }
 
-/// A streaming [`Read`] over one column chunk's buffered pages.
+/// A streaming [`Read`] over one column chunk's buffered pages, in final file
+/// order: the in-memory dictionary page (if any) first, then the data pages.
 ///
-/// Takes each blob back out of the [`PageStore`] in write order *as it is
-/// consumed*, releasing it immediately afterwards, so splicing a chunk into the
+/// Each data-page blob is taken back out of the [`PageStore`] *as it is
+/// consumed* and released immediately afterwards, so splicing a chunk into the
 /// output file never materializes more than a single page in memory at a time.
 /// This is what keeps the splice phase within the memory bound for a spilling
 /// backend (an in-memory store already holds the bytes, so it is unaffected).
 struct StreamingColumnChunkReader {
+    /// Dictionary-page blobs, emitted before any data page.
+    dictionary: IntoIter<Bytes>,
     store: Box<dyn PageStore>,
     keys: IntoIter<PageKey>,
     /// The blob currently being drained into the output; emptied as it is read.
@@ -672,6 +705,7 @@ struct StreamingColumnChunkReader {
 impl StreamingColumnChunkReader {
     fn new(data: ArrowColumnChunkData) -> Self {
         Self {
+            dictionary: data.dictionary.into_iter(),
             store: data.store,
             keys: data.keys.into_iter(),
             current: Bytes::new(),
@@ -681,13 +715,15 @@ impl StreamingColumnChunkReader {
 
 impl Read for StreamingColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        // Refill from the next stored blob whenever the current one is drained.
+        // Refill from the next blob whenever the current one is drained: the
+        // dictionary page first, then each data page from the store.
         while self.current.is_empty() {
-            match self.keys.next() {
-                Some(key) => {
-                    self.current = self.store.take(key).map_err(std::io::Error::other)?;
-                }
-                None => return Ok(0),
+            if let Some(blob) = self.dictionary.next() {
+                self.current = blob;
+            } else if let Some(key) = self.keys.next() {
+                self.current = self.store.take(key).map_err(std::io::Error::other)?;
+            } else {
+                return Ok(0);
             }
         }
 
@@ -778,10 +814,33 @@ impl PageWriter for ArrowPageWriter {
         spec.bytes_written = compressed_size as u64;
 
         buf.length += compressed_size;
-        buf.push(header)?;
-        buf.push(data)?;
+        if spec.page_type == PageType::DICTIONARY_PAGE {
+            // Held in memory and emitted first at splice — see
+            // `ArrowColumnChunkData::dictionary`. The buffer-relative offset in
+            // `spec` (the dictionary arrives after the data pages on this path)
+            // is rewritten to its true, dictionary-first position at splice.
+            buf.push_dictionary(header);
+            buf.push_dictionary(data);
+        } else {
+            buf.push(header)?;
+            buf.push(data)?;
+        }
 
         Ok(spec)
+    }
+
+    fn defers_dictionary_ordering(&self) -> bool {
+        // The Arrow chunk is buffered in full and spliced at row-group flush, so
+        // data pages may be accepted before the dictionary page and reordered
+        // then. This lets `GenericColumnWriter` stream dictionary-column data
+        // pages straight through instead of buffering them in memory.
+        true
+    }
+
+    fn buffered_memory_size(&self) -> usize {
+        // Only what is actually resident: a spilling store reports ~0 here even
+        // though the chunk's bytes have all passed through it.
+        self.buffer.try_lock().unwrap().memory_size()
     }
 
     fn close(&mut self) -> Result<()> {
@@ -843,7 +902,31 @@ impl ArrowColumnChunk {
         self,
         writer: &mut SerializedRowGroupWriter<'_, W>,
     ) -> Result<()> {
-        let ArrowColumnChunk { data, close } = self;
+        let ArrowColumnChunk { data, mut close } = self;
+
+        // On the Arrow path the dictionary page is produced *after* the data
+        // pages (so the data pages can stream straight through rather than
+        // accumulating in memory), but it must be written *first*. The encoder
+        // therefore recorded buffer-relative page offsets in production order;
+        // rewrite them to the final dictionary-first layout (dict at 0, data
+        // pages following) so the splice's offset remap lands them correctly.
+        let dictionary_len = data.dictionary_len();
+        if dictionary_len > 0 {
+            close.metadata = close
+                .metadata
+                .into_builder()
+                .set_dictionary_page_offset(Some(0))
+                .set_data_page_offset(dictionary_len as i64)
+                .build()?;
+            if let Some(offset_index) = close.offset_index.as_mut() {
+                let mut offset = dictionary_len as i64;
+                for location in offset_index.page_locations.iter_mut() {
+                    location.offset = offset;
+                    offset += location.compressed_page_size as i64;
+                }
+            }
+        }
+
         let reader = StreamingColumnChunkReader::new(data);
         writer.append_column_from_read(reader, close)
     }
@@ -1918,6 +2001,42 @@ mod tests {
             default_bytes, custom_bytes,
             "a custom PageStore must produce byte-identical output to the default"
         );
+    }
+
+    /// A dictionary-encoded column written through the deferred-ordering Arrow
+    /// path must round-trip correctly even with the offset index disabled, when
+    /// only the chunk-level dictionary/data page offsets are rewritten (there is
+    /// no offset index to rebuild). Spans multiple data pages so the
+    /// dictionary-first reordering is exercised.
+    #[test]
+    fn dictionary_column_round_trips_with_offset_index_disabled() {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+
+        // Low cardinality so the column stays dictionary-encoded; enough rows to
+        // span several data pages within a single row group.
+        let values: Vec<Option<i32>> = (0..50_000).map(|i| Some(i % 8)).collect();
+        let array = Int32Array::from(values.clone());
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_offset_index_disabled(true)
+            .set_data_page_row_count_limit(4096)
+            .build();
+        let opts = ArrowWriterOptions::new().with_properties(props);
+
+        let mut buffer = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buffer, schema.clone(), opts).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), values.len()).unwrap();
+        let read: Vec<RecordBatch> = reader.collect::<ArrowResult<_>>().unwrap();
+        let read_values: Vec<Option<i32>> = read
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int32Type>().iter())
+            .collect();
+        assert_eq!(read_values, values);
     }
 
     #[test]

@@ -176,6 +176,34 @@ impl PageStoreFactory for TempFilePageStoreFactory {
     }
 }
 
+/// Rows per batch / batches for the dictionary-column scenario (~4.2M rows).
+const DICT_ROWS_PER_BATCH: usize = 8192;
+const DICT_NUM_BATCHES: usize = 512;
+
+/// Write a single, low-cardinality (16 distinct values), high-row-count column
+/// as one row group. Such a column stays dictionary-encoded, so its completed
+/// data pages would historically pile up in `GenericColumnWriter` until close —
+/// the second accumulation point that plain page-buffer spilling does not reach.
+fn write_dict_dataset(options: ArrowWriterOptions) {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+    let props = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(DICT_ROWS_PER_BATCH * DICT_NUM_BATCHES * 2))
+        .build();
+    let options = options.with_properties(props);
+    let mut writer =
+        ArrowWriter::try_new_with_options(std::io::sink(), schema.clone(), options).unwrap();
+    for b in 0..DICT_NUM_BATCHES {
+        let vals: Vec<i32> = (0..DICT_ROWS_PER_BATCH)
+            .map(|r| ((b + r) % 16) as i32)
+            .collect();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vals))]).unwrap();
+        writer.write(&batch).unwrap();
+    }
+    writer.close().unwrap();
+}
+
 /// Run `f` under a fresh dhat profiler and return the peak live heap (bytes)
 /// observed during it. dhat's profiler is process-global, so callers must run
 /// sequentially (a single `#[test]`, not parallel tests).
@@ -239,5 +267,25 @@ fn page_store_bounds_write_memory() {
         spill_peak * 2 < in_memory_peak,
         "expected spilling peak ({spill_peak}) to be far below the in-memory baseline \
          ({in_memory_peak})"
+    );
+
+    // Dictionary-encoded column: completed data pages reach the page writer (and
+    // thus the store) as they are produced, so spilling bounds them too.
+    let dict_in_memory = peak_heap_bytes(|| write_dict_dataset(ArrowWriterOptions::new()));
+    let dict_spill = peak_heap_bytes(|| {
+        write_dict_dataset(
+            ArrowWriterOptions::new().with_page_store_factory(Arc::new(TempFilePageStoreFactory)),
+        )
+    });
+    eprintln!(
+        "dict column ({} rows) peak heap — in-memory: {:.2} MiB, temp-file spill: {:.2} MiB",
+        DICT_ROWS_PER_BATCH * DICT_NUM_BATCHES,
+        dict_in_memory as f64 / (1024.0 * 1024.0),
+        dict_spill as f64 / (1024.0 * 1024.0),
+    );
+    assert!(
+        dict_spill * 2 < dict_in_memory,
+        "expected dict-column spilling peak ({dict_spill}) to be far below the in-memory \
+         baseline ({dict_in_memory}) — dictionary data pages should spill, not accumulate"
     );
 }
