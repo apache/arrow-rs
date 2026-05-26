@@ -60,6 +60,19 @@ half = { version = "2.1", default-features = false, features = ["rand_distr"], o
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.codspeed.benches]
+# Per-bench CodSpeed config, read by .github/workflows/codspeed-matrix.sh.
+# `skip = true` drops the bench target from the CodSpeed matrix; these
+# currently panic/error at runtime, so fix the bench and remove its entry,
+# one at a time. (A per-bench `mode = "simulation" | "walltime"` could live
+# here too, once the workflow builds both measurement modes.)
+merge_kernels = { skip = true }
+buffer_bit_ops = { skip = true }
+buffer_create = { skip = true }
+sort_kernel = { skip = true }
+string_run_builder = { skip = true }
+primitive_run_accessor = { skip = true }
+
 [features]
 default = ["csv", "ipc", "json"]
 async = ["arrow-array/async"]

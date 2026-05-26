@@ -35,6 +35,11 @@ bench = false
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.codspeed.benches]
+# Skipped on CodSpeed (read by .github/workflows/codspeed-matrix.sh):
+# currently fails at runtime. Fix the bench and remove this entry.
+parse_date = { skip = true }
+
 [features]
 prettyprint = ["comfy-table"]
 force_validate = []
