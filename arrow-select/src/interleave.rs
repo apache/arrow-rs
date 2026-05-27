@@ -373,6 +373,64 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
+/// Specialized interleave for list child arrays that are primitive.
+/// Directly copies typed value slices and null bit ranges without
+/// going through MutableArrayData's function pointer indirection.
+fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+    interleaved: &Interleave<'_, GenericListArray<O>>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+) -> ArrayRef {
+    let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_primitive::<T>())
+        .collect();
+
+    let has_child_nulls = child_arrays.iter().any(|a| a.null_count() > 0);
+
+    // Build values buffer by copying contiguous slices
+    let mut values: Vec<T::Native> = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let o = interleaved.arrays[array].value_offsets();
+        let start = o[row].as_usize();
+        let end = o[row + 1].as_usize();
+        if end > start {
+            values.extend_from_slice(&child_arrays[array].values()[start..end]);
+        }
+    }
+
+    // Build null buffer. Pre-allocate capacity so appends never resize.
+    // For sources without nulls: append_n sets bits to 1 (byte-level fill).
+    // For sources with nulls: append_packed_range copies the validity bits.
+    let nulls = if has_child_nulls {
+        let mut builder = BooleanBufferBuilder::new(capacity);
+        for &(array, row) in indices {
+            let o = interleaved.arrays[array].value_offsets();
+            let start = o[row].as_usize();
+            let end = o[row + 1].as_usize();
+            let len = end - start;
+            if len > 0 {
+                match child_arrays[array].nulls() {
+                    Some(null_buffer) => {
+                        let offset = null_buffer.offset();
+                        builder.append_packed_range(
+                            offset + start..offset + end,
+                            null_buffer.validity(),
+                        );
+                    }
+                    None => builder.append_n(len, true),
+                }
+            }
+        }
+        Some(NullBuffer::new(builder.finish()))
+    } else {
+        None
+    };
+
+    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls))
+}
+
 fn interleave_list<O: OffsetSizeTrait>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -394,52 +452,40 @@ fn interleave_list<O: OffsetSizeTrait>(
     }
 
     // Step 2: build child values.
-    // For primitive child types, use MutableArrayData to directly memcpy contiguous
-    // ranges, avoiding the intermediate child_indices Vec allocation.
-    // For complex child types (nested lists, structs, views, dictionaries, etc.),
-    // use recursive interleave to benefit from type-specific optimizations.
-    let child_values = if field.data_type().primitive_width().is_some() {
-        let child_data: Vec<_> = interleaved
-            .arrays
-            .iter()
-            .map(|list| list.values().to_data())
-            .collect();
-        let child_data_refs: Vec<_> = child_data.iter().collect();
-        let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    macro_rules! list_primitive_helper {
+        ($t:ty) => {
+            interleave_list_primitive_child::<O, $t>(&interleaved, indices, capacity)
+        };
+    }
 
-        for &(array, row) in indices {
-            let o = interleaved.arrays[array].value_offsets();
-            let start = o[row].as_usize();
-            let end = o[row + 1].as_usize();
-            if end > start {
-                mutable_child.extend(array, start, end);
+    let child_values = downcast_primitive! {
+        // For primitive child types, directly copy typed value slices and null bit
+        // ranges, avoiding both the intermediate child_indices Vec allocation and
+        // MutableArrayData's function pointer indirection.
+        field.data_type() => (list_primitive_helper),
+        _ => {
+            // For complex child types (nested lists, structs, views, dictionaries, etc.),
+            // use recursive interleave to benefit from type-specific optimizations.
+            let mut child_indices = Vec::with_capacity(capacity);
+            for (array, row) in indices {
+                let list = interleaved.arrays[*array];
+                let start = list.value_offsets()[*row].as_usize();
+                let end = list.value_offsets()[*row + 1].as_usize();
+                child_indices.extend((start..end).map(|i| (*array, i)));
             }
-        }
-        make_array(mutable_child.freeze())
-    } else {
-        let mut child_indices = Vec::with_capacity(capacity);
-        for (array, row) in indices {
-            let list = interleaved.arrays[*array];
-            let start = list.value_offsets()[*row].as_usize();
-            let end = list.value_offsets()[*row + 1].as_usize();
-            child_indices.extend((start..end).map(|i| (*array, i)));
-        }
 
-        let child_arrays: Vec<&dyn Array> = interleaved
-            .arrays
-            .iter()
-            .map(|list| list.values().as_ref())
-            .collect();
-        interleave(&child_arrays, &child_indices)?
+            let child_arrays: Vec<&dyn Array> = interleaved
+                .arrays
+                .iter()
+                .map(|list| list.values().as_ref())
+                .collect();
+            interleave(&child_arrays, &child_indices)?
+        }
     };
 
     let offsets = OffsetBuffer::new(offsets.into());
-    let list_array = GenericListArray::<O>::new(
-        field.clone(),
-        offsets,
-        child_values,
-        interleaved.nulls,
-    );
+    let list_array =
+        GenericListArray::<O>::new(field.clone(), offsets, child_values, interleaved.nulls);
 
     Ok(Arc::new(list_array))
 }
