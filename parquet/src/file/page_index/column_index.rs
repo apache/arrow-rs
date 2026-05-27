@@ -638,7 +638,7 @@ impl ColumnIndexMetaData {
 
     /// Returns array of null counts, one per page.
     ///
-    /// Returns `None` if now null counts have been set in the index
+    /// Returns `None` if no null counts have been set in the index
     pub fn null_counts(&self) -> Option<&Vec<i64>> {
         match self {
             Self::NONE => None,
@@ -655,7 +655,7 @@ impl ColumnIndexMetaData {
 
     /// Returns array of NaN counts, one per page.
     ///
-    /// Returns `None` if now null counts have been set in the index
+    /// Returns `None` if no NaN counts have been set in the index
     pub fn nan_counts(&self) -> Option<&Vec<i64>> {
         match self {
             Self::NONE => None,
@@ -684,7 +684,7 @@ impl ColumnIndexMetaData {
 
     /// Returns the number of NaN values in the page indexed by `idx`
     ///
-    /// Returns `None` if no null counts have been set in the index
+    /// Returns `None` if no NaN counts have been set in the index
     pub fn nan_count(&self, idx: usize) -> Option<i64> {
         colidx_enum_func!(self, nan_count, idx)
     }
