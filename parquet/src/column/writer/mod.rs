@@ -904,37 +904,42 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
+    // For float columns, always provide Some(n), even if n is 0
+    // For non-float columns, always provide None
+    fn get_nan_count<T: ParquetValueType>(&self) -> Option<i64> {
+        let nan_count = || {
+            let nan_count = self.page_metrics.num_page_nans.unwrap_or(0);
+            i64::try_from(nan_count).ok()
+        };
+        match T::PHYSICAL_TYPE {
+            Type::FLOAT | Type::DOUBLE => nan_count(),
+            Type::FIXED_LEN_BYTE_ARRAY
+                if matches!(self.descr.logical_type_ref(), Some(LogicalType::Float16)) =>
+            {
+                nan_count()
+            }
+            _ => None,
+        }
+    }
+
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
         page_statistics: Option<&ValueStatistics<E::T>>,
         page_variable_length_bytes: Option<i64>,
     ) {
-        // Determine if this is a floating-point column
-        let is_float_column = matches!(self.descr.physical_type(), Type::FLOAT | Type::DOUBLE)
-            || (self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY
-                && self.descr.logical_type_ref() == Some(&LogicalType::Float16));
-
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
-            // For float columns, always provide Some(n), even if n is 0
-            // For non-float columns, always provide None
-            let nan_count = if is_float_column {
-                Some(self.page_metrics.num_page_nans.unwrap_or(0) as i64)
-            } else {
-                None
-            };
-
             self.column_index_builder.append(
                 null_page,
                 vec![],
                 vec![],
                 self.page_metrics.num_page_nulls as i64,
-                nan_count,
+                self.get_nan_count::<E::T>(),
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -969,14 +974,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     }
                     self.last_non_null_data_page_min_max = Some((new_min.clone(), new_max.clone()));
 
-                    // For float columns, always provide Some(n), even if n is 0
-                    // For non-float columns, always provide None
-                    let nan_count = if is_float_column {
-                        Some(stat.nan_count_opt().unwrap_or(0) as i64)
-                    } else {
-                        None
-                    };
-
                     if self.can_truncate_value() {
                         self.column_index_builder.append(
                             null_page,
@@ -991,7 +988,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
-                            nan_count,
+                            self.get_nan_count::<E::T>(),
                         );
                     } else {
                         self.column_index_builder.append(
@@ -999,7 +996,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             stat.min_bytes_opt().unwrap().to_vec(),
                             stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
-                            nan_count,
+                            self.get_nan_count::<E::T>(),
                         );
                     }
                 }
