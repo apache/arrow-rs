@@ -909,7 +909,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn get_nan_count<T: ParquetValueType>(&self) -> Option<i64> {
         let nan_count = || {
             let nan_count = self.page_metrics.num_page_nans.unwrap_or(0);
-            i64::try_from(nan_count).ok()
+            match i64::try_from(nan_count) {
+                Ok(count) => Some(count),
+                _ => Some(i64::MAX),
+            }
         };
         match T::PHYSICAL_TYPE {
             Type::FLOAT | Type::DOUBLE => nan_count(),
