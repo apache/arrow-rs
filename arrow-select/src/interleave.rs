@@ -23,6 +23,8 @@ use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::bit_mask::set_bits;
+use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
@@ -400,11 +402,15 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
         }
     }
 
-    // Build null buffer. Pre-allocate capacity so appends never resize.
-    // For sources without nulls: append_n sets bits to 1 (byte-level fill).
-    // For sources with nulls: append_packed_range copies the validity bits.
+    // Build null buffer. Pre-allocate with 0x00 (all null), then:
+    // - Sources with nulls: set_bits ORs in valid bits from source.
+    // - Sources without nulls: set the bit range to all 1s directly.
     let nulls = if has_child_nulls {
-        let mut builder = BooleanBufferBuilder::new(capacity);
+        let null_byte_len = bit_util::ceil(capacity, 8);
+        let mut null_buf = MutableBuffer::new(null_byte_len);
+        null_buf.resize(null_byte_len, 0);
+
+        let mut offset_write = 0;
         for &(array, row) in indices {
             let o = interleaved.arrays[array].value_offsets();
             let start = o[row].as_usize();
@@ -413,17 +419,26 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             if len > 0 {
                 match child_arrays[array].nulls() {
                     Some(null_buffer) => {
-                        let offset = null_buffer.offset();
-                        builder.append_packed_range(
-                            offset + start..offset + end,
+                        set_bits(
+                            null_buf.as_slice_mut(),
                             null_buffer.validity(),
+                            offset_write,
+                            null_buffer.offset() + start,
+                            len,
                         );
                     }
-                    None => builder.append_n(len, true),
+                    None => {
+                        // Slow path. For a non-nullable source, set the bit range to all 1s directly.
+                        let buf = null_buf.as_slice_mut();
+                        (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
+                    }
                 }
             }
+            offset_write += len;
         }
-        Some(NullBuffer::new(builder.finish()))
+
+        let bool_buf = BooleanBuffer::new(null_buf.into(), 0, capacity);
+        Some(NullBuffer::new(bool_buf))
     } else {
         None
     };
