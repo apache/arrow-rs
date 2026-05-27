@@ -10775,8 +10775,8 @@ mod tests {
         assert_eq!("0.12", decimal_arr.value_as_string(7));
         assert_eq!("12.23", decimal_arr.value_as_string(8));
         assert!(decimal_arr.is_null(9));
-        assert_eq!("0.00", decimal_arr.value_as_string(10));
-        assert_eq!("0.00", decimal_arr.value_as_string(11));
+        assert!(decimal_arr.is_null(10));
+        assert!(decimal_arr.is_null(11));
         assert!(decimal_arr.is_null(12));
         assert_eq!("-1.23", decimal_arr.value_as_string(13));
         assert_eq!("-1.24", decimal_arr.value_as_string(14));
@@ -10815,8 +10815,8 @@ mod tests {
         assert_eq!("0.123", decimal_arr.value_as_string(7));
         assert_eq!("12.234", decimal_arr.value_as_string(8));
         assert!(decimal_arr.is_null(9));
-        assert_eq!("0.000", decimal_arr.value_as_string(10));
-        assert_eq!("0.000", decimal_arr.value_as_string(11));
+        assert!(decimal_arr.is_null(10));
+        assert!(decimal_arr.is_null(11));
         assert!(decimal_arr.is_null(12));
         assert_eq!("-1.235", decimal_arr.value_as_string(13));
         assert_eq!("-1.236", decimal_arr.value_as_string(14));
@@ -10880,8 +10880,8 @@ mod tests {
 
         let test_cases = [
             (None, None),
-            // (Some(""), None),
-            // (Some("   "), None),
+            (Some(""), None),
+            (Some("   "), None),
             (Some("0"), Some("0")),
             (Some("000.000"), Some("0")),
             (Some("12345"), Some("12345")),
@@ -11028,6 +11028,15 @@ mod tests {
             casted_err
                 .to_string()
                 .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type")
+        );
+
+        let str_array = StringArray::from(vec![""]);
+        let array = Arc::new(str_array) as ArrayRef;
+        let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
+        assert!(
+            casted_err
+                .to_string()
+                .contains("Cannot cast string '' to value of Decimal128(38, 10) type")
         );
     }
 
