@@ -375,9 +375,6 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
-/// Specialized interleave for list child arrays that are primitive.
-/// Directly copies typed value slices and null bit ranges without
-/// going through MutableArrayData's function pointer indirection.
 fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
     interleaved: &Interleave<'_, GenericListArray<O>>,
     indices: &[(usize, usize)],
