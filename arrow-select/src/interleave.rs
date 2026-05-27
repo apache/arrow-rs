@@ -393,29 +393,51 @@ fn interleave_list<O: OffsetSizeTrait>(
         );
     }
 
-    // Step 2: use MutableArrayData to directly copy child ranges.
-    let child_data: Vec<_> = interleaved
-        .arrays
-        .iter()
-        .map(|list| list.values().to_data())
-        .collect();
-    let child_data_refs: Vec<_> = child_data.iter().collect();
-    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    // Step 2: build child values.
+    // For primitive child types, use MutableArrayData to directly memcpy contiguous
+    // ranges, avoiding the intermediate child_indices Vec allocation.
+    // For complex child types (nested lists, structs, views, dictionaries, etc.),
+    // use recursive interleave to benefit from type-specific optimizations.
+    let child_values = if field.data_type().primitive_width().is_some() {
+        let child_data: Vec<_> = interleaved
+            .arrays
+            .iter()
+            .map(|list| list.values().to_data())
+            .collect();
+        let child_data_refs: Vec<_> = child_data.iter().collect();
+        let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
 
-    for &(array, row) in indices {
-        let o = interleaved.arrays[array].value_offsets();
-        let start = o[row].as_usize();
-        let end = o[row + 1].as_usize();
-        if end > start {
-            mutable_child.extend(array, start, end);
+        for &(array, row) in indices {
+            let o = interleaved.arrays[array].value_offsets();
+            let start = o[row].as_usize();
+            let end = o[row + 1].as_usize();
+            if end > start {
+                mutable_child.extend(array, start, end);
+            }
         }
-    }
+        make_array(mutable_child.freeze())
+    } else {
+        let mut child_indices = Vec::with_capacity(capacity);
+        for (array, row) in indices {
+            let list = interleaved.arrays[*array];
+            let start = list.value_offsets()[*row].as_usize();
+            let end = list.value_offsets()[*row + 1].as_usize();
+            child_indices.extend((start..end).map(|i| (*array, i)));
+        }
+
+        let child_arrays: Vec<&dyn Array> = interleaved
+            .arrays
+            .iter()
+            .map(|list| list.values().as_ref())
+            .collect();
+        interleave(&child_arrays, &child_indices)?
+    };
 
     let offsets = OffsetBuffer::new(offsets.into());
     let list_array = GenericListArray::<O>::new(
         field.clone(),
         offsets,
-        make_array(mutable_child.freeze()),
+        child_values,
         interleaved.nulls,
     );
 
