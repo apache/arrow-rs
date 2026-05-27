@@ -18,6 +18,7 @@
 //! Test for predicate cache in Parquet Arrow reader
 
 use super::io::TestReader;
+use arrow::array::Array;
 use arrow::array::ArrayRef;
 use arrow::array::Int64Array;
 use arrow::compute::and;
@@ -100,6 +101,83 @@ async fn test_cache_projection_excludes_nested_columns() {
 
     let async_builder = test.async_builder().await.add_nested_filter();
     test.run_async(async_builder).await;
+}
+
+/// Regression: cache must match no-cache for a nullable single-leaf struct.
+#[tokio::test]
+async fn test_async_predicate_on_single_leaf_nullable_struct() {
+    // Rows: b = NULL, then b.aa = "hello".
+    let aa: StringArray = StringArray::from(vec!["padding", "hello"]);
+    let nulls = arrow_buffer::NullBuffer::from(vec![false, true]);
+    let b = StructArray::new(
+        vec![Arc::new(Field::new("aa", DataType::Utf8, false))].into(),
+        vec![Arc::new(aa) as ArrayRef],
+        Some(nulls),
+    );
+    let input_batch = RecordBatch::try_from_iter([("b", Arc::new(b) as ArrayRef)]).unwrap();
+
+    let mut output = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut output, input_batch.schema(), None).unwrap();
+    writer.write(&input_batch).unwrap();
+    writer.close().unwrap();
+    let bytes = Bytes::from(output);
+
+    // Since `aa` is required, `b.aa IS NULL` means `b` is NULL.
+    let build_is_null_filter = |schema_descr: &parquet::schema::types::SchemaDescPtr| -> RowFilter {
+        let mask = ProjectionMask::leaves(schema_descr, vec![0]);
+        let predicate = ArrowPredicateFn::new(mask.clone(), |batch: RecordBatch| {
+            let struct_arr = batch.column(0).as_struct();
+            let leaf = struct_arr.column(0);
+            Ok((0..batch.num_rows())
+                .map(|i| struct_arr.is_null(i) || leaf.is_null(i))
+                .collect::<arrow_array::BooleanArray>())
+        });
+        RowFilter::new(vec![Box::new(predicate)])
+    };
+
+    // Default cache.
+    let reader = TestReader::new(bytes.clone());
+    let async_builder =
+        ParquetRecordBatchStreamBuilder::new_with_options(reader, ArrowReaderOptions::default())
+            .await
+            .unwrap();
+    let schema_descr = async_builder.metadata().file_metadata().schema_descr_ptr();
+    let async_builder = async_builder
+        .with_projection(ProjectionMask::leaves(&schema_descr, vec![0]))
+        .with_row_filter(build_is_null_filter(&schema_descr));
+    let mut stream = async_builder.build().unwrap();
+    let mut row_count_cached = 0;
+    while let Some(batch) = stream.next().await {
+        row_count_cached += batch.unwrap().num_rows();
+    }
+
+    // Cache disabled.
+    let reader = TestReader::new(bytes.clone());
+    let async_builder =
+        ParquetRecordBatchStreamBuilder::new_with_options(reader, ArrowReaderOptions::default())
+            .await
+            .unwrap();
+    let schema_descr = async_builder.metadata().file_metadata().schema_descr_ptr();
+    let async_builder = async_builder
+        .with_projection(ProjectionMask::leaves(&schema_descr, vec![0]))
+        .with_row_filter(build_is_null_filter(&schema_descr))
+        .with_max_predicate_cache_size(0);
+    let mut stream = async_builder.build().unwrap();
+    let mut row_count_uncached = 0;
+    while let Some(batch) = stream.next().await {
+        row_count_uncached += batch.unwrap().num_rows();
+    }
+
+    assert_eq!(
+        row_count_uncached, 1,
+        "control: with cache disabled the predicate must match exactly one row (parent NULL)"
+    );
+    assert_eq!(
+        row_count_cached, row_count_uncached,
+        "cached reader must match uncached reader; \
+         got {row_count_cached} cached vs {row_count_uncached} uncached. \
+         single-leaf struct roots must stay out of the cache."
+    );
 }
 
 // --  Begin test infrastructure --
