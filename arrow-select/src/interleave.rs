@@ -379,6 +379,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
     interleaved: &Interleave<'_, GenericListArray<O>>,
     indices: &[(usize, usize)],
     capacity: usize,
+    data_type: &DataType,
 ) -> ArrayRef {
     let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
         .arrays
@@ -408,6 +409,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
         null_buf.resize(null_byte_len, 0);
 
         let mut offset_write = 0;
+        let mut null_count = 0usize;
         for &(array, row) in indices {
             let o = interleaved.arrays[array].value_offsets();
             let start = o[row].as_usize();
@@ -416,7 +418,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             if len > 0 {
                 match child_arrays[array].nulls() {
                     Some(null_buffer) => {
-                        set_bits(
+                        null_count += set_bits(
                             null_buf.as_slice_mut(),
                             null_buffer.validity(),
                             offset_write,
@@ -425,7 +427,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
                         );
                     }
                     None => {
-                        // Slow path. For a non-nullable source, set the bit range to all 1s directly.
+                        // For a non-nullable source, set the bit range to all 1s directly.
                         let buf = null_buf.as_slice_mut();
                         (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
                     }
@@ -434,13 +436,18 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             offset_write += len;
         }
 
-        let bool_buf = BooleanBuffer::new(null_buf.into(), 0, capacity);
-        Some(NullBuffer::new(bool_buf))
+        if null_count > 0 {
+            let bool_buf = BooleanBuffer::new(null_buf.into(), 0, capacity);
+            // SAFETY: null_count is accumulated from set_bits which correctly counts unset bits
+            Some(unsafe { NullBuffer::new_unchecked(bool_buf, null_count) })
+        } else {
+            None
+        }
     } else {
         None
     };
 
-    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls))
+    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
 }
 
 fn interleave_list<O: OffsetSizeTrait>(
@@ -466,7 +473,12 @@ fn interleave_list<O: OffsetSizeTrait>(
     // Step 2: build child values.
     macro_rules! list_primitive_helper {
         ($t:ty) => {
-            interleave_list_primitive_child::<O, $t>(&interleaved, indices, capacity)
+            interleave_list_primitive_child::<O, $t>(
+                &interleaved,
+                indices,
+                capacity,
+                field.data_type(),
+            )
         };
     }
 
