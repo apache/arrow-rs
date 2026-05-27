@@ -1857,8 +1857,8 @@ mod test {
     }
 
     #[test]
-    fn test_decoder_auto_cost_model_keeps_pushdown_for_projected_predicate_with_expensive_deferred_fixed_output(
-    ) {
+    fn test_decoder_auto_cost_model_keeps_pushdown_for_projected_predicate_with_expensive_deferred_fixed_output()
+     {
         let data = &WIDE_FIXED_COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
@@ -1872,7 +1872,10 @@ mod test {
 
         let mut decoder = builder
             .with_batch_size(100)
-            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b", "c", "d", "e"]))
+            .with_projection(ProjectionMask::columns(
+                &schema_descr,
+                ["a", "b", "c", "d", "e"],
+            ))
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
             .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
             .with_metrics(metrics.clone())
@@ -3074,14 +3077,7 @@ mod test {
         let d: ArrayRef = Arc::new(Int64Array::from_iter_values(1200..1600));
         let e: ArrayRef = Arc::new(Int64Array::from_iter_values(1600..2000));
 
-        RecordBatch::try_from_iter(vec![
-            ("a", a),
-            ("b", b),
-            ("c", c),
-            ("d", d),
-            ("e", e),
-        ])
-        .unwrap()
+        RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c), ("d", d), ("e", e)]).unwrap()
     });
 
     static WIDE_FIXED_COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> =
