@@ -393,42 +393,22 @@ fn interleave_list<O: OffsetSizeTrait>(
         );
     }
 
-    // Step 2: use MutableArrayData to directly copy child ranges,
-    // merging adjacent contiguous ranges from the same source array.
+    // Step 2: use MutableArrayData to directly copy child ranges.
     let child_data: Vec<_> = interleaved
         .arrays
         .iter()
         .map(|list| list.values().to_data())
         .collect();
     let child_data_refs: Vec<_> = child_data.iter().collect();
-    // nulls are derived from children.
-    let mut mutable_child = MutableArrayData::new(child_data_refs, /*use_nulls=*/false, capacity);
+    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
 
-    let first_offsets = interleaved.arrays[indices[0].0].value_offsets();
-    let mut cur_array = indices[0].0;
-    let mut cur_start = first_offsets[indices[0].1].as_usize();
-    let mut cur_end = first_offsets[indices[0].1 + 1].as_usize();
-
-    for &(array, row) in &indices[1..] {
+    for &(array, row) in indices {
         let o = interleaved.arrays[array].value_offsets();
-        let row_start = o[row].as_usize();
-        let row_end = o[row + 1].as_usize();
-        if array == cur_array && row_start == cur_end {
-            // Extend current contiguous range
-            cur_end = row_end;
-        } else {
-            // Flush accumulated range
-            if cur_end > cur_start {
-                mutable_child.extend(cur_array, cur_start, cur_end);
-            }
-            cur_array = array;
-            cur_start = row_start;
-            cur_end = row_end;
+        let start = o[row].as_usize();
+        let end = o[row + 1].as_usize();
+        if end > start {
+            mutable_child.extend(array, start, end);
         }
-    }
-    // Flush final range
-    if cur_end > cur_start {
-        mutable_child.extend(cur_array, cur_start, cur_end);
     }
 
     let offsets = OffsetBuffer::new(offsets.into());
