@@ -30,7 +30,7 @@ mod test {
             ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
             arrow_writer::ArrowWriterOptions,
         },
-        basic::{EdgeInterpolationAlgorithm, LogicalType},
+        basic::LogicalType,
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
@@ -62,29 +62,22 @@ mod test {
         let expected_metadata = [
             (
                 "crs-default.parquet",
-                LogicalType::Geometry { crs: None },
+                LogicalType::geometry(None),
                 WkbMetadata::new(None, None),
             ),
             (
                 "crs-srid.parquet",
-                LogicalType::Geometry {
-                    crs: Some("srid:5070".to_string()),
-                },
+                LogicalType::geometry(Some("srid:5070".to_string())),
                 WkbMetadata::new(Some("srid:5070"), None),
             ),
             (
                 "crs-projjson.parquet",
-                LogicalType::Geometry {
-                    crs: Some("projjson:projjson_epsg_5070".to_string()),
-                },
+                LogicalType::geometry(Some("projjson:projjson_epsg_5070".to_string())),
                 WkbMetadata::new(Some("projjson:projjson_epsg_5070"), None),
             ),
             (
                 "crs-geography.parquet",
-                LogicalType::Geography {
-                    crs: None,
-                    algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
-                },
+                LogicalType::geography(None, None),
                 WkbMetadata::new(None, Some(WkbEdges::Spherical)),
             ),
         ];
@@ -109,8 +102,8 @@ mod test {
         let column_descr = metadata.file_metadata().schema_descr().column(1);
         let logical_type = column_descr.logical_type_ref().unwrap();
 
-        if let LogicalType::Geometry { crs } = logical_type {
-            let crs = crs.as_ref();
+        if let LogicalType::Geometry(geometry) = logical_type {
+            let crs = geometry.crs.as_ref();
             let crs_parsed: Value = serde_json::from_str(crs.unwrap()).unwrap();
             assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
         } else {
@@ -136,7 +129,7 @@ mod test {
         //    optional binary field_id=-1 geometry (Geometry(crs=));
         let fields = metadata.file_metadata().schema().get_fields();
         let logical_type = fields[2].get_basic_info().logical_type_ref().unwrap();
-        assert_eq!(logical_type, &LogicalType::Geometry { crs: None });
+        assert_eq!(logical_type, &LogicalType::geometry(None));
 
         let geo_statistics = metadata.row_group(0).column(2).geo_statistics();
         assert!(geo_statistics.is_some());

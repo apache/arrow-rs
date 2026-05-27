@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "arrow")]
+use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::CdcOptions;
 use crate::schema::types::ColumnDescriptor;
@@ -275,8 +277,8 @@ impl ContentDefinedChunker {
     /// evaluate if we need to create a new chunk.
     fn calculate<F>(
         &mut self,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
         num_levels: usize,
         mut roll_value: F,
     ) -> Vec<CdcChunk>
@@ -322,10 +324,11 @@ impl ContentDefinedChunker {
             //   def_levels:    [1, 0, 1, 0, 1]
             //   level:          0  1  2  3  4
             //   value_offset:   0     1     2  (only increments on def==1)
-            let def_levels = def_levels.expect("def_levels required when max_def_level > 0");
             #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
-                let def_level = def_levels[offset];
+                let def_level = def_levels
+                    .value_at(offset)
+                    .expect("def_levels required when max_def_level > 0");
                 self.roll_level(def_level);
                 if def_level == self.max_def_level {
                     // For non-nested data, the leaf array has one slot per
@@ -380,13 +383,15 @@ impl ContentDefinedChunker {
             // Using value_offset=1 would index position 1 (the null slot).
             //
             // Using value_offset for roll_value would hash the wrong array slot.
-            let def_levels = def_levels.expect("def_levels required for nested data");
-            let rep_levels = rep_levels.expect("rep_levels required for nested data");
             let mut leaf_offset: usize = 0;
 
             for offset in 0..num_levels {
-                let def_level = def_levels[offset];
-                let rep_level = rep_levels[offset];
+                let def_level = def_levels
+                    .value_at(offset)
+                    .expect("def_levels required for nested data");
+                let rep_level = rep_levels
+                    .value_at(offset)
+                    .expect("rep_levels required for nested data");
 
                 self.roll_level(def_level);
                 self.roll_level(rep_level);
@@ -439,16 +444,20 @@ impl ContentDefinedChunker {
     #[cfg(feature = "arrow")]
     pub(crate) fn get_arrow_chunks(
         &mut self,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
         array: &dyn arrow_array::Array,
     ) -> Result<Vec<CdcChunk>> {
         use arrow_array::cast::AsArray;
         use arrow_schema::DataType;
 
-        let num_levels = match def_levels {
-            Some(def_levels) => def_levels.len(),
-            None => array.len(),
+        // For nested (list) data, null list entries can own non-zero child
+        // ranges in the leaf array, so `array.len()` may exceed the number of
+        // levels.  Always drive the loop by the level count; fall back to the
+        // array length only when there are no levels at all.
+        let num_levels = match (def_levels.len(), rep_levels.len()) {
+            (0, 0) => array.len(),
+            (d, r) => d.max(r),
         };
 
         macro_rules! fixed_width {
@@ -566,6 +575,8 @@ impl ContentDefinedChunker {
 mod tests {
     use super::*;
     use crate::basic::Type as PhysicalType;
+    #[cfg(feature = "arrow")]
+    use crate::column::writer::LevelDataRef;
     use crate::schema::types::{ColumnPath, Type};
     use std::sync::Arc;
 
@@ -615,9 +626,14 @@ mod tests {
 
         // Write a small amount of data — should produce exactly 1 chunk.
         let num_values = 4;
-        let chunks = chunker.calculate(None, None, num_values, |c, i| {
-            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
-        });
+        let chunks = chunker.calculate(
+            LevelDataRef::Absent,
+            LevelDataRef::Absent,
+            num_values,
+            |c, i| {
+                c.roll_fixed::<4>(&(i as i32).to_le_bytes());
+            },
+        );
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].level_offset, 0);
         assert_eq!(chunks[0].value_offset, 0);
@@ -636,9 +652,14 @@ mod tests {
         // Write enough data to exceed max_chunk_size multiple times.
         // Each i32 = 4 bytes, max_chunk_size=1024, so ~256 values per chunk max.
         let num_values = 2000;
-        let chunks = chunker.calculate(None, None, num_values, |c, i| {
-            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
-        });
+        let chunks = chunker.calculate(
+            LevelDataRef::Absent,
+            LevelDataRef::Absent,
+            num_values,
+            |c, i| {
+                c.roll_fixed::<4>(&(i as i32).to_le_bytes());
+            },
+        );
 
         // Should have multiple chunks
         assert!(chunks.len() > 1);
@@ -668,10 +689,10 @@ mod tests {
         };
 
         let mut chunker1 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks1 = chunker1.calculate(None, None, 200, roll);
+        let chunks1 = chunker1.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
 
         let mut chunker2 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks2 = chunker2.calculate(None, None, 200, roll);
+        let chunks2 = chunker2.calculate(LevelDataRef::Absent, LevelDataRef::Absent, 200, roll);
 
         assert_eq!(chunks1.len(), chunks2.len());
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
@@ -699,9 +720,14 @@ mod tests {
             .collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
-        let chunks = chunker.calculate(Some(&def_levels), None, num_levels, |c, i| {
-            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
-        });
+        let chunks = chunker.calculate(
+            LevelDataRef::Materialized(&def_levels),
+            LevelDataRef::Absent,
+            num_levels,
+            |c, i| {
+                c.roll_fixed::<4>(&(i as i32).to_le_bytes());
+            },
+        );
 
         assert!(!chunks.is_empty());
         let total_levels: usize = chunks.iter().map(|c| c.num_levels).sum();
@@ -729,6 +755,7 @@ mod arrow_tests {
 
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_writer::ArrowWriter;
+    use crate::column::writer::LevelDataRef;
     use crate::file::properties::{CdcOptions, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
 
@@ -1107,6 +1134,27 @@ mod arrow_tests {
         }
 
         buf
+    }
+
+    #[test]
+    fn cdc_all_null_arrow_column_writes_data_pages() {
+        let array = Arc::new(Int32Array::from(vec![None::<i32>; 4096])) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![Field::new("f0", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(schema, vec![array.clone()]).unwrap();
+
+        let data = write_with_cdc_options(&[&batch], 64, 256, Some(4096), false);
+        let info = get_column_info(&data, 0);
+
+        assert_eq!(info.len(), 1);
+        assert!(
+            !info[0].page_lengths.is_empty(),
+            "all-null CDC write should still emit data pages"
+        );
+        assert_eq!(
+            info[0].page_lengths.iter().sum::<i64>(),
+            array.len() as i64,
+            "all-null CDC pages should account for every input row"
+        );
     }
 
     fn read_batches(data: &[u8]) -> Vec<RecordBatch> {
@@ -2190,11 +2238,15 @@ mod arrow_tests {
 
         let array: Int32Array = (0..n).map(|i| test_hash(0, i as u64) as i32).collect();
         let mut chunker = super::ContentDefinedChunker::new(&desc, &options).unwrap();
-        let chunks = chunker.get_arrow_chunks(None, None, &array).unwrap();
+        let chunks = chunker
+            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &array)
+            .unwrap();
 
         let sliced = array.slice(offset, n - offset);
         let mut chunker2 = super::ContentDefinedChunker::new(&desc, &options).unwrap();
-        let chunks2 = chunker2.get_arrow_chunks(None, None, &sliced).unwrap();
+        let chunks2 = chunker2
+            .get_arrow_chunks(LevelDataRef::Absent, LevelDataRef::Absent, &sliced)
+            .unwrap();
 
         let values: Vec<usize> = chunks.iter().map(|c| c.num_values).collect();
         let values2: Vec<usize> = chunks2.iter().map(|c| c.num_values).collect();
