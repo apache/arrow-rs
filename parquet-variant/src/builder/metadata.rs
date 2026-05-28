@@ -268,7 +268,7 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 #[cfg(test)]
 mod test {
     use crate::{
-        ParentState, ValueBuilder, Variant, VariantBuilder, VariantMetadata,
+        ParentState, ValueBuilder, Variant, VariantMetadata,
         builder::{
             metadata::{ReadOnlyMetadataBuilder, WritableMetadataBuilder},
             object::ObjectBuilder,
