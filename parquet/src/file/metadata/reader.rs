@@ -61,7 +61,7 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 /// // read parquet metadata including page indexes from a file
 /// let file = open_parquet_file("some_path.parquet");
 /// let mut reader = ParquetMetaDataReader::new()
-///     .with_page_with_page_index_policy(PageIndexPolicy::Required);
+///     .with_page_index_policy(PageIndexPolicy::Required);
 /// reader.try_parse(&file).unwrap();
 /// let metadata = reader.finish().unwrap();
 /// assert!(metadata.column_index().is_some());
