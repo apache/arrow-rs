@@ -209,7 +209,18 @@ fn convert_stats(
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Generic nan count for floating point types
-            let nan_count = stats.nan_count.map(|value| value as u64);
+            let nan_count = stats
+                .nan_count
+                .map(|nan_count| {
+                    if nan_count < 0 {
+                        return Err(general_err!(
+                            "Statistics null count is negative {}",
+                            nan_count
+                        ));
+                    }
+                    Ok(nan_count as u64)
+                })
+                .transpose()?;
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
