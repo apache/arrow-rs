@@ -214,7 +214,7 @@ fn convert_stats(
                 .map(|nan_count| {
                     if nan_count < 0 {
                         return Err(general_err!(
-                            "Statistics null count is negative {}",
+                            "Statistics NaN count is negative {}",
                             nan_count
                         ));
                     }
