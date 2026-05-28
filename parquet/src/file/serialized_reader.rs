@@ -240,7 +240,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
     /// Creates file reader from a Parquet file with read options.
     /// Returns an error if the Parquet file does not exist or is corrupt.
-    #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options.metadata_options.clone()))
@@ -266,8 +265,8 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
         // If page indexes are desired, build them with the filtered set of row groups
         if options.enable_page_index {
-            let mut reader =
-                ParquetMetaDataReader::new_with_metadata(metadata).with_page_indexes(true);
+            let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+                .with_page_index_policy(PageIndexPolicy::Required);
             reader.read_page_indexes(&chunk_reader)?;
             metadata = reader.finish()?;
         }

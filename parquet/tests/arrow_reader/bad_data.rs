@@ -188,9 +188,8 @@ fn skip_unknown_types() {
 
 #[cfg(feature = "async")]
 #[tokio::test]
-#[allow(deprecated)]
 async fn bad_metadata_err() {
-    use parquet::file::metadata::ParquetMetaDataReader;
+    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
@@ -199,13 +198,13 @@ async fn bad_metadata_err() {
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();
     loader.try_load(&mut reader, metadata_length).await.unwrap();
-    loader = loader.with_page_indexes(false);
+    loader = loader.with_page_index_policy(PageIndexPolicy::Skip);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_offset_indexes(true);
+    loader = loader.with_offset_index_policy(PageIndexPolicy::Required);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_column_indexes(true);
+    loader = loader.with_column_index_policy(PageIndexPolicy::Required);
     let err = loader.load_page_index(&mut reader).await.unwrap_err();
 
     assert_eq!(
