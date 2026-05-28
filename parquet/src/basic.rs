@@ -1045,7 +1045,7 @@ impl ColumnOrder {
             ColumnOrder::IEEE_754_TOTAL_ORDER
         } else {
             let sort_order =
-                Self::sort_order_for_type(logical_type, converted_type, physical_type, true);
+                Self::get_sort_order_for_type(logical_type, converted_type, physical_type, true);
             ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
         }
     }
@@ -1054,7 +1054,26 @@ impl ColumnOrder {
     ///
     /// `is_type_defined` indicates whether the column order for this type is
     /// [`ColumnOrder::TYPE_DEFINED_ORDER`].
+    /// 
+    /// It is now prefered to obtain this via [`Self::sort_order`].
+    #[deprecated(since = "59.0.0", note = "use `ColumnOrder::sort_order` instead")]
     pub fn sort_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+        is_type_defined: bool,
+    ) -> SortOrder {
+        ColumnOrder::get_sort_order_for_type(
+            logical_type,
+            converted_type,
+            physical_type,
+            is_type_defined,
+        )
+    }
+
+    // this is pub(crate) so it can be used in the thrift parser to correctly instantiate
+    // the column_orders vec
+    pub(crate) fn get_sort_order_for_type(
         logical_type: Option<&LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,

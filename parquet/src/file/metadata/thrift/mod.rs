@@ -897,11 +897,13 @@ pub(crate) fn parquet_metadata_from_bytes(
         return Err(general_err!("Column order length mismatch"));
     }
     // replace default type defined column orders with ones having the correct sort order
-    // TODO(ets): this could instead be done above when decoding
     let column_orders = column_orders.map(|mut cos| {
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
-                let sort_order = ColumnOrder::sort_order_for_type(
+                // use `get_sort_order_for_type` so we don't replace a type defined sort order
+                // with a more recent ordering. we need to preserve what was actually in the
+                // footer.
+                let sort_order = ColumnOrder::get_sort_order_for_type(
                     column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
