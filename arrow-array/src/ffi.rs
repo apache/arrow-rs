@@ -306,6 +306,10 @@ pub unsafe fn from_ffi_and_data_type(
         owner: &array,
     };
     let mut data = tmp.consume()?;
+    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
+    // a no-op when buffers are already aligned.
+    // See https://github.com/apache/arrow/issues/43552 and
+    // https://github.com/apache/arrow-rs/issues/10028 for context.
     data.align_buffers();
     Ok(data)
 }
