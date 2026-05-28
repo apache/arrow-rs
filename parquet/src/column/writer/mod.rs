@@ -2865,14 +2865,14 @@ mod tests {
     fn test_ieee754_total_order_float() {
         // Test IEEE 754 total order for f32
         // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
-        let neg_nan = f32::from_bits(0xffc00000);
+        let neg_nan = f32::from_bits(0xffc00000); // a NaN with the sign bit set
         let neg_inf = f32::NEG_INFINITY;
         let neg_one = -1.0_f32;
         let neg_zero = -0.0_f32;
         let pos_zero = 0.0_f32;
         let pos_one = 1.0_f32;
         let pos_inf = f32::INFINITY;
-        let pos_nan = f32::from_bits(0x7fc00000);
+        let pos_nan = f32::from_bits(0x7fc00000); // a NaN with the sign bit unset
 
         let values = vec![
             pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
@@ -2892,21 +2892,20 @@ mod tests {
 
     #[test]
     fn test_ieee754_total_order_float_only_nan() {
-        // Test IEEE 754 total order for f32
-        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
-        let neg_nan1 = f32::from_bits(0xffc00000);
-        let neg_nan2 = f32::from_bits(0xffc00001);
-        let neg_nan3 = f32::from_bits(0xffc00002);
-        let pos_nan1 = f32::from_bits(0x7fc00000);
-        let pos_nan2 = f32::from_bits(0x7fc00001);
-        let pos_nan3 = f32::from_bits(0x7fc00002);
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
+        let neg_nan1 = f32::from_bits(0xffc00000); // sign bit set, significand x400000
+        let neg_nan2 = f32::from_bits(0xffc00001); // sign bit set, significand x400001
+        let neg_nan3 = f32::from_bits(0xffc00002); // sign bit set, significand x400002
+        let pos_nan1 = f32::from_bits(0x7fc00000); // sign bit unset, significand x400000
+        let pos_nan2 = f32::from_bits(0x7fc00001); // sign bit unset, significand x400001
+        let pos_nan3 = f32::from_bits(0x7fc00002); // sign bit unset, significand x400002
 
         let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
 
         let stats = statistics_roundtrip::<FloatType>(&values);
         if let Statistics::Float(stats) = stats {
-            // With IEEE 754 total order, min should be -NaN, max should be +NaN
-            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
             assert_eq!(
                 stats.min_opt().unwrap().total_cmp(&neg_nan3),
                 Ordering::Equal
@@ -2950,8 +2949,8 @@ mod tests {
 
     #[test]
     fn test_ieee754_total_order_double_only_nan() {
-        // Test IEEE 754 total order for f64
-        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
         let neg_nan1 = f64::from_bits(0xfff8000000000000);
         let neg_nan2 = f64::from_bits(0xfff8000000000001);
         let neg_nan3 = f64::from_bits(0xfff8000000000002);
@@ -2963,8 +2962,7 @@ mod tests {
 
         let stats = statistics_roundtrip::<DoubleType>(&values);
         if let Statistics::Double(stats) = stats {
-            // With IEEE 754 total order, min should be -NaN, max should be +NaN
-            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
             assert_eq!(
                 stats.min_opt().unwrap().total_cmp(&neg_nan3),
                 Ordering::Equal
