@@ -825,9 +825,19 @@ impl VariantBuilder {
     /// # Panics
     ///
     /// Panics if a top-level variant value has already been written to this builder. For a
-    /// fallible version, use [`VariantBuilderExt::try_new_list`].
+    /// fallible version, use [`VariantBuilder::try_new_list`].
     pub fn new_list(&mut self) -> ListBuilder<'_, ()> {
-        VariantBuilderExt::try_new_list(self).unwrap()
+        self.try_new_list().unwrap()
+    }
+
+    /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
+    pub fn try_new_list(&mut self) -> Result<ListBuilder<'_, ()>, ArrowError> {
+        self.check_no_top_level_value()?;
+        let parent_state =
+            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        Ok(ListBuilder::new(parent_state, self.validate_unique_fields))
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
@@ -837,9 +847,19 @@ impl VariantBuilder {
     /// # Panics
     ///
     /// Panics if a top-level variant value has already been written to this builder. For a
-    /// fallible version, use [`VariantBuilderExt::try_new_object`].
+    /// fallible version, use [`VariantBuilder::try_new_object`].
     pub fn new_object(&mut self) -> ObjectBuilder<'_, ()> {
-        VariantBuilderExt::try_new_object(self).unwrap()
+        self.try_new_object().unwrap()
+    }
+
+    /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
+    pub fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, ()>, ArrowError> {
+        self.check_no_top_level_value()?;
+        let parent_state =
+            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        Ok(ObjectBuilder::new(parent_state, self.validate_unique_fields))
     }
 
     /// Append a value to the builder.
@@ -988,17 +1008,11 @@ impl VariantBuilderExt for VariantBuilder {
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
-        self.check_no_top_level_value()?;
-        let parent_state =
-            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
-        Ok(ListBuilder::new(parent_state, self.validate_unique_fields))
+        self.try_new_list()
     }
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
-        self.check_no_top_level_value()?;
-        let parent_state =
-            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
-        Ok(ObjectBuilder::new(parent_state, self.validate_unique_fields))
+        self.try_new_object()
     }
 }
 
