@@ -178,6 +178,9 @@ pub fn create_random_array(
         Map(_, _) => create_random_map_array(field, size, null_density, true_density)?,
         Decimal128(_, _) => create_random_decimal_array(field, size, null_density)?,
         Decimal256(_, _) => create_random_decimal_array(field, size, null_density)?,
+        RunEndEncoded(index, value) => {
+            create_random_run_end_encoded_array(index, value, size, null_density, true_density)?
+        }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {other:?}"
@@ -227,6 +230,62 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
         }
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Cannot create decimal array for field {field}"
+        ))),
+    }
+}
+#[inline]
+fn create_random_run_end_encoded_array(
+    index: &Field,
+    value: &Field,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<ArrayRef> {
+    const MIN_RUN: usize = 8;
+    const MAX_RUN: usize = 32;
+
+    let mut rng = seedable_rng();
+    let mut run_lengths: Vec<usize> = Vec::new();
+    let mut remaining = size;
+    while remaining > 0 {
+        let len = rng.random_range(MIN_RUN..=MAX_RUN).min(remaining);
+        run_lengths.push(len);
+        remaining -= len;
+    }
+    let num_runs = run_lengths.len();
+
+    let mut cumulative: i64 = 0;
+    let run_ends_i64: Vec<i64> = run_lengths
+        .iter()
+        .map(|&l| {
+            cumulative += l as i64;
+            cumulative
+        })
+        .collect();
+
+    let values = create_random_array(value, num_runs, null_density, true_density)?;
+
+    match index.data_type() {
+        DataType::Int16 => {
+            let run_ends: Int16Array = run_ends_i64.iter().map(|&v| v as i16).collect();
+            Ok(Arc::new(RunArray::<Int16Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        DataType::Int32 => {
+            let run_ends: Int32Array = run_ends_i64.iter().map(|&v| v as i32).collect();
+            Ok(Arc::new(RunArray::<Int32Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        DataType::Int64 => {
+            let run_ends: Int64Array = run_ends_i64.iter().copied().collect();
+            Ok(Arc::new(RunArray::<Int64Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        other => Err(ArrowError::InvalidArgumentError(format!(
+            "Unsupported run-ends type for REE: {other:?}"
         ))),
     }
 }
@@ -646,6 +705,30 @@ mod tests {
         let col_d_y = col_d.column_by_name("d_y").unwrap();
         assert_eq!(col_d_y.data_type(), &DataType::Float32);
         assert_eq!(col_d_y.null_count(), 0);
+    }
+
+    #[test]
+    fn test_create_run_end_encoded_array() {
+        let size = 1000;
+        let ree_field = Field::new(
+            "ree",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ),
+            false,
+        );
+
+        let array = create_random_array(&ree_field, size, 0.25, 0.0).unwrap();
+        assert_eq!(array.len(), size);
+
+        let ree = array.as_run::<Int32Type>();
+        let run_ends = ree.run_ends().values();
+        let num_runs = run_ends.len();
+
+        assert_eq!(*run_ends.last().unwrap() as usize, size);
+
+        assert_eq!(ree.values().len(), num_runs);
     }
 
     #[test]
