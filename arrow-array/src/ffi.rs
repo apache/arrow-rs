@@ -283,7 +283,8 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
     };
     let mut data = tmp.consume()?;
     // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned.
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
     // See https://github.com/apache/arrow/issues/43552 and
     // https://github.com/apache/arrow-rs/issues/10028 for context.
     data.align_buffers();
@@ -307,7 +308,8 @@ pub unsafe fn from_ffi_and_data_type(
     };
     let mut data = tmp.consume()?;
     // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned.
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
     // See https://github.com/apache/arrow/issues/43552 and
     // https://github.com/apache/arrow-rs/issues/10028 for context.
     data.align_buffers();
