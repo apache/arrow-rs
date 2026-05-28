@@ -401,15 +401,14 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
     }
 
     // Build null buffer. Pre-allocate with 0x00 (all null), then:
-    // - Sources with nulls: set_bits ORs in valid bits from source.
+    // - Sources with nulls: set_bits copies the source validity bits into the destination range.
     // - Sources without nulls: set the bit range to all 1s directly.
     let nulls = if has_child_nulls {
         let null_byte_len = bit_util::ceil(capacity, 8);
-        let mut null_buf = MutableBuffer::new(null_byte_len);
-        null_buf.resize(null_byte_len, 0);
+        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
 
         let mut offset_write = 0;
-        let mut null_count = 0usize;
+        let mut output_null_count = 0usize;
         for &(array, row) in indices {
             let o = interleaved.arrays[array].value_offsets();
             let start = o[row].as_usize();
@@ -418,8 +417,8 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             if len > 0 {
                 match child_arrays[array].nulls() {
                     Some(null_buffer) => {
-                        null_count += set_bits(
-                            null_buf.as_slice_mut(),
+                        output_null_count += set_bits(
+                            output_null_buf.as_slice_mut(),
                             null_buffer.validity(),
                             offset_write,
                             null_buffer.offset() + start,
@@ -428,7 +427,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
                     }
                     None => {
                         // For a non-nullable source, set the bit range to all 1s directly.
-                        let buf = null_buf.as_slice_mut();
+                        let buf = output_null_buf.as_slice_mut();
                         (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
                     }
                 }
@@ -436,10 +435,10 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             offset_write += len;
         }
 
-        if null_count > 0 {
-            let bool_buf = BooleanBuffer::new(null_buf.into(), 0, capacity);
+        if output_null_count > 0 {
+            let bool_buf = BooleanBuffer::new(output_null_buf.into(), 0, capacity);
             // SAFETY: null_count is accumulated from set_bits which correctly counts unset bits
-            Some(unsafe { NullBuffer::new_unchecked(bool_buf, null_count) })
+            Some(unsafe { NullBuffer::new_unchecked(bool_buf, output_null_count) })
         } else {
             None
         }
