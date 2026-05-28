@@ -190,6 +190,8 @@ fn shredded_get_path(
                 if as_field.is_some_and(Field::has_valid_extension_type::<VariantType>) {
                     let all_nulls = Some(arrow::buffer::NullBuffer::from(vec![false; num_rows]));
                     let arr = VariantArray::from_parts(
+                        // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
+                        // a new empty metadata array. (n * 3 bytes vs Arc bump)
                         input.metadata_field().clone(),
                         None,
                         None,
