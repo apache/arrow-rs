@@ -559,6 +559,12 @@ where
     let integers = first_part;
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
 
+    if integers.is_empty() && decimals.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid decimal format: {value_str:?}"
+        )));
+    }
+
     if !integers.is_empty() && !integers.as_bytes()[0].is_ascii_digit() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {value_str:?}"
@@ -973,6 +979,17 @@ mod tests {
             parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
             12345679_i128
         );
+
+        for value in ["", " ", ".", "+", "-", "+.", "-."] {
+            assert!(
+                parse_string_to_decimal_native::<Decimal128Type>(value, 2).is_err(),
+                "expected {value:?} to fail parsing as Decimal128"
+            );
+            assert!(
+                parse_string_to_decimal_native::<Decimal256Type>(value, 2).is_err(),
+                "expected {value:?} to fail parsing as Decimal256"
+            );
+        }
         Ok(())
     }
 

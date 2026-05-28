@@ -17,7 +17,6 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
-use arrow_array::ree_map;
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -58,6 +57,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
+    }
+    if let Some(ree) = array.as_any_ree_opt() {
+        let lengths = length(ree.values())?;
+        return Ok(ree.with_values(lengths));
     }
     match array.data_type() {
         DataType::List(_) => {
@@ -117,15 +120,6 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 list.nulls().cloned(),
             )?))
         }
-        DataType::RunEndEncoded(k, _) => match k.data_type() {
-            DataType::Int16 => ree_map!(array, Int16Type, length),
-            DataType::Int32 => ree_map!(array, Int32Type, length),
-            DataType::Int64 => ree_map!(array, Int64Type, length),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid run-end type: {:?}",
-                k.data_type()
-            ))),
-        },
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -143,6 +137,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = bit_length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
+    }
+    if let Some(ree) = array.as_any_ree_opt() {
+        let lengths = bit_length(ree.values())?;
+        return Ok(ree.with_values(lengths));
     }
 
     match array.data_type() {
@@ -190,15 +188,6 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 array.nulls().cloned(),
             )?))
         }
-        DataType::RunEndEncoded(k, _) => match k.data_type() {
-            DataType::Int16 => ree_map!(array, Int16Type, bit_length),
-            DataType::Int32 => ree_map!(array, Int32Type, bit_length),
-            DataType::Int64 => ree_map!(array, Int64Type, bit_length),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid run-end type: {:?}",
-                k.data_type()
-            ))),
-        },
         other => Err(ArrowError::ComputeError(format!(
             "bit_length not supported for {other:?}"
         ))),
