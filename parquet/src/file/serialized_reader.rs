@@ -1185,8 +1185,6 @@ mod tests {
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
     use crate::file::metadata::thrift::DataPageHeaderV2;
-    #[allow(deprecated)]
-    use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -2179,31 +2177,6 @@ mod tests {
         assert_eq!(4, page_offset.offset);
         assert_eq!(152, page_offset.compressed_page_size);
         assert_eq!(0, page_offset.first_row_index);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_page_index_reader_out_of_order() {
-        let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
-        let options = ReadOptionsBuilder::new().with_page_index().build();
-        let reader = SerializedFileReader::new_with_options(test_file, options).unwrap();
-        let metadata = reader.metadata();
-
-        let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
-        let columns = metadata.row_group(0).columns();
-        let reversed: Vec<_> = columns.iter().cloned().rev().collect();
-
-        let a = read_columns_indexes(&test_file, columns).unwrap().unwrap();
-        let mut b = read_columns_indexes(&test_file, &reversed)
-            .unwrap()
-            .unwrap();
-        b.reverse();
-        assert_eq!(a, b);
-
-        let a = read_offset_indexes(&test_file, columns).unwrap().unwrap();
-        let mut b = read_offset_indexes(&test_file, &reversed).unwrap().unwrap();
-        b.reverse();
-        assert_eq!(a, b);
     }
 
     #[test]

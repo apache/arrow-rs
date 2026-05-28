@@ -20,12 +20,10 @@
 use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::Int96;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     ThriftSliceInputProtocol, WriteThrift, WriteThriftField, read_thrift_vec,
@@ -42,97 +40,6 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
         (Some(a), Some(b)) => Some(a.start.min(b.start)..a.end.max(b.end)),
         (None, x) | (x, None) => x,
     }
-}
-
-/// Reads per-column [`ColumnIndexMetaData`] for all columns of a row group by
-/// decoding [`ColumnIndex`] .
-///
-/// Returns a vector of `index[column_number]`.
-///
-/// Returns `None` if this row group does not contain a [`ColumnIndex`].
-///
-/// See [Page Index Documentation] for more details.
-///
-/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-#[deprecated(
-    since = "55.2.0",
-    note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
-)]
-pub fn read_columns_indexes<R: ChunkReader>(
-    reader: &R,
-    chunks: &[ColumnChunkMetaData],
-) -> Result<Option<Vec<ColumnIndexMetaData>>, ParquetError> {
-    let fetch = chunks
-        .iter()
-        .fold(None, |range, c| acc_range(range, c.column_index_range()));
-
-    let fetch = match fetch {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-
-    let bytes = reader.get_bytes(fetch.start as _, (fetch.end - fetch.start).try_into()?)?;
-
-    Some(
-        chunks
-            .iter()
-            .map(|c| match c.column_index_range() {
-                Some(r) => decode_column_index(
-                    &bytes[usize::try_from(r.start - fetch.start)?
-                        ..usize::try_from(r.end - fetch.start)?],
-                    c.column_type(),
-                ),
-                None => Ok(ColumnIndexMetaData::NONE),
-            })
-            .collect(),
-    )
-    .transpose()
-}
-
-/// Reads per-column [`OffsetIndexMetaData`] for all columns of a row group by
-/// decoding [`OffsetIndex`] .
-///
-/// Returns a vector of `offset_index[column_number]`.
-///
-/// Returns `None` if this row group does not contain an [`OffsetIndex`].
-///
-/// See [Page Index Documentation] for more details.
-///
-/// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-#[deprecated(
-    since = "55.2.0",
-    note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
-)]
-pub fn read_offset_indexes<R: ChunkReader>(
-    reader: &R,
-    chunks: &[ColumnChunkMetaData],
-) -> Result<Option<Vec<OffsetIndexMetaData>>, ParquetError> {
-    let fetch = chunks
-        .iter()
-        .fold(None, |range, c| acc_range(range, c.offset_index_range()));
-
-    let fetch = match fetch {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-
-    let bytes = reader.get_bytes(fetch.start as _, (fetch.end - fetch.start).try_into()?)?;
-
-    Some(
-        chunks
-            .iter()
-            .map(|c| match c.offset_index_range() {
-                Some(r) => decode_offset_index(
-                    &bytes[usize::try_from(r.start - fetch.start)?
-                        ..usize::try_from(r.end - fetch.start)?],
-                ),
-                None => Err(general_err!("missing offset index")),
-            })
-            .collect(),
-    )
-    .transpose()
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
