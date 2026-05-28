@@ -883,7 +883,10 @@ impl VariantBuilder {
         self.check_no_top_level_value()?;
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
-        Ok(ObjectBuilder::new(parent_state, self.validate_unique_fields))
+        Ok(ObjectBuilder::new(
+            parent_state,
+            self.validate_unique_fields,
+        ))
     }
 
     /// Append a value to the builder.
@@ -1160,10 +1163,7 @@ mod tests {
 
             // per the spec, a variant must have a top-level value; try_finish() rejects empty
             let err = variant2.try_finish().unwrap_err();
-            assert!(
-                err.to_string().contains("empty"),
-                "unexpected error: {err}"
-            );
+            assert!(err.to_string().contains("empty"), "unexpected error: {err}");
         }
 
         // write out variant1 and make sure the sorted flag is properly encoded
