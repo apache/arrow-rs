@@ -1018,19 +1018,7 @@ impl ColumnDescriptor {
     ///
     /// Returns `SortOrder::UNDEFINED` for non-primitive types.
     pub fn sort_order(&self) -> SortOrder {
-        match self.primitive_type.as_ref() {
-            Type::PrimitiveType {
-                basic_info,
-                physical_type,
-                ..
-            } => ColumnOrder::column_order_for_type(
-                basic_info.logical_type_ref(),
-                basic_info.converted_type(),
-                *physical_type,
-            )
-            .sort_order(),
-            _ => SortOrder::UNDEFINED,
-        }
+        self.primitive_type.get_basic_info().sort_order()
     }
 }
 
