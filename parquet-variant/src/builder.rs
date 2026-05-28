@@ -52,6 +52,31 @@ pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {
     }
 }
 
+const ONE_TOP_LEVEL_VALUE_MSG: &str =
+    "VariantBuilder already contains a top-level variant value; only one is allowed";
+const EMPTY_BUILDER_MSG: &str =
+    "VariantBuilder is empty; append a top-level value before calling finish()";
+
+// Error/panic construction is kept out-of-line and cold so the per-call guards on the
+// builder hot paths stay small enough to inline as a single predictable branch.
+#[cold]
+#[inline(never)]
+fn top_level_value_panic() -> ! {
+    panic!("{ONE_TOP_LEVEL_VALUE_MSG}");
+}
+
+#[cold]
+#[inline(never)]
+fn top_level_value_error() -> ArrowError {
+    ArrowError::InvalidArgumentError(ONE_TOP_LEVEL_VALUE_MSG.into())
+}
+
+#[cold]
+#[inline(never)]
+fn empty_builder_error() -> ArrowError {
+    ArrowError::InvalidArgumentError(EMPTY_BUILDER_MSG.into())
+}
+
 /// Wrapper around a `Vec<u8>` that provides methods for appending
 /// primitive values, variant types, and metadata.
 ///
@@ -797,23 +822,22 @@ impl VariantBuilder {
     /// A [`VariantBuilder`] holds exactly one top-level variant value. Any committed top-level
     /// value leaves bytes in the value buffer; a child builder dropped without `finish()` has
     /// its bytes rolled back by [`ParentState`], so the offset is a faithful indicator.
+    #[inline]
     fn has_top_level_value(&self) -> bool {
         self.value_builder.offset() != 0
     }
 
+    #[inline]
     fn ensure_no_top_level_value(&self) {
-        assert!(
-            !self.has_top_level_value(),
-            "VariantBuilder already contains a top-level variant value; only one is allowed"
-        );
+        if self.has_top_level_value() {
+            top_level_value_panic();
+        }
     }
 
+    #[inline]
     fn check_no_top_level_value(&self) -> Result<(), ArrowError> {
         if self.has_top_level_value() {
-            return Err(ArrowError::InvalidArgumentError(
-                "VariantBuilder already contains a top-level variant value; only one is allowed"
-                    .into(),
-            ));
+            return Err(top_level_value_error());
         }
         Ok(())
     }
@@ -933,8 +957,7 @@ impl VariantBuilder {
     /// Panics if no top-level variant value has been appended. For a fallible version, use
     /// [`VariantBuilder::try_finish`].
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        self.try_finish()
-            .expect("VariantBuilder is empty; append a top-level value before calling finish()")
+        self.try_finish().expect(EMPTY_BUILDER_MSG)
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -942,9 +965,7 @@ impl VariantBuilder {
     /// Returns an error if no top-level variant value has been appended.
     pub fn try_finish(mut self) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
         if !self.has_top_level_value() {
-            return Err(ArrowError::InvalidArgumentError(
-                "VariantBuilder is empty; append a top-level value before calling finish()".into(),
-            ));
+            return Err(empty_builder_error());
         }
         self.metadata_builder.finish();
         Ok((
