@@ -308,6 +308,19 @@ impl LevelInfoBuilder {
         }
     }
 
+    /// Returns `true` if the child contains no nested repetition levels, meaning
+    /// each child element produces exactly one rep_level entry in the leaf.
+    /// This is true for `Primitive` children and `Struct` trees with no list descendants.
+    fn child_has_no_nested_rep(&self) -> bool {
+        match self {
+            LevelInfoBuilder::Primitive(_) => true,
+            LevelInfoBuilder::Struct(children, _, _) => {
+                children.iter().all(|c| c.child_has_no_nested_rep())
+            }
+            _ => false,
+        }
+    }
+
     /// Write `range` elements from ListArray `array`
     ///
     /// Note: MapArrays are `ListArray<i32>` under the hood and so are dispatched to this method
@@ -324,6 +337,15 @@ impl LevelInfoBuilder {
             child.visit_leaves(|leaf| {
                 leaf.extend_uniform_levels(ctx.def_level - 2, ctx.rep_level - 1, count);
             });
+            return;
+        }
+
+        // Fast path for "last-level list": when the child has no nested rep_levels,
+        // each child element produces exactly one rep_level entry. We can batch
+        // contiguous non-empty list slots into a single child.write() call, then
+        // fix up the rep_levels at list-slot boundaries using offsets directly.
+        if child.child_has_no_nested_rep() {
+            Self::write_list_last_level(child, ctx, offsets, nulls, range);
             return;
         }
 
@@ -425,6 +447,115 @@ impl LevelInfoBuilder {
                 write_empty_run(child, pending_empties);
             }
         }
+    }
+
+    /// Optimized write path for lists whose child has no nested repetition levels.
+    ///
+    /// When the child is a leaf (or a struct of leaves), each child element maps to
+    /// exactly one rep_level entry. This lets us batch contiguous non-empty list
+    /// slots into a single `child.write()` call, then stamp the list-start markers
+    /// at positions computed directly from offsets — avoiding per-slot `write` +
+    /// reverse-scan overhead.
+    fn write_list_last_level<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let null_offset = range.start;
+        let offsets = &offsets[range.start..range.end + 1];
+        let list_start_rep = ctx.rep_level - 1;
+
+        // Emit `count` null list slots (list itself is absent)
+        let emit_nulls = |child: &mut LevelInfoBuilder, count: usize| {
+            child.visit_leaves(|leaf| {
+                leaf.append_rep_level_run(list_start_rep, count);
+                leaf.append_def_level_run(ctx.def_level - 2, count);
+            });
+        };
+
+        // Emit `count` empty list slots (list present but has zero elements)
+        let emit_empties = |child: &mut LevelInfoBuilder, count: usize| {
+            child.visit_leaves(|leaf| {
+                leaf.append_rep_level_run(list_start_rep, count);
+                leaf.append_def_level_run(ctx.def_level - 1, count);
+            });
+        };
+
+        // Write a batched run of contiguous non-empty list slots.
+        // `run_offsets` = &offsets[run_first_slot..=run_last_slot+1], i.e. one
+        // offset per slot boundary: [o0, o1, ..., oN] for N slots.
+        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
+            let values_start = run_offsets[0].as_usize();
+            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
+
+            // Write all leaf values in one batch. Since the child has no nested
+            // rep, this emits (values_end - values_start) rep_levels all equal
+            // to ctx.rep_level (= "continuation within list").
+            child.write(values_start..values_end);
+
+            // Fix up: the first element of each list slot needs rep_level =
+            // list_start_rep to mark a new list boundary. Because there's a 1:1
+            // mapping between child elements and rep_level entries, the position
+            // of each slot's first element is directly computable from offsets.
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
+                let batch_len = values_end - values_start;
+                let batch_base = rep_levels.len() - batch_len;
+
+                for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                    let list_start_pos = batch_base + (slot_offset.as_usize() - values_start);
+                    rep_levels[list_start_pos] = list_start_rep;
+                }
+            });
+        };
+
+        // Classify each slot then detect run boundaries. On each transition
+        // (or end of iteration), flush the completed run.
+        #[derive(Clone, Copy, PartialEq)]
+        enum SlotKind {
+            Null,
+            Empty,
+            NonEmpty,
+        }
+
+        let classify = |slot_idx: usize| -> SlotKind {
+            if nulls.is_some_and(|n| !n.is_valid(slot_idx + null_offset)) {
+                SlotKind::Null
+            } else if offsets[slot_idx] == offsets[slot_idx + 1] {
+                SlotKind::Empty
+            } else {
+                SlotKind::NonEmpty
+            }
+        };
+
+        let flush_run =
+            |child: &mut LevelInfoBuilder, kind: SlotKind, start: usize, end: usize| match kind {
+                SlotKind::Null => emit_nulls(child, end - start),
+                SlotKind::Empty => emit_empties(child, end - start),
+                SlotKind::NonEmpty => emit_non_empty_run(child, &offsets[start..end + 1]),
+            };
+
+        let num_slots = offsets.len() - 1;
+        if num_slots == 0 {
+            return;
+        }
+
+        let mut run_kind = classify(0);
+        let mut run_start: usize = 0;
+
+        for slot_idx in 1..num_slots {
+            let kind = classify(slot_idx);
+            if kind != run_kind {
+                flush_run(child, run_kind, run_start, slot_idx);
+                run_kind = kind;
+                run_start = slot_idx;
+            }
+        }
+        flush_run(child, run_kind, run_start, num_slots);
     }
 
     /// Write `range` elements from ListViewArray `array`
