@@ -215,24 +215,10 @@ pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
     (v.div_euclid(base), v.rem_euclid(base) as u32)
 }
 
-/// converts a `i64` representing a `duration(s)` to [`Duration`]
-#[inline]
-#[deprecated(since = "55.2.0", note = "Use `try_duration_s_to_duration` instead")]
-pub fn duration_s_to_duration(v: i64) -> Duration {
-    Duration::try_seconds(v).unwrap()
-}
-
 /// converts a `i64` representing a `duration(s)` to [`Option<Duration>`]
 #[inline]
 pub fn try_duration_s_to_duration(v: i64) -> Option<Duration> {
     Duration::try_seconds(v)
-}
-
-/// converts a `i64` representing a `duration(ms)` to [`Duration`]
-#[inline]
-#[deprecated(since = "55.2.0", note = "Use `try_duration_ms_to_duration` instead")]
-pub fn duration_ms_to_duration(v: i64) -> Duration {
-    Duration::try_seconds(v).unwrap()
 }
 
 /// converts a `i64` representing a `duration(ms)` to [`Option<Duration>`]

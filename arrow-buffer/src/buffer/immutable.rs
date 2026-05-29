@@ -103,17 +103,6 @@ unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
-    /// Create a new Buffer from a (internal) `Bytes`
-    ///
-    /// NOTE despite the same name, `Bytes` is an internal struct in arrow-rs
-    /// and is different than [`bytes::Bytes`].
-    ///
-    /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
-    #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
-    pub fn from_bytes(bytes: Bytes) -> Self {
-        Self::from(bytes)
-    }
-
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
     ///
     /// self.ptr and self.data can be different after slicing or advancing the buffer.

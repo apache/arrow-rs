@@ -2198,12 +2198,6 @@ impl ArrayDataBuilder {
         Ok(data)
     }
 
-    /// Creates an array data, validating all inputs, and aligning any buffers
-    #[deprecated(since = "54.1.0", note = "Use ArrayData::align_buffers instead")]
-    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
-        self.align_buffers(true).build()
-    }
-
     /// Ensure that all buffers are aligned, copying data if necessary
     ///
     /// Rust requires that arrays are aligned to their corresponding primitive,
