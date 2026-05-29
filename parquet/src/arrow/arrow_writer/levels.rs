@@ -513,8 +513,7 @@ impl LevelInfoBuilder {
             });
         };
 
-        // Classify each slot then detect run boundaries. On each transition
-        // (or end of iteration), flush the completed run.
+        // Classify each slot, detect run boundaries, flush on transition.
         #[derive(Clone, Copy, PartialEq)]
         enum SlotKind {
             Null,
@@ -522,40 +521,58 @@ impl LevelInfoBuilder {
             NonEmpty,
         }
 
-        let classify = |slot_idx: usize| -> SlotKind {
-            if nulls.is_some_and(|n| !n.is_valid(slot_idx + null_offset)) {
-                SlotKind::Null
-            } else if offsets[slot_idx] == offsets[slot_idx + 1] {
-                SlotKind::Empty
-            } else {
-                SlotKind::NonEmpty
-            }
-        };
-
-        let flush_run =
-            |child: &mut LevelInfoBuilder, kind: SlotKind, start: usize, end: usize| match kind {
-                SlotKind::Null => emit_nulls(child, end - start),
-                SlotKind::Empty => emit_empties(child, end - start),
-                SlotKind::NonEmpty => emit_non_empty_run(child, &offsets[start..end + 1]),
-            };
-
         let num_slots = offsets.len() - 1;
         if num_slots == 0 {
             return;
         }
 
-        let mut run_kind = classify(0);
-        let mut run_start: usize = 0;
-
-        for slot_idx in 1..num_slots {
-            let kind = classify(slot_idx);
-            if kind != run_kind {
-                flush_run(child, run_kind, run_start, slot_idx);
-                run_kind = kind;
-                run_start = slot_idx;
-            }
+        macro_rules! scan_slots {
+            ($classify:expr) => {{
+                let classify = $classify;
+                let mut run_kind = classify(0);
+                let mut run_start = 0;
+                for i in 1..num_slots {
+                    let kind = classify(i);
+                    if kind != run_kind {
+                        match run_kind {
+                            SlotKind::Null => emit_nulls(child, i - run_start),
+                            SlotKind::Empty => emit_empties(child, i - run_start),
+                            SlotKind::NonEmpty => {
+                                emit_non_empty_run(child, &offsets[run_start..i + 1])
+                            }
+                        }
+                        run_kind = kind;
+                        run_start = i;
+                    }
+                }
+                match run_kind {
+                    SlotKind::Null => emit_nulls(child, num_slots - run_start),
+                    SlotKind::Empty => emit_empties(child, num_slots - run_start),
+                    SlotKind::NonEmpty => {
+                        emit_non_empty_run(child, &offsets[run_start..num_slots + 1])
+                    }
+                }
+            }};
         }
-        flush_run(child, run_kind, run_start, num_slots);
+
+        match nulls {
+            Some(nulls) => scan_slots!(|i: usize| {
+                if !nulls.is_valid(i + null_offset) {
+                    SlotKind::Null
+                } else if offsets[i] == offsets[i + 1] {
+                    SlotKind::Empty
+                } else {
+                    SlotKind::NonEmpty
+                }
+            }),
+            None => scan_slots!(|i: usize| {
+                if offsets[i] == offsets[i + 1] {
+                    SlotKind::Empty
+                } else {
+                    SlotKind::NonEmpty
+                }
+            }),
+        }
     }
 
     /// Write `range` elements from ListViewArray `array`
