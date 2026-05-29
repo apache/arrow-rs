@@ -565,13 +565,13 @@ impl UnionFields {
     /// ```
     /// use arrow_schema::{DataType, Field, UnionFields};
     ///
-    /// let fields = UnionFields::new(
+    /// let fields = UnionFields::try_new(
     ///     vec![1, 3],
     ///     vec![
     ///         Field::new("field1", DataType::UInt8, false),
     ///         Field::new("field3", DataType::Utf8, false),
     ///     ],
-    /// );
+    /// ).unwrap();
     ///
     /// assert!(fields.get(0).is_some());
     /// assert!(fields.get(1).is_some());
