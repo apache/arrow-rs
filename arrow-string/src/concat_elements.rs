@@ -188,8 +188,18 @@ pub fn concat_elements_fixed_size_binary(
         )));
     }
 
-    let left_size = left.value_length() as usize;
-    let right_size = right.value_length() as usize;
+    let left_size: usize = left.value_length().try_into().map_err(|_| {
+        ArrowError::InvalidArgumentError(format!(
+            "Invalid size of FixedSizeBinaryArray({})",
+            left.value_length()
+        ))
+    })?;
+    let right_size: usize = right.value_length().try_into().map_err(|_| {
+        ArrowError::InvalidArgumentError(format!(
+            "Invalid size of FixedSizeBinaryArray({})",
+            right.value_length()
+        ))
+    })?;
     let output_size = left_size + right_size;
 
     // Pre-compute combined null bitmap so the per-row NULL check is efficient
