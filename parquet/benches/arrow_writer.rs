@@ -32,7 +32,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use arrow_array::RecordBatchOptions;
+use arrow_array::{RecordBatchOptions, StringArray};
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
@@ -100,6 +100,29 @@ fn create_string_bench_batch(
     )?)
 }
 
+/// 1 M short, fixed-width 8-byte strings. Exercises the BYTE_ARRAY hot path
+/// for the case where individual values are small enough that the byte-budget
+/// based sub-batch sizing in `write_batch_internal` should always resolve to
+/// the full chunk (no granular splitting, no regression vs. current behavior).
+fn create_short_string_bench_batch(size: usize) -> Result<RecordBatch> {
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{i:08}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings. Exercises the BYTE_ARRAY path
+/// where individual values are large enough that batching the default
+/// `write_batch_size` of them would blow the page byte limit by orders of
+/// magnitude — the case the page-size fix targets.
+fn create_large_string_bench_batch(size: usize, value_size: usize) -> Result<RecordBatch> {
+    let value = "x".repeat(value_size);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|_| value.as_str()),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
 fn create_string_and_binary_view_bench_batch(
     size: usize,
     null_density: f32,
@@ -126,6 +149,30 @@ fn create_string_dictionary_bench_batch(
     let fields = vec![Field::new(
         "_1",
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
+// commenting out until implementation of RunEndEncoded is complete. See https://github.com/apache/arrow-rs/pull/9936#discussion_r3242936421
+#[allow(dead_code)]
+fn create_ree_bench_batch(
+    value_dt: DataType,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![Field::new(
+        "_1",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", value_dt, true)),
+        ),
         true,
     )];
     let schema = Schema::new(fields);
@@ -392,6 +439,16 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_string_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string", batch));
 
+    let batch = create_short_string_bench_batch(BATCH_SIZE).unwrap();
+    batches.push(("short_string_non_null", batch));
+
+    // 1024 rows × 256 KiB = 256 MiB total. With the default 1 MiB page byte
+    // limit, this is the case where the page-size fix kicks in: each value
+    // needs its own page, and `write_batch_size = 1024` would otherwise
+    // buffer all 256 MiB before the post-write check runs.
+    let batch = create_large_string_bench_batch(1024, 256 * 1024).unwrap();
+    batches.push(("large_string_non_null", batch));
+
     let batch = create_string_and_binary_view_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_and_binary_view", batch));
 
@@ -400,6 +457,12 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
+
+    //let batch = create_ree_bench_batch(DataType::Utf8, BATCH_SIZE, 0.25, 0.75).unwrap();
+    //batches.push(("string_ree", batch));
+
+    //let batch = create_ree_bench_batch(DataType::Int32, BATCH_SIZE, 0.25, 0.75).unwrap();
+    //batches.push(("int32_ree", batch));
 
     let batch = create_float_bench_batch_with_nans(BATCH_SIZE, 0.5).unwrap();
     batches.push(("float_with_nans", batch));
