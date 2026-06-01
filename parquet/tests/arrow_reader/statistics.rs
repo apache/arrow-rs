@@ -2341,6 +2341,80 @@ async fn test_boolean() {
 }
 
 // struct array
+#[tokio::test]
+async fn test_struct_children_from_column_index() {
+    let reader = TestReader {
+        scenario: Scenario::StructArray,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    let schema = reader.schema();
+    let parquet_schema = reader.parquet_schema();
+    let (_idx, struct_field) = schema.column_with_name("struct").unwrap();
+    let DataType::Struct(fields) = struct_field.data_type() else {
+        panic!("expected struct field, got {:?}", struct_field.data_type());
+    };
+
+    let cases = vec![
+        (
+            "struct.int32_col",
+            "int32_col",
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef,
+            UInt64Array::from(vec![1]),
+        ),
+        (
+            "struct.float32_col",
+            "float32_col",
+            Arc::new(Float32Array::from(vec![Some(6.0)])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![Some(8.5)])) as ArrayRef,
+            UInt64Array::from(vec![0]),
+        ),
+        (
+            "struct.float64_col",
+            "float64_col",
+            Arc::new(Float64Array::from(vec![Some(12.0)])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(14.0)])) as ArrayRef,
+            UInt64Array::from(vec![1]),
+        ),
+    ];
+
+    for (parquet_path, field_name, expected_min, expected_max, expected_null_counts) in cases {
+        let parquet_column_index = parquet_schema
+            .columns()
+            .iter()
+            .position(|col| col.path().string() == parquet_path)
+            .unwrap();
+        let (_field_idx, child_field) = fields.find(field_name).unwrap();
+
+        let converter = StatisticsConverter::from_column_index(
+            parquet_column_index,
+            child_field.as_ref(),
+            parquet_schema,
+        )
+        .unwrap();
+
+        assert_eq!(converter.parquet_column_index(), Some(parquet_column_index));
+        assert_eq!(converter.arrow_field(), child_field.as_ref());
+
+        Test {
+            reader: &reader,
+            expected_min,
+            expected_max,
+            expected_null_counts,
+            expected_row_counts: Some(UInt64Array::from(vec![3])),
+            expected_max_value_exact: BooleanArray::from(vec![true]),
+            expected_min_value_exact: BooleanArray::from(vec![true]),
+            column_name: field_name,
+            check: Check::RowGroup,
+        }
+        .run_checks(converter);
+    }
+}
+
+// struct array
 // BUG
 // https://github.com/apache/datafusion/issues/10609
 // Note that: since I have not worked on struct array before, there may be a bug in the test code rather than the real bug in the code
