@@ -18,60 +18,49 @@
 //! MSD radix sort on row-encoded keys.
 //!
 //! The Arrow row format produces big-endian, memcmp-comparable byte sequences,
-//! making it ideal for MSD (Most Significant Digit) radix sort without any
-//! additional encoding. This gives O(n × key_width) performance instead of
-//! O(n log n × comparison_cost).
+//! so they can be radix sorted directly with no extra encoding. MSD (Most
+//! Significant Digit) radix sort runs in O(n * key_width) instead of the
+//! O(n log n * comparison_cost) of a comparison sort.
 //!
 //! # When to use this
 //!
-//! Radix sort is the fastest strategy when sorting by **two or more columns**,
-//! especially as N grows. It benefits from:
-//! - **Multi-column schemas** where comparison sort must traverse columns
-//!   per comparison, while radix sort pays a fixed cost per byte position
-//! - **String columns**, where the row encoding produces compact,
-//!   high-entropy byte sequences that radix passes discriminate quickly
-//! - **Mixed column types** (primitives, strings, dicts, lists)
+//! Radix sort wins when sorting by two or more columns, and the margin grows
+//! with N. Comparison sort walks every column again on each comparison. Radix
+//! sort pays a fixed cost per byte position no matter how many columns there
+//! are or what types they are (primitives, strings, dicts, lists).
 //!
 //! # When NOT to use this
 //!
 //! Prefer [`lexsort_to_indices`] when:
 //! - **Sorting by a single column.** The row encoding overhead (allocation,
 //!   encoding, indirection through `Rows`) outweighs the radix advantage.
-//!   Single-column sorts are faster with direct comparison sort on the
-//!   columnar array, which avoids encoding entirely.
+//!   Comparison sort on the columnar array skips encoding entirely.
 //! - **All sort columns are low-cardinality dictionaries** with no
-//!   high-cardinality column to break ties. The row encoding for
-//!   dictionary values produces long shared prefixes, and radix sort
-//!   gains little from its first few byte passes before falling back
-//!   to comparison sort.
-//! - **Columns with low-entropy leading bytes**, such as `Decimal128` or
-//!   `Decimal256`. These types are encoded as 16- or 32-byte big-endian
-//!   integers, but real-world values occupy a tiny fraction of the range.
-//!   The leading bytes are nearly identical across rows (e.g., `0x80` for
-//!   small positive values), so radix passes burn through the max depth
-//!   without discriminating rows, then fall back to comparison sort.
-//! - **A leading primitive column discriminates most rows and a trailing
-//!   column is expensive to encode** (e.g., lists). [`lexsort_to_indices`]
-//!   avoids encoding the trailing column for rows already resolved by
-//!   the leading column.
+//!   high-cardinality column to break ties. Dictionary values encode to long
+//!   shared prefixes, so the early radix passes discriminate few rows before
+//!   falling back to comparison sort.
+//! - **Columns with low-entropy leading bytes**, such as `Decimal128` and
+//!   `Decimal256`. These encode as 16- or 32-byte big-endian integers, but
+//!   real values cover only a fraction of that range, so the leading bytes
+//!   barely differ across rows. Radix uses up its max depth without
+//!   discriminating rows and then falls back to comparison sort.
+//! - **A leading column discriminates most rows and a trailing column is
+//!   expensive to encode**, such as a list. [`lexsort_to_indices`] skips
+//!   encoding the trailing column for rows already resolved by the leading
+//!   column.
 //!
 //! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
 use crate::Rows;
 
-/// Buckets smaller than this fall back to comparison sort. A lower
-/// threshold favors the comparison path, which avoids the ping-pong
-/// buffer overhead and per-level indirection cost of radix passes on
-/// small buckets where O(n log n) comparison sort is already cheap.
+/// Buckets this size or smaller fall back to comparison sort. On small inputs
+/// a comparison sort beats the per-level indirection of another radix pass.
 const FALLBACK_THRESHOLD: usize = 32;
 
-/// Maximum number of radix passes before falling back to comparison
-/// sort. Each pass chases pointers through the Rows offset/buffer
-/// indirection, so deeper passes hit diminishing returns as buckets
-/// shrink and the per-level overhead dominates. 8 bytes covers the
-/// discriminating prefix of most key layouts including skewed or
-/// narrow-range distributions; remaining ties are resolved by
-/// comparison sort on the suffix.
+/// Maximum number of radix passes before falling back to comparison sort.
+/// Each pass chases pointers through the Rows indirection, so returns diminish
+/// as buckets shrink. 8 bytes covers the discriminating prefix of most key
+/// layouts. Comparison sort resolves any remaining ties on the suffix.
 const MAX_DEPTH: usize = 8;
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
@@ -135,14 +124,7 @@ struct RadixSortConfig {
     fallback_threshold: usize,
 }
 
-impl Default for RadixSortConfig {
-    fn default() -> Self {
-        Self {
-            max_depth: MAX_DEPTH,
-            fallback_threshold: FALLBACK_THRESHOLD,
-        }
-    }
-}
+/// The byte at `byte_pos` of row `idx`, or 0 past the row's end.
 ///
 /// # Safety
 /// `idx` must be a valid row index in `rows`.
@@ -174,14 +156,14 @@ fn msd_radix_sort(
     let n = src.len();
 
     if n <= config.fallback_threshold || byte_pos >= config.max_depth {
-        // Compare only from byte_pos onward — earlier bytes are identical
-        // within this bucket, having already been discriminated by radix
-        // passes above us. Safe slice via get() is needed because rows of
-        // different lengths can share a bucket when a shorter row's
-        // past-end default (0) matches a longer row's real byte value.
+        // Compare from byte_pos onward. Earlier bytes are identical within this
+        // bucket, having been discriminated by the radix passes above. Rows of
+        // different lengths can share a bucket when a shorter row's past-end
+        // default (0) matches a longer row's real byte, and data_from returns
+        // an empty slice past the end so those rows still order correctly.
         //
-        // When !result_in_src the caller expects the output in dst, so
-        // we copy first and sort in place there.
+        // When the result is expected in dst, copy there first and sort in
+        // place.
         if result_in_src {
             src.sort_unstable_by(|&a, &b| {
                 // SAFETY: indices contains a permutation of 0..rows.num_rows()
@@ -201,9 +183,8 @@ fn msd_radix_sort(
         return;
     }
 
-    // Extract bytes and build histogram in one pass. The bytes buffer
-    // is reused across levels so the scatter loop can read from a flat
-    // array instead of chasing pointers through Rows a second time.
+    // Extract bytes and build the histogram in one pass. The scatter below
+    // reads from this flat buffer instead of indirecting through Rows again.
     let bytes = &mut bytes[..n];
     let mut counts = [0u32; 256];
     for (i, &idx) in src.iter().enumerate() {
@@ -220,13 +201,13 @@ fn msd_radix_sort(
         offsets[i + 1] = offsets[i] + counts[i];
     }
 
-    // No scatter happened — data is still in src, roles unchanged.
+    // No scatter happened, so the data is still in src and roles are unchanged.
     if num_buckets == 1 {
         msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src, config);
         return;
     }
 
-    // Scatter src → dst using the pre-extracted bytes
+    // Scatter from src into dst using the pre-extracted bytes.
     let mut write_pos = offsets;
     for (i, &idx) in src.iter().enumerate() {
         let b = bytes[i] as usize;
@@ -234,9 +215,9 @@ fn msd_radix_sort(
         write_pos[b] += 1;
     }
 
-    // Recurse with roles swapped: after scatter the data lives in dst,
-    // so dst becomes the next level's src. Flipping result_in_src
-    // ensures each level's output lands where the caller above expects.
+    // Recurse with roles swapped. After the scatter the data lives in dst, so
+    // dst becomes the next level's src. Flipping result_in_src keeps each
+    // level's output in the buffer its caller expects.
     for bucket in 0..256 {
         let start = offsets[bucket] as usize;
         let end = offsets[bucket + 1] as usize;
@@ -252,9 +233,8 @@ fn msd_radix_sort(
                 config,
             );
         } else if len == 1 && result_in_src {
-            // Single-element bucket doesn't recurse. After scatter
-            // the element is in dst; copy it back if the caller
-            // expects the result in src.
+            // Singleton bucket does not recurse. The scattered element is in
+            // dst, so copy it back when the caller expects the result in src.
             src[start] = dst[start];
         }
     }
@@ -482,7 +462,8 @@ mod tests {
         assert_sorted(&rows, &indices);
     }
 
-    // Tests sizes around the FALLBACK_THRESHOLD (64) to exercise both paths
+    // Tests sizes around FALLBACK_THRESHOLD to exercise both the radix and
+    // fallback paths.
     #[test]
     fn test_radix_sort_threshold_boundary() {
         let mut rng = StdRng::seed_from_u64(0xCAFE);

@@ -1475,6 +1475,7 @@ impl<'a> Row<'a> {
     ///
     /// Useful for comparing rows that share a known prefix (e.g.,
     /// after radix sort has already discriminated on earlier bytes).
+    #[inline]
     pub fn data_from(&self, offset: usize) -> &'a [u8] {
         if offset <= self.data.len() {
             // SAFETY: bounds checked above
