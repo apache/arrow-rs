@@ -679,22 +679,42 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     }
 }
 
-impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
-    fn from(v: Vec<Option<&[u8]>>) -> Self {
+impl TryFrom<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
+    type Error = ArrowError;
+
+    fn try_from(v: Vec<Option<&[u8]>>) -> Result<Self, Self::Error> {
         #[allow(deprecated)]
-        Self::try_from_sparse_iter(v.into_iter()).unwrap()
+        Self::try_from_sparse_iter(v.into_iter())
     }
 }
 
-impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
-    fn from(v: Vec<&[u8]>) -> Self {
-        Self::try_from_iter(v.into_iter()).unwrap()
+impl TryFrom<Vec<&[u8]>> for FixedSizeBinaryArray {
+    type Error = ArrowError;
+
+    fn try_from(v: Vec<&[u8]>) -> Result<Self, Self::Error> {
+        Self::try_from_iter(v.into_iter())
     }
 }
 
-impl<const N: usize> From<Vec<&[u8; N]>> for FixedSizeBinaryArray {
-    fn from(v: Vec<&[u8; N]>) -> Self {
-        Self::try_from_iter(v.into_iter()).unwrap()
+impl<const N: usize> TryFrom<Vec<Option<&[u8; N]>>> for FixedSizeBinaryArray {
+    type Error = ArrowError;
+
+    fn try_from(v: Vec<Option<&[u8; N]>>) -> Result<Self, Self::Error> {
+        N.try_into()
+            .map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "FixedSizeBinaryArray value length exceeds i32, got {N}"
+                ))
+            })
+            .and_then(|x| Self::try_from_sparse_iter_with_size(v.into_iter(), x))
+    }
+}
+
+impl<const N: usize> TryFrom<Vec<&[u8; N]>> for FixedSizeBinaryArray {
+    type Error = ArrowError;
+
+    fn try_from(v: Vec<&[u8; N]>) -> Result<Self, Self::Error> {
+        Self::try_from_iter(v.into_iter())
     }
 }
 
@@ -1009,7 +1029,7 @@ mod tests {
     #[test]
     fn test_fixed_size_binary_array_from_vec() {
         let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
-        let array = FixedSizeBinaryArray::from(values);
+        let array = FixedSizeBinaryArray::try_from(values).unwrap();
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
         assert_eq!(array.logical_null_count(), 0);
@@ -1024,10 +1044,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
     fn test_fixed_size_binary_array_from_vec_incorrect_length() {
         let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
-        let _ = FixedSizeBinaryArray::from(values);
+        assert!(FixedSizeBinaryArray::try_from(values).is_err());
     }
 
     #[test]
@@ -1039,7 +1058,7 @@ mod tests {
             Some(b"six"),
             Some(b"ten"),
         ];
-        let array = FixedSizeBinaryArray::from(values);
+        let array = FixedSizeBinaryArray::try_from(values).unwrap();
         assert_eq!(array.len(), 5);
         assert_eq!(array.value(0), b"one");
         assert_eq!(array.value(1), b"two");
@@ -1053,7 +1072,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
     fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
         let values = vec![
             Some("one".as_bytes()),
@@ -1062,7 +1080,7 @@ mod tests {
             Some(b"three"),
             Some(b"four"),
         ];
-        let _ = FixedSizeBinaryArray::from(values);
+        assert!(FixedSizeBinaryArray::try_from(values).is_err());
     }
 
     #[test]
@@ -1098,7 +1116,7 @@ mod tests {
     )]
     fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
         let values = vec![Some("one".as_bytes()), Some(b"two"), None];
-        let array = FixedSizeBinaryArray::from(values);
+        let array = FixedSizeBinaryArray::try_from(values).unwrap();
 
         array.value(4);
     }

@@ -505,30 +505,33 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_concat() {
-        let left = FixedSizeBinaryArray::from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
-        let right = FixedSizeBinaryArray::from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let left = FixedSizeBinaryArray::try_from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None])
+            .unwrap();
+        let right = FixedSizeBinaryArray::try_from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")])
+            .unwrap();
 
         let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
 
-        let expected = FixedSizeBinaryArray::from(vec![None, Some(b"baryyy" as &[u8]), None]);
+        let expected =
+            FixedSizeBinaryArray::try_from(vec![None, Some(b"baryyy" as &[u8]), None]).unwrap();
         assert_eq!(output, expected);
     }
 
     #[test]
     fn test_fixed_size_binary_concat_no_null() {
-        let left = FixedSizeBinaryArray::from(vec![b"ab" as &[u8], b"cd"]);
-        let right = FixedSizeBinaryArray::from(vec![b"12" as &[u8], b"34"]);
+        let left = FixedSizeBinaryArray::try_from(vec![b"ab" as &[u8], b"cd"]).unwrap();
+        let right = FixedSizeBinaryArray::try_from(vec![b"12" as &[u8], b"34"]).unwrap();
 
         let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
 
-        let expected = FixedSizeBinaryArray::from(vec![b"ab12" as &[u8], b"cd34"]);
+        let expected = FixedSizeBinaryArray::try_from(vec![b"ab12" as &[u8], b"cd34"]).unwrap();
         assert_eq!(output, expected);
     }
 
     #[test]
     fn test_fixed_size_binary_concat_error() {
-        let left = FixedSizeBinaryArray::from(vec![b"ab" as &[u8], b"cd"]);
-        let right = FixedSizeBinaryArray::from(vec![b"12" as &[u8]]);
+        let left = FixedSizeBinaryArray::try_from(vec![b"ab" as &[u8], b"cd"]).unwrap();
+        let right = FixedSizeBinaryArray::try_from(vec![b"12" as &[u8]]).unwrap();
 
         let output = concat_elements_fixed_size_binary(&left, &right);
         assert_eq!(
@@ -673,13 +676,16 @@ mod tests {
         assert_eq!(output, expected);
 
         // test for FixedSizeBinaryArray
-        let left = FixedSizeBinaryArray::from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
-        let right = FixedSizeBinaryArray::from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let left = FixedSizeBinaryArray::try_from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None])
+            .unwrap();
+        let right = FixedSizeBinaryArray::try_from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")])
+            .unwrap();
         let output: FixedSizeBinaryArray = concat_elements_dyn(&left, &right)
             .unwrap()
             .into_data()
             .into();
-        let expected = FixedSizeBinaryArray::from(vec![None, Some(b"baryyy" as &[u8]), None]);
+        let expected =
+            FixedSizeBinaryArray::try_from(vec![None, Some(b"baryyy" as &[u8]), None]).unwrap();
         assert_eq!(output, expected);
     }
 
