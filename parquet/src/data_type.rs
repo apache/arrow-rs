@@ -57,6 +57,9 @@ const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
 const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 
 impl Int96 {
+    /// Size of an INT96 value in bytes.
+    pub const SIZE_IN_BYTES: usize = std::mem::size_of::<[u32; 3]>();
+
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
         Self { value: [0; 3] }
@@ -721,10 +724,12 @@ pub(crate) mod private {
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
-        /// Return the encoded size for a type
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<Self>(), 1)
-        }
+        /// Return the size in bytes for the value encoded in the plain encoding.
+        ///
+        /// This method is only used with the dictionary encoding. Since the writer
+        /// does not use the dictionary encoding for BOOLEAN type, this method's
+        /// implementation for bool will panic if called.
+        fn plain_encoded_size(&self) -> usize;
 
         /// Return the number of variable length bytes in a given slice of data
         ///
@@ -801,6 +806,10 @@ pub(crate) mod private {
             let values_read = bit_reader.skip(num_values, 1);
             decoder.num_values -= values_read;
             Ok(values_read)
+        }
+
+        fn plain_encoded_size(&self) -> usize {
+            panic!("dictionary encoding should not be used for BOOLEAN type")
         }
 
         #[inline]
@@ -885,6 +894,10 @@ pub(crate) mod private {
                     decoder.num_values -= num_values;
 
                     Ok(num_values)
+                }
+
+                fn plain_encoded_size(&self) -> usize {
+                    std::mem::size_of::<Self>()
                 }
 
                 #[inline]
@@ -984,6 +997,10 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
+        fn plain_encoded_size(&self) -> usize {
+            Self::SIZE_IN_BYTES
+        }
+
         #[inline]
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -1071,9 +1088,8 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        #[inline]
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<u32>(), self.len())
+        fn plain_encoded_size(&self) -> usize {
+            std::mem::size_of::<u32>() + self.len()
         }
 
         #[inline]
@@ -1171,9 +1187,11 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        #[inline]
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<u32>(), self.len())
+        fn plain_encoded_size(&self) -> usize {
+            // The encoding of fixed-length byte arrays only encodes the bytes
+            // without a length prefix. In practice, the length of fixed-length
+            // column values is taken from the column metadata and this call is avoided.
+            self.len()
         }
 
         #[inline]
