@@ -51,7 +51,7 @@ half = { version = "2.1", default-features = false }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 lexical-core = { version = "1.0", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 atoi = "2.0.0"
-comfy-table = { version = "7", optional = true, default-features = false }
+comfy-table = { version = "7.2.1", optional = true, default-features = false }
 base64 = "0.22"
 ryu = "1.0.16"
 
