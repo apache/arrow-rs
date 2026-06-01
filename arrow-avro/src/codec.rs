@@ -253,6 +253,52 @@ impl AvroDataType {
         self.nullability
     }
 
+    // Returns `Ok` if this data type accepts a JSON null default value,
+    // according to Avro schema rules prior to spec version 1.12, otherwise
+    // returns an `Err` with a schema error.
+    // Prior to 1.12, Avro only allowed default values matching the first branch of a union.
+    #[cfg(not(feature = "avro_1_12"))]
+    fn validate_null_default(&self) -> Result<(), ArrowError> {
+        match self.codec() {
+            Codec::Null => Ok(()),
+            Codec::Union(encodings, _, _)
+                if encodings
+                    .first()
+                    .map_or(false, |enc| matches!(enc.codec(), Codec::Null)) =>
+            {
+                Ok(())
+            }
+            _ if self.nullability() == Some(Nullability::NullFirst) => Ok(()),
+            _ => Err(ArrowError::SchemaError(
+                    "JSON null default is only valid for `null` type or for a union whose first branch is `null`"
+                        .to_string(),
+                )),
+        }
+    }
+
+    // Returns `Ok` if this data type accepts a JSON null default value,
+    // according to Avro schema rules for spec version 1.12 and later, otherwise
+    // returns an `Err` with a schema error.
+    // Since 1.12, Avro allows default values matching any branch of a union.
+    #[cfg(feature = "avro_1_12")]
+    fn validate_null_default(&self) -> Result<(), ArrowError> {
+        match self.codec() {
+            Codec::Null => Ok(()),
+            Codec::Union(encodings, _, _)
+                if encodings
+                    .iter()
+                    .any(|enc| matches!(enc.codec(), Codec::Null)) =>
+            {
+                Ok(())
+            }
+            _ if self.nullability().is_some() => Ok(()),
+            _ => Err(ArrowError::SchemaError(
+                    "JSON null default is only valid for `null` type or for a union with a `null` branch"
+                        .to_string(),
+                )),
+        }
+    }
+
     #[inline]
     fn parse_default_literal(&self, default_json: &Value) -> Result<AvroLiteral, ArrowError> {
         fn expect_string<'v>(
@@ -315,21 +361,10 @@ impl AvroDataType {
             }
         }
 
-        // Handle JSON nulls per-spec: allowed only for `null` type or unions with null FIRST
+        // Handle JSON nulls per the spec rules
         if default_json.is_null() {
-            return match self.codec() {
-                Codec::Null => Ok(AvroLiteral::Null),
-                Codec::Union(encodings, _, _) if !encodings.is_empty()
-                    && matches!(encodings[0].codec(), Codec::Null) =>
-                    {
-                        Ok(AvroLiteral::Null)
-                    }
-                _ if self.nullability() == Some(Nullability::NullFirst) => Ok(AvroLiteral::Null),
-                _ => Err(ArrowError::SchemaError(
-                    "JSON null default is only valid for `null` type or for a union whose first branch is `null`"
-                        .to_string(),
-                )),
-            };
+            self.validate_null_default()?;
+            return Ok(AvroLiteral::Null);
         }
         let lit = match self.codec() {
             Codec::Null => {
@@ -3284,6 +3319,11 @@ mod tests {
         let lit2 = dt_int_nf.parse_and_store_default(&Value::Null).unwrap();
         assert_eq!(lit2, AvroLiteral::Null);
         assert_default_stored(&dt_int_nf, &Value::Null);
+    }
+
+    #[cfg(not(feature = "avro_1_12"))]
+    #[test]
+    fn test_validate_and_store_default_null_and_nullability_rules_avro_1_11() {
         let mut dt_int_ns =
             AvroDataType::new(Codec::Int32, HashMap::new(), Some(Nullability::NullSecond));
         let err2 = dt_int_ns.parse_and_store_default(&Value::Null).unwrap_err();
@@ -3292,6 +3332,16 @@ mod tests {
                 .contains("JSON null default is only valid for `null` type"),
             "unexpected error: {err2}"
         );
+    }
+
+    #[cfg(feature = "avro_1_12")]
+    #[test]
+    fn test_validate_and_store_default_null_and_nullability_rules_avro_1_12() {
+        let mut dt_int_ns =
+            AvroDataType::new(Codec::Int32, HashMap::new(), Some(Nullability::NullSecond));
+        let lit3 = dt_int_ns.parse_and_store_default(&Value::Null).unwrap();
+        assert_eq!(lit3, AvroLiteral::Null);
+        assert_default_stored(&dt_int_ns, &Value::Null);
     }
 
     #[test]
