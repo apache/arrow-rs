@@ -213,9 +213,20 @@ fn shredded_get_path(
         return Ok(shredded);
     }
 
-    // Structs are special. Recurse into each field separately, hoping to follow the shredding even
-    // further, and build up the final struct from those individually shredded results.
+    // Structs are special.
+    //
+    // For fully unshredded targets (`typed_value` absent), delegate to the row builder so we
+    // preserve struct-level cast semantics:
+    // - safe mode: non-object rows become NULL structs
+    // - strict mode: non-object rows raise a cast error
+    //
+    // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
+    // separately to take advantage of deeper shredding in child fields.
     if let DataType::Struct(fields) = as_field.data_type() {
+        if target.typed_value_field().is_none() {
+            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
+        }
+
         let children = fields
             .iter()
             .map(|field| {
@@ -3109,6 +3120,81 @@ mod test {
             .unwrap();
         assert_eq!(inner_values.value(0), 42);
         assert_eq!(inner_values.value(1), 100);
+    }
+
+    #[test]
+    fn test_unshredded_struct_safe_cast_non_object_rows_are_null() {
+        let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123", "{}"];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Struct(struct_fields),
+                true,
+            ))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array_ref, options).unwrap();
+        let struct_result = result.as_struct();
+        let field_a = struct_result
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let field_b = struct_result
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+
+        // Row 0 is an object, so the struct row is valid with extracted fields.
+        assert!(!struct_result.is_null(0));
+        assert_eq!(field_a.value(0), 1);
+        assert_eq!(field_b.value(0), 2);
+
+        // Row 1 is a scalar, so safe struct cast should produce a NULL struct row.
+        assert!(struct_result.is_null(1));
+        assert!(field_a.is_null(1));
+        assert!(field_b.is_null(1));
+
+        // Row 2 is an empty object, so the struct row is valid with missing fields as NULL.
+        assert!(!struct_result.is_null(2));
+        assert!(field_a.is_null(2));
+        assert!(field_b.is_null(2));
+    }
+
+    #[test]
+    fn test_unshredded_struct_strict_cast_non_object_errors() {
+        let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123"];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Struct(struct_fields),
+                true,
+            ))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array_ref, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to extract struct from variant")
+        );
     }
 
     /// Create comprehensive shredded variant with diverse null patterns and empty objects
