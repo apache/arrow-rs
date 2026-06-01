@@ -5908,7 +5908,7 @@ mod tests {
         let bytes_2 = "Hello".as_bytes();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
-        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
 
         let array_ref = cast(&a1, &DataType::Binary).unwrap();
         let down_cast = array_ref.as_binary::<i32>();
@@ -5935,7 +5935,7 @@ mod tests {
         let bytes_2 = "Hello".as_bytes();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), Some(bytes_1), None];
-        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
 
         let cast_type = DataType::Dictionary(
             Box::new(DataType::Int8),
