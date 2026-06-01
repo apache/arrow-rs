@@ -74,55 +74,65 @@ where
 {
     let sort_options = options.unwrap_or_default();
 
-    let mut mutable_buffer = vec![T::default_value(); primitive_values.len()];
-    let mutable_slice = &mut mutable_buffer;
-
-    let input_values = primitive_values.values().as_ref();
-
-    let nulls_count = primitive_values.null_count();
-    let valid_count = primitive_values.len() - nulls_count;
-
-    let null_bit_buffer = match nulls_count > 0 {
-        true => {
-            let mut validity_buffer = BooleanBufferBuilder::new(primitive_values.len());
-            if sort_options.nulls_first {
-                validity_buffer.append_n(nulls_count, false);
-                validity_buffer.append_n(valid_count, true);
-            } else {
-                validity_buffer.append_n(valid_count, true);
-                validity_buffer.append_n(nulls_count, false);
-            }
-            Some(validity_buffer.finish().into())
-        }
-        false => None,
-    };
-
     if let Some(nulls) = primitive_values.nulls().filter(|n| n.null_count() > 0) {
-        let values_slice = match sort_options.nulls_first {
-            true => &mut mutable_slice[nulls_count..],
-            false => &mut mutable_slice[..valid_count],
+        let length = primitive_values.len();
+        let nulls_count = nulls.null_count();
+        let valid_count = length - nulls_count;
+
+        let mut validity_buffer = BooleanBufferBuilder::new(length);
+        let mut mutable_buffer = Vec::with_capacity(length);
+
+        let values_slice = if sort_options.nulls_first {
+            validity_buffer.append_n(nulls_count, false);
+            validity_buffer.append_n(valid_count, true);
+
+            mutable_buffer.resize(nulls_count, T::default_value());
+            // SAFETY: The indices are valid because they come from the nulls buffer.
+            mutable_buffer.extend(
+                nulls
+                    .valid_indices()
+                    .map(|i| unsafe { primitive_values.value_unchecked(i) }),
+            );
+
+            &mut mutable_buffer[nulls_count..]
+        } else {
+            validity_buffer.append_n(valid_count, true);
+            validity_buffer.append_n(nulls_count, false);
+
+            // SAFETY: The indices are valid because they come from the nulls buffer.
+            mutable_buffer.extend(
+                nulls
+                    .valid_indices()
+                    .map(|i| unsafe { primitive_values.value_unchecked(i) }),
+            );
+            mutable_buffer.resize(length, T::default_value());
+
+            &mut mutable_buffer[..valid_count]
         };
 
-        for (write_index, index) in nulls.valid_indices().enumerate() {
-            values_slice[write_index] = primitive_values.value(index);
+        if sort_options.descending {
+            values_slice.sort_unstable_by(|a, b| b.compare(*a));
+        } else {
+            values_slice.sort_unstable_by(|a, b| a.compare(*b));
         }
 
-        values_slice.sort_unstable_by(|a, b| a.compare(*b));
-        if sort_options.descending {
-            values_slice.reverse();
-        }
+        return Ok(Arc::new(
+            PrimitiveArray::<T>::try_new(mutable_buffer.into(), Some(validity_buffer.into()))?
+                .with_data_type(primitive_values.data_type().clone()),
+        ));
     } else {
-        mutable_slice.copy_from_slice(input_values);
-        mutable_slice.sort_unstable_by(|a, b| a.compare(*b));
+        let mut mutable_buffer = primitive_values.values().to_vec();
         if sort_options.descending {
-            mutable_slice.reverse();
+            mutable_buffer.sort_unstable_by(|a, b| b.compare(*a));
+        } else {
+            mutable_buffer.sort_unstable_by(|a, b| a.compare(*b));
         }
-    }
 
-    Ok(Arc::new(
-        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
-            .with_data_type(primitive_values.data_type().clone()),
-    ))
+        return Ok(Arc::new(
+            PrimitiveArray::<T>::try_new(mutable_buffer.into(), None)?
+                .with_data_type(primitive_values.data_type().clone()),
+        ));
+    }
 }
 
 /// Sort the `ArrayRef` partially.
@@ -216,27 +226,20 @@ fn partition_validity_scan(
     let mut valid = Vec::with_capacity(len - null_count);
     let mut nulls = Vec::with_capacity(null_count);
 
-    unsafe {
-        // 1) Write valid indices (bits == 1)
-        let valid_slice = valid.spare_capacity_mut();
-        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
-            valid_slice[i].write(idx);
+    let mut cur_idx = 0u32;
+
+    bitmap.inner().iter().for_each(|is_valid| {
+        if is_valid {
+            valid.push(cur_idx);
+        } else {
+            nulls.push(cur_idx);
         }
 
-        // 2) Write null indices by inverting
-        let inv_buf = !bitmap.inner();
-        let null_slice = nulls.spare_capacity_mut();
-        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
-            null_slice[i].write(idx);
-        }
+        cur_idx += 1;
+    });
 
-        // Finalize lengths
-        valid.set_len(len - null_count);
-        nulls.set_len(null_count);
-    }
-
-    assert_eq!(valid.len(), len - null_count);
-    assert_eq!(nulls.len(), null_count);
+    debug_assert_eq!(valid.len(), len - null_count);
+    debug_assert_eq!(nulls.len(), null_count);
     (valid, nulls)
 }
 
