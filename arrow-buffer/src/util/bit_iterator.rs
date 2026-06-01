@@ -232,6 +232,7 @@ impl<'a> BitSliceIterator<'a> {
 impl Iterator for BitSliceIterator<'_> {
     type Item = (usize, usize);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         // Used as termination condition
         if self.len == 0 {
@@ -270,6 +271,61 @@ impl Iterator for BitSliceIterator<'_> {
                 }
             }
         }
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut accum = init;
+        while self.len != 0 {
+            let (start_chunk, start_bit) = match self.advance_to_set_bit() {
+                Some(v) => v,
+                None => break,
+            };
+
+            // Set bits up to start
+            self.current_chunk |= (1 << start_bit) - 1;
+
+            loop {
+                if self.current_chunk != u64::MAX {
+                    // Find the index of the first 0
+                    let end_bit = self.current_chunk.trailing_ones();
+
+                    // Zero out up to end_bit
+                    self.current_chunk &= !((1 << end_bit) - 1);
+
+                    accum = f(
+                        accum,
+                        (
+                            (start_chunk + start_bit as i64) as usize,
+                            (self.current_offset + end_bit as i64) as usize,
+                        ),
+                    );
+                    break;
+                }
+
+                match self.iter.next() {
+                    Some(next) => {
+                        self.current_chunk = next;
+                        self.current_offset += 64;
+                    }
+                    None => {
+                        accum = f(
+                            accum,
+                            (
+                                (start_chunk + start_bit as i64) as usize,
+                                std::mem::replace(&mut self.len, 0),
+                            ),
+                        );
+                        return accum;
+                    }
+                }
+            }
+        }
+        accum
     }
 }
 
@@ -317,6 +373,31 @@ impl Iterator for BitIndexIterator<'_> {
             self.current_chunk = self.iter.next()?;
             self.chunk_offset += 64;
         }
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut accum = init;
+        while self.current_chunk != 0 {
+            let bit_pos = self.current_chunk.trailing_zeros();
+            self.current_chunk &= self.current_chunk - 1;
+            accum = f(accum, (self.chunk_offset + bit_pos as i64) as usize);
+        }
+
+        let mut chunk_offset = self.chunk_offset;
+        for chunk in self.iter {
+            chunk_offset += 64;
+            let mut c = chunk;
+            while c != 0 {
+                let bit_pos = c.trailing_zeros();
+                c &= c - 1;
+                accum = f(accum, (chunk_offset + bit_pos as i64) as usize);
+            }
+        }
+        accum
     }
 }
 
@@ -374,6 +455,29 @@ impl<'a> Iterator for BitIndexU32Iterator<'a> {
                 None => return None,
             }
         }
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        loop {
+            while self.curr != 0 {
+                let tz = self.curr.trailing_zeros();
+                self.curr &= self.curr - 1;
+                init = f(init, (self.chunk_offset + tz as i64) as u32);
+            }
+
+            match self.iter.next() {
+                Some(next) => {
+                    self.chunk_offset += 64;
+                    self.curr = next;
+                }
+                None => break,
+            }
+        }
+        init
     }
 }
 
@@ -1003,5 +1107,50 @@ mod tests {
                 }
             },
         );
+    }
+
+    #[test]
+    fn test_bit_index_iterator_fold() {
+        let mask = &[0b00010010, 0b00100011];
+        let iter = BitIndexIterator::new(mask, 0, 16);
+        let actual = iter.sum::<usize>();
+        let expected = BitIndexIterator::new(mask, 0, 16).sum::<usize>();
+        assert_eq!(actual, expected);
+
+        let mask = &[0b11111111, 0b11111111];
+        let iter = BitIndexIterator::new(mask, 0, 16);
+        let actual = iter.sum::<usize>();
+        let expected = BitIndexIterator::new(mask, 0, 16).sum::<usize>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_bit_slice_iterator_fold() {
+        let mask = &[0b00010010, 0b00100011];
+        let iter = BitSliceIterator::new(mask, 0, 16);
+        let actual = iter.fold(Vec::new(), |mut acc, i| {
+            acc.push(i);
+            acc
+        });
+        let expected: Vec<_> = BitSliceIterator::new(mask, 0, 16).collect();
+        assert_eq!(actual, expected);
+
+        let mask = &[0b11111111, 0b11111111];
+        let iter = BitSliceIterator::new(mask, 0, 16);
+        let actual = iter.fold(Vec::new(), |mut acc, i| {
+            acc.push(i);
+            acc
+        });
+        let expected: Vec<_> = BitSliceIterator::new(mask, 0, 16).collect();
+        assert_eq!(actual, expected);
+
+        let mask = &[0b00000000, 0b00000000];
+        let iter = BitSliceIterator::new(mask, 0, 16);
+        let actual = iter.fold(Vec::new(), |mut acc, i| {
+            acc.push(i);
+            acc
+        });
+        let expected: Vec<_> = BitSliceIterator::new(mask, 0, 16).collect();
+        assert_eq!(actual, expected);
     }
 }
