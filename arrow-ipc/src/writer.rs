@@ -742,7 +742,6 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
         let finished_data = fbb.finished_data();
 
-        //same as [Self::record_batch_to_bytes]
         let mut arrow_data: Vec<u8> = Vec::with_capacity(body_len);
         for encoded in &encoded_buffers {
             arrow_data.extend_from_slice(encoded.as_slice());
@@ -762,7 +761,7 @@ impl IpcDataGenerator {
     /// intermediate `arrow_data: Vec<u8>` accumulator used by [`Self::record_batch_to_bytes`].
     ///
     /// For the uncompressed path each array buffer is held as an Arc-backed slice and
-    /// written straight to `writer` — one copy instead of two.  For the compressed path
+    /// written straight to `writer`. one copy instead of two.  For the compressed path
     /// each buffer is compressed into a per-buffer scratch `Vec<u8>` and written from
     /// there, eliminating the extra copy that `write_buffer` -> `arrow_data` ->
     /// `write_body_buffers` would otherwise incur.
