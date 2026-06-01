@@ -378,7 +378,7 @@ impl<'a> Parser<'a> {
         if length < 0 {
             return Err(make_error(
                 self.val,
-                &format!("FixedSizeBinary length must be positive, got {length}"),
+                &format!("FixedSizeBinary length must be non-negative, got {length}"),
             ));
         }
         self.expect_token(Token::RParen)?;
@@ -1444,7 +1444,7 @@ mod test {
             // can't have negative width
             (
                 "FixedSizeBinary(-1), ",
-                "FixedSizeBinary length must be positive, got -1",
+                "FixedSizeBinary length must be non-negative, got -1",
             ),
             // can't have negative precision
             (
