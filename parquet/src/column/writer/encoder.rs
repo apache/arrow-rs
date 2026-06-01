@@ -393,8 +393,8 @@ pub(crate) fn create_bloom_filter(
 ) -> Result<(Option<Sbbf>, f64)> {
     match props.bloom_filter_properties(descr.path()) {
         Some(bf_props) => Ok((
-            Some(Sbbf::new_with_ndv_fpp(bf_props.ndv, bf_props.fpp)?),
-            bf_props.fpp,
+            Some(Sbbf::new_with_ndv_fpp(bf_props.ndv(), bf_props.fpp())?),
+            bf_props.fpp(),
         )),
         None => Ok((None, 0.0)),
     }

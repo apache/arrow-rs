@@ -24,7 +24,8 @@ use crate::file::metadata::HeapSize;
 use crate::file::metadata::thrift::SchemaElement;
 
 use crate::basic::{
-    ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
+    ColumnOrder, ConvertedType, IntType, LogicalType, Repetition, SortOrder, TimeType, TimeUnit,
+    Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -356,20 +357,20 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     ));
                 }
                 (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Decimal { scale, precision }, _) => {
+                (LogicalType::Decimal(decimal), _) => {
                     // Check that scale and precision are consistent with legacy values
-                    if *scale != self.scale {
+                    if decimal.scale != self.scale {
                         return Err(general_err!(
                             "DECIMAL logical type scale {} must match self.scale {} for field '{}'",
-                            scale,
+                            decimal.scale,
                             self.scale,
                             self.name
                         ));
                     }
-                    if *precision != self.precision {
+                    if decimal.precision != self.precision {
                         return Err(general_err!(
                             "DECIMAL logical type precision {} must match self.precision {} for field '{}'",
-                            precision,
+                            decimal.precision,
                             self.precision,
                             self.name
                         ));
@@ -378,32 +379,30 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
                 (LogicalType::Date, PhysicalType::INT32) => {}
                 (
-                    LogicalType::Time {
+                    LogicalType::Time(TimeType {
                         unit: TimeUnit::MILLIS,
                         ..
-                    },
+                    }),
                     PhysicalType::INT32,
                 ) => {}
-                (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
-                    if *unit == TimeUnit::MILLIS {
+                (LogicalType::Time(time), PhysicalType::INT64) => {
+                    if time.unit == TimeUnit::MILLIS {
                         return Err(general_err!(
                             "Cannot use millisecond unit on INT64 type for field '{}'",
                             self.name
                         ));
                     }
                 }
-                (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
-                (LogicalType::Integer { bit_width, .. }, PhysicalType::INT32)
-                    if *bit_width <= 32 => {}
-                (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
-                    if *bit_width == 64 => {}
+                (LogicalType::Timestamp(_), PhysicalType::INT64) => {}
+                (LogicalType::Integer(int), PhysicalType::INT32) if int.bit_width <= 32 => {}
+                (LogicalType::Integer(int), PhysicalType::INT64) if int.bit_width == 64 => {}
                 // Null type
-                (LogicalType::Unknown, PhysicalType::INT32) => {}
+                (LogicalType::Unknown, _) => {}
                 (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geometry { .. }, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geography { .. }, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Geometry(_), PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Geography(_), PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
                 (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
@@ -1280,8 +1279,8 @@ fn build_tree<'a>(
 
 /// Checks if the logical type is valid.
 fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
-    if let Some(LogicalType::Integer { bit_width, .. }) = *logical_type {
-        if bit_width != 8 && bit_width != 16 && bit_width != 32 && bit_width != 64 {
+    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type {
+        if *bit_width != 8 && *bit_width != 16 && *bit_width != 32 && *bit_width != 64 {
             return Err(general_err!(
                 "Bit width must be 8, 16, 32, or 64 for Integer logical type"
             ));
@@ -1401,7 +1400,7 @@ fn schema_from_array_helper<'a>(
         Some(n) => {
             let repetition = element.repetition_type;
 
-            let mut fields = Vec::with_capacity(n as usize);
+            let mut fields = Vec::with_capacity(usize::try_from(n)?);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
@@ -1449,10 +1448,7 @@ mod tests {
     #[test]
     fn test_primitive_type() {
         let mut result = Type::primitive_type_builder("foo", PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 32,
-                is_signed: true,
-            }))
+            .with_logical_type(Some(LogicalType::integer(32, true)))
             .with_id(Some(0))
             .build();
         assert!(result.is_ok());
@@ -1464,10 +1460,7 @@ mod tests {
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
                 basic_info.logical_type_ref(),
-                Some(&LogicalType::Integer {
-                    bit_width: 32,
-                    is_signed: true
-                })
+                Some(&LogicalType::integer(32, true))
             );
             assert_eq!(basic_info.converted_type(), ConvertedType::INT_32);
             assert_eq!(basic_info.id(), 0);
@@ -1482,16 +1475,13 @@ mod tests {
         // Test illegal inputs with logical type
         result = Type::primitive_type_builder("foo", PhysicalType::INT64)
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::Integer {
-                is_signed: true,
-                bit_width: 8,
-            }))
+            .with_logical_type(Some(LogicalType::integer(8, true)))
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
                 format!("{e}"),
-                "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 for field 'foo'"
+                "Parquet error: Cannot annotate Integer(IntType { bit_width: 8, is_signed: true }) from INT64 for field 'foo'"
             );
         }
 
@@ -1524,10 +1514,7 @@ mod tests {
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::Decimal {
-                scale: 32,
-                precision: 12,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(32, 12)))
             .with_precision(-1)
             .with_scale(-1)
             .build();
@@ -2516,5 +2503,23 @@ mod tests {
 
         let result_schema = parquet_schema_from_array(thrift_schema).unwrap();
         assert_eq!(result_schema, expected_schema);
+    }
+
+    #[test]
+    fn test_parquet_schema_from_array_rejects_negative_num_children() {
+        let elements = vec![SchemaElement {
+            r#type: None,
+            type_length: None,
+            repetition_type: Some(Repetition::REQUIRED),
+            name: "schema",
+            num_children: Some(-1),
+            converted_type: None,
+            scale: None,
+            precision: None,
+            field_id: None,
+            logical_type: None,
+        }];
+        let result = parquet_schema_from_array(elements);
+        assert!(result.unwrap_err().to_string().contains("Integer overflow"));
     }
 }

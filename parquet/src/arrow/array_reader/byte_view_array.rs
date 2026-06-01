@@ -36,10 +36,14 @@ use bytes::Bytes;
 use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
+///
+/// `batch_size` is used to pre-allocate internal buffers,
+/// avoiding reallocations when reading the first batch of data.
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -52,7 +56,7 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader = GenericRecordReader::new(column_desc, batch_size);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -162,13 +166,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::default();
-        let mut decoder = ByteViewArrayDecoderPlain::new(
-            buf,
-            num_values as usize,
-            Some(num_values as usize),
-            self.validate_utf8,
-        );
+        let num_values = num_values as usize;
+        let mut buffer = ViewBuffer::with_capacity(num_values);
+        let mut decoder =
+            ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
         self.dict = Some(buffer);
         Ok(())
@@ -674,12 +675,19 @@ impl ByteViewArrayDecoderDelta {
     // <https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-strings-delta_byte_array--7>
 
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        output.views.reserve(len.min(self.decoder.remaining()));
+        let to_reserve = len.min(self.decoder.remaining());
+        output.views.reserve(to_reserve);
 
         // array buffer only have long strings
         let mut array_buffer: Vec<u8> = Vec::with_capacity(4096);
 
         let buffer_id = output.buffers.len() as u32;
+
+        // Use unsafe ptr writes instead of per-element push to avoid
+        // repeated length checks. Safety: we reserved enough space above.
+        let views_ptr = output.views.as_mut_ptr();
+        let initial_len = output.views.len();
+        let mut write_count = 0;
 
         let read = if !self.validate_utf8 {
             self.decoder.read(len, |bytes| {
@@ -690,18 +698,18 @@ impl ByteViewArrayDecoderDelta {
                     array_buffer.extend_from_slice(bytes);
                 }
 
-                // # Safety
-                // The buffer_id is the last buffer in the output buffers
-                // The offset is calculated from the buffer, so it is valid
+                // Safety: views_ptr is valid for writes, we reserved enough space,
+                // and write_count < to_reserve.
                 unsafe {
-                    output.append_raw_view_unchecked(view);
+                    views_ptr.add(initial_len + write_count).write(view);
                 }
+                write_count += 1;
                 Ok(())
             })?
         } else {
             // utf8 validation buffer has only short strings. These short
             // strings are inlined into the views but we copy them into a
-            // contiguous buffer to accelerate validation.®
+            // contiguous buffer to accelerate validation.
             let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
             let v = self.decoder.read(len, |bytes| {
@@ -714,19 +722,23 @@ impl ByteViewArrayDecoderDelta {
                     utf8_validation_buffer.extend_from_slice(bytes);
                 }
 
-                // # Safety
-                // The buffer_id is the last buffer in the output buffers
-                // The offset is calculated from the buffer, so it is valid
-                // Utf-8 validation is done later
+                // Safety: views_ptr is valid for writes, we reserved enough space,
+                // and write_count < to_reserve. Utf-8 validation is done later.
                 unsafe {
-                    output.append_raw_view_unchecked(view);
+                    views_ptr.add(initial_len + write_count).write(view);
                 }
+                write_count += 1;
                 Ok(())
             })?;
             check_valid_utf8(&array_buffer)?;
             check_valid_utf8(&utf8_validation_buffer)?;
             v
         };
+
+        // Safety: we wrote exactly `read` views via ptr writes above
+        unsafe {
+            output.views.set_len(initial_len + read);
+        }
 
         let actual_block_id = output.append_block(Buffer::from_vec(array_buffer));
         assert_eq!(actual_block_id, buffer_id);
@@ -769,7 +781,7 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = ViewBuffer::default();
+            let mut output = ViewBuffer::with_capacity(0);
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
@@ -812,7 +824,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
-        let mut view_buffer = ViewBuffer::default();
+        let mut view_buffer = ViewBuffer::with_capacity(0);
         decoder.set_data(Encoding::PLAIN, pages, 4, None).unwrap();
         decoder.read(&mut view_buffer, 1).unwrap();
         decoder.read(&mut view_buffer, 1).unwrap();

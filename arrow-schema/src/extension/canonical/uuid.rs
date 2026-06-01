@@ -53,10 +53,14 @@ impl ExtensionType for Uuid {
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
         metadata.map_or_else(
             || Ok(()),
-            |_| {
-                Err(ArrowError::InvalidArgumentError(
-                    "Uuid extension type expects no metadata".to_owned(),
-                ))
+            |v| {
+                if !v.is_empty() {
+                    Err(ArrowError::InvalidArgumentError(
+                        "Uuid extension type expects no metadata".to_owned(),
+                    ))
+                } else {
+                    Ok(())
+                }
             },
         )
     }
@@ -122,11 +126,28 @@ mod tests {
         let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
             [
                 (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    "unexpected".to_owned(),
+                ),
             ]
             .into_iter()
             .collect(),
         );
         field.extension_type::<Uuid>();
+    }
+
+    #[test]
+    fn empty_metadata_string_is_treated_as_none() -> Result<(), ArrowError> {
+        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
+            [
+                (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
+                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        field.try_extension_type::<Uuid>()?;
+        Ok(())
     }
 }
