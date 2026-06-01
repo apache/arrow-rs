@@ -69,7 +69,12 @@ pub struct IpcWriteOptions {
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
 }
-
+/// Return type for [`IpcDataGenerator::write_batch_direct`]: `(dict_sizes, batch_sizes)` where
+/// each element is `(ipc_metadata_bytes, body_bytes)`.
+///
+/// [`FileWriter`] uses these sizes to build the [`Block`] index entries required by the IPC
+/// footer for random-access reads.
+type IPCMetadata = Result<(Vec<(usize, usize)>, (usize, usize)), ArrowError>;
 /// A single buffer segment ready to be written to the output stream.
 ///
 /// Used by [`IpcDataGenerator::write_batch_direct`] to avoid staging all buffer
@@ -753,7 +758,7 @@ impl IpcDataGenerator {
         })
     }
 
-    /// Write dictionaries and a record batch directly to `writer`, skipping the
+    /// Write dictionaries and record batch's directly to `writer`, skipping the
     /// intermediate `arrow_data: Vec<u8>` accumulator used by [`Self::record_batch_to_bytes`].
     ///
     /// For the uncompressed path each array buffer is held as an Arc-backed slice and
@@ -761,9 +766,6 @@ impl IpcDataGenerator {
     /// each buffer is compressed into a per-buffer scratch `Vec<u8>` and written from
     /// there, eliminating the extra copy that `write_buffer` -> `arrow_data` ->
     /// `write_body_buffers` would otherwise incur.
-    ///
-    /// Returns `(dict_sizes, batch_sizes)` where each element is
-    /// `(ipc_metadata_bytes, body_bytes)`
     fn write_batch_direct<W: Write>(
         &self,
         batch: &RecordBatch,
@@ -771,7 +773,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
         writer: &mut W,
-    ) -> Result<(Vec<(usize, usize)>, (usize, usize)), ArrowError> {
+    ) -> IPCMetadata {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::new();
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
@@ -2287,7 +2289,7 @@ fn write_array_data(
 
 /// Write a buffer into `arrow_data`, a vector of bytes, and adds its
 /// [`crate::Buffer`] to `buffers`. Returns the new offset in `arrow_data`
-/// /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
+/// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
 /// Each constituent buffer is first compressed with the indicated
 /// compressor, and then written with the uncompressed length in the first 8
 /// bytes as a 64-bit little-endian signed integer followed by the compressed
