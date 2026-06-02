@@ -630,7 +630,7 @@ impl i256 {
         if base <= Self::ONE {
             return None;
         }
-        if self <= base {
+        if self < base {
             return Some(0);
         }
 
