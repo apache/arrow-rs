@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow_array::RecordBatch;
-use arrow_flight::{FlightClient, Ticket, encode::FlightDataEncoderBuilder};
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use arrow_flight::{FlightClient, FlightData, encode::FlightDataEncoderBuilder};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::TryStreamExt;
 use tonic::transport::Channel;
 
@@ -25,108 +25,63 @@ mod common;
 use common::{TYPES, build_batch, start_server};
 
 const ROWS: [usize; 2] = [8 * 1024, 64 * 1024];
-const PUT_COLS: [usize; 2] = [1, 8];
-const EXCHANGE_COLS: [usize; 2] = [8, 16];
+const COLS: [usize; 2] = [1, 8];
 
-async fn flight_put(channel: Channel, batch: RecordBatch) {
-    let mut client = FlightClient::new(channel);
-    let frames = FlightDataEncoderBuilder::new().build(futures::stream::iter([Ok(batch)]));
-    let _: Vec<_> = client
-        .do_put(frames)
-        .await
-        .unwrap()
-        .try_collect()
-        .await
-        .unwrap();
-}
-
-async fn flight_exchange(channel: Channel, batch: RecordBatch) {
-    let mut client = FlightClient::new(channel);
-    let frames = FlightDataEncoderBuilder::new().build(futures::stream::iter([Ok(batch)]));
-    let resp = client.do_exchange(frames).await.unwrap();
-    let _: Vec<RecordBatch> = resp.try_collect().await.unwrap();
-}
-
-async fn flight_get(channel: Channel) {
-    let mut client = FlightClient::new(channel);
-    let _: Vec<RecordBatch> = client
-        .do_get(Ticket::new(""))
-        .await
-        .unwrap()
-        .try_collect()
-        .await
-        .unwrap();
-}
-
-fn bench_put(c: &mut Criterion) {
+fn bench_encode(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let (channel, _) = rt.block_on(start_server());
-    let mut g = c.benchmark_group("put");
+    let mut g = c.benchmark_group("encode");
 
     for &(name, build) in TYPES {
         for &rows in &ROWS {
-            for &cols in &PUT_COLS {
+            for &cols in &COLS {
+                let batch = build_batch(name, rows, cols, build);
+                let id = BenchmarkId::new(name, format!("{rows}x{cols}"));
+                g.throughput(Throughput::Bytes(batch.get_array_memory_size() as u64));
+                g.bench_with_input(id, &batch, |b, batch| {
+                    b.to_async(&rt).iter(|| async {
+                        let _: Vec<FlightData> = FlightDataEncoderBuilder::new()
+                            .build(futures::stream::iter([Ok(batch.clone())]))
+                            .try_collect()
+                            .await
+                            .unwrap();
+                    });
+                });
+            }
+        }
+    }
+}
+
+async fn roundtrip(channel: Channel, batch: RecordBatch) {
+    let mut client = FlightClient::new(channel);
+    let frames = FlightDataEncoderBuilder::new().build(futures::stream::iter([Ok(batch)]));
+    let _: Vec<RecordBatch> = client
+        .do_exchange(frames)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+}
+
+fn bench_roundtrip(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (channel, _) = rt.block_on(start_server());
+    let mut g = c.benchmark_group("roundtrip");
+
+    for &(name, build) in TYPES {
+        for &rows in &ROWS {
+            for &cols in &COLS {
                 let batch = build_batch(name, rows, cols, build);
                 let id = BenchmarkId::new(name, format!("{rows}x{cols}"));
                 g.throughput(Throughput::Bytes(batch.get_array_memory_size() as u64));
                 g.bench_with_input(id, &batch, |b, batch| {
                     b.to_async(&rt)
-                        .iter(|| flight_put(channel.clone(), batch.clone()));
+                        .iter(|| roundtrip(channel.clone(), batch.clone()));
                 });
             }
         }
     }
 }
 
-fn bench_exchange(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let (channel, _) = rt.block_on(start_server());
-    let mut g = c.benchmark_group("exchange");
-
-    for &(name, build) in TYPES {
-        for &rows in &ROWS {
-            for &cols in &EXCHANGE_COLS {
-                let id = BenchmarkId::new(name, format!("{rows}x{cols}"));
-                g.bench_function(id, |b| {
-                    let batch = build_batch(name, rows, cols, build);
-                    b.to_async(&rt).iter_batched(
-                        || (channel.clone(), batch.clone()),
-                        |(ch, b)| flight_exchange(ch, b),
-                        BatchSize::SmallInput,
-                    );
-                });
-            }
-        }
-    }
-}
-
-fn bench_mix(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let (channel, server) = rt.block_on(start_server());
-    let mut g = c.benchmark_group("put and get");
-
-    for &(name, build) in TYPES {
-        for &rows in &ROWS {
-            for &cols in &PUT_COLS {
-                let batch = build_batch(name, rows, cols, build);
-                let frames: Vec<_> = rt.block_on(async {
-                    FlightDataEncoderBuilder::new()
-                        .build(futures::stream::iter([Ok(batch.clone())]))
-                        .try_collect()
-                        .await
-                        .unwrap()
-                });
-                server.set_frames(frames);
-
-                let id = BenchmarkId::new(name, format!("{rows}x{cols}"));
-                g.throughput(Throughput::Bytes(batch.get_array_memory_size() as u64));
-                g.bench_with_input(id, &batch, |b, _| {
-                    b.to_async(&rt).iter(|| flight_get(channel.clone()));
-                });
-            }
-        }
-    }
-}
-
-criterion_group!(benches, bench_put, bench_exchange, bench_mix);
+criterion_group!(benches, bench_encode, bench_roundtrip);
 criterion_main!(benches);

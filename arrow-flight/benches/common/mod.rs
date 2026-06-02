@@ -128,6 +128,7 @@ impl FlightService for BenchServer {
     async fn do_action(&self, _: Request<Action>) -> Result<Response<Self::DoActionStream>, Status> { unimpl() }
     async fn list_actions(&self, _: Request<Empty>) -> Result<Response<Self::ListActionsStream>, Status> { unimpl() }
 }
+#[allow(dead_code)]
 pub async fn start_server() -> (Channel, BenchServer) {
     const DUMMY_URL: &str = "http://localhost:50051";
 
