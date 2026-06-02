@@ -1720,7 +1720,7 @@ mod tests {
         // self < base is 0
         assert_eq!(i256::from(3).checked_ilog(i256::from(5)), Some(0));
 
-        // cross-check small results (0 and 1) against u128::ilog 
+        // cross-check small results (0 and 1) against u128::ilog
         for base in [2i64, 3, 5, 7, 1000] {
             for v in 1i64..64 {
                 let want = (v as u128).ilog(base as u128);
