@@ -67,26 +67,13 @@ struct AlpPageLayout<Exact: AlpExact> {
 /// Parse and validate a full ALP-encoded page body.
 ///
 /// Validation includes:
-/// - header fields/encoding
-/// - non-negative `num_elements`
+/// - header decoding via [`AlpHeader::deserialize`]
+/// - supported compression mode, integer encoding, and vector-size range
 /// - offsets bounds + monotonicity
 /// - per-vector metadata/data section lengths
 fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<Exact>> {
     let data_ref = data.as_ref();
-    if data_ref.len() < ALP_HEADER_SIZE {
-        return Err(general_err!(
-            "Invalid ALP page: expected at least {} bytes for header, got {}",
-            ALP_HEADER_SIZE,
-            data_ref.len()
-        ));
-    }
-
-    let header = AlpHeader {
-        compression_mode: data_ref[0],
-        integer_encoding: data_ref[1],
-        log_vector_size: data_ref[2],
-        num_elements: i32::from_le_bytes([data_ref[3], data_ref[4], data_ref[5], data_ref[6]]),
-    };
+    let header = AlpHeader::deserialize(data_ref)?;
 
     if header.compression_mode != ALP_COMPRESSION_MODE {
         return Err(general_err!(
@@ -102,26 +89,18 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
         ));
     }
 
-    if header.log_vector_size < ALP_MIN_LOG_VECTOR_SIZE {
+    if header.vector_size < (1usize << ALP_MIN_LOG_VECTOR_SIZE) {
         return Err(general_err!(
             "Invalid ALP page: log_vector_size {} below min {}",
-            header.log_vector_size,
+            header.vector_size.trailing_zeros(),
             ALP_MIN_LOG_VECTOR_SIZE
         ));
     }
-
-    if header.log_vector_size > ALP_MAX_LOG_VECTOR_SIZE {
+    if header.vector_size > (1usize << ALP_MAX_LOG_VECTOR_SIZE) {
         return Err(general_err!(
             "Invalid ALP page: log_vector_size {} exceeds max {}",
-            header.log_vector_size,
+            header.vector_size.trailing_zeros(),
             ALP_MAX_LOG_VECTOR_SIZE
-        ));
-    }
-
-    if header.num_elements < 0 {
-        return Err(general_err!(
-            "Invalid ALP page: num_elements {} must be >= 0",
-            header.num_elements
         ));
     }
 
@@ -450,7 +429,7 @@ fn decode_vector_values<Value: AlpFloat>(
 }
 
 fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> Result<Vec<Value>> {
-    let total = layout.header.num_elements_usize();
+    let total = layout.header.num_elements;
     let mut out = vec![Value::default(); total];
     decode_page_values_into::<Value>(layout, &mut out)?;
     Ok(out)
@@ -463,7 +442,7 @@ fn decode_page_values_into<Value: AlpFloat>(
     layout: &AlpPageLayout<Value::Exact>,
     out: &mut [Value],
 ) -> Result<()> {
-    let total = layout.header.num_elements_usize();
+    let total = layout.header.num_elements;
     if out.len() < total {
         return Err(general_err!(
             "Invalid ALP decode output: output length {} smaller than page values {}",
@@ -555,7 +534,7 @@ where
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let layout = parse_alp_page_layout::<<T::T as AlpFloat>::Exact>(data)?;
 
-        if layout.header.num_elements_usize() != num_values {
+        if layout.header.num_elements != num_values {
             return Err(general_err!(
                 "Invalid ALP page: header num_elements {} does not match page num_values {}",
                 layout.header.num_elements,
@@ -733,21 +712,84 @@ mod tests {
     }
 
     #[test]
+    fn test_alp_header_serialize_deserialize_round_trip() {
+        let header = AlpHeader {
+            compression_mode: ALP_COMPRESSION_MODE,
+            integer_encoding: ALP_INTEGER_ENCODING_FOR_BIT_PACK,
+            vector_size: 8,
+            num_elements: 1234,
+        };
+        let bytes = header.serialize().unwrap();
+        let parsed = AlpHeader::deserialize(&bytes).unwrap();
+        assert_eq!(parsed.compression_mode, header.compression_mode);
+        assert_eq!(parsed.integer_encoding, header.integer_encoding);
+        assert_eq!(parsed.vector_size, header.vector_size);
+        assert_eq!(parsed.num_elements, header.num_elements);
+    }
+
+    #[test]
+    fn test_alp_header_serialize_rejects_overflow() {
+        let header = AlpHeader {
+            compression_mode: 0,
+            integer_encoding: 0,
+            vector_size: 8,
+            num_elements: i32::MAX as usize + 1,
+        };
+        let err = header.serialize().unwrap_err();
+        assert!(err.to_string().contains("exceeds i32::MAX"));
+    }
+
+    #[test]
+    fn test_alp_header_serialize_rejects_non_power_of_two_vector_size() {
+        let header = AlpHeader {
+            compression_mode: 0,
+            integer_encoding: 0,
+            vector_size: 100,
+            num_elements: 4,
+        };
+        let err = header.serialize().unwrap_err();
+        assert!(err.to_string().contains("is not a power of two"));
+    }
+
+    #[test]
+    fn test_alp_header_deserialize_short_header() {
+        let err = AlpHeader::deserialize(&[0, 1, 2]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: expected at least 7 bytes for header")
+        );
+    }
+
+    #[test]
+    fn test_alp_header_deserialize_negative_num_elements() {
+        let mut bytes = [0u8; ALP_HEADER_SIZE];
+        bytes[2] = ALP_MIN_LOG_VECTOR_SIZE;
+        bytes[3..7].copy_from_slice(&(-1i32).to_le_bytes());
+        let err = AlpHeader::deserialize(&bytes).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: num_elements -1 must be >= 0")
+        );
+    }
+
+    #[test]
+    fn test_alp_header_deserialize_log_vector_size_overflow() {
+        let mut bytes = [0u8; ALP_HEADER_SIZE];
+        bytes[2] = 64; // 1 << 64 overflows usize
+        let err = AlpHeader::deserialize(&bytes).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("too large to represent a vector size")
+        );
+    }
+
+    #[test]
     fn test_parse_alp_page_layout_valid() {
         let data = make_alp_page_bytes(0, 0, 3, 4, &[4], 13);
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap();
         assert_eq!(parsed.header.num_elements, 4);
         assert_eq!(parsed.vectors.len(), 1);
         assert_eq!(parsed.vectors[0].num_elements, 4);
-    }
-
-    #[test]
-    fn test_parse_alp_page_layout_short_header() {
-        let err = parse_alp_page_layout::<u64>(Bytes::from_static(&[0, 1, 2])).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Invalid ALP page: expected at least 7 bytes for header")
-        );
     }
 
     #[test]
@@ -777,16 +819,6 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: unsupported integer encoding 1")
-        );
-    }
-
-    #[test]
-    fn test_parse_alp_page_layout_negative_num_elements() {
-        let data = make_alp_page_bytes(0, 0, 3, -1, &[4], 8);
-        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Invalid ALP page: num_elements -1 must be >= 0")
         );
     }
 

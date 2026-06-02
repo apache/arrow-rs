@@ -37,6 +37,7 @@
 //! Each vector entry has the form
 //! `[AlpInfo][ForInfo][PackedValues][ExceptionPositions][ExceptionValues]`.
 
+use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{FromBitpacked, FromBytes};
 
 pub(crate) const ALP_HEADER_SIZE: usize = 7;
@@ -62,37 +63,111 @@ pub(crate) const ALP_MAX_EXPONENT_F64: u8 = 18;
 /// - `[1]` `integer_encoding`
 /// - `[2]` `log_vector_size`
 /// - `[3..7]` `num_elements` (little-endian `i32`)
+///
+/// The fields hold the *decoded* values used throughout the decoder, not the
+/// raw on-disk encoding:
+/// - `num_elements` is stored on disk as an `i32`, kept in memory as a `usize`.
+/// - vector size is stored on disk as a `u8` `log_vector_size`, kept in memory
+///   as the actual `vector_size` (`1 << log_vector_size`) `usize`.
+///
+/// Each conversion happens once, in [`AlpHeader::deserialize`] and
+/// [`AlpHeader::serialize`], so the rest of the decoder computes offsets and
+/// sizes in `usize`. Those methods reject only what the target type cannot
+/// represent; spec-level validity, such as the allowed vector-size range, is
+/// enforced by the page parser.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AlpHeader {
     pub(crate) compression_mode: u8,
     pub(crate) integer_encoding: u8,
-    pub(crate) log_vector_size: u8,
-    pub(crate) num_elements: i32,
+    pub(crate) vector_size: usize,
+    pub(crate) num_elements: usize,
 }
 
 impl AlpHeader {
-    pub(crate) fn num_elements_usize(&self) -> usize {
-        self.num_elements as usize
+    /// Parse a 7-byte page header from its little-endian on-disk form,
+    /// converting each field to its in-memory type:
+    /// - `log_vector_size` (`u8`) is expanded to `vector_size` with an
+    ///   overflow-checked shift.
+    /// - `num_elements` (`i32`) is checked for non-negativity.
+    pub(crate) fn deserialize(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < ALP_HEADER_SIZE {
+            return Err(general_err!(
+                "Invalid ALP page: expected at least {} bytes for header, got {}",
+                ALP_HEADER_SIZE,
+                bytes.len()
+            ));
+        }
+
+        let log_vector_size = bytes[2];
+        let vector_size = 1usize
+            .checked_shl(u32::from(log_vector_size))
+            .ok_or_else(|| {
+                general_err!(
+                    "Invalid ALP page: log_vector_size {} too large to represent a vector size",
+                    log_vector_size
+                )
+            })?;
+
+        let num_elements_i32 = i32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]);
+        let num_elements = usize::try_from(num_elements_i32).map_err(|_| {
+            general_err!(
+                "Invalid ALP page: num_elements {} must be >= 0",
+                num_elements_i32
+            )
+        })?;
+
+        Ok(Self {
+            compression_mode: bytes[0],
+            integer_encoding: bytes[1],
+            vector_size,
+            num_elements,
+        })
     }
 
-    fn vector_size(&self) -> usize {
-        1usize << self.log_vector_size
+    /// Serialize this header into its 7-byte little-endian on-disk form.
+    ///
+    /// Converts the in-memory values back to the on-disk encoding, rejecting
+    /// what cannot be represented: `vector_size` must be a power of two (its log
+    /// is the on-disk field), and `num_elements` must fit in an `i32`.
+    /// Counterpart to [`AlpHeader::deserialize`]; consumed by the ALP encoder.
+    #[allow(dead_code)]
+    pub(crate) fn serialize(&self) -> Result<[u8; ALP_HEADER_SIZE]> {
+        if !self.vector_size.is_power_of_two() {
+            return Err(general_err!(
+                "Invalid ALP page: vector_size {} is not a power of two",
+                self.vector_size
+            ));
+        }
+        let log_vector_size = self.vector_size.trailing_zeros() as u8;
+
+        let num_elements = i32::try_from(self.num_elements).map_err(|_| {
+            general_err!(
+                "Invalid ALP page: num_elements {} exceeds i32::MAX",
+                self.num_elements
+            )
+        })?;
+
+        let mut out = [0u8; ALP_HEADER_SIZE];
+        out[0] = self.compression_mode;
+        out[1] = self.integer_encoding;
+        out[2] = log_vector_size;
+        out[3..7].copy_from_slice(&num_elements.to_le_bytes());
+        Ok(out)
     }
 
     pub(crate) fn num_vectors(&self) -> usize {
         if self.num_elements == 0 {
             0
         } else {
-            self.num_elements_usize().div_ceil(self.vector_size())
+            self.num_elements.div_ceil(self.vector_size)
         }
     }
 
     pub(crate) fn vector_num_elements(&self, vector_index: usize) -> u16 {
-        let vector_size = self.vector_size();
-        let num_full_vectors = self.num_elements_usize() / vector_size;
-        let remainder = self.num_elements_usize() % vector_size;
+        let num_full_vectors = self.num_elements / self.vector_size;
+        let remainder = self.num_elements % self.vector_size;
         if vector_index < num_full_vectors {
-            vector_size as u16
+            self.vector_size as u16
         } else if vector_index == num_full_vectors && remainder > 0 {
             remainder as u16
         } else {
