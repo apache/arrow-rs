@@ -27,7 +27,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, IntType, LogicalType,
+    PageType, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -1522,9 +1523,9 @@ fn update_stat<T: ParquetValueType, F>(
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::INT32 | Type::INT64 => {
-            if let Some(LogicalType::Integer {
+            if let Some(LogicalType::Integer(IntType {
                 is_signed: false, ..
-            }) = descr.logical_type_ref()
+            })) = descr.logical_type_ref()
             {
                 // need to compare unsigned
                 return compare_greater_unsigned_int(a, b);
@@ -1541,7 +1542,7 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
             };
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal { .. }) = descr.logical_type_ref() {
+            if let Some(LogicalType::Decimal(_)) = descr.logical_type_ref() {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
             if let ConvertedType::DECIMAL = descr.converted_type() {
@@ -4449,10 +4450,7 @@ mod tests {
         let path = ColumnPath::from("col");
         let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
-            .with_logical_type(Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 3,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(2, 3)))
             .with_scale(2)
             .with_precision(3)
             .build()

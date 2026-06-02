@@ -21,6 +21,7 @@ use arrow::util::test_util::parquet_test_data;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::ParquetMetaDataReader;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -175,11 +176,20 @@ fn non_standard_delta_blocks() {
     }
 }
 
+#[test]
+fn skip_unknown_types() {
+    // test file contains a FileMetaData with unknown fields with
+    // types not currently used by Parquet (uuid, set, map). The
+    // parser should be able to skip these unknown fields without
+    // erroring.
+    let file = Bytes::from_static(include_bytes!("new_types.bin"));
+    ParquetMetaDataReader::decode_metadata(&file).unwrap();
+}
+
 #[cfg(feature = "async")]
 #[tokio::test]
-#[allow(deprecated)]
 async fn bad_metadata_err() {
-    use parquet::file::metadata::ParquetMetaDataReader;
+    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
@@ -188,13 +198,13 @@ async fn bad_metadata_err() {
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();
     loader.try_load(&mut reader, metadata_length).await.unwrap();
-    loader = loader.with_page_indexes(false);
+    loader = loader.with_page_index_policy(PageIndexPolicy::Skip);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_offset_indexes(true);
+    loader = loader.with_offset_index_policy(PageIndexPolicy::Required);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_column_indexes(true);
+    loader = loader.with_column_index_policy(PageIndexPolicy::Required);
     let err = loader.load_page_index(&mut reader).await.unwrap_err();
 
     assert_eq!(

@@ -274,13 +274,17 @@ fn convert_stats(
                 Type::INT96 => {
                     // INT96 statistics may not be correct, because comparison is signed
                     let min = if let Some(data) = min {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(general_err!("Incorrect Int96 min statistics"));
+                        }
                         Some(Int96::try_from_le_slice(data)?)
                     } else {
                         None
                     };
                     let max = if let Some(data) = max {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(general_err!("Incorrect Int96 max statistics"));
+                        }
                         Some(Int96::try_from_le_slice(data)?)
                     } else {
                         None
@@ -1135,13 +1139,7 @@ impl DataPageHeaderV2 {
                     repetition_levels_byte_length = Some(val);
                 }
                 7 => {
-                    if field_ident.bool_val.is_none() {
-                        return Err(general_err!(
-                            "Expected bool field but got thrift type {:?}",
-                            field_ident.field_type
-                        ));
-                    }
-                    is_compressed = field_ident.bool_val;
+                    is_compressed = Some(field_ident.bool_val()?);
                 }
                 _ => {
                     prot.skip(field_ident.field_type)?;
@@ -1837,7 +1835,7 @@ pub(crate) mod tests {
     fn assert_malformed_bool_error(err: crate::errors::ParquetError) {
         let msg = err.to_string();
         assert!(
-            msg.contains("Expected bool field"),
+            msg.contains("Unexpected struct field type"),
             "unexpected error message: {msg}"
         );
     }
@@ -1920,6 +1918,46 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decoded_zero.null_count_opt(), Some(0));
+    }
+
+    #[test]
+    fn test_convert_stats_returns_error_for_overlong_int96_statistics() {
+        let primitive =
+            crate::schema::types::Type::primitive_type_builder("col", PhysicalType::INT96)
+                .build()
+                .unwrap();
+        let column_descr = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+        let invalid = (0..13).collect::<Vec<_>>();
+
+        let make_stats = |min, max| super::Statistics {
+            max,
+            min,
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+
+        let err = super::convert_stats(&column_descr, Some(make_stats(Some(&invalid), None)))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 min statistics"
+        );
+
+        let err = super::convert_stats(&column_descr, Some(make_stats(None, Some(&invalid))))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 max statistics"
+        );
     }
 
     #[test]

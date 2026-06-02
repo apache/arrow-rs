@@ -128,7 +128,11 @@ pub struct VariantList<'m, 'v> {
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+#[cfg(target_pointer_width = "64")]
 const _: () = crate::utils::expect_size_of::<VariantList>(64);
+
+#[cfg(target_pointer_width = "32")]
+const _: () = crate::utils::expect_size_of::<VariantList>(40);
 
 impl<'m, 'v> VariantList<'m, 'v> {
     /// Attempts to interpret `value` as a variant array value.

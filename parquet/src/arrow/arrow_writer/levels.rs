@@ -153,6 +153,13 @@ enum LevelInfoBuilder {
     Struct(Vec<LevelInfoBuilder>, LevelContext, Option<NullBuffer>),
 }
 
+/// Minimum sub-range length before the bulk-fill fast path in `write_leaf`
+/// becomes profitable for null-heavy leaf columns. Below this, per-call
+/// slice + popcount overhead regresses list/struct paths that call
+/// `write_leaf` many times with tiny ranges. Picked via threshold sweep;
+/// see <https://github.com/apache/arrow-rs/pull/9967> for the rationale.
+const BULK_FILL_MIN_LEN: usize = 64;
+
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
@@ -311,6 +318,15 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
+        // Fast path: entire list array is null; emit bulk null rep/def levels
+        if nulls.is_some_and(|nulls| nulls.null_count() == nulls.len()) {
+            let count = range.end - range.start;
+            child.visit_leaves(|leaf| {
+                leaf.extend_uniform_levels(ctx.def_level - 2, ctx.rep_level - 1, count);
+            });
+            return;
+        }
+
         let offsets = &offsets[range.start..range.end + 1];
 
         let write_non_null_slice =
@@ -502,14 +518,19 @@ impl LevelInfoBuilder {
         range: Range<usize>,
     ) {
         let write_null = |children: &mut [LevelInfoBuilder], range: Range<usize>| {
+            let len = range.end - range.start;
             for child in children {
                 child.visit_leaves(|info| {
-                    let len = range.end - range.start;
-                    info.append_def_level_run(ctx.def_level - 1, len);
-                    info.append_rep_level_run(ctx.rep_level, len);
+                    info.extend_uniform_levels(ctx.def_level - 1, ctx.rep_level, len);
                 })
             }
         };
+
+        // Fast path: entire struct array is null; emit bulk null def/rep levels
+        if nulls.is_some_and(|nulls| nulls.null_count() == nulls.len()) {
+            write_null(children, range);
+            return;
+        }
 
         let write_non_null = |children: &mut [LevelInfoBuilder], range: Range<usize>| {
             for child in children {
@@ -560,6 +581,15 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
+        // Fast path: entire fixed-size list array is null
+        if nulls.is_some_and(|nulls| nulls.null_count() == nulls.len()) {
+            let count = range.end - range.start;
+            child.visit_leaves(|leaf| {
+                leaf.extend_uniform_levels(ctx.def_level - 2, ctx.rep_level - 1, count);
+            });
+            return;
+        }
+
         let write_non_null = |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
             let values_start = start_idx * fixed_size;
             let values_end = end_idx * fixed_size;
@@ -638,6 +668,14 @@ impl LevelInfoBuilder {
     fn write_leaf(info: &mut ArrayLevels, range: Range<usize>) {
         let len = range.end - range.start;
 
+        // Fast path: entire leaf array is null
+        if let Some(nulls) = &info.logical_nulls {
+            if !matches!(info.def_levels, LevelData::Absent) && nulls.null_count() == nulls.len() {
+                info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
+                return;
+            }
+        }
+
         if matches!(info.def_levels, LevelData::Absent) {
             info.non_null_indices.extend(range.clone());
         } else {
@@ -645,20 +683,43 @@ impl LevelInfoBuilder {
             match &info.logical_nulls {
                 Some(nulls) => {
                     assert!(range.end <= nulls.len());
-                    let nulls = nulls.inner();
-                    info.def_levels.extend_from_iter(range.clone().map(|i| {
-                        // Safety: range.end was asserted to be in bounds earlier
-                        let valid = unsafe { nulls.value_unchecked(i) };
-                        max_def_level - (!valid as i16)
-                    }));
-                    info.non_null_indices.reserve(len);
-                    info.non_null_indices.extend(
-                        BitIndexIterator::new(nulls.inner(), nulls.offset() + range.start, len)
-                            .map(|i| i + range.start),
-                    );
+                    // Bulk-fill is profitable only on null-heavy ranges long enough to
+                    // amortize the slice/popcount cost; see `BULK_FILL_MIN_LEN` and the
+                    // PR description for the threshold sweep. The gate uses the cached
+                    // buffer-wide `null_count` (O(1)) to stay cheap on the cold path.
+                    if len >= BULK_FILL_MIN_LEN && nulls.null_count() * 2 >= nulls.len() {
+                        let range_nulls = nulls.slice(range.start, len);
+                        let valid_in_range = len - range_nulls.null_count();
+                        let null_def_level = max_def_level - 1;
+                        let buf = info
+                            .def_levels
+                            .materialize_mut()
+                            .expect("definition levels present");
+                        let base = buf.len();
+                        buf.resize(base + len, null_def_level);
+                        for i in range_nulls.valid_indices() {
+                            buf[base + i] = max_def_level;
+                        }
+                        info.non_null_indices.reserve(valid_in_range);
+                        info.non_null_indices
+                            .extend(range_nulls.valid_indices().map(|i| i + range.start));
+                    } else {
+                        let bits = nulls.inner();
+                        info.def_levels.extend_from_iter(range.clone().map(|i| {
+                            // Safety: range.end was asserted to be in bounds earlier
+                            let valid = unsafe { bits.value_unchecked(i) };
+                            max_def_level - (!valid as i16)
+                        }));
+                        info.non_null_indices.reserve(len);
+                        info.non_null_indices.extend(
+                            BitIndexIterator::new(bits.inner(), bits.offset() + range.start, len)
+                                .map(|i| i + range.start),
+                        );
+                    }
                 }
                 None => {
                     info.append_def_level_run(max_def_level, len);
+                    info.non_null_indices.reserve(len);
                     info.non_null_indices.extend(range.clone());
                 }
             }
@@ -970,6 +1031,12 @@ impl ArrayLevels {
             array,
             logical_nulls,
         }
+    }
+
+    /// Bulk-emit `count` uniform def/rep levels.
+    fn extend_uniform_levels(&mut self, def_val: i16, rep_val: i16, count: usize) {
+        self.def_levels.append_run(def_val, count);
+        self.rep_levels.append_run(rep_val, count);
     }
 
     fn append_def_level_run(&mut self, value: i16, count: usize) {
@@ -2441,5 +2508,162 @@ mod tests {
         assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 0]));
         assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
         assert_eq!(sliced.array.len(), 0);
+    }
+
+    #[test]
+    fn test_all_null_list() {
+        // List<Int32> where every list slot is null.
+        // Schema: list (nullable) -> item (int32, nullable)
+        // Data: [null, null, null, null]
+        //
+        // Expected: max_def=3, max_rep=1, def/rep levels all 0.
+        let item_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new_null(item_field, 4);
+        let values = list.values().clone();
+        let field = Field::new("list", list.data_type().clone(), true);
+        let array = Arc::new(list) as ArrayRef;
+
+        let levels = calculate_array_levels(&array, &field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let logical_nulls = values.logical_nulls();
+        let expected = ArrayLevels {
+            def_levels: LevelData::Uniform { value: 0, count: 4 },
+            rep_levels: LevelData::Uniform { value: 0, count: 4 },
+            non_null_indices: vec![],
+            max_def_level: 3,
+            max_rep_level: 1,
+            array: values,
+            logical_nulls,
+        };
+        assert_eq!(&levels[0], &expected);
+    }
+
+    #[test]
+    fn test_all_null_fixed_size_list() {
+        // FixedSizeList<Int32; 2> where every list slot is null.
+        // Schema: list (nullable) -> item (int32, nullable)
+        // Data: [null, null, null]
+        //
+        // Expected: max_def=3, max_rep=1, def/rep levels all 0.
+        let item_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = FixedSizeListArray::new_null(item_field, 2, 3);
+        let values = list.values().clone();
+        let field = Field::new("list", list.data_type().clone(), true);
+        let array = Arc::new(list) as ArrayRef;
+
+        let levels = calculate_array_levels(&array, &field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let logical_nulls = values.logical_nulls();
+        let expected = ArrayLevels {
+            def_levels: LevelData::Uniform { value: 0, count: 3 },
+            rep_levels: LevelData::Uniform { value: 0, count: 3 },
+            non_null_indices: vec![],
+            max_def_level: 3,
+            max_rep_level: 1,
+            array: values,
+            logical_nulls,
+        };
+        assert_eq!(&levels[0], &expected);
+    }
+
+    #[test]
+    fn test_all_null_struct() {
+        // Struct<Int32> where every struct slot is null.
+        // Schema: a (struct, nullable) -> c (int32, nullable)
+        // Data: [null, null, null, null]
+        //
+        // Expected: max_def=2, def_levels all 0 (struct is null → child never reached),
+        // leaf values are empty.
+        let c = Int32Array::from(vec![None::<i32>; 4]);
+        let leaf = Arc::new(c) as ArrayRef;
+        let c_field = Arc::new(Field::new("c", DataType::Int32, true));
+        let a = StructArray::from((vec![(c_field, leaf.clone())], Buffer::from([0b00000000])));
+        let a_field = Field::new("a", a.data_type().clone(), true);
+        let a_array = Arc::new(a) as ArrayRef;
+
+        let levels = calculate_array_levels(&a_array, &a_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected = ArrayLevels {
+            def_levels: LevelData::Uniform { value: 0, count: 4 },
+            rep_levels: LevelData::Absent,
+            non_null_indices: vec![],
+            max_def_level: 2,
+            max_rep_level: 0,
+            array: leaf,
+            logical_nulls: Some(NullBuffer::new_null(4)),
+        };
+        assert_eq!(&levels[0], &expected);
+    }
+
+    #[test]
+    fn test_all_null_nested_struct() {
+        // Struct<Struct<Int32>> where the outer struct is entirely null.
+        // Schema: a (struct, nullable) -> b (struct, nullable) -> c (int32, nullable)
+        // Data: [null, null, null]
+        //
+        // Expected: max_def=3, def_levels all 0.
+        let c = Int32Array::from(vec![None::<i32>; 3]);
+        let leaf = Arc::new(c) as ArrayRef;
+        let c_field = Arc::new(Field::new("c", DataType::Int32, true));
+        let b = StructArray::from((vec![(c_field, leaf.clone())], Buffer::from([0b00000000])));
+        let b_field = Arc::new(Field::new("b", b.data_type().clone(), true));
+        let a = StructArray::from((
+            vec![(b_field, Arc::new(b) as ArrayRef)],
+            Buffer::from([0b00000000]),
+        ));
+        let a_field = Field::new("a", a.data_type().clone(), true);
+        let a_array = Arc::new(a) as ArrayRef;
+
+        let levels = calculate_array_levels(&a_array, &a_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected = ArrayLevels {
+            def_levels: LevelData::Uniform { value: 0, count: 3 },
+            rep_levels: LevelData::Absent,
+            non_null_indices: vec![],
+            max_def_level: 3,
+            max_rep_level: 0,
+            array: leaf,
+            logical_nulls: Some(NullBuffer::new_null(3)),
+        };
+        assert_eq!(&levels[0], &expected);
+    }
+
+    #[test]
+    fn test_all_null_struct_multiple_children() {
+        // Struct with two leaf children, entirely null.
+        // Schema: a (struct, nullable) -> { c1 (int32, nullable), c2 (int32, nullable) }
+        // Data: [null, null]
+        //
+        // Both leaf columns should get uniform def_levels=0.
+        let c1 = Arc::new(Int32Array::from(vec![None::<i32>; 2])) as ArrayRef;
+        let c2 = Arc::new(Int32Array::from(vec![None::<i32>; 2])) as ArrayRef;
+        let c1_field = Arc::new(Field::new("c1", DataType::Int32, true));
+        let c2_field = Arc::new(Field::new("c2", DataType::Int32, true));
+        let a = StructArray::from((
+            vec![(c1_field, c1.clone()), (c2_field, c2.clone())],
+            Buffer::from([0b00000000]),
+        ));
+        let a_field = Field::new("a", a.data_type().clone(), true);
+        let a_array = Arc::new(a) as ArrayRef;
+
+        let levels = calculate_array_levels(&a_array, &a_field).unwrap();
+        assert_eq!(levels.len(), 2);
+
+        for (i, leaf) in [c1, c2].into_iter().enumerate() {
+            let expected = ArrayLevels {
+                def_levels: LevelData::Uniform { value: 0, count: 2 },
+                rep_levels: LevelData::Absent,
+                non_null_indices: vec![],
+                max_def_level: 2,
+                max_rep_level: 0,
+                array: leaf,
+                logical_nulls: Some(NullBuffer::new_null(2)),
+            };
+            assert_eq!(&levels[i], &expected, "leaf {i} mismatch");
+        }
     }
 }

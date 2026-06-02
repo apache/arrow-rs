@@ -375,6 +375,12 @@ impl<'a> Parser<'a> {
     fn parse_fixed_size_binary(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeBinary")?;
+        if length < 0 {
+            return Err(make_error(
+                self.val,
+                &format!("FixedSizeBinary length must be non-negative, got {length}"),
+            ));
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::FixedSizeBinary(length))
     }
@@ -997,7 +1003,6 @@ mod test {
             DataType::BinaryView,
             DataType::FixedSizeBinary(0),
             DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::Utf8View,
@@ -1312,7 +1317,6 @@ mod test {
             ("BinaryView", BinaryView),
             ("FixedSizeBinary(0)", FixedSizeBinary(0)),
             ("FixedSizeBinary(1234)", FixedSizeBinary(1234)),
-            ("FixedSizeBinary(-432)", FixedSizeBinary(-432)),
             ("LargeBinary", LargeBinary),
             ("Utf8", Utf8),
             ("Utf8View", Utf8View),
@@ -1436,6 +1440,11 @@ mod test {
             (
                 "FixedSizeBinary(4000000000), ",
                 "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted",
+            ),
+            // can't have negative width
+            (
+                "FixedSizeBinary(-1), ",
+                "FixedSizeBinary length must be non-negative, got -1",
             ),
             // can't have negative precision
             (
