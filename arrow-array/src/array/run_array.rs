@@ -245,13 +245,20 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// assert_eq!(new_run_array.run_ends().values(), &[2, 3, 5]);
     /// ```
     pub fn with_values(&self, values: ArrayRef) -> Self {
-        assert_eq!(values.len(), self.values().len());
+        assert_eq!(values.len(), self.values.len());
         let (run_ends_field, values_field) = match &self.data_type {
-            DataType::RunEndEncoded(r, v) => (r, v),
+            DataType::RunEndEncoded(r, v) => {
+                let new_v = Arc::new(Field::new(
+                    v.name(),
+                    values.data_type().clone(),
+                    v.is_nullable(),
+                ));
+                (r, new_v)
+            }
             _ => unreachable!("RunArray should have type RunEndEncoded"),
         };
-        let data_type =
-            DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(values_field));
+        let data_type = DataType::RunEndEncoded(Arc::clone(run_ends_field), values_field);
+
         Self {
             data_type,
             run_ends: self.run_ends.clone(),
@@ -781,6 +788,28 @@ where
         RunArrayIter::new(self)
     }
 }
+/// An array that can be downcast to a [`RunArray`] of any run end type and any value type.
+///
+/// This can be used to efficiently implement kernels for all possible run end
+/// types without needing to create specialized implementations for each key type.
+pub trait AnyRunEndArray: Array {
+    /// Returns the values of this array.
+    fn values(&self) -> &Arc<dyn Array>;
+
+    /// Returns a new run-end encoded array with the given values, preserving the
+    /// existing run ends.
+    fn with_values(&self, values: ArrayRef) -> ArrayRef;
+}
+
+impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
+    fn values(&self) -> &Arc<dyn Array> {
+        &self.values
+    }
+
+    fn with_values(&self, values: ArrayRef) -> ArrayRef {
+        Arc::new(RunArray::<R>::with_values(self, values))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -789,6 +818,7 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::Int64Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::new_empty_array;
@@ -1054,6 +1084,25 @@ mod tests {
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
         let expected = ArrowError::InvalidArgumentError("The run_ends array length should be the same as values array length. Run_ends array length is 3, values array length is 4".to_string());
         assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
+    }
+    #[test]
+    fn test_run_array_with_values_changes_value_type() {
+        let values = StringArray::from(vec!["foo", "bar", "baz"]);
+        let run_ends: Int32Array = [Some(1), Some(2), Some(3)].into_iter().collect();
+        let ree = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let new_values = Int64Array::from(vec![10, 20, 30]);
+        let result = ree.with_values(Arc::new(new_values));
+
+        match result.data_type() {
+            DataType::RunEndEncoded(_, v) => {
+                assert_eq!(v.data_type(), &DataType::Int64);
+            }
+            other => panic!("expected RunEndEncoded, got {other:?}"),
+        }
+
+        assert_eq!(result.values().data_type(), &DataType::Int64);
+        assert_eq!(result.values().len(), 3);
     }
 
     #[test]
