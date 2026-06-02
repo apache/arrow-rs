@@ -72,7 +72,7 @@ pub struct IpcWriteOptions {
 /// Return type for [`IpcDataGenerator::write_batch_direct`]: `(dict_sizes, batch_sizes)` where
 /// each element is `(ipc_metadata_bytes, body_bytes)`.
 ///
-/// [`FileWriter`] uses these sizes to build the [`Block`] index entries required by the IPC
+/// [`FileWriter`] uses these sizes to build the Block index entries required by the IPC
 /// footer for random-access reads.
 type IPCMetadata = Result<(Vec<(usize, usize)>, (usize, usize)), ArrowError>;
 /// A single buffer segment ready to be written to the output stream.
