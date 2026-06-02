@@ -434,7 +434,9 @@ impl FileDecryptionProperties {
     }
 
     /// Whether these decryption properties use a key retriever.
-    /// When false, keys can be retrieved without providing key metadata.
+    /// When false, explicit keys were provided up front and can
+    /// be retrieved without providing key metadata, rather than
+    /// resolved on demand.
     pub fn uses_key_retriever(&self) -> bool {
         matches!(self.keys, DecryptionKeys::ViaRetriever(_))
     }
