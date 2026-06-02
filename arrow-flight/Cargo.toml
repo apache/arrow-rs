@@ -76,6 +76,7 @@ cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-root
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
 assert_cmd = "2.0.8"
+criterion = { workspace = true, default-features = false, features = ["async_tokio"] }
 http = "1.1.0"
 http-body = "1.0.0"
 hyper-util = "0.1"
@@ -105,3 +106,18 @@ required-features = ["flight-sql", "tls-ring"]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
 required-features = ["cli", "flight-sql", "tls-ring"]
+
+[[bench]]
+name = "flight_encode"
+path = "benches/flight_encode.rs"
+harness = false
+
+[[bench]]
+name = "flight_decode"
+path = "benches/flight_decode.rs"
+harness = false
+
+[[bench]]
+name = "roundtrip"
+path = "benches/roundtrip.rs"
+harness = false
