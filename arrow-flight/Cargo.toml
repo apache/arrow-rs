@@ -108,16 +108,6 @@ path = "tests/flight_sql_client_cli.rs"
 required-features = ["cli", "flight-sql", "tls-ring"]
 
 [[bench]]
-name = "flight_encode"
-path = "benches/flight_encode.rs"
-harness = false
-
-[[bench]]
-name = "flight_decode"
-path = "benches/flight_decode.rs"
-harness = false
-
-[[bench]]
-name = "roundtrip"
-path = "benches/roundtrip.rs"
+name = "flight"
+path = "benches/flight.rs"
 harness = false
