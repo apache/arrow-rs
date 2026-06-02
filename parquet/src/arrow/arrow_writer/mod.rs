@@ -20,11 +20,9 @@
 use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
-use std::io::{Read, Write};
-use std::iter::Peekable;
+use std::io::Write;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
-use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -49,7 +47,6 @@ use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, ParquetMetaData, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
-use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
@@ -604,54 +601,15 @@ impl ArrowWriterOptions {
 }
 
 /// A single column chunk produced by [`ArrowColumnWriter`]
+///
+/// Holds the column's serialized pages (each page's header followed by its
+/// compressed data, in file order) as a sequence of byte buffers, ready to be
+/// spliced into the row group via
+/// [`SerializedRowGroupWriter::append_column_from_pages`].
 #[derive(Default)]
 struct ArrowColumnChunkData {
     length: usize,
     data: Vec<Bytes>,
-}
-
-impl Length for ArrowColumnChunkData {
-    fn len(&self) -> u64 {
-        self.length as _
-    }
-}
-
-impl ChunkReader for ArrowColumnChunkData {
-    type T = ArrowColumnChunkReader;
-
-    fn get_read(&self, start: u64) -> Result<Self::T> {
-        assert_eq!(start, 0); // Assume append_column writes all data in one-shot
-        Ok(ArrowColumnChunkReader(
-            self.data.clone().into_iter().peekable(),
-        ))
-    }
-
-    fn get_bytes(&self, _start: u64, _length: usize) -> Result<Bytes> {
-        unimplemented!()
-    }
-}
-
-/// A [`Read`] for [`ArrowColumnChunkData`]
-struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
-
-impl Read for ArrowColumnChunkReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        let buffer = loop {
-            match self.0.peek_mut() {
-                Some(b) if b.is_empty() => {
-                    self.0.next();
-                    continue;
-                }
-                Some(b) => break b,
-                None => return Ok(0),
-            }
-        };
-
-        let len = buffer.len().min(out.len());
-        let b = buffer.split_to(len);
-        out[..len].copy_from_slice(&b);
-        Ok(len)
-    }
 }
 
 /// A shared [`ArrowColumnChunkData`]
@@ -785,12 +743,15 @@ impl ArrowColumnChunk {
         &mut self.close
     }
 
-    /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
+    /// Splices this column's buffered pages into the row group via
+    /// [`SerializedRowGroupWriter::append_column_from_pages`], writing each page
+    /// buffer directly to the output without copying through an intermediate
+    /// buffer.
     pub fn append_to_row_group<W: Write + Send>(
         self,
         writer: &mut SerializedRowGroupWriter<'_, W>,
     ) -> Result<()> {
-        writer.append_column(&self.data, self.close)
+        writer.append_column_from_pages(self.data.data, self.close)
     }
 }
 
