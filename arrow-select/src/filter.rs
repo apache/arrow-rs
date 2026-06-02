@@ -410,19 +410,31 @@ impl FilterPredicate {
         self.count
     }
 
-    /// Filters the given `nulls` buffer using this predicate.
+    /// Computes a new [`NullBuffer`] by applying this predicate to `nulls`.
     ///
     /// Returns `None` when there is nothing to track in the output, either
     /// because the input `nulls` was `None`, the input had no nulls, or the
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
-        let (null_count, nulls) = filter_null_mask(nulls, self)?;
-        let buffer = BooleanBuffer::new(nulls, 0, self.count);
+        let nulls = nulls?;
+        if nulls.null_count() == 0 {
+            return None;
+        }
 
+        let nulls = filter_bits(nulls.inner(), self);
+        // The filtered `nulls` has a length of `self.count` bits and therefore
+        // the null count is this minus the number of valid bits
+        let null_count = self.count - nulls.count_set_bits_offset(0, self.count);
+
+        if null_count == 0 {
+            return None;
+        }
+
+        let buffer = BooleanBuffer::new(nulls, 0, self.count);
         debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
-        // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
-        // matches the number of unset bits as required by `new_unchecked`.
+        // SAFETY: `null_count` was derived from `buffer` above, so it matches
+        // the number of unset bits as required by `new_unchecked`.
         Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
     }
 }
@@ -567,33 +579,6 @@ where
 
     let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
     RunArray::try_new(&run_ends, &values)
-}
-
-/// Computes a new null mask for `data` based on `predicate`
-///
-/// If the predicate selected no null-rows, returns `None`, otherwise returns
-/// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
-/// in the filtered output, and `null_buffer` is the filtered null buffer
-///
-fn filter_null_mask(
-    nulls: Option<&NullBuffer>,
-    predicate: &FilterPredicate,
-) -> Option<(usize, Buffer)> {
-    let nulls = nulls?;
-    if nulls.null_count() == 0 {
-        return None;
-    }
-
-    let nulls = filter_bits(nulls.inner(), predicate);
-    // The filtered `nulls` has a length of `predicate.count` bits and
-    // therefore the null count is this minus the number of valid bits
-    let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);
-
-    if null_count == 0 {
-        return None;
-    }
-
-    Some((null_count, nulls))
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
@@ -940,13 +925,7 @@ fn filter_struct(
         .map(|column| filter_array(column, predicate))
         .collect::<Result<_, _>>()?;
 
-    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
-
-        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
-    } else {
-        None
-    };
+    let nulls = predicate.filter_nulls(array.nulls());
 
     Ok(unsafe {
         StructArray::new_unchecked_with_length(
