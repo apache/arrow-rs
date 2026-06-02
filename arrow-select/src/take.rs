@@ -1755,6 +1755,41 @@ mod tests {
         assert_eq!(result.as_ref(), &expected);
     }
 
+    /// Take from a *sliced* byte array, i.e. one whose value offsets do not
+    /// start at zero. This exercises copying byte data out of an array with a
+    /// non-zero base offset for both the no-null fast path and the nullable
+    /// path (null indices and selected null values).
+    #[test]
+    fn test_take_bytes_sliced_values() {
+        let values = StringArray::from(vec![
+            Some("aaa"),
+            Some("bbb"),
+            None,
+            Some("ccccc"),
+            Some("dd"),
+            None,
+            Some("eeee"),
+        ]);
+        // Slice so the underlying value offsets no longer start at 0:
+        // sliced == [None, "ccccc", "dd", None, "eeee"]
+        let sliced = values.slice(2, 5);
+
+        // Fast path: every output slot is valid (no null indices, no null
+        // values selected).
+        let indices = Int32Array::from(vec![1, 2, 4, 1]);
+        let result = take(&sliced, &indices, None).unwrap();
+        let expected =
+            StringArray::from(vec![Some("ccccc"), Some("dd"), Some("eeee"), Some("ccccc")]);
+        assert_eq!(result.as_string::<i32>(), &expected);
+
+        // Nullable path: a null index (position 1) and selected null values
+        // (sliced indices 0 and 3 are null).
+        let indices = Int32Array::from(vec![Some(1), None, Some(0), Some(4), Some(3)]);
+        let result = take(&sliced, &indices, None).unwrap();
+        let expected = StringArray::from(vec![Some("ccccc"), None, None, Some("eeee"), None]);
+        assert_eq!(result.as_string::<i32>(), &expected);
+    }
+
     fn _test_byte_view<T>()
     where
         T: ByteViewType,
@@ -2837,9 +2872,37 @@ mod tests {
 
     #[test]
     fn test_take_bytes_offset_overflow() {
-        let indices = Int32Array::from(vec![0; (i32::MAX >> 4) as usize]);
-        let text = ('a'..='z').collect::<String>();
-        let values = StringArray::from(vec![Some(text.clone())]);
+        // Select a single large value enough times that the cumulative offset
+        // exceeds i32::MAX. Using a large value keeps the number of indices
+        // (and therefore the runtime) small.
+        let value_len = 1_000_000;
+        let big = "a".repeat(value_len);
+        let values = StringArray::from(vec![Some(big.as_str())]);
+
+        let n = i32::MAX as usize / value_len + 1;
+        let indices = Int32Array::from(vec![0; n]);
+        assert!(matches!(
+            take(&values, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    /// The offset-overflow error must also be produced on the nullable code
+    /// path (when the output contains nulls), not only on the no-null fast path.
+    #[test]
+    fn test_take_bytes_offset_overflow_nullable() {
+        // Same overflow trigger as `test_take_bytes_offset_overflow`, but with a
+        // null index so the output contains nulls and the nullable code path is
+        // exercised. A large value keeps the index count (and runtime) small.
+        let value_len = 1_000_000;
+        let big = "a".repeat(value_len);
+        let values = StringArray::from(vec![Some(big.as_str())]);
+
+        let n = i32::MAX as usize / value_len + 1;
+        let validity =
+            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
+        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
+
         assert!(matches!(
             take(&values, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))
