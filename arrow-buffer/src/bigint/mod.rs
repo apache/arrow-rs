@@ -630,7 +630,7 @@ impl i256 {
         if base <= Self::ONE {
             return None;
         }
-        if self <= base {
+        if self < base {
             return Some(0);
         }
 
@@ -1706,6 +1706,31 @@ mod tests {
         assert_eq!(i256::ZERO.checked_ilog(i256::from(10)), None);
         assert_eq!(i256::ZERO.checked_ilog10(), None);
         assert_eq!(i256::ZERO.checked_ilog2(), None);
+
+        // self == base, matches std: `n.ilog(n) == 1`
+        assert_eq!(i256::from(2).checked_ilog(i256::from(2)), Some(1));
+        assert_eq!(i256::from(3).checked_ilog(i256::from(3)), Some(1));
+        assert_eq!(i256::from(5).checked_ilog(i256::from(5)), Some(1));
+        assert_eq!(i256::from(1000).checked_ilog(i256::from(1000)), Some(1));
+        assert_eq!(i256::from(2).checked_ilog2(), Some(1));
+        assert_eq!(i256::from(2).ilog2(), 1);
+        // base 10 goes through the checked_ilog10 fast path
+        assert_eq!(i256::from(10).checked_ilog(i256::from(10)), Some(1));
+
+        // self < base is 0
+        assert_eq!(i256::from(3).checked_ilog(i256::from(5)), Some(0));
+
+        // cross-check small results (0 and 1) against u128::ilog 
+        for base in [2i64, 3, 5, 7, 1000] {
+            for v in 1i64..64 {
+                let want = (v as u128).ilog(base as u128);
+                assert_eq!(
+                    i256::from(v).checked_ilog(i256::from(base)),
+                    Some(want),
+                    "checked_ilog({v}, {base})"
+                );
+            }
+        }
 
         let value = i256::from_parts(100000000, 1234);
         assert_eq!(value.checked_ilog(i256::from(10)), Some(41));
