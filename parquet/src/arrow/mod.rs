@@ -485,7 +485,8 @@ pub fn parquet_column<'a>(
 mod test {
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::{
-        ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter,
+        PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+        ParquetMetaDataWriter,
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::schema::parser::parse_message_type;
@@ -497,7 +498,6 @@ mod test {
     use super::ProjectionMask;
 
     #[test]
-    #[allow(deprecated)]
     // Reproducer for https://github.com/apache/arrow-rs/issues/6464
     fn test_metadata_read_write_partial_offset() {
         let parquet_bytes = create_parquet_file();
@@ -514,7 +514,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let err = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true) // there are no page indexes in the metadata
+            .with_page_index_policy(PageIndexPolicy::Required) // there are no page indexes in the metadata
             .parse_and_finish(&metadata_bytes)
             .err()
             .unwrap();
@@ -553,7 +553,6 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 
@@ -562,7 +561,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
@@ -571,7 +570,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .parse_and_finish(&metadata_bytes)
             .unwrap();
 

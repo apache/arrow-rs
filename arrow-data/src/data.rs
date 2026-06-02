@@ -134,6 +134,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
         ],
         DataType::FixedSizeBinary(size) => {
+            if *size < 0 {
+                panic!("cannot construct buffers from FixedSizeBinary({size})");
+            }
             [MutableBuffer::new(capacity * *size as usize), empty_buffer]
         }
         DataType::Dictionary(k, _) => [
@@ -634,6 +637,10 @@ impl ArrayData {
     }
 
     /// Returns a new [`ArrayData`] valid for `data_type` containing `len` null values
+    ///
+    /// # Panics
+    /// This function panics if:
+    /// * the datatype `data_type` has incorrect layout
     pub fn new_null(data_type: &DataType, len: usize) -> Self {
         let bit_len = bit_util::ceil(len, 8);
         let zeroed = |len: usize| Buffer::from(MutableBuffer::from_len_zeroed(len));
@@ -650,7 +657,12 @@ impl ArrayData {
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
-                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![], true),
+                DataType::FixedSizeBinary(i) => {
+                    if *i < 0 {
+                        panic!("cannot construct null data from FixedSizeBinary({i})");
+                    }
+                    (vec![zeroed(*i as usize * len)], vec![], true)
+                }
                 DataType::List(f) | DataType::Map(f, _) => (
                     vec![zeroed((len + 1) * 4)],
                     vec![ArrayData::new_empty(f.data_type())],
@@ -2253,6 +2265,22 @@ impl From<ArrayData> for ArrayDataBuilder {
             align_buffers: false,
             skip_validation: UnsafeFlag::new(),
         }
+    }
+}
+
+/// Get byte width of FixedSizeBinary size
+/// # Panics:
+/// - Panics if the `data_type` is not FixedSizeBinary
+/// - Panics if byte width is negative
+pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::FixedSizeBinary(i) => {
+            if *i < 0 {
+                panic!("cannot compare FixedSizeBinary({})", *i);
+            }
+            *i as usize
+        }
+        _ => unreachable!(),
     }
 }
 

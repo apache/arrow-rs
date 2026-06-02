@@ -5908,7 +5908,7 @@ mod tests {
         let bytes_2 = "Hello".as_bytes();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
-        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
 
         let array_ref = cast(&a1, &DataType::Binary).unwrap();
         let down_cast = array_ref.as_binary::<i32>();
@@ -5935,7 +5935,7 @@ mod tests {
         let bytes_2 = "Hello".as_bytes();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), Some(bytes_1), None];
-        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
 
         let cast_type = DataType::Dictionary(
             Box::new(DataType::Int8),
@@ -6276,6 +6276,132 @@ mod tests {
         assert!(keys.is_null(3));
         assert_eq!(keys.value(0), keys.value(2));
         assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct() {
+        // Cast a StructArray into Dictionary<UInt32, Struct{…}>. The dictionary
+        // value type's child fields may differ from the source's (here:
+        // Utf8 source → Utf8View child for `name`), so the per-field cast
+        // must run before identity keys are emitted. This is the "as long as
+        // the struct can be cast to the dict value" contract.
+        let names = StringArray::from(vec![Some("alpha"), None, Some("gamma")]);
+        let ids = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let source = StructArray::from(vec![
+            (
+                Arc::new(Field::new("name", DataType::Utf8, true)),
+                Arc::new(names) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(ids) as ArrayRef,
+            ),
+        ]);
+
+        let target_value_type = DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8View, true),
+                Field::new("id", DataType::Int64, false),
+            ]
+            .into(),
+        );
+        let cast_type = DataType::Dictionary(
+            Box::new(DataType::UInt32),
+            Box::new(target_value_type.clone()),
+        );
+        assert!(can_cast_types(source.data_type(), &cast_type));
+
+        let cast_array = cast(&source, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 3);
+
+        let dict = cast_array.as_dictionary::<UInt32Type>();
+        assert_eq!(dict.values().data_type(), &target_value_type);
+        // No dedup is performed for struct values — one row, one key.
+        assert_eq!(dict.values().len(), 3);
+
+        // Source row 1 was a `Utf8`-null in the `name` field but the whole
+        // struct row was valid (StructArray::from above takes per-field
+        // nulls only). The dictionary's logical null mask therefore mirrors
+        // the source struct's row-level null mask — all rows valid here.
+        let keys = dict.keys();
+        assert_eq!(keys.values(), &[0u32, 1, 2]);
+        assert_eq!(keys.null_count(), 0);
+
+        let struct_values = dict.values().as_struct();
+        let names_out = struct_values
+            .column_by_name("name")
+            .unwrap()
+            .as_string_view();
+        assert_eq!(names_out.value(0), "alpha");
+        assert!(names_out.is_null(1));
+        assert_eq!(names_out.value(2), "gamma");
+        let ids_out = struct_values
+            .column_by_name("id")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert_eq!(ids_out.values(), &[1i64, 2, 3]);
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct_row_nulls() {
+        // Row-level nulls on the source struct must surface as null keys on
+        // the dictionary, since the dictionary's logical null mask is
+        // determined by the keys.
+        let names = StringArray::from(vec![Some("alpha"), Some("beta"), Some("gamma")]);
+        let ids = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let source = StructArray::try_new(
+            vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("id", DataType::Int32, false),
+            ]
+            .into(),
+            vec![Arc::new(names) as ArrayRef, Arc::new(ids) as ArrayRef],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )
+        .unwrap();
+
+        let target_value_type = DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("id", DataType::Int32, false),
+            ]
+            .into(),
+        );
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(target_value_type));
+
+        let cast_array = cast(&source, &cast_type).unwrap();
+        let dict = cast_array.as_dictionary::<UInt32Type>();
+        assert_eq!(dict.len(), 3);
+        let keys = dict.keys();
+        assert!(!keys.is_null(0));
+        assert!(keys.is_null(1));
+        assert!(!keys.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct_key_overflow() {
+        // Source has 300 rows but the dictionary key type is UInt8 (max 255).
+        // We must return a CastError instead of silently truncating.
+        let n = 300;
+        let names = StringArray::from((0..n).map(|i| Some(format!("v{i}"))).collect::<Vec<_>>());
+        let source = StructArray::from(vec![(
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(names) as ArrayRef,
+        )]);
+
+        let cast_type = DataType::Dictionary(
+            Box::new(DataType::UInt8),
+            Box::new(DataType::Struct(
+                vec![Field::new("name", DataType::Utf8, true)].into(),
+            )),
+        );
+        let err = cast(&source, &cast_type).unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot fit") && err.contains("dictionary keys"),
+            "expected key-overflow error, got: {err}"
+        );
     }
 
     #[test]
