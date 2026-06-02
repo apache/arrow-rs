@@ -1738,6 +1738,62 @@ mod tests {
         statistics::Statistics,
     };
 
+    /// The `page_encoding_stats` list of a dictionary-encoded column chunk must
+    /// list the dictionary page *before* the data pages, matching the on-disk
+    /// page layout (the dictionary page is always written first) and the order
+    /// produced by the column-at-a-time `SerializedFileWriter`.
+    #[test]
+    fn dictionary_page_encoding_stats_lists_dictionary_first() {
+        use crate::basic::PageType;
+        use crate::file::metadata::ParquetMetaDataOptions;
+
+        // A low-cardinality column so it stays dictionary-encoded, with enough
+        // rows to emit at least one data page in addition to the dictionary page.
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+        let values: Vec<Option<i32>> = (0..4096).map(|i| Some(i % 4)).collect();
+        let array = Int32Array::from(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let buffer = Bytes::from(buffer);
+
+        // Read the *full*, ordered page encoding stats. By default this crate
+        // collapses them to a bitmask, which would discard the ordering this
+        // test is about, so opt out of that here.
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+        let metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
+            .parse_and_finish(&buffer)
+            .unwrap();
+
+        let col = metadata.row_group(0).column(0);
+        assert!(
+            col.dictionary_page_offset().is_some(),
+            "column should be dictionary encoded"
+        );
+        let stats = col
+            .page_encoding_stats()
+            .expect("full (non-mask) page encoding stats should be present");
+
+        let dict_pos = stats
+            .iter()
+            .position(|s| s.page_type == PageType::DICTIONARY_PAGE)
+            .expect("a DICTIONARY_PAGE encoding stat should be present");
+        let first_data_pos = stats
+            .iter()
+            .position(|s| s.page_type == PageType::DATA_PAGE)
+            .expect("a DATA_PAGE encoding stat should be present");
+
+        assert!(
+            dict_pos < first_data_pos,
+            "the DICTIONARY_PAGE encoding stat must precede the DATA_PAGE stats \
+             (dictionary-first page layout), got {stats:?}"
+        );
+    }
+
     #[test]
     fn arrow_writer() {
         // define schema
