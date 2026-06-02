@@ -19,7 +19,7 @@
 //!
 //! While a row group is being written the [`ArrowWriter`] must buffer every
 //! column's encoded pages, because Parquet requires each column chunk to be
-//! contiguous on disk while record batches arrive with all columns interleaved.
+//! contiguous in the file while record batches arrive with all columns interleaved.
 //! By default that buffer lives on the heap, so the writer's peak memory grows
 //! with the row group size. A [`PageStore`] lets the buffer live somewhere else
 //! — a local temp file, object storage, etc. — bounding peak write memory
