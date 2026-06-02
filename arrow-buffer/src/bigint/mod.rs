@@ -839,7 +839,7 @@ macro_rules! define_standard_shift {
             fn $method(self, rhs: $t) -> Self::Output {
                 let rhs = u8::try_from(rhs).expect("rhs overflow for shift");
                 // Other possible overflows are handled by Shl<u8> implementation
-                self.$method(rhs as u8)
+                self.$method(rhs)
             }
         }
     };
