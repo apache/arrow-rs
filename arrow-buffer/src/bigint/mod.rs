@@ -810,7 +810,7 @@ impl Shr<u8> for i256 {
 impl WrappingShl for i256 {
     #[inline]
     fn wrapping_shl(&self, rhs: u32) -> i256 {
-        // Mask the higher-order bits
+        // Limit shift to 256 (max valid shift for i256)
         (*self).shl(rhs as u8)
     }
 }
@@ -818,7 +818,7 @@ impl WrappingShl for i256 {
 impl WrappingShr for i256 {
     #[inline]
     fn wrapping_shr(&self, rhs: u32) -> i256 {
-        // Masks the higher-order bits
+        // Limit shift to 256 (max valid shift for i256)
         (*self).shr(rhs as u8)
     }
 }
@@ -837,7 +837,7 @@ macro_rules! define_standard_shift {
 
             #[inline]
             fn $method(self, rhs: $t) -> Self::Output {
-                let rhs = u8::try_from(rhs).expect("rhs overflow for shift {rhs}");
+                let rhs = u8::try_from(rhs).expect("rhs overflow for shift");
                 // Other possible overflows are handled by Shl<u8> implementation
                 self.$method(rhs as u8)
             }
