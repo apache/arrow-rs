@@ -2843,16 +2843,20 @@ mod tests {
         assert_eq!(array.len(), 3);
     }
 
+    /// Fixture for the offset-overflow tests: a single large value plus the
+    /// number of times it must be selected so the cumulative offset exceeds
+    /// `i32::MAX`. Using a large value keeps the index count (and the test
+    /// runtime) small.
+    fn offset_overflow_fixture() -> (StringArray, usize) {
+        let value_len = 1_000_000;
+        let values = StringArray::from(vec![Some("a".repeat(value_len))]);
+        let n = i32::MAX as usize / value_len + 1;
+        (values, n)
+    }
+
     #[test]
     fn test_take_bytes_offset_overflow() {
-        // Select a single large value enough times that the cumulative offset
-        // exceeds i32::MAX. Using a large value keeps the number of indices
-        // (and therefore the runtime) small.
-        let value_len = 1_000_000;
-        let big = "a".repeat(value_len);
-        let values = StringArray::from(vec![Some(big.as_str())]);
-
-        let n = i32::MAX as usize / value_len + 1;
+        let (values, n) = offset_overflow_fixture();
         let indices = Int32Array::from(vec![0; n]);
         assert!(matches!(
             take(&values, &indices, None),
@@ -2864,14 +2868,9 @@ mod tests {
     /// path (when the output contains nulls), not only on the no-null fast path.
     #[test]
     fn test_take_bytes_offset_overflow_nullable() {
-        // Same overflow trigger as `test_take_bytes_offset_overflow`, but with a
-        // null index so the output contains nulls and the nullable code path is
-        // exercised. A large value keeps the index count (and runtime) small.
-        let value_len = 1_000_000;
-        let big = "a".repeat(value_len);
-        let values = StringArray::from(vec![Some(big.as_str())]);
-
-        let n = i32::MAX as usize / value_len + 1;
+        let (values, n) = offset_overflow_fixture();
+        // A null index forces the output to contain nulls, exercising the
+        // nullable code path.
         let validity =
             NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
         let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
