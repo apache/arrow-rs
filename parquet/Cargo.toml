@@ -94,7 +94,6 @@ tokio = { version = "1.0", default-features = false, features = ["macros", "rt-m
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.38.1", default-features = false, features = ["system"] }
-dhat = { version = "0.3", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -158,10 +157,6 @@ path = "./examples/read_with_rowgroup.rs"
 
 [[test]]
 name = "arrow_writer_layout"
-required-features = ["arrow"]
-
-[[test]]
-name = "page_spill_memory"
 required-features = ["arrow"]
 
 [[test]]
