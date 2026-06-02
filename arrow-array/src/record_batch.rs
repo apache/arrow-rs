@@ -21,6 +21,7 @@
 use crate::cast::AsArray;
 use crate::{Array, ArrayRef, StructArray, new_empty_array};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
+use std::collections::HashMap;
 use std::ops::Index;
 use std::sync::Arc;
 
@@ -34,6 +35,14 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     /// reader should have the same schema as returned from this method.
     fn schema(&self) -> SchemaRef;
 }
+
+/// Shared per-batch custom metadata.
+///
+/// This is the type stored inside a [`RecordBatch`] and accepted by
+/// [`RecordBatch::with_custom_metadata`]. Cloning is cheap (an [`Arc`]
+/// refcount bump), so the same metadata map can be attached to many batches
+/// without copying the underlying [`HashMap`].
+pub type CustomMetadata = Arc<HashMap<String, String>>;
 
 impl<R: RecordBatchReader + ?Sized> RecordBatchReader for Box<R> {
     fn schema(&self) -> SchemaRef {
@@ -220,7 +229,7 @@ macro_rules! record_batch {
 ///     ("c", Utf8, ["alpha", "beta", "gamma"])
 /// );
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RecordBatch {
     schema: SchemaRef,
     columns: Vec<Arc<dyn Array>>,
@@ -229,6 +238,39 @@ pub struct RecordBatch {
     ///
     /// This is stored separately from the columns to handle the case of no columns
     row_count: usize,
+
+    /// Per-batch custom metadata
+    ///
+    /// This corresponds to the `custom_metadata` field on the IPC `Message`
+    /// flatbuffer, allowing per-batch metadata separate from schema-level
+    /// metadata. Stored as `Option<Arc<...>>` so that a `RecordBatch` without
+    /// custom metadata adds only a pointer's worth of overhead, and clones
+    /// share the map.
+    custom_metadata: Option<CustomMetadata>,
+}
+
+// Custom equality: a batch built with an empty metadata map compares equal to
+// one built without any metadata at all. This is also reachable via
+// `custom_metadata_mut().clear()`, so we collapse the two forms here rather
+// than letting the derived impl surface the distinction.
+impl PartialEq for RecordBatch {
+    fn eq(&self, other: &Self) -> bool {
+        if self.row_count != other.row_count || self.schema != other.schema {
+            return false;
+        }
+        let metadata_eq = match (
+            self.custom_metadata.as_deref(),
+            other.custom_metadata.as_deref(),
+        ) {
+            (None, None) => true,
+            (Some(m), None) | (None, Some(m)) => m.is_empty(),
+            (Some(a), Some(b)) => a == b,
+        };
+        if !metadata_eq {
+            return false;
+        }
+        self.columns == other.columns
+    }
 }
 
 impl RecordBatch {
@@ -289,6 +331,7 @@ impl RecordBatch {
             schema,
             columns,
             row_count,
+            custom_metadata: None,
         }
     }
 
@@ -316,6 +359,7 @@ impl RecordBatch {
             schema,
             columns,
             row_count: 0,
+            custom_metadata: None,
         }
     }
 
@@ -390,12 +434,32 @@ impl RecordBatch {
             schema,
             columns,
             row_count,
+            custom_metadata: None,
         })
     }
 
     /// Return the schema, columns and row count of this [`RecordBatch`]
+    ///
+    /// Note: this discards any [`Self::custom_metadata`]. Use
+    /// [`Self::into_parts_with_custom_metadata`] to also retrieve it.
     pub fn into_parts(self) -> (SchemaRef, Vec<ArrayRef>, usize) {
         (self.schema, self.columns, self.row_count)
+    }
+
+    /// Return the schema, columns, row count and custom metadata of this [`RecordBatch`].
+    ///
+    /// The returned metadata is `None` if this batch has no custom metadata,
+    /// otherwise it is the shared [`Arc`] held by this batch. Callers that need
+    /// an owned `HashMap` can use [`Arc::unwrap_or_clone`].
+    pub fn into_parts_with_custom_metadata(
+        self,
+    ) -> (SchemaRef, Vec<ArrayRef>, usize, Option<CustomMetadata>) {
+        (
+            self.schema,
+            self.columns,
+            self.row_count,
+            self.custom_metadata,
+        )
     }
 
     /// Override the schema of this [`RecordBatch`]
@@ -416,6 +480,7 @@ impl RecordBatch {
             schema,
             columns: self.columns,
             row_count: self.row_count,
+            custom_metadata: self.custom_metadata,
         })
     }
 
@@ -451,6 +516,46 @@ impl RecordBatch {
         &mut schema.metadata
     }
 
+    /// Returns the per-batch custom metadata, or `None` if not set.
+    ///
+    /// This corresponds to the `custom_metadata` field on the IPC `Message`
+    /// flatbuffer, separate from schema-level metadata.
+    pub fn custom_metadata(&self) -> Option<&HashMap<String, String>> {
+        self.custom_metadata.as_deref()
+    }
+
+    /// Returns a mutable reference to the per-batch custom metadata, allocating
+    /// an empty map on first access.
+    ///
+    /// Cheap if this [`RecordBatch`] uniquely owns the metadata; otherwise the
+    /// underlying map is cloned via [`Arc::make_mut`]. An empty map left after
+    /// clearing entries still reports as `Some(_)` from
+    /// [`Self::custom_metadata`]; two batches that differ only in this respect
+    /// still compare equal.
+    pub fn custom_metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        Arc::make_mut(
+            self.custom_metadata
+                .get_or_insert_with(|| Arc::new(HashMap::new())),
+        )
+    }
+
+    /// Sets the per-batch custom metadata, returning `self`.
+    ///
+    /// Takes an [`Arc`] so the same metadata map can be shared across many
+    /// [`RecordBatch`]es without cloning. Callers with a fresh `HashMap`
+    /// can wrap it via [`Arc::new`].
+    ///
+    /// An empty map is normalized to "no metadata", so a batch built with an
+    /// empty map compares equal to one built without calling this method.
+    pub fn with_custom_metadata(mut self, metadata: CustomMetadata) -> Self {
+        self.custom_metadata = if metadata.is_empty() {
+            None
+        } else {
+            Some(metadata)
+        };
+        self
+    }
+
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch, ArrowError> {
         let projected_schema = self.schema.project(indices)?;
@@ -471,11 +576,13 @@ impl RecordBatch {
             // Since we're starting from a valid RecordBatch and project
             // creates a strict subset of the original, there's no need to
             // redo the validation checks in `try_new_with_options`.
-            Ok(RecordBatch::new_unchecked(
+            let mut projected = RecordBatch::new_unchecked(
                 SchemaRef::new(projected_schema),
                 batch_fields,
                 self.row_count,
-            ))
+            );
+            projected.custom_metadata = self.custom_metadata.clone();
+            Ok(projected)
         }
     }
 
@@ -570,7 +677,11 @@ impl RecordBatch {
                 }
             }
         }
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+        let custom_metadata = self.custom_metadata.clone();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map(|mut b| {
+            b.custom_metadata = custom_metadata;
+            b
+        })
     }
 
     /// Returns the number of columns in the record batch.
@@ -691,6 +802,7 @@ impl RecordBatch {
             schema: self.schema.clone(),
             columns,
             row_count: length,
+            custom_metadata: self.custom_metadata.clone(),
         }
     }
 
@@ -864,6 +976,7 @@ impl From<StructArray> for RecordBatch {
             schema: Arc::new(Schema::new(fields)),
             row_count,
             columns,
+            custom_metadata: None,
         }
     }
 }
@@ -1791,5 +1904,108 @@ mod tests {
         assert!(col.is_valid(0));
         assert!(col.is_null(1));
         assert!(col.is_valid(2));
+    }
+
+    #[test]
+    fn test_with_custom_metadata() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        assert!(batch.custom_metadata().is_none());
+
+        let mut metadata = HashMap::new();
+        metadata.insert("key".to_string(), "value".to_string());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
+        assert_eq!(batch.custom_metadata(), Some(&metadata));
+    }
+
+    #[test]
+    fn test_custom_metadata_mut() {
+        let mut batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        batch
+            .custom_metadata_mut()
+            .insert("key".to_string(), "value".to_string());
+        assert_eq!(
+            batch.custom_metadata().and_then(|m| m.get("key")),
+            Some(&"value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_slice_preserves_custom_metadata() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
+
+        let sliced = batch.slice(0, 2);
+        assert_eq!(sliced.custom_metadata(), Some(&metadata));
+    }
+
+    #[test]
+    fn test_project_preserves_custom_metadata() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
+
+        let projected = batch.project(&[0]).unwrap();
+        assert_eq!(projected.custom_metadata(), Some(&metadata));
+    }
+
+    #[test]
+    fn test_into_parts_with_custom_metadata() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
+
+        let (schema, columns, row_count, custom_metadata) = batch.into_parts_with_custom_metadata();
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(columns.len(), 1);
+        assert_eq!(row_count, 3);
+        assert_eq!(custom_metadata.as_deref(), Some(&metadata));
+    }
+
+    #[test]
+    fn test_custom_metadata_equality() {
+        let batch1 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let batch2 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+
+        // Both empty metadata -> equal
+        assert_eq!(batch1, batch2);
+
+        // Different metadata -> not equal
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let batch1 = batch1.with_custom_metadata(Arc::new(metadata));
+        assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn test_empty_custom_metadata_normalized_to_none() {
+        // A batch built with an empty map compares equal to one with no
+        // metadata, and the setter normalizes the empty map away.
+        let batch1 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let batch2 = record_batch!(("a", Int32, [1, 2, 3]))
+            .unwrap()
+            .with_custom_metadata(Arc::new(HashMap::new()));
+        assert_eq!(batch1, batch2);
+        assert!(batch2.custom_metadata().is_none());
+    }
+
+    #[test]
+    fn test_equality_after_mut_clear() {
+        // `custom_metadata_mut().clear()` cannot normalize the Option back to
+        // None, so it leaves an empty `Some` in place. PartialEq must still
+        // treat this as equal to a batch with no metadata.
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let no_meta = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let mut cleared = no_meta.clone().with_custom_metadata(Arc::new(metadata));
+        cleared.custom_metadata_mut().clear();
+        assert!(cleared.custom_metadata().is_some_and(|m| m.is_empty()));
+        assert_eq!(no_meta, cleared);
     }
 }
