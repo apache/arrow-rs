@@ -661,9 +661,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
 /// Incrementally builds up arrays
 ///
 /// [`GenericInProgressArray`] is the default implementation that buffers
-/// arrays and uses other kernels concatenates them when finished.
+/// arrays, uses other kernels, and concatenates them when finished.
 ///
-/// Some types have specialized implementations for this array types (e.g.,
+/// Some types have specialized, faster implementations (e.g.,
 /// [`StringViewArray`], etc.).
 ///
 /// [`StringViewArray`]: arrow_array::StringViewArray
@@ -676,17 +676,25 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Copy rows from the current source array into the in-progress array
     ///
-    /// The source array is set by [`Self::set_source`].
+    /// Note: The source array is set by [`Self::set_source`].
     ///
     /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
     /// Copy rows selected by `filter` from the current source array.
+    ///
+    /// The default implementation calls [`Self::copy_rows_by_selection`]
     fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         self.copy_rows_by_selection(filter.selection())
     }
 
-    /// Copy rows selected by `filter` from `source`.
+    /// Copy rows selected by a [`FilterPredicate`] from `source`.
+    ///
+    /// Unlike the other copy methods, the source array is passed in directly
+    /// rather than read from the array set by [`Self::set_source`].
+    ///
+    /// The default implementation sets `source` via [`Self::set_source`] and
+    /// then calls [`Self::copy_rows_by_filter`].
     fn copy_rows_by_filter_from(
         &mut self,
         source: ArrayRef,
@@ -699,6 +707,10 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     }
 
     /// Copy rows described by a [`FilterSelection`] from the current source array.
+    ///
+    /// You typically get a [`FilterSelection`] from [`FilterPredicate::selection`].
+    ///
+    /// Note: The source array is set by [`Self::set_source`].
     fn copy_rows_by_selection(&mut self, selection: FilterSelection<'_>) -> Result<(), ArrowError> {
         match selection {
             FilterSelection::None => Ok(()),

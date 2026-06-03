@@ -434,6 +434,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         let s = source.as_byte_view::<B>();
+        // The source views reference no external buffers, so they must all be
+        // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
@@ -441,6 +443,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             return Ok(());
         }
 
+        // The views reference external buffers, so materialize the
+        // filtered array and append it through the regular `copy_rows` path
+        // (which copies the referenced string data into our own buffers).
         let filtered = filter.filter(source.as_ref())?;
         self.set_source(Some(filtered));
         let result = self.copy_rows(0, filter.count());
