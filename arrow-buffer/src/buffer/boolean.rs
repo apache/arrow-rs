@@ -1073,7 +1073,7 @@ mod tests {
         let input_buffer_left = BooleanBuffer::from(&input_bools_left[..]);
         let input_buffer_right = BooleanBuffer::from(&input_bools_right[..]);
 
-        #[cfg(miri)]
+        #[cfg(miri)] // Takes too long otherwise
         let left_offsets = [0, 1, 7, 8, 63, 64, 65];
         #[cfg(not(miri))]
         let left_offsets = 0..200;

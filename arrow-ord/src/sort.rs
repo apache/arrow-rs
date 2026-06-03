@@ -4892,7 +4892,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_partition_validity() {
         let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
         for _ in 0..1_000 {
