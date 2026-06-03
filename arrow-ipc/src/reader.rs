@@ -1794,37 +1794,15 @@ pub(crate) enum IpcMessage {
     },
 }
 
-/// Read exactly `body_len` bytes from `reader` into a freshly allocated
-/// [`MutableBuffer`], growing the buffer in 64 KiB chunks.
-///
-/// This deliberately avoids the previous `MutableBuffer::from_len_zeroed(body_len)`
-/// pattern: when `body_len` is derived from an untrusted IPC message header
-/// that pattern allowed a 4-byte input (claiming a 1.2 GiB body) to drive a
-/// 1.2 GiB up-front allocation before any read failure could surface. The
-/// chunked path here means the high-water-mark allocation is tied to the
-/// number of bytes actually delivered by `reader`, while still preserving
-/// the cache-line alignment that downstream Arrow consumers rely on.
-fn read_body_into_buffer<R: Read>(
-    reader: &mut R,
-    body_len: usize,
-) -> Result<MutableBuffer, ArrowError> {
-    const CHUNK: usize = 64 * 1024;
-    let mut buf = MutableBuffer::with_capacity(0);
-    let mut remaining = body_len;
-    let mut scratch = [0u8; CHUNK];
-    while remaining > 0 {
-        let want = remaining.min(CHUNK);
-        let slice = &mut scratch[..want];
-        reader.read_exact(slice).map_err(|e| {
-            ArrowError::ParseError(format!(
-                "Unexpected EOF reading {body_len} bytes of message body: {e}"
-            ))
-        })?;
-        buf.extend_from_slice(slice);
-        remaining -= want;
-    }
-    Ok(buf)
-}
+/// Maximum bytes of IPC message metadata we will allocate up front from an
+/// untrusted header. Real Arrow IPC metadata is a FlatBuffer schema descriptor
+/// — well under 1 MiB even for very wide tables — so this is a generous cap.
+const MAX_META_LEN: usize = 16 * 1024 * 1024;
+
+/// Maximum bytes of IPC message body we will allocate up front from an
+/// untrusted header. Single Arrow record batches above 2 GiB are rare in
+/// practice and would push past `usize`-on-32-bit anyway.
+const MAX_BODY_LEN: usize = 2 * 1024 * 1024 * 1024;
 
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
@@ -1857,25 +1835,18 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         };
 
-        // Both `meta_len` and the message's `bodyLength` are derived from
-        // untrusted input. Eagerly resizing `self.buf` to `meta_len` (or a
-        // fresh `MutableBuffer` to `bodyLength` further down) means a few
-        // bytes of attacker-crafted input — e.g. a header that lies and
-        // claims a 1.2 GiB metadata payload — would force a multi-GB
-        // up-front allocation before any read failure could bound it.
-        //
-        // Read into a buffer that grows as actual bytes arrive instead, so
-        // the upfront allocation is independent of the (untrusted) declared
-        // length, then verify we got exactly the requested number of bytes.
-        self.buf.clear();
-        let read = (&mut self.reader)
-            .take(meta_len as u64)
-            .read_to_end(&mut self.buf)?;
-        if read != meta_len {
+        // Both `meta_len` and the message's `bodyLength` come from untrusted
+        // input. Reject obviously-out-of-range claims up front so a 4-byte
+        // header can't force a multi-GB allocation before any read can
+        // surface the truncation.
+        if meta_len > MAX_META_LEN {
             return Err(ArrowError::ParseError(format!(
-                "Unexpected EOF reading {meta_len} bytes of message metadata, got {read}"
+                "IPC message metadata length {meta_len} exceeds {MAX_META_LEN}"
             )));
         }
+
+        self.buf.resize(meta_len, 0);
+        self.reader.read_exact(&mut self.buf)?;
 
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
@@ -1885,7 +1856,14 @@ impl<R: Read> MessageReader<R> {
         let body_len = usize::try_from(body_len_i64).map_err(|_| {
             ArrowError::ParseError(format!("Invalid message bodyLength: {body_len_i64}"))
         })?;
-        let buf = read_body_into_buffer(&mut self.reader, body_len)?;
+        if body_len > MAX_BODY_LEN {
+            return Err(ArrowError::ParseError(format!(
+                "IPC message body length {body_len} exceeds {MAX_BODY_LEN}"
+            )));
+        }
+
+        let mut buf = MutableBuffer::from_len_zeroed(body_len);
+        self.reader.read_exact(&mut buf)?;
 
         Ok(Some((message, buf)))
     }
