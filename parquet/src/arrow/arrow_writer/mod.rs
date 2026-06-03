@@ -4904,6 +4904,124 @@ mod tests {
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 
+    #[test]
+    fn test_arrow_writer_granular_mode_roundtrip() {
+        // Granular mode subdivides chunks and writes more pages than
+        // `main`. Make sure the data we write back is bit-identical to
+        // what went in — page-count assertions elsewhere only prove
+        // pages were cut, not that the encoded data is correct.
+        //
+        // Mix value sizes so that the cumulative-byte-budget cutoff
+        // lands mid-chunk, exercising both batched and granular paths
+        // within the same `write_batch_internal` call.
+        let small = "tiny".to_string();
+        let big = "x".repeat(64 * 1024);
+        let strings: Vec<String> = (0..256)
+            .map(|i| {
+                if i % 16 == 0 {
+                    big.clone()
+                } else {
+                    small.clone()
+                }
+            })
+            .collect();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            ArrowDataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(strings.clone())) as _],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_data_page_size_limit(16 * 1024)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let mut reader = ParquetRecordBatchReader::try_new(data, 1024).unwrap();
+        let read = reader.next().unwrap().unwrap();
+        assert!(reader.next().is_none(), "expected one batch");
+        let col = read
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(col.len(), strings.len());
+        for (i, expected) in strings.iter().enumerate() {
+            assert_eq!(
+                col.value(i),
+                expected.as_str(),
+                "value mismatch at index {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_arrow_writer_all_null_string_column() {
+        // The `LevelDataRef::value_count` Uniform branch with
+        // `value != max_def` (entirely-null chunk) must return 0 so the
+        // sub-batch sizer short-circuits to batch mode without trying
+        // to estimate byte budgets for non-existent values.
+        let num_rows = 1024;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            ArrowDataType::Utf8,
+            true,
+        )]));
+        let nulls: Vec<Option<&str>> = vec![None; num_rows];
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(nulls)) as _],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_data_page_size_limit(16 * 1024)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        // Re-parse the file: row group has one column, every row is
+        // null, all data pages report `num_rows / page_count` rows.
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let row_group = metadata.row_group(0);
+        let col_meta = row_group.column(0);
+        assert_eq!(row_group.num_rows() as usize, num_rows);
+        // Statistics record `null_count = num_rows` — proves every value
+        // was written as null.
+        if let Some(stats) = col_meta.statistics() {
+            assert_eq!(
+                stats.null_count_opt().unwrap_or(0) as usize,
+                num_rows,
+                "expected all-null column to report null_count = num_rows"
+            );
+        }
+
+        let mut reader =
+            SerializedPageReader::new(Arc::new(data.clone()), col_meta, num_rows, None).unwrap();
+        let mut total_values = 0u32;
+        while let Some(page) = reader.get_next_page().unwrap() {
+            if matches!(page, Page::DataPage { .. } | Page::DataPageV2 { .. }) {
+                total_values += page.num_values();
+            }
+        }
+        assert_eq!(
+            total_values as usize, num_rows,
+            "expected every level position to be represented in some page"
+        );
+    }
+
     struct WriteBatchesShape {
         num_batches: usize,
         rows_per_batch: usize,
