@@ -49,7 +49,10 @@ use crate::file::properties::{
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
+mod byte_budget_chunker;
 pub(crate) mod encoder;
+
+use byte_budget_chunker::ByteBudgetChunker;
 
 macro_rules! downcast_writer {
     ($e:expr, $i:ident, $b:expr) => {
@@ -374,6 +377,24 @@ impl<'a> LevelDataRef<'a> {
             Self::Uniform { value, .. } => Self::Uniform { value, count: len },
         }
     }
+
+    /// Count of positions in this slice that represent an actual value
+    /// (definition level equal to `max_def`). `Absent` means the column has
+    /// `max_def == 0` and every position is a value, so the implicit count
+    /// is the caller-supplied `total`.
+    pub(crate) fn value_count(self, total: usize, max_def: i16) -> usize {
+        match self {
+            Self::Absent => total,
+            Self::Materialized(values) => values.iter().filter(|&&d| d == max_def).count(),
+            Self::Uniform { value, count } => {
+                if value == max_def {
+                    count
+                } else {
+                    0
+                }
+            }
+        }
+    }
 }
 
 /// Typed column writer for a primitive column.
@@ -545,6 +566,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         } else {
             self.props.write_batch_size()
         };
+        let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
@@ -555,14 +577,45 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
             }
 
-            values_offset += self.write_mini_batch(
+            let chunk_size = end_offset - levels_offset;
+            let chunk_def = def_levels.slice(levels_offset, chunk_size);
+            let chunk_rep = rep_levels.slice(levels_offset, chunk_size);
+
+            // Key decision point: can we write this whole chunk as one
+            // mini-batch (the common case — small or fixed-width values, no
+            // further page-size accounting needed), or must we fall back to
+            // byte-budget-aware sub-batching to keep a page from overshooting
+            // `data_page_size_limit`? `pick_sub_batch_size` returns
+            // `chunk_size` for the former.
+            let sub_batch_size = chunker.pick_sub_batch_size(
+                &self.encoder,
                 values,
-                values_offset,
                 value_indices,
-                end_offset - levels_offset,
-                def_levels.slice(levels_offset, end_offset - levels_offset),
-                rep_levels.slice(levels_offset, end_offset - levels_offset),
-            )?;
+                chunk_def,
+                values_offset,
+                chunk_size,
+            );
+
+            if sub_batch_size >= chunk_size {
+                values_offset += self.write_mini_batch(
+                    values,
+                    values_offset,
+                    value_indices,
+                    chunk_size,
+                    chunk_def,
+                    chunk_rep,
+                )?;
+            } else {
+                values_offset += self.write_granular_chunk(
+                    values,
+                    values_offset,
+                    value_indices,
+                    chunk_size,
+                    chunk_def,
+                    chunk_rep,
+                    sub_batch_size,
+                )?;
+            }
             levels_offset = end_offset;
         }
 
@@ -711,6 +764,69 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             column_index,
             offset_index,
         })
+    }
+
+    /// Writes a chunk in `sub_batch_size`-level sub-batches, checking the
+    /// data page byte limit after each. This keeps the page size close to
+    /// `data_page_size_limit` instead of overshooting it by a whole chunk.
+    ///
+    /// For repeated/nested columns sub-batches step from one `rep == 0`
+    /// boundary to the next so a record never spans data pages, matching
+    /// the parquet format rule.
+    ///
+    /// Returns the total number of values consumed across all sub-batches.
+    ///
+    /// `#[inline(never)]` keeps this slow path — only reached for
+    /// variable-width columns whose values need page splitting — out of
+    /// the hot `write_batch_internal` loop.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn write_granular_chunk(
+        &mut self,
+        values: &E::Values,
+        values_offset: usize,
+        value_indices: Option<&[usize]>,
+        chunk_size: usize,
+        chunk_def: LevelDataRef<'_>,
+        chunk_rep: LevelDataRef<'_>,
+        sub_batch_size: usize,
+    ) -> Result<usize> {
+        // The chunker always sizes a sub-batch to at least one level, so each
+        // iteration below makes progress (`sub_end > sub_start`).
+        debug_assert!(sub_batch_size >= 1, "chunker must size at least one level");
+        let mut values_consumed = 0;
+        let mut sub_start = 0;
+        while sub_start < chunk_size {
+            let sub_end = match chunk_rep {
+                LevelDataRef::Materialized(levels) => {
+                    // Pack up to `sub_batch_size` levels per mini-batch, then
+                    // extend to the next record boundary (rep == 0) so a
+                    // record never spans data pages. Packing whole records
+                    // rather than stepping one record at a time avoids
+                    // calling `write_mini_batch` per record: records average
+                    // only a handful of levels, so a record-at-a-time step
+                    // would issue many more mini-batches than necessary.
+                    let mut e = (sub_start + sub_batch_size).min(chunk_size);
+                    while e < chunk_size && levels[e] != 0 {
+                        e += 1;
+                    }
+                    e
+                }
+                _ => (sub_start + sub_batch_size).min(chunk_size),
+            };
+            let sub_len = sub_end - sub_start;
+            let written = self.write_mini_batch(
+                values,
+                values_offset + values_consumed,
+                value_indices,
+                sub_len,
+                chunk_def.slice(sub_start, sub_len),
+                chunk_rep.slice(sub_start, sub_len),
+            )?;
+            values_consumed += written;
+            sub_start = sub_end;
+        }
+        Ok(values_consumed)
     }
 
     /// Creates a new streaming level encoder appropriate for the writer version.
@@ -2677,6 +2793,310 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_caps_page_size_for_large_byte_array_values() {
+        // Regression: the post-write data page byte limit check only fires
+        // at mini-batch boundaries, so a 1024-row mini-batch of multi-MiB
+        // BYTE_ARRAY values used to buffer multiple GiB into a single page
+        // before the limit was even consulted. With the threshold-based
+        // granular mode this batch should split into ~one page per value.
+        let value_size = 64 * 1024; // 64 KiB per value
+        let page_byte_limit = 16 * 1024; // 16 KiB page limit
+        let num_rows = 64;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            // Default write_batch_size (1024) — without the fix this
+            // buffers the entire input into a single ~4 MiB page.
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+
+        // Every value must end up somewhere.
+        let total_values: u32 = pages.data_pages.iter().map(|(_, n)| n).sum();
+        assert_eq!(total_values as usize, num_rows);
+        // Without the fix this assertion fired with one ~4 MiB page; the
+        // threshold splits the input so that no page holds more than a
+        // single oversized value's worth of bytes.
+        assert!(
+            pages.data_pages.len() >= num_rows / 2,
+            "expected pages to be cut close to one per value, got {:?}",
+            pages.data_pages,
+        );
+        // Each page must be bounded by roughly one value's worth of bytes;
+        // parquet allows a single oversized value to occupy a page by
+        // itself but never lets us pile many of them together.
+        for (size, _) in &pages.data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound ({}B) — pages {:?}",
+                value_size + 64,
+                pages.data_pages,
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_for_large_values_in_list() {
+        // Coverage for the Materialized-rep branch of
+        // `write_granular_chunk`. The flat-column regression test
+        // exercises the per-level step; this exercises the
+        // record-by-record step used when rep levels are present.
+        //
+        // Column is `list<required binary>` (max_def = 1, max_rep = 1)
+        // with 3 records of 3 large blobs each. The page byte limit is
+        // smaller than a single blob, so granular mode kicks in, and the
+        // Materialized-rep arm of `write_granular_chunk` steps from one
+        // `rep == 0` boundary to the next so a record never spans pages.
+        let value_size = 32 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let values_per_record = 3;
+        let num_records = 3;
+        let num_values = values_per_record * num_records;
+
+        // rep levels: 0, 1, 1, 0, 1, 1, 0, 1, 1
+        let mut rep_levels = Vec::with_capacity(num_values);
+        for _ in 0..num_records {
+            rep_levels.push(0i16);
+            rep_levels.extend(std::iter::repeat_n(1i16, values_per_record - 1));
+        }
+        let def_levels = vec![1i16; num_values];
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(
+            props,
+            1,
+            1,
+            &data,
+            Some(&def_levels),
+            Some(&rep_levels),
+        );
+        let data_pages = pages.data_pages;
+
+        // The Materialized-rep arm groups levels by record, and each
+        // record's bytes blow the page byte limit on its own, so we get
+        // exactly one page per record.
+        assert_eq!(
+            data_pages.len(),
+            num_records,
+            "expected one data page per record, got {data_pages:?}"
+        );
+        for (bytes, n_values) in &data_pages {
+            assert_eq!(
+                *n_values as usize, values_per_record,
+                "each page must hold a whole record's leaves, got {data_pages:?}"
+            );
+            // Each page is one full record (its leaves cannot be split),
+            // so allow up to `values_per_record` blobs of payload plus a
+            // small fudge for level encoding overhead.
+            let upper_bound = values_per_record * (value_size + 16);
+            assert!(
+                *bytes <= upper_bound,
+                "page size {bytes} exceeds whole-record bound ({upper_bound}); pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_with_nullable_large_values() {
+        // Coverage for `LevelDataRef::value_count` on Materialized def
+        // levels: a nullable column with mixed nulls and large values.
+        // `value_count` must return the actual non-null count so the
+        // byte estimate reflects bytes that will actually be written,
+        // not the level count.
+        let value_size = 32 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_levels = 32;
+
+        // Alternating null / non-null: 16 nulls and 16 values.
+        let def_levels: Vec<i16> = (0..num_levels as i16).map(|i| i % 2).collect();
+        let num_values = def_levels.iter().filter(|&&d| d == 1).count();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // With 16 actual values of 32 KiB each and a 16 KiB page limit,
+        // every non-null value should get its own page (plus possibly
+        // adjacent nulls). At minimum, the number of pages must be
+        // roughly the value count, not 1 (which is what `main` produced).
+        assert!(
+            data_pages.len() >= num_values / 2,
+            "expected at least {} pages for {num_values} large values, got {} pages: {data_pages:?}",
+            num_values / 2,
+            data_pages.len(),
+        );
+        // No page contains more than ~one value's worth of payload bytes.
+        for size in &data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_dict_enabled_large_values_post_spill() {
+        // While dictionary encoding is active, `has_dictionary()` short-
+        // circuits `estimated_value_bytes` — the byte estimate is plain-
+        // encoded size but dict-encoded pages only store small RLE
+        // indices, so we'd otherwise shrink pages spuriously. Once the
+        // dictionary spills (each value is large + unique), plain
+        // encoding takes over and the byte-budget sub-batch kicks in.
+        //
+        // This test makes sure the writer survives that transition and
+        // produces bounded pages thereafter.
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_rows = 32;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            // Force a small dict so it spills quickly even though
+            // each value here is unique.
+            .set_dictionary_page_size_limit(1024)
+            .set_data_page_size_limit(page_byte_limit)
+            // Small mini-batches so dict fallback happens part-way
+            // through the input, leaving subsequent mini-batches to
+            // exercise the post-spill plain-encoding path that the
+            // page-size fix actually targets.
+            .set_write_batch_size(4)
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // After spill, plain encoding writes one ~64 KiB value per page.
+        // Without the fix, post-spill writes still buffered all 32
+        // values into a single ~2 MiB page.
+        assert!(
+            data_pages.len() >= num_rows / 2,
+            "expected >= {} data pages after dict spill, got {} ({data_pages:?})",
+            num_rows / 2,
+            data_pages.len(),
+        );
+        for size in &data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_dictionary_page_size() {
+        // A column of large *distinct* values with dictionary encoding on:
+        // the dictionary page accumulates the values themselves, and its
+        // spill check runs only once per mini-batch. Without bounding the
+        // dictionary-encoding mini-batch, one `write_batch_size` mini-batch
+        // would intern `write_batch_size * value_size` bytes into the
+        // dictionary page before the check fires (~16 MiB here). The chunker
+        // must sub-batch the dictionary-encoding phase too.
+        let value_size = 8 * 1024;
+        let dict_page_limit = 64 * 1024;
+        let num_rows = 2048;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(dict_page_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| {
+                // each value distinct, so the dictionary cannot dedup them
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+        let dict_page_size = pages.dict_page_size;
+
+        assert!(
+            dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // Bounded near the limit (~2x from the post-mini-batch check). Before
+        // the fix the dictionary page reached num_rows * value_size (~16 MiB,
+        // 256x the limit).
+        assert!(
+            dict_page_size <= 3 * dict_page_limit,
+            "dictionary page {dict_page_size} exceeds 3x the {dict_page_limit} limit",
+        );
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_for_fixed_len_byte_array() {
+        // Coverage for `ParquetValueType::byte_size` override on
+        // `FixedLenByteArray`. With `type_length = 1`, each plain-encoded
+        // value is one byte, so a 4-byte page byte limit forces the
+        // sub-batch sizer to write ~4 values per page rather than one
+        // page for the whole batch.
+        let page_byte_limit = 4;
+        let num_values = 128;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut fla = FixedLenByteArray::default();
+                fla.set_data(Bytes::from(vec![i as u8]));
+                fla
+            })
+            .collect();
+        let pages =
+            write_and_collect_pages::<FixedLenByteArrayType>(props, 0, 0, &data, None, None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // Without the fix this is a single 128-byte page; with the fix
+        // the byte budget caps each page at ~`page_byte_limit` bytes.
+        assert!(
+            data_pages.len() >= num_values / 8,
+            "expected pages capped by byte budget, got {data_pages:?}"
+        );
+        for size in &data_pages {
+            assert!(
+                *size <= page_byte_limit * 4,
+                "page size {size} larger than expected; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         // Booleans have an unsigned sort order and so are not compatible
@@ -4309,6 +4729,69 @@ mod tests {
         get_typed_column_writer::<T>(column_writer)
     }
 
+    /// Pages collected by [`write_and_collect_pages`].
+    struct CollectedPages {
+        /// `(compressed byte size, value count)` for every data page, in order.
+        data_pages: Vec<(usize, u32)>,
+        /// Largest dictionary page seen, or 0 if the column wasn't dict-encoded.
+        dict_page_size: usize,
+    }
+
+    /// Writes `data` (with optional def/rep levels) through a raw
+    /// `ColumnWriterImpl` configured by `props`, then re-reads the file and
+    /// returns its page layout. Shared by the page-size regression tests so
+    /// each only has to express its props, input, and assertions.
+    fn write_and_collect_pages<T: DataType>(
+        props: WriterProperties,
+        max_def_level: i16,
+        max_rep_level: i16,
+        data: &[T::T],
+        def_levels: Option<&[i16]>,
+        rep_levels: Option<&[i16]>,
+    ) -> CollectedPages {
+        let mut file = tempfile::tempfile().unwrap();
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let mut writer =
+            get_test_column_writer::<T>(page_writer, max_def_level, max_rep_level, Arc::new(props));
+        writer.write_batch(data, def_levels, rep_levels).unwrap();
+        let r = writer.close().unwrap();
+        drop(write);
+
+        let read_props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+        let mut page_reader = Box::new(
+            SerializedPageReader::new_with_properties(
+                Arc::new(file),
+                &r.metadata,
+                r.rows_written as usize,
+                None,
+                Arc::new(read_props),
+            )
+            .unwrap(),
+        );
+
+        let mut collected = CollectedPages {
+            data_pages: Vec::new(),
+            dict_page_size: 0,
+        };
+        while let Some(page) = page_reader.get_next_page().unwrap() {
+            match page.page_type() {
+                PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => {
+                    collected
+                        .data_pages
+                        .push((page.buffer().len(), page.num_values()));
+                }
+                PageType::DICTIONARY_PAGE => {
+                    collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
+                }
+                _ => {}
+            }
+        }
+        collected
+    }
+
     /// Returns column reader.
     fn get_test_column_reader<T: DataType>(
         page_reader: Box<dyn PageReader>,
@@ -4715,6 +5198,42 @@ mod tests {
                 assert_eq!(&v[..levels_read], self.expected_rep_levels.unwrap());
             }
         }
+    }
+
+    #[test]
+    fn test_level_data_ref_value_count() {
+        // `value_count` is what the byte-budget chunker uses to convert a
+        // chunk's level span into a leaf-value count. It must work for any
+        // column shape — flat, nullable, or nested — because the leaf
+        // values array is decoupled from the rep/def level stream.
+        let max_def = 2;
+        // Non-nullable / unrepeated: no def levels materialized — every
+        // level is a value.
+        assert_eq!(LevelDataRef::Absent.value_count(64, max_def), 64);
+        // Uniform run of present values, and of nulls.
+        assert_eq!(
+            LevelDataRef::Uniform {
+                value: max_def,
+                count: 40
+            }
+            .value_count(40, max_def),
+            40
+        );
+        assert_eq!(
+            LevelDataRef::Uniform {
+                value: max_def - 1,
+                count: 40
+            }
+            .value_count(40, max_def),
+            0
+        );
+        // Materialized def levels (nullable / nested): only levels equal to
+        // `max_def` are values; empty-list / null levels are not.
+        let levels = [2i16, 0, 2, 1, 2, 2, 0];
+        assert_eq!(
+            LevelDataRef::Materialized(&levels).value_count(levels.len(), max_def),
+            4
+        );
     }
 
     #[test]
