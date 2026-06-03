@@ -53,6 +53,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -91,7 +92,7 @@ struct Args {
 
     /// Rows per input batch fed to the writer. Each batch is dropped right after
     /// it is written, so only the writer's internal buffering accumulates.
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = 8192)]
     batch_size: usize,
 
     /// Use the spilling [`TempFilePageStore`] instead of the default in-memory
@@ -121,6 +122,20 @@ const SMALL_AVG_LEN: usize = 20;
 // heap.
 // ---------------------------------------------------------------------------
 
+/// Shared counters describing how much spilling actually happened, aggregated
+/// across every per-column [`TempFilePageStore`]. Each store holds an `Arc` to
+/// the same instance and bumps the atomics, so the totals survive the stores
+/// being dropped at row group flush.
+#[derive(Debug, Default)]
+struct SpillStats {
+    /// Number of temp files created — one per column chunk that was opened.
+    files_created: AtomicU64,
+    /// Total bytes handed to `put` and written to a temp file.
+    bytes_written: AtomicU64,
+    /// Total bytes read back out of a temp file by `take` (at row group flush).
+    bytes_read: AtomicU64,
+}
+
 /// A spilling [`PageStore`]: one temp file per column chunk.
 ///
 /// `put` appends the blob to the file and records its `(offset, len)`; `take`
@@ -132,14 +147,18 @@ struct TempFilePageStore {
     end: u64,
     /// `(offset, len)` for each stored blob, indexed by the `PageKey` we minted.
     locs: Vec<(u64, usize)>,
+    /// Shared, cross-store spill counters (see [`SpillStats`]).
+    stats: Arc<SpillStats>,
 }
 
 impl TempFilePageStore {
-    fn new() -> Result<Self> {
+    fn new(stats: Arc<SpillStats>) -> Result<Self> {
+        stats.files_created.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             file: tempfile::tempfile()?,
             end: 0,
             locs: Vec::new(),
+            stats,
         })
     }
 }
@@ -150,6 +169,9 @@ impl PageStore for TempFilePageStore {
         // OS file cursor).
         self.file.seek(SeekFrom::Start(self.end))?;
         self.file.write_all(&value)?;
+        self.stats
+            .bytes_written
+            .fetch_add(value.len() as u64, Ordering::Relaxed);
         let key = PageKey::new(self.locs.len() as u64);
         self.locs.push((self.end, value.len()));
         self.end += value.len() as u64;
@@ -161,6 +183,9 @@ impl PageStore for TempFilePageStore {
         let mut buf = vec![0u8; len];
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.read_exact(&mut buf)?;
+        self.stats
+            .bytes_read
+            .fetch_add(len as u64, Ordering::Relaxed);
         Ok(Bytes::from(buf))
     }
 
@@ -169,13 +194,16 @@ impl PageStore for TempFilePageStore {
     // `ArrowWriter::memory_size()` drop to just the in-flight encoder buffers.
 }
 
-/// Creates a fresh [`TempFilePageStore`] for every column chunk the writer opens.
-#[derive(Debug, Default)]
-struct TempFilePageStoreFactory;
+/// Creates a fresh [`TempFilePageStore`] for every column chunk the writer opens,
+/// handing each one an `Arc` to the shared [`SpillStats`].
+#[derive(Debug)]
+struct TempFilePageStoreFactory {
+    stats: Arc<SpillStats>,
+}
 
 impl PageStoreFactory for TempFilePageStoreFactory {
     fn create(&self, _column_index: usize) -> Result<Box<dyn PageStore>> {
-        Ok(Box::new(TempFilePageStore::new()?))
+        Ok(Box::new(TempFilePageStore::new(self.stats.clone())?))
     }
 }
 
@@ -283,8 +311,11 @@ fn main() -> Result<()> {
         .build();
 
     let mut options = ArrowWriterOptions::new().with_properties(props);
+    let spill_stats = Arc::new(SpillStats::default());
     if args.spill {
-        options = options.with_page_store_factory(Arc::new(TempFilePageStoreFactory));
+        options = options.with_page_store_factory(Arc::new(TempFilePageStoreFactory {
+            stats: spill_stats.clone(),
+        }));
     }
 
     // Total logical payload across the large columns — the part that dominates.
@@ -354,6 +385,19 @@ fn main() -> Result<()> {
     );
     println!();
     if args.spill {
+        let files = spill_stats.files_created.load(Ordering::Relaxed);
+        let written_bytes = spill_stats.bytes_written.load(Ordering::Relaxed);
+        let read_bytes = spill_stats.bytes_read.load(Ordering::Relaxed);
+        println!("Spill temp files created        : {files:>8}   <- one per column chunk");
+        println!(
+            "Total bytes spilled (written)   : {:>8.1} MiB",
+            mib(written_bytes as usize),
+        );
+        println!(
+            "Total bytes read back (take)    : {:>8.1} MiB",
+            mib(read_bytes as usize),
+        );
+        println!();
         println!(
             "With spilling, peak writer memory is bounded by the in-flight encoder \n\
              buffers (a page or two per column), not the {:.1} MiB row group.",
