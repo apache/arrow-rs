@@ -5101,7 +5101,7 @@ mod tests {
 
     // Fuzz testing: generate random UTF-8 strings and verify sort correctness
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fuzz_random_strings() {
         let mut rng = StdRng::seed_from_u64(42); // Fixed seed for reproducibility
 
