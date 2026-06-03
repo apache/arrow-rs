@@ -322,7 +322,7 @@ impl<T: Default> ColumnMetrics<T> {
 ///
 /// The variants are different physical representations of the same logical
 /// sequence of levels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LevelDataRef<'a> {
     Absent,
     Materialized(&'a [i16]),
@@ -373,6 +373,96 @@ impl<'a> LevelDataRef<'a> {
             Self::Materialized(values) => Self::Materialized(&values[offset..offset + len]),
             Self::Uniform { value, .. } => Self::Uniform { value, count: len },
         }
+    }
+}
+
+/// Borrowed view of a value selection, analogous to `&str` for `ValueSelection`'s `String`.
+///
+/// This type exists so that [`GenericColumnWriter::write_batch_internal`] can accept value
+/// selections from two callers without allocating: the public [`GenericColumnWriter::write_batch`]
+/// API constructs `Dense` directly from the caller's values length, while the Arrow writer
+/// borrows from `ArrayLevels` as either empty, dense, or sparse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueSelectionRef<'a> {
+    #[cfg(feature = "arrow")]
+    Empty,
+    Dense {
+        offset: usize,
+        len: usize,
+    },
+    #[cfg(feature = "arrow")]
+    Sparse(&'a [usize]),
+    #[cfg(not(feature = "arrow"))]
+    #[doc(hidden)]
+    _Phantom(std::marker::PhantomData<&'a ()>),
+}
+
+impl<'a> ValueSelectionRef<'a> {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            #[cfg(feature = "arrow")]
+            Self::Empty => 0,
+            Self::Dense { len, .. } => len,
+            #[cfg(feature = "arrow")]
+            Self::Sparse(indices) => indices.len(),
+            #[cfg(not(feature = "arrow"))]
+            Self::_Phantom(_) => unreachable!(),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Empty => {
+                debug_assert_eq!(offset, 0);
+                debug_assert_eq!(len, 0);
+                Self::Empty
+            }
+            Self::Dense {
+                offset: base,
+                len: selection_len,
+            } => {
+                debug_assert!(offset + len <= selection_len);
+                Self::Dense {
+                    offset: base + offset,
+                    len,
+                }
+            }
+            Self::Sparse(indices) => Self::Sparse(&indices[offset..offset + len]),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn index_at(self, idx: usize) -> Option<usize> {
+        match self {
+            Self::Empty => None,
+            Self::Dense { offset, len } => (idx < len).then_some(offset + idx),
+            Self::Sparse(indices) => indices.get(idx).copied(),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn for_each_index(self, mut f: impl FnMut(usize)) {
+        match self {
+            Self::Empty => {}
+            Self::Dense { offset, len } => {
+                for idx in offset..offset + len {
+                    f(idx);
+                }
+            }
+            Self::Sparse(indices) => {
+                for &idx in indices {
+                    f(idx);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn map_indices<T>(self, mut f: impl FnMut(usize) -> T) -> Vec<T> {
+        let mut values = Vec::with_capacity(self.len());
+        self.for_each_index(|i| values.push(f(i)));
+        values
     }
 }
 
@@ -485,7 +575,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
-        value_indices: Option<&[usize]>,
+        value_selection: ValueSelectionRef<'_>,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
         min: Option<&E::T>,
@@ -507,14 +597,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // The purpose of this chunking is to bound this. Even if a user writes large
         // number of values, the chunking will ensure that we add data page at a
         // reasonable pagesize limit.
-
-        // TODO: find out why we don't account for size of levels when we estimate page
-        // size.
         let num_levels = def_levels.len().max(rep_levels.len());
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_selection.len()
         };
 
         if let Some(min) = min {
@@ -539,7 +626,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             || !matches!(rep_levels, LevelDataRef::Absent);
         // When both level vectors are compact (Uniform or Absent), there is no
         // materialized slice to split and the per-mini-batch work is O(1), so we
-        // can safely use a much larger batch size.
+        // can safely use a much larger batch size.  We use
+        // `data_page_row_count_limit` (default 20 000) instead of the normal
+        // `write_batch_size` (default 1 024) to amortise the per-batch overhead
+        // while still respecting the page row-count ceiling.
         let base_batch_size = if both_levels_compact && has_levels {
             self.props.data_page_row_count_limit()
         } else {
@@ -558,7 +648,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_offset += self.write_mini_batch(
                 values,
                 values_offset,
-                value_indices,
+                value_selection,
                 end_offset - levels_offset,
                 def_levels.slice(levels_offset, end_offset - levels_offset),
                 rep_levels.slice(levels_offset, end_offset - levels_offset),
@@ -590,7 +680,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Result<usize> {
         self.write_batch_internal(
             values,
-            None,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: values.len(),
+            },
             LevelDataRef::from(def_levels),
             LevelDataRef::from(rep_levels),
             None,
@@ -617,7 +710,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Result<usize> {
         self.write_batch_internal(
             values,
-            None,
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: values.len(),
+            },
             LevelDataRef::from(def_levels),
             LevelDataRef::from(rep_levels),
             min,
@@ -728,7 +824,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         values_offset: usize,
-        value_indices: Option<&[usize]>,
+        value_selection: ValueSelectionRef<'_>,
         num_levels: usize,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
@@ -835,12 +931,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.page_metrics.num_buffered_rows += num_levels as u32;
         }
 
-        match value_indices {
-            Some(indices) => {
+        match value_selection {
+            #[cfg(feature = "arrow")]
+            ValueSelectionRef::Empty => {}
+            #[cfg(feature = "arrow")]
+            ValueSelectionRef::Sparse(indices) => {
+                debug_assert!(
+                    values_offset + values_to_write <= indices.len(),
+                    "Sparse value selection out of bounds: \
+                     values_offset={values_offset} values_to_write={values_to_write} \
+                     indices.len()={}",
+                    indices.len()
+                );
                 let indices = &indices[values_offset..values_offset + values_to_write];
                 self.encoder.write_gather(values, indices)?;
             }
-            None => self.encoder.write(values, values_offset, values_to_write)?,
+            ValueSelectionRef::Dense { offset, .. } => {
+                self.encoder
+                    .write(values, offset + values_offset, values_to_write)?
+            }
+            #[cfg(not(feature = "arrow"))]
+            ValueSelectionRef::_Phantom(_) => unreachable!(),
         }
 
         self.page_metrics.num_buffered_values += num_levels as u32;
@@ -1789,6 +1900,17 @@ mod tests {
                 "Parquet error: Expected to write 4 values, but have only 2"
             );
         }
+    }
+
+    #[test]
+    fn test_column_writer_levels_limit_values_written() {
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
+
+        let values_written = writer.write_batch(&[1, 2, 3], Some(&[1, 0]), None).unwrap();
+
+        assert_eq!(values_written, 1);
     }
 
     #[test]
@@ -4657,10 +4779,15 @@ mod tests {
                 Arc::new(self.props),
             );
 
+            let value_selection = ValueSelectionRef::Dense {
+                offset: 0,
+                len: self.values.len(),
+            };
+
             writer
                 .write_batch_internal(
                     self.values,
-                    None,
+                    value_selection,
                     self.def_levels,
                     self.rep_levels,
                     None,
@@ -4784,5 +4911,66 @@ mod tests {
                 .with_expected_def_levels(&expected_def_levels)
                 .run();
         }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_sparse_value_selection() {
+        // Nullable column with a mix of nulls and values.
+        // def_levels: [1, 0, 1, 0, 1] — values at indices 0, 2, 4.
+        // ValueSelectionRef::Sparse picks out the non-null positions.
+        let max_def_level = 1;
+        let all_values: Vec<i32> = vec![10, 20, 30, 40, 50];
+        let def_levels: &[i16] = &[1, 0, 1, 0, 1];
+        let non_null_indices: &[usize] = &[0, 2, 4];
+
+        let mut file = tempfile::tempfile().unwrap();
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let mut writer = get_test_column_writer::<Int32Type>(
+            page_writer,
+            max_def_level,
+            0,
+            Arc::new(WriterProperties::default()),
+        );
+
+        writer
+            .write_batch_internal(
+                &all_values,
+                ValueSelectionRef::Sparse(non_null_indices),
+                LevelDataRef::Materialized(def_levels),
+                LevelDataRef::Absent,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let result = writer.close().unwrap();
+        drop(write);
+
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+        let page_reader = Box::new(
+            SerializedPageReader::new_with_properties(
+                Arc::new(file),
+                &result.metadata,
+                result.rows_written as usize,
+                None,
+                Arc::new(props),
+            )
+            .unwrap(),
+        );
+        let mut reader = get_test_column_reader::<Int32Type>(page_reader, max_def_level, 0);
+
+        let mut actual_values = Vec::with_capacity(5);
+        let mut actual_def = Vec::with_capacity(5);
+
+        let (_, values_read, levels_read) = reader
+            .read_records(5, Some(&mut actual_def), None, &mut actual_values)
+            .unwrap();
+
+        assert_eq!(&actual_values[..values_read], &[10, 30, 50]);
+        assert_eq!(&actual_def[..levels_read], def_levels);
     }
 }

@@ -33,8 +33,8 @@ pub(crate) struct CdcChunk {
     pub level_offset: usize,
     /// The number of levels in this chunk.
     pub num_levels: usize,
-    /// The start index into `non_null_indices` for this chunk.
+    /// The start index into the value selection for this chunk.
     pub value_offset: usize,
-    /// The number of `non_null_indices` entries in this chunk.
+    /// The number of value selection entries in this chunk.
     pub num_values: usize,
 }
