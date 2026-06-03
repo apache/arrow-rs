@@ -560,11 +560,20 @@ impl<'a> RecordBatchDecoder<'a> {
             let mut arrays = vec![];
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
-                // Create array for projected field
-                if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                    let child = self.create_array(field, &mut variadic_counts)?;
-                    arrays.push((proj_idx, child));
-                } else {
+                // A projected field can appear more than once, so collect all matching positions.
+                let mut child = None;
+                for (proj_idx, projected_idx) in projection.iter().enumerate() {
+                    if *projected_idx == idx {
+                        if child.is_none() {
+                            child = Some(self.create_array(field, &mut variadic_counts)?);
+                        }
+
+                        // Reuse the decoded array for duplicate projection entries.
+                        arrays.push((proj_idx, child.as_ref().unwrap().clone()));
+                    }
+                }
+
+                if child.is_none() {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
@@ -754,7 +763,7 @@ impl<'a> RecordBatchDecoder<'a> {
 /// If `require_alignment` is false, this function will automatically allocate a new aligned buffer
 /// and copy over the data if any array data in the input `buf` is not properly aligned.
 /// (Properly aligned array data will remain zero-copy.)
-/// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
+/// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct [`arrow_data::ArrayData`].
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
@@ -1046,7 +1055,7 @@ impl FileDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
@@ -2293,6 +2302,30 @@ mod tests {
                 FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(vec![3, 2, 1]));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
+            assert_eq!(read_batch, expected_batch);
+        }
+    }
+
+    #[test]
+    fn test_projection_duplicate_indices() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        // Write the batch to IPC
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Verify duplicate([1, 1]) and reordered([2, 0, 2]) projection indices
+        for projection in [vec![1, 1], vec![2, 0, 2]] {
+            let reader =
+                FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(projection.clone()));
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+
+            let expected_batch = batch.project(&projection).unwrap();
             assert_eq!(read_batch, expected_batch);
         }
     }

@@ -124,15 +124,20 @@ pub fn substring(
             start as i32,
             length.map(|e| e as i32),
         ),
-        DataType::FixedSizeBinary(old_len) => fixed_size_binary_substring(
-            array
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .expect("a fixed size binary is expected"),
-            *old_len,
-            start as i32,
-            length.map(|e| e as i32),
-        ),
+        DataType::FixedSizeBinary(old_len) => {
+            let old_len: usize = (*old_len)
+                .try_into()
+                .expect("negative FixedSizeBinary value length");
+            fixed_size_binary_substring(
+                array
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .expect("a fixed size binary is expected"),
+                old_len,
+                start,
+                length,
+            )
+        }
         DataType::LargeUtf8 => byte_substring(
             array
                 .as_any()
@@ -322,31 +327,37 @@ where
 
 fn fixed_size_binary_substring(
     array: &FixedSizeBinaryArray,
-    old_len: i32,
-    start: i32,
-    length: Option<i32>,
+    old_len: usize,
+    start: i64,
+    length: Option<u64>,
 ) -> Result<ArrayRef, ArrowError> {
-    let new_start = if start >= 0 {
-        start.min(old_len)
-    } else {
-        (old_len + start).max(0)
+    let new_start = match start.cmp(&0) {
+        Ordering::Greater => usize::try_from(start).unwrap_or(usize::MAX).min(old_len),
+        Ordering::Equal => 0,
+        Ordering::Less => {
+            let offset = usize::try_from(start.unsigned_abs()).unwrap_or(usize::MAX);
+            old_len.saturating_sub(offset)
+        }
     };
+
     let new_len = match length {
-        Some(len) => len.min(old_len - new_start),
+        Some(len) => usize::try_from(len)
+            .unwrap_or(usize::MAX)
+            .min(old_len - new_start),
         None => old_len - new_start,
     };
 
     // build value buffer
     let num_of_elements = array.len();
     let data = array.value_data();
-    let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
+    let capacity = num_of_elements
+        .checked_mul(new_len)
+        .expect("capacity overflow");
+    let mut new_values = MutableBuffer::new(capacity);
     (0..num_of_elements)
         .map(|idx| {
-            let offset = array.value_offset(idx);
-            (
-                (offset + new_start) as usize,
-                (offset + new_start + new_len) as usize,
-            )
+            let offset = idx * array.value_size();
+            (offset + new_start, offset + new_start + new_len)
         })
         .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
 
@@ -362,6 +373,8 @@ fn fixed_size_binary_substring(
         // otherwise it collapses to an empty array (len=0).
         nulls = Some(NullBuffer::new_valid(num_of_elements));
     }
+
+    let new_len: i32 = new_len.try_into().expect("new_len overflow");
 
     Ok(Arc::new(FixedSizeBinaryArray::new(
         new_len,
@@ -411,6 +424,21 @@ mod tests {
                     let result = $substring_fn(&array, start, length).unwrap();
                     let result = result.as_any().downcast_ref::<$array_ty>().unwrap();
                     let expected = <$array_ty>::from(expected);
+                    assert_eq!(&expected, result);
+                })
+        };
+    }
+
+    /// A helper macro to test the substring functions for array types only implementing TryFrom.
+    macro_rules! do_test_tryfrom {
+        ($cases:expr, $array_ty:ty, $substring_fn:ident) => {
+            $cases
+                .into_iter()
+                .for_each(|(array, start, length, expected)| {
+                    let array = <$array_ty>::try_from(array).unwrap();
+                    let result = $substring_fn(&array, start, length).unwrap();
+                    let result = result.as_any().downcast_ref::<$array_ty>().unwrap();
+                    let expected = <$array_ty>::try_from(expected).unwrap();
                     assert_eq!(&expected, result);
                 })
         };
@@ -578,7 +606,7 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        do_test!(
+        do_test_tryfrom!(
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring
@@ -617,7 +645,7 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        do_test!(
+        do_test_tryfrom!(
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring

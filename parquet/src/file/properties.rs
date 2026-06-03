@@ -52,9 +52,9 @@ pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPositi
 pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// Default value for [`WriterProperties::column_index_truncate_length`]
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
-/// Default value for [`BloomFilterProperties::fpp`]
+/// Default value for [`BloomFilterProperties::fpp()`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// Default value for [`BloomFilterProperties::ndv`].
+/// Default value for [`BloomFilterProperties::ndv()`].
 ///
 /// Note: this is only the fallback default used when constructing [`BloomFilterProperties`]
 /// directly. When using [`WriterPropertiesBuilder`], columns with bloom filters enabled
@@ -1437,6 +1437,26 @@ impl Default for EnabledStatistics {
 /// [`Sbbf::fold_to_target_fpp`]: crate::bloom_filter::Sbbf::fold_to_target_fpp
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
+    fpp: f64,
+    ndv: u64,
+}
+
+impl Default for BloomFilterProperties {
+    fn default() -> Self {
+        BloomFilterProperties {
+            fpp: DEFAULT_BLOOM_FILTER_FPP,
+            ndv: DEFAULT_BLOOM_FILTER_NDV,
+        }
+    }
+}
+
+impl BloomFilterProperties {
+    /// Returns a new [`BloomFilterPropertiesBuilder`] for constructing
+    /// [`BloomFilterProperties`] with custom values.
+    pub fn builder() -> BloomFilterPropertiesBuilder {
+        BloomFilterPropertiesBuilder::new()
+    }
+
     /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_fpp`].
@@ -1447,7 +1467,10 @@ pub struct BloomFilterProperties {
     ///
     /// This value also serves as the target FPP for bloom filter folding: after all values
     /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
-    pub fpp: f64,
+    pub fn fpp(&self) -> f64 {
+        self.fpp
+    }
+
     /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_max_ndv`].
@@ -1469,23 +1492,8 @@ pub struct BloomFilterProperties {
     /// If you do set this value explicitly it is probably best to set it for each column
     /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_max_ndv`] rather than globally,
     /// since different columns may have different numbers of distinct values.
-    pub ndv: u64,
-}
-
-impl Default for BloomFilterProperties {
-    fn default() -> Self {
-        BloomFilterProperties {
-            fpp: DEFAULT_BLOOM_FILTER_FPP,
-            ndv: DEFAULT_BLOOM_FILTER_NDV,
-        }
-    }
-}
-
-impl BloomFilterProperties {
-    /// Returns a new [`BloomFilterPropertiesBuilder`] for constructing
-    /// [`BloomFilterProperties`] with custom values.
-    pub fn builder() -> BloomFilterPropertiesBuilder {
-        BloomFilterPropertiesBuilder::new()
+    pub fn ndv(&self) -> u64 {
+        self.ndv
     }
 }
 

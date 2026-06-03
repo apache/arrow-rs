@@ -1801,7 +1801,8 @@ mod tests {
             expected
         );
 
-        let fsb_array = FixedSizeBinaryArray::from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]);
+        let fsb_array =
+            FixedSizeBinaryArray::try_from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]).unwrap();
         let scalar = FixedSizeBinaryArray::new_scalar([1u8]);
         let expected = BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
         assert_eq!(crate::cmp::eq(&fsb_array, &scalar).unwrap(), expected);
@@ -1824,7 +1825,8 @@ mod tests {
             expected
         );
 
-        let fsb_array = FixedSizeBinaryArray::from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]);
+        let fsb_array =
+            FixedSizeBinaryArray::try_from(vec![&[0u8], &[0u8], &[0u8], &[1u8]]).unwrap();
         let scalar = FixedSizeBinaryArray::new_scalar([1u8]);
         let expected = BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
         assert_eq!(crate::cmp::neq(&fsb_array, &scalar).unwrap(), expected);
