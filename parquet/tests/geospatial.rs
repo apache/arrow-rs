@@ -30,7 +30,7 @@ mod test {
             ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
             arrow_writer::ArrowWriterOptions,
         },
-        basic::LogicalType,
+        basic::{EdgeInterpolationAlgorithm, LogicalType},
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
@@ -63,7 +63,7 @@ mod test {
             (
                 "crs-default.parquet",
                 LogicalType::geometry(None),
-                WkbMetadata::new(None, None),
+                WkbMetadata::new(Some("OGC:CRS84"), None), // omitted CRS defaults to OGC:CRS84
             ),
             (
                 "crs-srid.parquet",
@@ -78,7 +78,7 @@ mod test {
             (
                 "crs-geography.parquet",
                 LogicalType::geography(None, None),
-                WkbMetadata::new(None, Some(WkbEdges::Spherical)),
+                WkbMetadata::new(Some("OGC:CRS84"), Some(WkbEdges::Spherical)), // omitted CRS defaults to OGC:CRS84
             ),
         ];
 
@@ -424,5 +424,129 @@ mod test {
                 .map(|maybe_xy| maybe_xy.map(|(x, y)| wkb_point_xy(x, y))),
         );
         Arc::new(array)
+    }
+
+    #[test]
+    fn test_logical_type_to_field_conversion() {
+        use parquet::arrow::parquet_to_arrow_schema;
+        use parquet::basic::Type as PhysicalType;
+        use parquet::schema::types::{SchemaDescriptor, Type};
+
+        // Test cases: (LogicalType, expected extension name, expected metadata JSON)
+        let test_cases = [
+            // Geometry with default CRS (defaults to OGC:CRS84 per Parquet spec)
+            (
+                LogicalType::geometry(None),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84"}"#,
+            ),
+            // Geometry with srid:0 should result in an unset (omitted) CRS
+            (
+                LogicalType::geometry(Some("srid:0".to_string())),
+                "geoarrow.wkb",
+                r#"{}"#,
+            ),
+            // Geometry with custom CRSes (authority:code and partial projjson)
+            (
+                LogicalType::geometry(Some("EPSG:4267".to_string())),
+                "geoarrow.wkb",
+                r#"{"crs":"EPSG:4267"}"#,
+            ),
+            (
+                LogicalType::geometry(Some(
+                    r#"{"id":{"authority":"EPSG","code":4326}}"#.to_string(),
+                )),
+                "geoarrow.wkb",
+                r#"{"crs":{"id":{"authority":"EPSG","code":4326}}}"#,
+            ),
+            // Geography with default CRS (default OGC:CRS84, spherical edges)
+            (
+                LogicalType::geography(None, None),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
+            ),
+            // Geography with explicit edges
+            (
+                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::SPHERICAL)),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
+            ),
+            (
+                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::KARNEY)),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"karney"}"#,
+            ),
+            (
+                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::VINCENTY)),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"vincenty"}"#,
+            ),
+            (
+                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::ANDOYER)),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"andoyer"}"#,
+            ),
+            (
+                LogicalType::geography(None, Some(EdgeInterpolationAlgorithm::THOMAS)),
+                "geoarrow.wkb",
+                r#"{"crs":"OGC:CRS84","edges":"thomas"}"#,
+            ),
+            // Geometry with srid:0 should result in an unset (omitted) CRS
+            // and spherical edges
+            (
+                LogicalType::geography(Some("srid:0".to_string()), None),
+                "geoarrow.wkb",
+                r#"{"edges":"spherical"}"#,
+            ),
+            // Geography with custom CRSes (authority:code and partial projjson)
+            (
+                LogicalType::geography(Some("EPSG:4267".to_string()), None),
+                "geoarrow.wkb",
+                r#"{"crs":"EPSG:4267","edges":"spherical"}"#,
+            ),
+            (
+                LogicalType::geography(
+                    Some(r#"{"id":{"authority":"EPSG","code":4326}}"#.to_string()),
+                    None,
+                ),
+                "geoarrow.wkb",
+                r#"{"crs":{"id":{"authority":"EPSG","code":4326}},"edges":"spherical"}"#,
+            ),
+        ];
+
+        for (logical_type, expected_extension_name, expected_metadata) in test_cases {
+            // Build a Parquet schema with the given LogicalType
+            let parquet_schema = SchemaDescriptor::new(Arc::new(
+                Type::group_type_builder("schema")
+                    .with_fields(vec![Arc::new(
+                        Type::primitive_type_builder("geom", PhysicalType::BYTE_ARRAY)
+                            .with_logical_type(Some(logical_type.clone()))
+                            .build()
+                            .unwrap(),
+                    )])
+                    .build()
+                    .unwrap(),
+            ));
+
+            // Convert to Arrow schema
+            let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None).unwrap();
+            let field = arrow_schema.field(0);
+
+            // Check extension type name
+            let ext_name = field.metadata().get("ARROW:extension:name");
+            assert_eq!(
+                ext_name,
+                Some(&expected_extension_name.to_string()),
+                "Extension name mismatch for {logical_type:?}"
+            );
+
+            // Check extension metadata
+            let ext_metadata = field.metadata().get("ARROW:extension:metadata");
+            assert_eq!(
+                ext_metadata,
+                Some(&expected_metadata.to_string()),
+                "Extension metadata mismatch for {logical_type:?}"
+            );
+        }
     }
 }
