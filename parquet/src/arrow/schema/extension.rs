@@ -67,7 +67,13 @@ pub(crate) fn try_add_extension_type(
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geometry(geometry) => {
-            let md = parquet_geospatial::WkbMetadata::new(geometry.crs.as_deref(), None);
+            // Per Parquet spec: omitted CRS defaults to OGC:CRS84, srid:0 means unset CRS
+            let crs = match geometry.crs.as_deref() {
+                None => Some("OGC:CRS84"),
+                Some("srid:0") => None,
+                Some(crs) => Some(crs),
+            };
+            let md = parquet_geospatial::WkbMetadata::new(crs, None);
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
             arrow_field
@@ -78,7 +84,13 @@ pub(crate) fn try_add_extension_type(
                 .algorithm()
                 .map(|a| a.try_as_edges())
                 .transpose()?;
-            let md = parquet_geospatial::WkbMetadata::new(geography.crs.as_deref(), algorithm);
+            // Per Parquet spec: omitted CRS defaults to OGC:CRS84, srid:0 means unset CRS
+            let crs = match geography.crs.as_deref() {
+                None => Some("OGC:CRS84"),
+                Some("srid:0") => None,
+                Some(crs) => Some(crs),
+            };
+            let md = parquet_geospatial::WkbMetadata::new(crs, algorithm);
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
             arrow_field
