@@ -195,3 +195,63 @@ impl PageStoreFactory for InMemoryPageStoreFactory {
         Ok(Box::new(InMemoryPageStore::default()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_memory_round_trips_blobs_in_handle_order() {
+        let mut store = InMemoryPageStore::default();
+        let k0 = store.put(Bytes::from_static(b"hello")).unwrap();
+        let k1 = store.put(Bytes::from_static(b"world")).unwrap();
+        assert_ne!(k0, k1);
+        assert_eq!(&store.take(k0).unwrap()[..], b"hello");
+        assert_eq!(&store.take(k1).unwrap()[..], b"world");
+    }
+
+    #[test]
+    fn in_memory_take_releases_the_slot() {
+        let mut store = InMemoryPageStore::default();
+        let k = store.put(Bytes::from_static(b"abc")).unwrap();
+        assert_eq!(&store.take(k).unwrap()[..], b"abc");
+        // A second take yields the emptied placeholder rather than the blob,
+        // confirming the bytes were released on the first take.
+        assert!(store.take(k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn in_memory_invalid_key_errors() {
+        let mut store = InMemoryPageStore::default();
+        assert!(store.take(PageKey(99)).is_err());
+    }
+
+    #[test]
+    fn in_memory_reports_resident_bytes() {
+        let mut store = InMemoryPageStore::default();
+        assert_eq!(store.memory_size(), 0);
+        let k0 = store.put(Bytes::from_static(b"hello")).unwrap();
+        let k1 = store.put(Bytes::from_static(b"!")).unwrap();
+        assert_eq!(store.memory_size(), 6);
+        store.take(k0).unwrap();
+        assert_eq!(store.memory_size(), 1);
+        store.take(k1).unwrap();
+        assert_eq!(store.memory_size(), 0);
+    }
+
+    #[test]
+    fn default_store_memory_size_is_zero() {
+        // A spilling backend that does not override `memory_size` reports 0,
+        // reflecting that its blobs no longer occupy the heap.
+        struct OffHeap;
+        impl PageStore for OffHeap {
+            fn put(&mut self, _value: Bytes) -> Result<PageKey> {
+                Ok(PageKey::new(0))
+            }
+            fn take(&mut self, _key: PageKey) -> Result<Bytes> {
+                Ok(Bytes::new())
+            }
+        }
+        assert_eq!(OffHeap.memory_size(), 0);
+    }
+}
