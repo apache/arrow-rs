@@ -5193,4 +5193,151 @@ mod tests {
         let cc = file_meta.row_group(0).column(0);
         assert!(cc.column_index_range().is_none());
     }
+
+    /// Writes a single-column RecordBatch to an in-memory Parquet buffer.
+    fn write_column_to_bytes(array: ArrayRef) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            true,
+        )]));
+        let mut buf = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, schema.clone(), None).expect("create writer");
+        writer
+            .write(&RecordBatch::try_new(schema, vec![array]).unwrap())
+            .unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    /// Reads column 0 from a single-row-group Parquet buffer, projecting it with the given schema.
+    /// Passing a flat schema when the buffer was written from a REE array lets callers decode
+    /// the physical values without the run-end encoding wrapper.
+    fn read_column_with_schema(bytes: Bytes, schema: SchemaRef) -> ArrayRef {
+        let opts = crate::arrow::arrow_reader::ArrowReaderOptions::new().with_schema(schema);
+        ParquetRecordBatchReaderBuilder::try_new_with_options(bytes, opts)
+            .unwrap()
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .column(0)
+            .clone()
+    }
+
+    fn ree_write_read_roundtrip(ree: ArrayRef, flat: ArrayRef) {
+        let flat_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            flat.data_type().clone(),
+            true,
+        )]));
+        let ree_bytes = write_column_to_bytes(ree);
+        let flat_bytes = write_column_to_bytes(flat.clone());
+        assert_eq!(
+            ree_bytes, flat_bytes,
+            "REE and flat bytes should be identical"
+        );
+
+        let decoded_ree = read_column_with_schema(ree_bytes, flat_schema.clone());
+        let decoded_flat = read_column_with_schema(flat_bytes, flat_schema);
+
+        assert_eq!(decoded_ree.as_ref(), flat.as_ref());
+        assert_eq!(decoded_ree.as_ref(), decoded_flat.as_ref());
+    }
+
+    #[test]
+    fn ree_string() {
+        let ree: ArrayRef = Arc::new(
+            [Some("a"), Some("a"), None, Some("b"), Some("b")]
+                .into_iter()
+                .collect::<Int32RunArray>(),
+        );
+        let flat: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("a"),
+            None,
+            Some("b"),
+            Some("b"),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_int32() {
+        let mut b = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        for v in [Some(1), Some(1), None, Some(2), Some(2)] {
+            b.append_option(v);
+        }
+        let ree: ArrayRef = Arc::new(b.finish());
+        let flat: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(2),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_bool() {
+        // run_ends [3, 5, 7] → [T,T,T, null,null, F,F]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![3, 5, 7]),
+                &BooleanArray::from(vec![Some(true), None, Some(false)]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+            None,
+            Some(false),
+            Some(false),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_fixed_size_binary() {
+        let mk = |vals: &[Option<&[u8]>]| -> FixedSizeBinaryArray {
+            let mut b = FixedSizeBinaryBuilder::new(2);
+            for v in vals {
+                match v {
+                    Some(x) => b.append_value(x).unwrap(),
+                    None => b.append_null(),
+                }
+            }
+            b.finish()
+        };
+        // run_ends [2, 4, 6] → [aa,aa, null,null, bb,bb]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![2, 4, 6]),
+                &mk(&[Some(b"aa"), None, Some(b"bb")]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(mk(&[
+            Some(b"aa"),
+            Some(b"aa"),
+            None,
+            None,
+            Some(b"bb"),
+            Some(b"bb"),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_single_run() {
+        let ree: ArrayRef = Arc::new(["x", "x", "x"].into_iter().collect::<Int32RunArray>());
+        let flat: ArrayRef = Arc::new(StringArray::from(vec!["x", "x", "x"]));
+        ree_write_read_roundtrip(ree, flat);
+    }
 }
