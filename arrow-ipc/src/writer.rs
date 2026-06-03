@@ -93,7 +93,10 @@ struct IPCMetadata {
 ///   the `IPCMetadata` block sizes that `FileWriter` needs for its footer index.
 enum BatchEncoding {
     Encoded(EncodedData),
-    Written { padded_header_len: usize, body_len: usize },
+    Written {
+        padded_header_len: usize,
+        body_len: usize,
+    },
 }
 
 /// A single buffer segment ready to be written to the output stream.
@@ -654,7 +657,11 @@ impl IpcDataGenerator {
         let ipc_message = fbb.finished_data().to_vec();
 
         let a = usize::from(write_options.alignment - 1);
-        let prefix_size = if write_options.write_legacy_ipc_format { 4 } else { 8 };
+        let prefix_size = if write_options.write_legacy_ipc_format {
+            4
+        } else {
+            8
+        };
         let padded_header_len = (ipc_message.len() + prefix_size + a) & !a;
 
         if let Some(w) = writer {
@@ -688,7 +695,10 @@ impl IpcDataGenerator {
                 }
                 w.write_all(&PADDING[..tail_pad])?;
             }
-            Ok(BatchEncoding::Written { padded_header_len, body_len })
+            Ok(BatchEncoding::Written {
+                padded_header_len,
+                body_len,
+            })
         } else {
             // Flatten body segments into a contiguous Vec<u8>.
             let mut arrow_data: Vec<u8> = Vec::with_capacity(body_len);
@@ -699,7 +709,10 @@ impl IpcDataGenerator {
                 );
             }
             arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-            Ok(BatchEncoding::Encoded(EncodedData { ipc_message, arrow_data }))
+            Ok(BatchEncoding::Encoded(EncodedData {
+                ipc_message,
+                arrow_data,
+            }))
         }
     }
 
@@ -862,8 +875,10 @@ impl IpcDataGenerator {
             dict_sizes.push(write_message(&mut *writer, dict, write_options)?);
         }
 
-        if let BatchEncoding::Written { padded_header_len, body_len } =
-            self.encode_record_batch(batch, write_options, compression_context, Some(writer))?
+        if let BatchEncoding::Written {
+            padded_header_len,
+            body_len,
+        } = self.encode_record_batch(batch, write_options, compression_context, Some(writer))?
         {
             Ok(IPCMetadata {
                 dictionary_block_sizes: dict_sizes,
