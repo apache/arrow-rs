@@ -17,8 +17,8 @@
 
 use crate::coalesce::InProgressArray;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_integer_array};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -92,6 +92,42 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             .extend_from_slice(&s.values()[offset..offset + len]);
 
         Ok(())
+    }
+
+    fn copy_indices(&mut self, indices: &dyn Array) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+
+        let s = self
+            .source
+            .as_ref()
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
+                )
+            })?
+            .as_primitive::<T>();
+
+        let values = s.values();
+        let source_nulls = s.nulls();
+
+        downcast_integer_array!(indices => {
+            match source_nulls.filter(|nulls| nulls.null_count() > 0) {
+                Some(nulls) => {
+                    let nulls = NullBuffer::new(BooleanBuffer::collect_bool(indices.len(), |idx| {
+                        nulls.is_valid(indices.value(idx).as_usize())
+                    }));
+                    self.nulls.append_buffer(&nulls);
+                }
+                None => self.nulls.append_n_non_nulls(indices.len()),
+            }
+
+            self.current
+                .extend(indices.values().iter().map(|index| values[index.as_usize()]));
+            Ok(())
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!(
+            "Internal Error: unsupported index type for primitive coalescing: {d:?}"
+        ))))
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
