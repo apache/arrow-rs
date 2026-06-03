@@ -23,14 +23,26 @@
 //!
 //! Parquet requires every column chunk to be contiguous in the file, but Arrow
 //! record batches arrive with all columns interleaved. So while a row group is
-//! being written, [`ArrowWriter`] must buffer every column's completed,
-//! compressed pages until the row group is flushed. Peak write memory therefore
-//! grows with the row group size — painful for wide schemas with large, skewed
-//! columns (e.g. a few `id` columns next to a pile of fat string columns).
+//! being written, the writer must buffer every column's completed, compressed
+//! pages until the row group is flushed. Peak write memory therefore grows with
+//! the row group size — painful for wide schemas with large, skewed columns
+//! (e.g. a few `id` columns next to a pile of fat string columns).
 //!
 //! A [`PageStore`] lets that page buffer live somewhere other than the heap. This
 //! example plugs in a [`TempFilePageStore`] (one temp file per column chunk) and
 //! compares peak writer memory against the default in-memory buffering.
+//!
+//! # Concurrency
+//!
+//! To exercise the store from multiple threads, this example uses the low-level
+//! [`ArrowColumnWriter`] API (rather than the single-threaded [`ArrowWriter`]):
+//! it spawns one worker thread per column, hands each its own
+//! [`ArrowColumnWriter`], and fans each record batch's columns out to the
+//! workers via [`compute_leaves`]. Every column encodes on its own thread into
+//! its own [`PageStore`], and the finished [`ArrowColumnChunk`]s are spliced into
+//! the row group — streaming back out of the store one page at a time — on the
+//! main thread. (One thread per column is for clarity; production code would use
+//! a bounded pool such as rayon or tokio.)
 //!
 //! # Running
 //!
@@ -48,13 +60,18 @@
 //! ```
 //!
 //! [`ArrowWriter`]: parquet::arrow::ArrowWriter
+//! [`ArrowColumnWriter`]: parquet::arrow::arrow_writer::ArrowColumnWriter
+//! [`ArrowColumnChunk`]: parquet::arrow::arrow_writer::ArrowColumnChunk
+//! [`compute_leaves`]: parquet::arrow::arrow_writer::compute_leaves
 //! [`PageStore`]: parquet::arrow::arrow_writer::PageStore
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use tempfile::NamedTempFile;
 
@@ -62,13 +79,15 @@ use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use clap::Parser;
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::arrow_writer::{
-    ArrowWriterOptions, PageKey, PageStore, PageStoreFactory,
+    ArrowColumnChunk, ArrowLeafColumn, ArrowRowGroupWriterFactory, PageKey, PageStore,
+    PageStoreFactory, compute_leaves,
 };
 use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+use parquet::file::writer::SerializedFileWriter;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 /// Write a skewed, wide Parquet file and compare peak writer memory with and
@@ -337,18 +356,14 @@ fn main() -> Result<()> {
     // thing a PageStore governs) is the only thing that grows. Uncompressed keeps
     // the reported numbers easy to reason about — the buffer holds the raw page
     // bytes.
-    let props = WriterProperties::builder()
-        .set_compression(Compression::UNCOMPRESSED)
-        .set_max_row_group_row_count(Some(args.rows * 2))
-        .build();
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(Some(args.rows * 2))
+            .build(),
+    );
 
-    let mut options = ArrowWriterOptions::new().with_properties(props);
     let spill_stats = Arc::new(SpillStats::default());
-    if args.spill {
-        options = options.with_page_store_factory(Arc::new(TempFilePageStoreFactory {
-            stats: spill_stats.clone(),
-        }));
-    }
 
     // Total logical payload across the large columns — the part that dominates.
     let large_payload = args.large_string_columns * LARGE_AVG_LEN * args.rows;
@@ -371,44 +386,102 @@ fn main() -> Result<()> {
         },
         mib(large_payload),
     );
+    println!("Encoding columns concurrently: one worker thread per column.");
 
     let mut system = System::new_with_specifics(RefreshKind::everything());
     let rss_start = rss_bytes(&mut system);
 
-    // The output sink. `io::sink()` discards the file bytes so they never inflate
-    // the heap — the measured peak then reflects only the writer's buffering.
+    // Build the lower-level file writer so columns can be encoded in parallel.
+    // `io::sink()` discards the produced file bytes so they never inflate the
+    // heap — the measured peak then reflects only the writer's page buffering.
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(&schema)?;
     let writer_sink: Box<dyn Write + Send> = match &args.output {
         Some(path) => Box::new(File::create(path)?),
         None => Box::new(std::io::sink()),
     };
-    let mut writer = ArrowWriter::try_new_with_options(writer_sink, schema.clone(), options)?;
+    let mut file_writer =
+        SerializedFileWriter::new(writer_sink, parquet_schema.root_schema_ptr(), props.clone())?;
 
+    // One `ArrowColumnWriter` per leaf column, each backed by its own PageStore.
+    // With `--spill`, that store is a TempFilePageStore, so each worker thread's
+    // completed pages land in a temp file instead of the heap.
+    let mut factory = ArrowRowGroupWriterFactory::new(&file_writer, schema.clone());
+    if args.spill {
+        factory = factory.with_page_store_factory(Arc::new(TempFilePageStoreFactory {
+            stats: spill_stats.clone(),
+        }));
+    }
+    let col_writers = factory.create_column_writers(0)?;
+
+    // Spawn a worker per column. Each owns its `ArrowColumnWriter`, receives
+    // `ArrowLeafColumn`s over a small bounded channel (back-pressure keeps in-
+    // flight input from piling up), tracks the peak bytes its writer held
+    // resident, and returns the finished chunk plus that peak. The bounded
+    // channel makes the workers run concurrently with batch generation.
+    let workers: Vec<_> = col_writers
+        .into_iter()
+        .map(|mut col_writer| {
+            let (send, recv) = sync_channel::<ArrowLeafColumn>(2);
+            let handle = thread::spawn(move || -> Result<(ArrowColumnChunk, usize)> {
+                let mut peak_memory = 0usize;
+                for leaf in recv {
+                    col_writer.write(&leaf)?;
+                    // `memory_size()` is the bytes this column's writer holds
+                    // resident — pages in its PageStore plus in-flight encoder
+                    // buffers. With the in-memory store it climbs toward the whole
+                    // column chunk; with spilling it stays flat.
+                    peak_memory = peak_memory.max(col_writer.memory_size());
+                }
+                peak_memory = peak_memory.max(col_writer.memory_size());
+                Ok((col_writer.close()?, peak_memory))
+            });
+            (handle, send)
+        })
+        .collect();
+
+    // Generate batches and fan each batch's columns out to the workers. `schema`
+    // is flat, so leaf order matches field order and each field maps to exactly
+    // one worker.
     let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
-    let mut peak_writer_memory = 0usize;
     let mut peak_rss = rss_start;
-
     let mut written = 0;
     while written < args.rows {
         let rows = args.batch_size.min(args.rows - written);
         let batch = make_batch(&schema, &args, rows, &mut rng);
-        writer.write(&batch)?;
+        for (col_idx, (field, array)) in schema.fields().iter().zip(batch.columns()).enumerate() {
+            for leaf in compute_leaves(field, array)? {
+                // Blocks if this worker is busy — bounding in-flight input.
+                workers[col_idx].1.send(leaf).unwrap();
+            }
+        }
         written += rows;
-        // `batch` is dropped here — only the writer's internal page buffering
-        // persists. `memory_size()` reports the bytes the writer holds *resident*
-        // on the heap: with the in-memory store this climbs toward the whole row
-        // group; with the spilling store it stays flat.
-        peak_writer_memory = peak_writer_memory.max(writer.memory_size());
+        // `batch` is dropped here; its data lives on in whatever leaves are still
+        // in flight to the workers.
         peak_rss = peak_rss.max(rss_bytes(&mut system));
     }
 
-    peak_writer_memory = peak_writer_memory.max(writer.memory_size());
-    writer.close()?;
+    // Signal end-of-input to every worker, then join in column order and splice
+    // each finished chunk into the row group (streaming pages back out of the
+    // store). Columns must be appended in schema order.
+    let mut row_group_writer = file_writer.next_row_group()?;
+    let mut peak_writer_memory = 0usize;
+    for (handle, send) in workers {
+        drop(send); // closes the channel so the worker's `for leaf in recv` ends
+        let (chunk, col_peak) = handle.join().expect("worker thread panicked")?;
+        peak_writer_memory += col_peak;
+        chunk.append_to_row_group(&mut row_group_writer)?;
+        peak_rss = peak_rss.max(rss_bytes(&mut system));
+    }
+    row_group_writer.close()?;
+    file_writer.close()?;
     peak_rss = peak_rss.max(rss_bytes(&mut system));
 
     println!();
     println!("Done. Wrote {written} rows.");
     println!(
-        "Peak ArrowWriter::memory_size() : {:>8.1} MiB   <- bytes the writer held on the heap",
+        "Peak writer memory (Σ per-column): {:>8.1} MiB   <- bytes the column writers held on the heap",
         mib(peak_writer_memory),
     );
     println!(
@@ -434,11 +507,14 @@ fn main() -> Result<()> {
             mib(read_bytes as usize),
         );
         println!();
-        println!("Per spill file (column index, path, bytes stored):");
+        println!("Per spill file (column index, type, path, bytes stored):");
         for f in files.iter() {
+            // `schema` is flat, so the leaf column index is also the field index.
+            let field = schema.field(f.column_index);
             println!(
-                "  col {:>3}  {}  {} bytes ({:.1} MiB)",
+                "  col {:>3}  {:<8}  {}  {} bytes ({:.1} MiB)",
                 f.column_index,
+                format!("{}", field.data_type()),
                 f.path.display(),
                 f.bytes,
                 mib(f.bytes as usize),
