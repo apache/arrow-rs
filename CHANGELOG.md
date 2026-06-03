@@ -38,33 +38,34 @@
 
 **Implemented enhancements:**
 
-- Allow casting plain struct to dictionary encoded struct [\#10038](https://github.com/apache/arrow-rs/issues/10038)
-- Align buffers when importing via `from_ffi` / `ArrowArrayStreamReader` [\#10028](https://github.com/apache/arrow-rs/issues/10028)
-- Switch Parquet `LogicalType` enum to macro generated version [\#9995](https://github.com/apache/arrow-rs/issues/9995)
-- Future proof Parquet Thrift parser [\#9973](https://github.com/apache/arrow-rs/issues/9973)
-- Add `DatePart` 1-indexed variants [\#9964](https://github.com/apache/arrow-rs/issues/9964)
-- perf: Rework Parquet Thrift handling of boolean fields [\#9946](https://github.com/apache/arrow-rs/issues/9946)
-- Add benchmarks for REE to parquet [\#9935](https://github.com/apache/arrow-rs/issues/9935)
-- \(re\) Allow Large `FixedSizeBinaryArray`s [\#9906](https://github.com/apache/arrow-rs/issues/9906)
+- Allow casting plain struct to dictionary encoded struct [\#10038](https://github.com/apache/arrow-rs/issues/10038) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Align buffers when importing via `from_ffi` / `ArrowArrayStreamReader` [\#10028](https://github.com/apache/arrow-rs/issues/10028) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Switch Parquet `LogicalType` enum to macro generated version [\#9995](https://github.com/apache/arrow-rs/issues/9995) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Future proof Parquet Thrift parser [\#9973](https://github.com/apache/arrow-rs/issues/9973) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add `DatePart` 1-indexed variants [\#9964](https://github.com/apache/arrow-rs/issues/9964) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- perf: Rework Parquet Thrift handling of boolean fields [\#9946](https://github.com/apache/arrow-rs/issues/9946) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add benchmarks for REE to parquet [\#9935](https://github.com/apache/arrow-rs/issues/9935) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \(re\) Allow Large `FixedSizeBinaryArray`s [\#9906](https://github.com/apache/arrow-rs/issues/9906) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add a is\_normalized flag to DictionaryArray [\#9841](https://github.com/apache/arrow-rs/issues/9841)
 - \[Variant\] Remove `BorrowedShreddingState` [\#9790](https://github.com/apache/arrow-rs/issues/9790)
-- \[parquet\] Expose whether FileDecryptionProperties uses a KeyRetriever [\#9721](https://github.com/apache/arrow-rs/issues/9721)
-- Align cast logic for from/to\_decimal for variant to cast kernel [\#9688](https://github.com/apache/arrow-rs/issues/9688)
+- \[parquet\] Expose whether FileDecryptionProperties uses a KeyRetriever [\#9721](https://github.com/apache/arrow-rs/issues/9721) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Align cast logic for from/to\_decimal for variant to cast kernel [\#9688](https://github.com/apache/arrow-rs/issues/9688) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
 - parquet-variant build might fail on s390x [\#10026](https://github.com/apache/arrow-rs/issues/10026)
-- `FixedSizeBinaryArray` implements `From<Vec<&[u8]>>` etc despite conversion being fallible [\#10018](https://github.com/apache/arrow-rs/issues/10018)
-- string -\> decimal cast should not treat empty string as 0 [\#10009](https://github.com/apache/arrow-rs/issues/10009)
+- `FixedSizeBinaryArray` implements `From<Vec<&[u8]>>` etc despite conversion being fallible [\#10018](https://github.com/apache/arrow-rs/issues/10018) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- string -\> decimal cast should not treat empty string as 0 [\#10009](https://github.com/apache/arrow-rs/issues/10009) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Cast FixedSizeList to List will lost datatype metadata in list [\#10004](https://github.com/apache/arrow-rs/issues/10004) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Record reader panics with "index out of bounds" when row group num\_rows exceeds actual column data [\#9992](https://github.com/apache/arrow-rs/issues/9992)
-- parquet predicate-cache: panic / silent row drop on single-leaf nullable struct [\#9982](https://github.com/apache/arrow-rs/issues/9982)
+- Record reader panics with "index out of bounds" when row group num\_rows exceeds actual column data [\#9992](https://github.com/apache/arrow-rs/issues/9992) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- parquet predicate-cache: panic / silent row drop on single-leaf nullable struct [\#9982](https://github.com/apache/arrow-rs/issues/9982) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - parquet-variant doesn't build on 32-bit targets [\#9977](https://github.com/apache/arrow-rs/issues/9977)
-- Date32 doesn't parse date with large year [\#9960](https://github.com/apache/arrow-rs/issues/9960)
-- msrv check failing on main due to `tonic@0.14.6` [\#9938](https://github.com/apache/arrow-rs/issues/9938)
+- Date32 doesn't parse date with large year [\#9960](https://github.com/apache/arrow-rs/issues/9960) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- msrv check failing on main due to `tonic@0.14.6` [\#9938](https://github.com/apache/arrow-rs/issues/9938) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 
 **Documentation updates:**
 
+- Release arrow-rs / parquet  Minor/Patch version `58.3.0` or `58.2.1` \(May 2026\) [\#9859](https://github.com/apache/arrow-rs/issues/9859)
 - Add docs for `BitWriter` [\#9949](https://github.com/apache/arrow-rs/pull/9949) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Add docs for `BitReader` [\#9948](https://github.com/apache/arrow-rs/pull/9948) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 
@@ -80,20 +81,19 @@
 **Closed issues:**
 
 - Remove the `fused_inline_view_columns` field from `BatchCoalescer` if possible [\#10055](https://github.com/apache/arrow-rs/issues/10055)
-- DataType parser permits negative FixedSizeBinary size [\#10033](https://github.com/apache/arrow-rs/issues/10033)
-- Parquet: return error for overlong INT96 column metadata statistics [\#10002](https://github.com/apache/arrow-rs/issues/10002)
-- `Uuid` extension type fails to deserialize when `ARROW:extension:metadata` is an empty string [\#10000](https://github.com/apache/arrow-rs/issues/10000)
+- DataType parser permits negative FixedSizeBinary size [\#10033](https://github.com/apache/arrow-rs/issues/10033) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Parquet: return error for overlong INT96 column metadata statistics [\#10002](https://github.com/apache/arrow-rs/issues/10002) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `Uuid` extension type fails to deserialize when `ARROW:extension:metadata` is an empty string [\#10000](https://github.com/apache/arrow-rs/issues/10000) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet: timeline for removing thrift crate dependency \(CVE-2026-43868\) [\#9999](https://github.com/apache/arrow-rs/issues/9999)
-- Failure in CI: `Archery test With other arrows` - `binary_view Rust producing,  .NET consuming` [\#9989](https://github.com/apache/arrow-rs/issues/9989)
-- Validate FIXED\_LEN\_BYTE\_ARRAY type\_length for DECIMAL and INTERVAL in Parquet → Arrow schema conversion [\#9984](https://github.com/apache/arrow-rs/issues/9984)
-- IPC reader projection does not handle duplicate projection indices correctly [\#9950](https://github.com/apache/arrow-rs/issues/9950)
-- `AnyRunArray` trait [\#9909](https://github.com/apache/arrow-rs/issues/9909)
-- Release arrow-rs / parquet  Minor/Patch version `58.3.0` or `58.2.1` \(May 2026\) [\#9859](https://github.com/apache/arrow-rs/issues/9859)
-- Release arrow-rs / parquet Patch version `57.3.1` \(May 2026\) [\#9858](https://github.com/apache/arrow-rs/issues/9858)
-- Release arrow-rs / parquet Patch version `56.2.1` \(May 2026\) [\#9857](https://github.com/apache/arrow-rs/issues/9857)
+- Failure in CI: `Archery test With other arrows` - `binary_view Rust producing,  .NET consuming` [\#9989](https://github.com/apache/arrow-rs/issues/9989) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Validate FIXED\_LEN\_BYTE\_ARRAY type\_length for DECIMAL and INTERVAL in Parquet → Arrow schema conversion [\#9984](https://github.com/apache/arrow-rs/issues/9984) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- IPC reader projection does not handle duplicate projection indices correctly [\#9950](https://github.com/apache/arrow-rs/issues/9950) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `AnyRunArray` trait [\#9909](https://github.com/apache/arrow-rs/issues/9909) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Release arrow-rs / parquet Patch version `57.3.1` \(May 2026\) [\#9858](https://github.com/apache/arrow-rs/issues/9858) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Release arrow-rs / parquet Patch version `56.2.1` \(May 2026\) [\#9857](https://github.com/apache/arrow-rs/issues/9857) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet/arrow: should sync/async readers converge on a shared physical read planner [\#9764](https://github.com/apache/arrow-rs/issues/9764)
-- `arrow-string` has a lot of macro-generated deprecated kernels in `like.rs` [\#9675](https://github.com/apache/arrow-rs/issues/9675)
-- \[parquet\] Add BloomFilterProperties builder API to make bloom filter configuration explicit [\#9667](https://github.com/apache/arrow-rs/issues/9667)
+- `arrow-string` has a lot of macro-generated deprecated kernels in `like.rs` [\#9675](https://github.com/apache/arrow-rs/issues/9675) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[parquet\] Add BloomFilterProperties builder API to make bloom filter configuration explicit [\#9667](https://github.com/apache/arrow-rs/issues/9667) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Merged pull requests:**
 
@@ -143,15 +143,6 @@
 - \[Parquet\]: GH-563: Make `path_in_schema` optional [\#9678](https://github.com/apache/arrow-rs/pull/9678) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - Add support for FixedSizeList to variant\_to\_arrow [\#9663](https://github.com/apache/arrow-rs/pull/9663) ([rishvin](https://github.com/rishvin))
 - Reduce Miri runtime even more [\#9650](https://github.com/apache/arrow-rs/pull/9650) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([AdamGS](https://github.com/AdamGS))
-
-## [57.3.1](https://github.com/apache/arrow-rs/tree/57.3.1) (2026-05-07)
-
-[Full Changelog](https://github.com/apache/arrow-rs/compare/56.2.1...57.3.1)
-
-## [56.2.1](https://github.com/apache/arrow-rs/tree/56.2.1) (2026-05-07)
-
-[Full Changelog](https://github.com/apache/arrow-rs/compare/58.3.0...56.2.1)
-
 
 
 \* *This Changelog was automatically generated by [github_changelog_generator](https://github.com/github-changelog-generator/github-changelog-generator)*
