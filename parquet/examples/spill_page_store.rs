@@ -52,8 +52,11 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use tempfile::NamedTempFile;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -122,40 +125,54 @@ const SMALL_AVG_LEN: usize = 20;
 // heap.
 // ---------------------------------------------------------------------------
 
-/// Shared counters describing how much spilling actually happened, aggregated
-/// across every per-column [`TempFilePageStore`]. Each store holds an `Arc` to
-/// the same instance and bumps the atomics, so the totals survive the stores
-/// being dropped at row group flush.
+/// Shared spill bookkeeping, aggregated across every per-column
+/// [`TempFilePageStore`]. Each store holds an `Arc` to the same instance, so the
+/// totals and per-file records survive the stores being dropped at row group
+/// flush.
 #[derive(Debug, Default)]
 struct SpillStats {
-    /// Number of temp files created — one per column chunk that was opened.
-    files_created: AtomicU64,
     /// Total bytes handed to `put` and written to a temp file.
     bytes_written: AtomicU64,
     /// Total bytes read back out of a temp file by `take` (at row group flush).
     bytes_read: AtomicU64,
+    /// One record per temp file, pushed when each store is dropped.
+    files: Mutex<Vec<FileRecord>>,
+}
+
+/// What a single spill temp file ended up holding.
+#[derive(Debug)]
+struct FileRecord {
+    /// Leaf column index the store was created for.
+    column_index: usize,
+    /// Filesystem path of the temp file (valid while the store was alive).
+    path: PathBuf,
+    /// Total bytes written into the file.
+    bytes: u64,
 }
 
 /// A spilling [`PageStore`]: one temp file per column chunk.
 ///
 /// `put` appends the blob to the file and records its `(offset, len)`; `take`
-/// seeks and reads it back. The file is unlinked on creation (via
-/// [`tempfile::tempfile`]) so the OS reclaims it when the store is dropped.
+/// seeks and reads it back. A [`NamedTempFile`] is used (rather than an
+/// anonymous one) so the file has a reportable path; the OS reclaims it when the
+/// store is dropped at row group flush.
 struct TempFilePageStore {
-    file: File,
+    file: NamedTempFile,
+    /// Leaf column index this store backs (used only for reporting).
+    column_index: usize,
     /// Logical end of the file — where the next `put` appends.
     end: u64,
     /// `(offset, len)` for each stored blob, indexed by the `PageKey` we minted.
     locs: Vec<(u64, usize)>,
-    /// Shared, cross-store spill counters (see [`SpillStats`]).
+    /// Shared, cross-store spill bookkeeping (see [`SpillStats`]).
     stats: Arc<SpillStats>,
 }
 
 impl TempFilePageStore {
-    fn new(stats: Arc<SpillStats>) -> Result<Self> {
-        stats.files_created.fetch_add(1, Ordering::Relaxed);
+    fn new(stats: Arc<SpillStats>, column_index: usize) -> Result<Self> {
         Ok(Self {
-            file: tempfile::tempfile()?,
+            file: NamedTempFile::new()?,
+            column_index,
             end: 0,
             locs: Vec::new(),
             stats,
@@ -194,6 +211,18 @@ impl PageStore for TempFilePageStore {
     // `ArrowWriter::memory_size()` drop to just the in-flight encoder buffers.
 }
 
+impl Drop for TempFilePageStore {
+    fn drop(&mut self) {
+        // Record this file's path and final byte count before the NamedTempFile
+        // is unlinked, so `main` can list it after the writer is closed.
+        self.stats.files.lock().unwrap().push(FileRecord {
+            column_index: self.column_index,
+            path: self.file.path().to_path_buf(),
+            bytes: self.end,
+        });
+    }
+}
+
 /// Creates a fresh [`TempFilePageStore`] for every column chunk the writer opens,
 /// handing each one an `Arc` to the shared [`SpillStats`].
 #[derive(Debug)]
@@ -202,8 +231,11 @@ struct TempFilePageStoreFactory {
 }
 
 impl PageStoreFactory for TempFilePageStoreFactory {
-    fn create(&self, _column_index: usize) -> Result<Box<dyn PageStore>> {
-        Ok(Box::new(TempFilePageStore::new(self.stats.clone())?))
+    fn create(&self, column_index: usize) -> Result<Box<dyn PageStore>> {
+        Ok(Box::new(TempFilePageStore::new(
+            self.stats.clone(),
+            column_index,
+        )?))
     }
 }
 
@@ -385,10 +417,14 @@ fn main() -> Result<()> {
     );
     println!();
     if args.spill {
-        let files = spill_stats.files_created.load(Ordering::Relaxed);
+        let mut files = spill_stats.files.lock().unwrap();
+        files.sort_by_key(|f| f.column_index);
         let written_bytes = spill_stats.bytes_written.load(Ordering::Relaxed);
         let read_bytes = spill_stats.bytes_read.load(Ordering::Relaxed);
-        println!("Spill temp files created        : {files:>8}   <- one per column chunk");
+        println!(
+            "Spill temp files created        : {:>8}   <- one per column chunk",
+            files.len(),
+        );
         println!(
             "Total bytes spilled (written)   : {:>8.1} MiB",
             mib(written_bytes as usize),
@@ -397,6 +433,17 @@ fn main() -> Result<()> {
             "Total bytes read back (take)    : {:>8.1} MiB",
             mib(read_bytes as usize),
         );
+        println!();
+        println!("Per spill file (column index, path, bytes stored):");
+        for f in files.iter() {
+            println!(
+                "  col {:>3}  {}  {} bytes ({:.1} MiB)",
+                f.column_index,
+                f.path.display(),
+                f.bytes,
+                mib(f.bytes as usize),
+            );
+        }
         println!();
         println!(
             "With spilling, peak writer memory is bounded by the in-flight encoder \n\
