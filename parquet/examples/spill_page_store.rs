@@ -72,6 +72,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use tempfile::NamedTempFile;
 
@@ -349,6 +350,7 @@ fn mib(bytes: usize) -> f64 {
 }
 
 fn main() -> Result<()> {
+    let start = Instant::now();
     let args = Args::parse();
     let schema = build_schema(&args);
 
@@ -447,9 +449,10 @@ fn main() -> Result<()> {
     let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
     let mut peak_rss = rss_start;
     let mut written = 0;
+    let rows = args.batch_size.min(args.rows - written);
+    let batch = make_batch(&schema, &args, rows, &mut rng);
     while written < args.rows {
-        let rows = args.batch_size.min(args.rows - written);
-        let batch = make_batch(&schema, &args, rows, &mut rng);
+        //let batch = make_batch(&schema, &args, rows, &mut rng);
         for (col_idx, (field, array)) in schema.fields().iter().zip(batch.columns()).enumerate() {
             for leaf in compute_leaves(field, array)? {
                 // Blocks if this worker is busy — bounding in-flight input.
@@ -477,6 +480,7 @@ fn main() -> Result<()> {
     row_group_writer.close()?;
     file_writer.close()?;
     peak_rss = peak_rss.max(rss_bytes(&mut system));
+    let elapsed = start.elapsed();
 
     println!();
     println!("Done. Wrote {written} rows.");
@@ -487,6 +491,10 @@ fn main() -> Result<()> {
     println!(
         "Peak process RSS delta          : {:>8.1} MiB",
         (peak_rss.saturating_sub(rss_start)) as f64 / (1024.0 * 1024.0),
+    );
+    println!(
+        "Total elapsed time              : {:>8.3} s",
+        elapsed.as_secs_f64(),
     );
     println!();
     if args.spill {
