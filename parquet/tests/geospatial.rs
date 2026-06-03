@@ -435,15 +435,9 @@ mod test {
         // Test cases: (LogicalType, expected metadata JSON)
         let test_cases = [
             // Geometry with default CRS (defaults to OGC:CRS84 per Parquet spec)
-            (
-                LogicalType::geometry(None),
-                r#"{"crs":"OGC:CRS84"}"#,
-            ),
+            (LogicalType::geometry(None), r#"{"crs":"OGC:CRS84"}"#),
             // Geometry with srid:0 should result in an unset (omitted) CRS
-            (
-                LogicalType::geometry(Some("srid:0".to_string())),
-                r#"{}"#,
-            ),
+            (LogicalType::geometry(Some("srid:0".to_string())), r#"{}"#),
             // Geometry with custom CRSes (authority:code and partial projjson)
             (
                 LogicalType::geometry(Some("EPSG:4267".to_string())),
@@ -544,10 +538,7 @@ mod test {
         // Test cases: (extension metadata JSON, expected LogicalType)
         let test_cases = [
             // Geometry with no CRS should be GEOMETRY(srid:0)
-            (
-                r#"{}"#,
-                LogicalType::geometry(Some("srid:0".to_string())),
-            ),
+            (r#"{}"#, LogicalType::geometry(Some("srid:0".to_string()))),
             // Geometry with string CRS
             (
                 r#"{"crs":"EPSG:4267"}"#,
@@ -556,18 +547,14 @@ mod test {
             // Geometry with PROJJSON CRS
             (
                 r#"{"crs":{"id":{"authority":"EPSG","code":3857}}}"#,
-                LogicalType::geometry(Some(r#"{"id":{"authority":"EPSG","code":3857}}"#.to_string())),
+                LogicalType::geometry(Some(
+                    r#"{"id":{"authority":"EPSG","code":3857}}"#.to_string(),
+                )),
             ),
             // Geometry with lon/lat CRSes (canonically removed because lon/lat is the
             // default Parquet CRS)
-            (
-                r#"{"crs":"OGC:CRS84"}"#,
-                LogicalType::geometry(None),
-            ),
-            (
-                r#"{"crs":"EPSG:4326"}"#,
-                LogicalType::geometry(None),
-            ),
+            (r#"{"crs":"OGC:CRS84"}"#, LogicalType::geometry(None)),
+            (r#"{"crs":"EPSG:4326"}"#, LogicalType::geometry(None)),
             (
                 r#"{"crs":{"id":{"authority":"EPSG","code":4326}}}"#,
                 LogicalType::geometry(None),
@@ -610,24 +597,35 @@ mod test {
             // Geography with custom CRS and edges
             (
                 r#"{"crs":"EPSG:4267","edges":"karney"}"#,
-                LogicalType::geography(Some("\"EPSG:4267\"".to_string()), Some(EdgeInterpolationAlgorithm::KARNEY)),
+                LogicalType::geography(
+                    Some("\"EPSG:4267\"".to_string()),
+                    Some(EdgeInterpolationAlgorithm::KARNEY),
+                ),
             ),
             // Geography with PROJJSON CRS
             (
                 r#"{"crs":{"id":{"authority":"EPSG","code":4267}},"edges":"spherical"}"#,
-                LogicalType::geography(Some(r#"{"id":{"authority":"EPSG","code":4267}}"#.to_string()), None),
+                LogicalType::geography(
+                    Some(r#"{"id":{"authority":"EPSG","code":4267}}"#.to_string()),
+                    None,
+                ),
             ),
         ];
 
         for (ext_metadata, expected_logical_type) in test_cases {
             // Create an Arrow Field with raw extension metadata
             let metadata = HashMap::from([
-                ("ARROW:extension:name".to_string(), "geoarrow.wkb".to_string()),
-                ("ARROW:extension:metadata".to_string(), ext_metadata.to_string()),
+                (
+                    "ARROW:extension:name".to_string(),
+                    "geoarrow.wkb".to_string(),
+                ),
+                (
+                    "ARROW:extension:metadata".to_string(),
+                    ext_metadata.to_string(),
+                ),
             ]);
-            let field = Arc::new(
-                Field::new("geom", DataType::Binary, true).with_metadata(metadata)
-            );
+            let field =
+                Arc::new(Field::new("geom", DataType::Binary, true).with_metadata(metadata));
             let schema = Schema::new(vec![field]);
 
             // Convert to Parquet schema
@@ -644,5 +642,4 @@ mod test {
             );
         }
     }
-
 }
