@@ -34,15 +34,26 @@
 //!
 //! # Concurrency
 //!
-//! To exercise the store from multiple threads, this example uses the low-level
-//! [`ArrowColumnWriter`] API (rather than the single-threaded [`ArrowWriter`]):
-//! it spawns one worker thread per column, hands each its own
-//! [`ArrowColumnWriter`], and fans each record batch's columns out to the
-//! workers via [`compute_leaves`]. Every column encodes on its own thread into
-//! its own [`PageStore`], and the finished [`ArrowColumnChunk`]s are spliced into
-//! the row group — streaming back out of the store one page at a time — on the
-//! main thread. (One thread per column is for clarity; production code would use
-//! a bounded pool such as rayon or tokio.)
+//! To keep every core busy this example splits the work across two thread pools,
+//! sized to the machine: `N/2` **generator** threads building record batches and
+//! `N/2` **encoder** threads encoding them (`N` = available cores). It uses the
+//! low-level [`ArrowColumnWriter`] API (rather than the single-threaded
+//! [`ArrowWriter`]) so encoding can be parallelized:
+//!
+//! - Each generator claims the next batch index from a shared counter, builds
+//!   that batch deterministically, and sends it to the main thread.
+//! - The main thread re-orders batches by index (so the output is deterministic
+//!   regardless of how the generators interleave) and broadcasts each one to all
+//!   encoders. Batches are cheap to share — the columns are reference-counted.
+//! - The columns are distributed across the encoder threads, each owning a
+//!   disjoint subset of [`ArrowColumnWriter`]s backed by their own [`PageStore`].
+//!   Each encoder picks out its columns from every batch via [`compute_leaves`].
+//! - The finished [`ArrowColumnChunk`]s are collected, sorted into schema order,
+//!   and spliced into the row group — streaming back out of the store one page
+//!   at a time — on the main thread.
+//!
+//! (For clarity this hand-rolls the pools with threads and channels; production
+//! code would use rayon or tokio.)
 //!
 //! # Running
 //!
@@ -65,10 +76,11 @@
 //! [`compute_leaves`]: parquet::arrow::arrow_writer::compute_leaves
 //! [`PageStore`]: parquet::arrow::arrow_writer::PageStore
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -82,7 +94,7 @@ use bytes::Bytes;
 use clap::Parser;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::arrow_writer::{
-    ArrowColumnChunk, ArrowLeafColumn, ArrowRowGroupWriterFactory, PageKey, PageStore,
+    ArrowColumnChunk, ArrowColumnWriter, ArrowRowGroupWriterFactory, PageKey, PageStore,
     PageStoreFactory, compute_leaves,
 };
 use parquet::basic::Compression;
@@ -279,51 +291,69 @@ fn build_schema(args: &Args) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-/// A tiny deterministic xorshift RNG so runs are reproducible without pulling in
-/// a `rand` dependency.
-struct XorShift(u64);
-
-impl XorShift {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
+/// The per-batch column counts a generator needs (a small `Copy` view of `Args`
+/// so it can be handed to each generator thread).
+#[derive(Clone, Copy)]
+struct BatchSpec {
+    int_columns: usize,
+    small_string_columns: usize,
+    large_string_columns: usize,
 }
 
-/// Build a string column of `rows` rows whose values average `avg_len` bytes.
+/// Fill `buf` with a deterministic value of exactly `len` bytes derived from the
+/// counter `n`.
 ///
-/// Lengths vary uniformly in `[1, 2 * avg_len)` (so the mean is ≈ `avg_len`) and
-/// the content is high-entropy printable ASCII, so the values neither
-/// dictionary-encode nor compress away — the page buffer holds real bytes.
-fn make_string_array(rows: usize, avg_len: usize, rng: &mut XorShift) -> ArrayRef {
-    let mut builder = StringBuilder::with_capacity(rows, rows * avg_len);
+/// The 20-digit zero-padded counter makes every value distinct, so the fat
+/// columns stay plain-encoded (high cardinality) rather than dictionary-encoding
+/// away; the remainder is padded with a fixed `a`–`z` cycle. No RNG — the content
+/// is a pure function of `n`, so a run is fully reproducible.
+fn fill_value(buf: &mut String, n: u64, len: usize) {
+    use std::fmt::Write;
+    buf.clear();
+    let _ = write!(buf, "{n:020}");
+    while buf.len() < len {
+        buf.push((b'a' + (buf.len() % 26) as u8) as char);
+    }
+    buf.truncate(len); // all bytes are ASCII, so this is a clean char boundary
+}
+
+/// Build a string column of `rows` values, each exactly `len` bytes, keyed by the
+/// global row index (`row_offset + r`) and a per-column `salt` so values are
+/// distinct within the column.
+fn make_string_array(rows: usize, row_offset: u64, salt: u64, len: usize) -> ArrayRef {
+    let mut builder = StringBuilder::with_capacity(rows, rows * len);
     let mut value = String::new();
-    for _ in 0..rows {
-        let len = 1 + (rng.next() as usize % (2 * avg_len - 1));
-        value.clear();
-        for _ in 0..len {
-            // Map to printable ASCII (33..=126).
-            value.push((33 + (rng.next() % 94) as u8) as char);
-        }
+    for r in 0..rows {
+        let n = (row_offset + r as u64).wrapping_mul(101).wrapping_add(salt);
+        fill_value(&mut value, n, len);
         builder.append_value(&value);
     }
     Arc::new(builder.finish())
 }
 
-/// Build one record batch of `rows` rows for `schema`.
-fn make_batch(schema: &SchemaRef, args: &Args, rows: usize, rng: &mut XorShift) -> RecordBatch {
+/// Build the record batch covering rows `[row_offset, row_offset + rows)`.
+///
+/// Fully deterministic in `row_offset`: every column's values are a pure function
+/// of the global row index, so the batch a generator produces depends only on its
+/// claimed index — not on thread timing.
+fn make_batch(schema: &SchemaRef, spec: BatchSpec, row_offset: u64, rows: usize) -> RecordBatch {
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
-    for _ in 0..args.int_columns {
-        let vals: Vec<i64> = (0..rows).map(|_| rng.next() as i64).collect();
+    let mut salt = 0u64; // distinguishes columns so they don't all hold equal values
+    for _ in 0..spec.int_columns {
+        let s = salt;
+        salt += 1;
+        let vals: Vec<i64> = (0..rows)
+            .map(|r| (row_offset + r as u64 + s) as i64)
+            .collect();
         columns.push(Arc::new(Int64Array::from(vals)));
     }
-    for _ in 0..args.small_string_columns {
-        columns.push(make_string_array(rows, SMALL_AVG_LEN, rng));
+    for _ in 0..spec.small_string_columns {
+        columns.push(make_string_array(rows, row_offset, salt, SMALL_AVG_LEN));
+        salt += 1;
     }
-    for _ in 0..args.large_string_columns {
-        columns.push(make_string_array(rows, LARGE_AVG_LEN, rng));
+    for _ in 0..spec.large_string_columns {
+        columns.push(make_string_array(rows, row_offset, salt, LARGE_AVG_LEN));
+        salt += 1;
     }
     RecordBatch::try_new(schema.clone(), columns).unwrap()
 }
@@ -388,7 +418,18 @@ fn main() -> Result<()> {
         },
         mib(large_payload),
     );
-    println!("Encoding columns concurrently: one worker thread per column.");
+    // Split the cores: half generate batches, half encode them.
+    let num_cores = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    let num_generators = (num_cores / 2).max(1);
+    let num_encoders = (num_cores / 2).max(1);
+    let num_batches = args.rows.div_ceil(args.batch_size);
+    println!(
+        "Cores: {num_cores}  ({num_generators} generator threads, {num_encoders} encoder threads, \
+         {num_batches} batches of ≤{} rows)",
+        args.batch_size,
+    );
 
     let mut system = System::new_with_specifics(RefreshKind::everything());
     let rss_start = rss_bytes(&mut system);
@@ -417,62 +458,126 @@ fn main() -> Result<()> {
     }
     let col_writers = factory.create_column_writers(0)?;
 
-    // Spawn a worker per column. Each owns its `ArrowColumnWriter`, receives
-    // `ArrowLeafColumn`s over a small bounded channel (back-pressure keeps in-
-    // flight input from piling up), tracks the peak bytes its writer held
-    // resident, and returns the finished chunk plus that peak. The bounded
-    // channel makes the workers run concurrently with batch generation.
-    let workers: Vec<_> = col_writers
-        .into_iter()
-        .map(|mut col_writer| {
-            let (send, recv) = sync_channel::<ArrowLeafColumn>(2);
-            let handle = thread::spawn(move || -> Result<(ArrowColumnChunk, usize)> {
-                let mut peak_memory = 0usize;
-                for leaf in recv {
-                    col_writer.write(&leaf)?;
+    // Distribute the columns across the encoder threads round-robin, so the fat
+    // columns (contiguous at the end of the schema) spread evenly. Each encoder
+    // owns a disjoint set of `(column index, ArrowColumnWriter)` pairs.
+    let mut encoder_cols: Vec<Vec<(usize, ArrowColumnWriter)>> =
+        (0..num_encoders).map(|_| Vec::new()).collect();
+    for (idx, writer) in col_writers.into_iter().enumerate() {
+        encoder_cols[idx % num_encoders].push((idx, writer));
+    }
+
+    // Spawn the encoder pool. Each encoder receives whole batches over a small
+    // bounded channel (back-pressure), encodes only its own columns from each,
+    // tracks the peak bytes each writer held resident, and returns the finished
+    // chunks plus those peaks.
+    let mut encoder_txs = Vec::with_capacity(num_encoders);
+    let mut encoder_handles = Vec::with_capacity(num_encoders);
+    for mut cols in encoder_cols {
+        let (tx, rx) = sync_channel::<Arc<RecordBatch>>(1);
+        let schema = schema.clone();
+        let handle = thread::spawn(move || -> Result<Vec<(usize, ArrowColumnChunk, usize)>> {
+            let mut peaks = vec![0usize; cols.len()];
+            for batch in rx {
+                for (slot, (idx, writer)) in cols.iter_mut().enumerate() {
+                    let field = &schema.fields()[*idx];
+                    for leaf in compute_leaves(field, batch.column(*idx))? {
+                        writer.write(&leaf)?;
+                    }
                     // `memory_size()` is the bytes this column's writer holds
                     // resident — pages in its PageStore plus in-flight encoder
                     // buffers. With the in-memory store it climbs toward the whole
                     // column chunk; with spilling it stays flat.
-                    peak_memory = peak_memory.max(col_writer.memory_size());
+                    peaks[slot] = peaks[slot].max(writer.memory_size());
                 }
-                peak_memory = peak_memory.max(col_writer.memory_size());
-                Ok((col_writer.close()?, peak_memory))
-            });
-            (handle, send)
-        })
-        .collect();
-
-    // Generate batches and fan each batch's columns out to the workers. `schema`
-    // is flat, so leaf order matches field order and each field maps to exactly
-    // one worker.
-    let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
-    let mut peak_rss = rss_start;
-    let mut written = 0;
-    let rows = args.batch_size.min(args.rows - written);
-    let batch = make_batch(&schema, &args, rows, &mut rng);
-    while written < args.rows {
-        //let batch = make_batch(&schema, &args, rows, &mut rng);
-        for (col_idx, (field, array)) in schema.fields().iter().zip(batch.columns()).enumerate() {
-            for leaf in compute_leaves(field, array)? {
-                // Blocks if this worker is busy — bounding in-flight input.
-                workers[col_idx].1.send(leaf).unwrap();
             }
-        }
-        written += rows;
-        // `batch` is dropped here; its data lives on in whatever leaves are still
-        // in flight to the workers.
-        peak_rss = peak_rss.max(rss_bytes(&mut system));
+            cols.into_iter()
+                .zip(peaks)
+                .map(|((idx, writer), peak)| {
+                    let peak = peak.max(writer.memory_size());
+                    Ok((idx, writer.close()?, peak))
+                })
+                .collect()
+        });
+        encoder_txs.push(tx);
+        encoder_handles.push(handle);
     }
 
-    // Signal end-of-input to every worker, then join in column order and splice
-    // each finished chunk into the row group (streaming pages back out of the
-    // store). Columns must be appended in schema order.
+    // Spawn the generator pool. Each generator claims the next batch index from a
+    // shared counter, builds that batch deterministically, and sends `(index,
+    // batch)` to the main thread. The bounded channel applies back-pressure so
+    // generators don't race arbitrarily far ahead of the encoders.
+    // Keep the result channel shallow: with wide/huge schemas each batch can be
+    // hundreds of MiB, and they pipeline, so the in-flight input — not the
+    // (spilled) page buffer — dominates process RSS. A depth of 1 bounds it to
+    // roughly the working set the generators and encoders are actively touching.
+    let next_batch = Arc::new(AtomicUsize::new(0));
+    let (result_tx, result_rx) = sync_channel::<(usize, Arc<RecordBatch>)>(1);
+    let mut gen_handles = Vec::with_capacity(num_generators);
+    let spec = BatchSpec {
+        int_columns: args.int_columns,
+        small_string_columns: args.small_string_columns,
+        large_string_columns: args.large_string_columns,
+    };
+    for _ in 0..num_generators {
+        let schema = schema.clone();
+        let next_batch = next_batch.clone();
+        let tx = result_tx.clone();
+        let (rows, batch_size) = (args.rows, args.batch_size);
+        let handle = thread::spawn(move || {
+            loop {
+                let i = next_batch.fetch_add(1, Ordering::Relaxed);
+                if i >= num_batches {
+                    break;
+                }
+                let row_offset = (i * batch_size) as u64;
+                let rows_in = batch_size.min(rows - i * batch_size);
+                let batch = make_batch(&schema, spec, row_offset, rows_in);
+                if tx.send((i, Arc::new(batch))).is_err() {
+                    break; // main hung up (shouldn't happen on the happy path)
+                }
+            }
+        });
+        gen_handles.push(handle);
+    }
+    drop(result_tx); // only the generators hold senders now
+
+    // Main: pull generated batches, re-order them by index, and broadcast each in
+    // index order to every encoder. Re-ordering keeps the written row order — and
+    // therefore the output file — deterministic regardless of generator timing.
+    let mut peak_rss = rss_start;
+    let mut pending: HashMap<usize, Arc<RecordBatch>> = HashMap::new();
+    let mut next_emit = 0usize;
+    while next_emit < num_batches {
+        if let Some(batch) = pending.remove(&next_emit) {
+            for tx in &encoder_txs {
+                tx.send(batch.clone()).unwrap(); // cheap: clones an Arc
+            }
+            next_emit += 1;
+            peak_rss = peak_rss.max(rss_bytes(&mut system));
+        } else {
+            let (i, batch) = result_rx.recv().expect("generators ended early");
+            pending.insert(i, batch);
+        }
+    }
+    drop(encoder_txs); // signal end-of-input to the encoders
+    for handle in gen_handles {
+        handle.join().expect("generator thread panicked");
+    }
+
+    // Collect the encoded chunks, sort them back into schema order, and splice
+    // each into the row group (streaming pages back out of the store). Columns
+    // must be appended in schema order.
+    let mut chunks: Vec<(usize, ArrowColumnChunk, usize)> = Vec::new();
+    for handle in encoder_handles {
+        chunks.extend(handle.join().expect("encoder thread panicked")?);
+        peak_rss = peak_rss.max(rss_bytes(&mut system));
+    }
+    chunks.sort_by_key(|(idx, _, _)| *idx);
+
     let mut row_group_writer = file_writer.next_row_group()?;
     let mut peak_writer_memory = 0usize;
-    for (handle, send) in workers {
-        drop(send); // closes the channel so the worker's `for leaf in recv` ends
-        let (chunk, col_peak) = handle.join().expect("worker thread panicked")?;
+    for (_idx, chunk, col_peak) in chunks {
         peak_writer_memory += col_peak;
         chunk.append_to_row_group(&mut row_group_writer)?;
         peak_rss = peak_rss.max(rss_bytes(&mut system));
@@ -481,6 +586,7 @@ fn main() -> Result<()> {
     file_writer.close()?;
     peak_rss = peak_rss.max(rss_bytes(&mut system));
     let elapsed = start.elapsed();
+    let written = args.rows;
 
     println!();
     println!("Done. Wrote {written} rows.");
