@@ -155,6 +155,11 @@ name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
 
+[[example]]
+name = "spill_page_store"
+required-features = ["arrow", "cli"]
+path = "./examples/spill_page_store.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]
