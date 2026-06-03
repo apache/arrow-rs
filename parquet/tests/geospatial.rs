@@ -565,7 +565,7 @@ mod test {
                 LogicalType::geometry(None),
             ),
             (
-                r#"{"crs":"EPSG:4326}"#,
+                r#"{"crs":"EPSG:4326"}"#,
                 LogicalType::geometry(None),
             ),
             (

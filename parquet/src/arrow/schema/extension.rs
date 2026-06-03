@@ -179,15 +179,31 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
 
     match field.extension_type_name() {
         Some(n) if n == WkbType::NAME => match field.try_extension_type::<WkbType>() {
-            Ok(wkb_type) => match wkb_type.metadata().type_hint() {
-                WkbTypeHint::Geometry => Some(LogicalType::geometry(
-                    wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
-                )),
-                WkbTypeHint::Geography => Some(LogicalType::geography(
-                    wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
-                    wkb_type.metadata().algorithm.map(|a| a.into()),
-                )),
-            },
+            Ok(wkb_type) => {
+                // Convert Arrow CRS to Parquet CRS:
+                // - None → "srid:0" (unset CRS in Parquet)
+                // - lon/lat CRS (OGC:CRS84, EPSG:4326) → None (default in Parquet)
+                // - Other CRS → JSON string
+                let crs = match &wkb_type.metadata().crs {
+                    None => Some("srid:0".to_string()),
+                    Some(_) if wkb_type.metadata().crs_is_lon_lat() => None,
+                    Some(c) => Some(c.to_string()),
+                };
+                // Convert Arrow edges to Parquet algorithm:
+                // - Spherical → None (default for Geography)
+                // - Other algorithms → Some(algorithm)
+                let algorithm = wkb_type.metadata().algorithm.and_then(|a| {
+                    use parquet_geospatial::WkbEdges;
+                    match a {
+                        WkbEdges::Spherical => None, // spherical is the default
+                        _ => Some(a.into()),
+                    }
+                });
+                match wkb_type.metadata().type_hint() {
+                    WkbTypeHint::Geometry => Some(LogicalType::geometry(crs)),
+                    WkbTypeHint::Geography => Some(LogicalType::geography(crs, algorithm)),
+                }
+            }
             Err(_e) => None,
         },
         _ => None,
