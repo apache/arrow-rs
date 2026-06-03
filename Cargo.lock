@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "arrow"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "anyhow",
  "arrow-arith",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-test"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-testing"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arbitrary",
  "arrow-array",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -466,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-pyarrow"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-geospatial"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-schema",
  "geo-traits",
@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-compute"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-json"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-schema",
  "base64",
@@ -2422,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "parquet",
  "proc-macro2",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive_test"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "chrono",
  "parquet",
