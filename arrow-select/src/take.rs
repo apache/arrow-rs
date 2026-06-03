@@ -531,7 +531,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                     let data: &[u8] = array.value_unchecked(index.as_usize()).as_ref();
                     std::ptr::copy_nonoverlapping(
                         data.as_ptr(),
-                        dst[offset..].as_mut_ptr().cast::<u8>(),
+                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
                         data.len(),
                     );
                     offset += data.len();
@@ -545,7 +545,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }
         // Nullable path: only process valid (non-null) output positions.
         Some(output_nulls) => {
-            let mut ranges = Vec::with_capacity(indices.len() - output_nulls.null_count());
+            let mut source_ranges = Vec::with_capacity(indices.len() - output_nulls.null_count());
             let mut last_filled = 0;
 
             // Pre-fill offsets; we overwrite valid positions below.
@@ -568,9 +568,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 offsets[i + 1] = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
 
-                debug_assert!(end >= start, "invalid range: start ({start}) > end ({end})");
-
-                ranges.push((start, end));
+                source_ranges.push((start, end));
                 last_filled = i + 1;
             }
 
@@ -581,7 +579,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             // Pass 2: copy byte data for all collected ranges.
             values.reserve(capacity);
             debug_assert_eq!(
-                ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
+                source_ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
                 capacity,
                 "capacity must equal total bytes across all ranges"
             );
@@ -593,7 +591,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
             let mut offset = 0;
 
-            for (start, end) in ranges.into_iter() {
+            for (start, end) in source_ranges.into_iter() {
                 let value_len = end - start;
                 // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
                 // `dst` asserted above to include the required capacity.
@@ -601,7 +599,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         src.add(start),
-                        dst[offset..].as_mut_ptr().cast::<u8>(),
+                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
                         value_len,
                     );
                     offset += value_len;
