@@ -19,14 +19,16 @@
 
 use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{Int32Builder, ListBuilder};
+use arrow_array::builder::{BinaryBuilder, Int32Builder, ListBuilder};
+use arrow_array::types::Int32Type;
+use arrow_array::{DictionaryArray, FixedSizeBinaryArray, StringViewArray};
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{ReaderProperties, WriterProperties};
+use parquet::file::properties::{EnabledStatistics, ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
@@ -408,16 +410,16 @@ fn test_string() {
                 columns: vec![ColumnChunk {
                     pages: vec![
                         Page {
-                            rows: 130,
+                            rows: 126,
                             page_header_size: 38,
-                            compressed_size: 138,
+                            compressed_size: 114,
                             encoding: Encoding::RLE_DICTIONARY,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
-                            rows: 1250,
+                            rows: 1254,
                             page_header_size: 40,
-                            compressed_size: 10000,
+                            compressed_size: 10032,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
                         },
@@ -429,10 +431,16 @@ fn test_string() {
                             page_type: PageType::DATA_PAGE,
                         },
                     ],
+                    // The byte-budget chunker sub-batches the dictionary
+                    // phase. The mini-batch deliberately includes the value
+                    // that crosses the 1000-byte limit so the spill triggers
+                    // on this chunk rather than carrying a sliver into the
+                    // next page, giving a 126-row dictionary page at 1008
+                    // bytes.
                     dictionary_page: Some(Page {
-                        rows: 130,
+                        rows: 126,
                         page_header_size: 38,
-                        compressed_size: 1040,
+                        compressed_size: 1008,
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
                     }),
@@ -598,4 +606,345 @@ fn test_per_column_data_page_size_limit() {
     // col_b: 10000 byte limit for 8000 bytes of data -> 1 page
     assert_eq!(col_a_page_count, 16);
     assert_eq!(col_b_page_count, 1);
+}
+
+#[test]
+fn test_fixed_size_binary() {
+    // FixedSizeBinary values larger than the data page byte limit.
+    let value_size = 1024usize;
+    let num_rows = 64usize;
+    let values: Vec<u8> = (0..num_rows)
+        .flat_map(|i| vec![i as u8; value_size])
+        .collect();
+    let array =
+        Arc::new(FixedSizeBinaryArray::try_new(value_size as i32, values.into(), None).unwrap())
+            as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(4096)
+        .set_write_page_header_statistics(true)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    // 12 pages of 5 values (5 * 1024 = 5120 B, the boundary
+                    // value pushes each page just past the 4096 B limit) plus
+                    // a final page with the remaining 4 values.
+                    pages: (0..12)
+                        .map(|_| Page {
+                            rows: 5,
+                            page_header_size: 157,
+                            compressed_size: 5120,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .chain(std::iter::once(Page {
+                            rows: 4,
+                            page_header_size: 157,
+                            compressed_size: 4096,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        }))
+                        .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_dictionary() {
+    // Arrow `DictionaryArray<Int32, Utf8>` input.
+    let num_rows = 2000;
+    let dict_values = StringArray::from_iter_values(["alpha", "beta", "gamma", "delta"]);
+    let keys = Int32Array::from_iter_values((0..num_rows).map(|i| i % 4));
+    let array =
+        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values)).unwrap()) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(true)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(1000)
+        .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: vec![Page {
+                        rows: 2000,
+                        page_header_size: 40,
+                        compressed_size: 505,
+                        encoding: Encoding::RLE_DICTIONARY,
+                        page_type: PageType::DATA_PAGE,
+                    }],
+                    dictionary_page: Some(Page {
+                        rows: 4,
+                        page_header_size: 38,
+                        compressed_size: 35,
+                        encoding: Encoding::PLAIN,
+                        page_type: PageType::DICTIONARY_PAGE,
+                    }),
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_large_string() {
+    // Large `Utf8` values (64 KiB each) with a 16 KiB data page limit.
+    //
+    // Each value already exceeds the page byte budget, so the byte-budget
+    // chunker in `ByteArrayEncoder` (the offsets-buffer scan in
+    // `count_within_budget_offsets`) cuts one value per page instead of
+    // buffering the whole ~2 MiB column into a single page. This drives the
+    // real `ArrowWriter` user path; the lower-level column writer is covered
+    // by `test_column_writer_caps_page_size_for_large_byte_array_values`.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(16 * 1024)
+        // Disable statistics so page headers stay small and the layout is
+        // determined purely by the page-splitting logic under test.
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    // One 64 KiB value per page (4-byte length prefix + value).
+                    pages: (0..32)
+                        .map(|_| Page {
+                            rows: 1,
+                            page_header_size: 21,
+                            compressed_size: 65540,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_large_string_view() {
+    // Same bytes and expected layout as `test_large_string`, but the input
+    // is a `Utf8View` array. View arrays expose no contiguous offsets
+    // buffer, so the arrow writer bounds pages via the view-specific scan
+    // (`count_within_budget_views`, reading each value's length from the
+    // low 32 bits of its view word) rather than the offsets scan. This
+    // confirms that path caps pages identically.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
+    let array = Arc::new(StringViewArray::from_iter_values(
+        strings.iter().map(|s| s.as_str()),
+    )) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: (0..32)
+                        .map(|_| Page {
+                            rows: 1,
+                            page_header_size: 21,
+                            compressed_size: 65540,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_large_values_in_list() {
+    // `list<binary>` with large leaf values, driving the record-by-record
+    // (Materialized-rep) arm of the byte-budget chunker through the arrow
+    // path. Because repetition levels are present, a list element's leaves
+    // can never span pages, so the chunker steps from one `rep == 0`
+    // boundary to the next. Three records of three 32 KiB blobs each, with
+    // a 16 KiB page limit, yield exactly one page per record (a whole
+    // record's ~96 KiB of leaves stays together even though it blows the
+    // budget — it cannot be split). The raw-writer analogue is
+    // `test_column_writer_caps_page_size_for_large_values_in_list`.
+    let value_size = 32 * 1024;
+    let mut builder = ListBuilder::new(BinaryBuilder::new());
+    let mut byte = 0u8;
+    for _ in 0..3 {
+        for _ in 0..3 {
+            builder.values().append_value(vec![byte; value_size]);
+            byte = byte.wrapping_add(1);
+        }
+        builder.append(true);
+    }
+    let array = Arc::new(builder.finish()) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    // One record (3 leaves + rep/def levels) per page.
+                    pages: (0..3)
+                        .map(|_| Page {
+                            rows: 1,
+                            page_header_size: 21,
+                            compressed_size: 98328,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_nullable_large_values() {
+    // Nullable `Utf8` column alternating null / 32 KiB value. The byte
+    // budget must count only the non-null values (the def-level value
+    // count), not the level count — otherwise the estimate would be wrong
+    // for sparse columns. With a 16 KiB page limit each 32 KiB value still
+    // gets its own page (carrying its adjacent leading null), giving 16
+    // two-row pages. Mirrors the raw-writer
+    // `test_column_writer_caps_page_size_with_nullable_large_values`.
+    let value_size = 32 * 1024;
+    let big = "x".repeat(value_size);
+    let values: Vec<Option<String>> = (0..32)
+        .map(|i| if i % 2 == 1 { Some(big.clone()) } else { None })
+        .collect();
+    let array = Arc::new(StringArray::from(values)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    // Each page holds one null + one 32 KiB value (2 rows).
+                    pages: (0..16)
+                        .map(|_| Page {
+                            rows: 2,
+                            page_header_size: 21,
+                            compressed_size: 32778,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_dictionary_spill_large_values() {
+    // Dictionary encoding is enabled, but each value is large (64 KiB) and
+    // unique, so the dictionary spills almost immediately (1 KiB dict page
+    // limit). After the spill, plain encoding takes over and the byte-budget
+    // sub-batch bounds each page to a single value. The first value is
+    // interned into the dictionary page (one RLE_DICTIONARY data page
+    // referencing it); the remaining 31 fall back to PLAIN, one per page.
+    // Mirrors `test_column_writer_dict_enabled_large_values_post_spill`,
+    // exercising the same dict→plain transition via the arrow path.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32)
+        .map(|i| format!("{i:05}") + &"x".repeat(value_size - 5))
+        .collect();
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(true)
+        // Tiny dict limit so it spills after the first (already oversized)
+        // value, leaving the rest to exercise the post-spill plain path.
+        .set_dictionary_page_size_limit(1024)
+        .set_data_page_size_limit(16 * 1024)
+        .set_write_batch_size(4)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: std::iter::once(Page {
+                        // The single value interned before the dict spilled.
+                        rows: 1,
+                        page_header_size: 17,
+                        compressed_size: 2,
+                        encoding: Encoding::RLE_DICTIONARY,
+                        page_type: PageType::DATA_PAGE,
+                    })
+                    .chain((0..31).map(|_| Page {
+                        // Post-spill plain-encoded values, one per page.
+                        rows: 1,
+                        page_header_size: 21,
+                        compressed_size: 65540,
+                        encoding: Encoding::PLAIN,
+                        page_type: PageType::DATA_PAGE,
+                    }))
+                    .collect(),
+                    dictionary_page: Some(Page {
+                        rows: 1,
+                        page_header_size: 21,
+                        compressed_size: 65540,
+                        encoding: Encoding::PLAIN,
+                        page_type: PageType::DICTIONARY_PAGE,
+                    }),
+                }],
+            }],
+        },
+    });
 }
