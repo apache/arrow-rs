@@ -50,14 +50,18 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 /// For string array and binary array, length is the number of bytes of each value.
 ///
 /// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, FixedSizeListArray,
-///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values
+///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values, or
+///   RunEndEncoded arrays with above arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
     }
-
+    if let Some(ree) = array.as_any_ree_opt() {
+        let lengths = length(ree.values())?;
+        return Ok(ree.with_values(lengths));
+    }
     match array.data_type() {
         DataType::List(_) => {
             let list = array.as_list::<i32>();
@@ -126,13 +130,17 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 ///
 /// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, StringViewArray/Utf8View,
 ///   BinaryArray, LargeBinaryArray, BinaryViewArray, and FixedSizeBinaryArray,
-///   or DictionaryArray with above Arrays as values
+///   or DictionaryArray/REE with above Arrays as values
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = bit_length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
+    }
+    if let Some(ree) = array.as_any_ree_opt() {
+        let lengths = bit_length(ree.values())?;
+        return Ok(ree.with_values(lengths));
     }
 
     match array.data_type() {
@@ -844,5 +852,63 @@ mod tests {
 
         let result = bit_length(&array).unwrap();
         assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
+    }
+    #[test]
+    fn length_test_ree_string_values() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let string_values = StringArray::from(vec!["hello", "owl", "test", "arrow", "a"]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![2i32, 5, 9, 11, 14]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &string_values).unwrap();
+
+        let result = length(&ree_array).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        let result_values = result
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let expected: Int32Array = vec![5, 3, 4, 5, 1].into();
+        assert_eq!(&expected, result_values);
+    }
+    #[test]
+    fn length_test_ree_invalid_type_early_fail() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let uint64_values = UInt64Array::from(vec![1u64, 2, 3]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![1i32, 2, 3]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &uint64_values).unwrap();
+
+        assert!(length(&ree_array).is_err());
+    }
+
+    #[test]
+    fn bit_length_test_ree_utf8() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let strings = StringArray::from(vec!["hello", "world", "test"]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![1i32, 2, 3]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &strings).unwrap();
+
+        let result = bit_length(&ree_array).unwrap();
+        let result_values = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap()
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let expected: Int32Array = vec![40, 40, 32].into();
+        assert_eq!(&expected, result_values);
     }
 }

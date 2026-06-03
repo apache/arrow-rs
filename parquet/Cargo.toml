@@ -52,7 +52,6 @@ parquet-variant-compute = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
@@ -287,6 +286,11 @@ required-features = ["arrow"]
 
 [[bench]]
 name = "bloom_filter"
+harness = false
+
+[[bench]]
+name = "arrow_reader_peak_memory"
+required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
 [lib]
