@@ -686,6 +686,15 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
+    // Functional round-trip coverage of importing an under-aligned `Decimal128`
+    // buffer over the C Data Interface. NOTE: this is *not* the `force_validate`
+    // regression guard for #10034 — `arrow-array`'s `force_validate` feature is
+    // empty and does not forward to `arrow-data/force_validate`, so under
+    // `force_validate` this test does not actually reach `arrow-data`'s
+    // validation gate, and under default features the import succeeds even with
+    // an unfixed `consume` (the buffer still ends up realigned). The true
+    // CI-reachable regression guard lives in `arrow/tests/ffi_from_ffi.rs`,
+    // which runs under `cargo test -p arrow --features=force_validate,...,ffi`.
     #[test]
     fn test_decimal128_under_aligned_round_trip() -> Result<()> {
         // Model an FFI producer that only guarantees the C Data Interface's
