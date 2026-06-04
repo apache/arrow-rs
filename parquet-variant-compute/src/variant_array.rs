@@ -874,11 +874,10 @@ impl TryFrom<&StructArray> for ShreddingState {
 /// shredded column of that type must carry the canonical [`UuidExtension`]
 /// extension metadata on its field.
 fn typed_value_field(array: &ArrayRef) -> FieldRef {
-    let field = Field::new("typed_value", array.data_type().clone(), true);
-    let field = match array.data_type() {
-        DataType::FixedSizeBinary(16) => field.with_extension_type(UuidExtension),
-        _ => field,
-    };
+    let mut field = Field::new("typed_value", array.data_type().clone(), true);
+    if array.data_type() == DataType::FixedSizeBinary(16) {
+        field = field.with_extension_type(UuidExtension);
+    }
     Arc::new(field)
 }
 
