@@ -134,7 +134,7 @@ pub async fn start_server() -> (Channel, BenchServer) {
 
     let bench_server = BenchServer::default();
 
-    let (client, server) = tokio::io::duplex(1024 * 1024);
+    let (client, server) = tokio::io::duplex(64 * 1024 * 1024); // 64MB
 
     let mut client = Some(client);
     let channel = Endpoint::try_from(DUMMY_URL)
