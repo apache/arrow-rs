@@ -42,6 +42,17 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
     data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
 }
 
+/// Maximum selected row fraction for the fused sparse-filter copy path.
+///
+/// Shared benchmark results show this path helps low-selectivity filters, but
+/// can regress once the filter becomes denser. Keep this as a cheap integer
+/// threshold on the hot path: `selected_count <= filter_len / 16`.
+const SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
+
+fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bool {
+    selected_count <= filter_len / SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
 /// Concatenate multiple [`RecordBatch`]es
 ///
 /// Implements the common pattern of incrementally creating output
@@ -627,9 +638,12 @@ impl BatchCoalescer {
             .biggest_coalesce_batch_size
             .is_some_and(|limit| selected_count > limit);
         let does_not_fit_buffer = selected_count > self.target_batch_size - self.buffered_rows;
+        let should_materialize_filter = exceeds_coalesce_limit
+            || self.has_non_specialized_filter_columns
+            || does_not_fit_buffer
+            || !should_use_sparse_filter_copy(filter_len, selected_count);
 
-        if exceeds_coalesce_limit || self.has_non_specialized_filter_columns || does_not_fit_buffer
-        {
+        if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
             let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
             let filtered_batch = predicate.filter_record_batch(&batch)?;
@@ -779,6 +793,14 @@ mod tests {
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
             .run();
+    }
+
+    #[test]
+    fn test_sparse_filter_copy_threshold() {
+        assert!(should_use_sparse_filter_copy(8192, 8));
+        assert!(should_use_sparse_filter_copy(8192, 81));
+        assert!(!should_use_sparse_filter_copy(8192, 819));
+        assert!(!should_use_sparse_filter_copy(8192, 6553));
     }
 
     #[test]
