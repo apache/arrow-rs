@@ -4906,10 +4906,10 @@ mod tests {
 
     #[test]
     fn test_arrow_writer_granular_mode_roundtrip() {
-        // Granular mode subdivides chunks and writes more pages than
-        // `main`. Make sure the data we write back is bit-identical to
-        // what went in — page-count assertions elsewhere only prove
-        // pages were cut, not that the encoded data is correct.
+        // Granular mode subdivides chunks and writes more pages than the
+        // default batched path. Make sure the data we write back is
+        // bit-identical to what went in — page-count assertions elsewhere
+        // only prove pages were cut, not that the encoded data is correct.
         //
         // Mix value sizes so that the cumulative-byte-budget cutoff
         // lands mid-chunk, exercising both batched and granular paths
