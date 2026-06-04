@@ -39,6 +39,7 @@
 **Implemented enhancements:**
 
 - Allow casting plain struct to dictionary encoded struct [\#10038](https://github.com/apache/arrow-rs/issues/10038) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Optimize arrow-flight [\#10029](https://github.com/apache/arrow-rs/issues/10029)
 - Align buffers when importing via `from_ffi` / `ArrowArrayStreamReader` [\#10028](https://github.com/apache/arrow-rs/issues/10028) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Switch Parquet `LogicalType` enum to macro generated version [\#9995](https://github.com/apache/arrow-rs/issues/9995) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Future proof Parquet Thrift parser [\#9973](https://github.com/apache/arrow-rs/issues/9973) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -80,8 +81,8 @@
 
 **Closed issues:**
 
-- Bound ArrowWriter peak memory  [\#10071](https://github.com/apache/arrow-rs/issues/10071)
-- Parquet writer can produce massively oversized data pages for large variable-width values [\#10061](https://github.com/apache/arrow-rs/issues/10061)
+- Bound ArrowWriter peak memory  [\#10071](https://github.com/apache/arrow-rs/issues/10071) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet writer can produce massively oversized data pages for large variable-width values [\#10061](https://github.com/apache/arrow-rs/issues/10061) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Remove the `fused_inline_view_columns` field from `BatchCoalescer` if possible [\#10055](https://github.com/apache/arrow-rs/issues/10055)
 - DataType parser permits negative FixedSizeBinary size [\#10033](https://github.com/apache/arrow-rs/issues/10033) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Parquet: return error for overlong INT96 column metadata statistics [\#10002](https://github.com/apache/arrow-rs/issues/10002) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -99,6 +100,7 @@
 
 **Merged pull requests:**
 
+- Bump max throughput in `flight` benchmark before blocking [\#10070](https://github.com/apache/arrow-rs/pull/10070) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([Rich-T-kid](https://github.com/Rich-T-kid))
 - Add coalesce inline-view filter benchmarks [\#10050](https://github.com/apache/arrow-rs/pull/10050) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([ClSlaid](https://github.com/ClSlaid))
 - fix: better error handling for negative size of FixedSizeBinary [\#10042](https://github.com/apache/arrow-rs/pull/10042) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([theirix](https://github.com/theirix))
 - bench\(parquet\): add Sbbf check/insert benchmarks [\#10041](https://github.com/apache/arrow-rs/pull/10041) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([dmatth1](https://github.com/dmatth1))
