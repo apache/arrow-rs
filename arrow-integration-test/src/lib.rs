@@ -1341,18 +1341,10 @@ mod tests {
         let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
-            Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(
-                [("k".to_string(), "v".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
-            Field::new("bools-with-metadata-vec", DataType::Boolean, true).with_metadata(
-                [("k2".to_string(), "v2".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
+            Field::new("bools-with-metadata-map", DataType::Boolean, true)
+                .with_metadata([("k", "v")]),
+            Field::new("bools-with-metadata-vec", DataType::Boolean, true)
+                .with_metadata([("k2", "v2")]),
             Field::new("bools", DataType::Boolean, true),
             Field::new("int8s", DataType::Int8, true),
             Field::new("int16s", DataType::Int16, true),

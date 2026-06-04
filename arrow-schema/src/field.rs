@@ -17,7 +17,6 @@
 
 use crate::error::ArrowError;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use crate::datatype::DataType;
 use crate::extension::CanonicalExtensionType;
 use crate::schema::SchemaBuilder;
 use crate::{
-    Fields, UnionFields, UnionMode,
+    Fields, Metadata, UnionFields, UnionMode,
     extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
 };
 
@@ -57,7 +56,7 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    metadata: HashMap<String, String>,
+    metadata: Metadata,
 }
 
 impl std::fmt::Debug for Field {
@@ -128,31 +127,7 @@ impl Ord for Field {
             .cmp(other.name())
             .then_with(|| self.data_type.cmp(other.data_type()))
             .then_with(|| self.nullable.cmp(&other.nullable))
-            .then_with(|| {
-                // ensure deterministic key order
-                let mut keys: Vec<&String> =
-                    self.metadata.keys().chain(other.metadata.keys()).collect();
-                keys.sort();
-                for k in keys {
-                    match (self.metadata.get(k), other.metadata.get(k)) {
-                        (None, None) => {}
-                        (Some(_), None) => {
-                            return Ordering::Less;
-                        }
-                        (None, Some(_)) => {
-                            return Ordering::Greater;
-                        }
-                        (Some(v1), Some(v2)) => match v1.cmp(v2) {
-                            Ordering::Equal => {}
-                            other => {
-                                return other;
-                            }
-                        },
-                    }
-                }
-
-                Ordering::Equal
-            })
+            .then_with(|| self.metadata.cmp(&other.metadata))
     }
 }
 
@@ -161,14 +136,8 @@ impl Hash for Field {
         self.name.hash(state);
         self.data_type.hash(state);
         self.nullable.hash(state);
-
-        // ensure deterministic key order
-        let mut keys: Vec<&String> = self.metadata.keys().collect();
-        keys.sort();
-        for k in keys {
-            k.hash(state);
-            self.metadata.get(k).expect("key valid").hash(state);
-        }
+        // `Metadata` iterates in deterministic (sorted) key order
+        self.metadata.hash(state);
     }
 }
 
@@ -197,7 +166,7 @@ impl Field {
             nullable,
             dict_id: 0,
             dict_is_ordered: false,
-            metadata: HashMap::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -238,7 +207,7 @@ impl Field {
             nullable,
             dict_id,
             dict_is_ordered,
-            metadata: HashMap::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -368,25 +337,25 @@ impl Field {
 
     /// Sets the `Field`'s optional custom metadata.
     #[inline]
-    pub fn set_metadata(&mut self, metadata: HashMap<String, String>) {
-        self.metadata = metadata;
+    pub fn set_metadata(&mut self, metadata: impl Into<Metadata>) {
+        self.metadata = metadata.into();
     }
 
     /// Sets the metadata of this `Field` to be `metadata` and returns self
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(mut self, metadata: impl Into<Metadata>) -> Self {
         self.set_metadata(metadata);
         self
     }
 
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &HashMap<String, String> {
+    pub const fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
     /// Returns a mutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+    pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
 
@@ -464,11 +433,8 @@ impl Field {
     /// let field = Field::new("", DataType::Null, false);
     /// assert_eq!(field.extension_type_name(), None);
     ///
-    /// let field = Field::new("", DataType::Null, false).with_metadata(
-    ///    [(EXTENSION_TYPE_NAME_KEY.to_owned(), "example".to_owned())]
-    ///        .into_iter()
-    ///        .collect(),
-    /// );
+    /// let field = Field::new("", DataType::Null, false)
+    ///     .with_metadata([(EXTENSION_TYPE_NAME_KEY, "example")]);
     /// assert_eq!(field.extension_type_name(), Some("example"));
     /// ```
     pub fn extension_type_name(&self) -> Option<&str> {
@@ -491,11 +457,8 @@ impl Field {
     /// let field = Field::new("", DataType::Null, false);
     /// assert_eq!(field.extension_type_metadata(), None);
     ///
-    /// let field = Field::new("", DataType::Null, false).with_metadata(
-    ///    [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "example".to_owned())]
-    ///        .into_iter()
-    ///        .collect(),
-    /// );
+    /// let field = Field::new("", DataType::Null, false)
+    ///     .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "example")]);
     /// assert_eq!(field.extension_type_metadata(), Some("example"));
     /// ```
     pub fn extension_type_metadata(&self) -> Option<&str> {
@@ -963,7 +926,7 @@ impl Field {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.data_type)
             + self.data_type.size()
             + self.name.capacity()
-            + (std::mem::size_of::<(String, String)>() * self.metadata.capacity())
+            + (std::mem::size_of::<(String, String)>() * self.metadata.len())
             + self
                 .metadata
                 .iter()
@@ -1009,6 +972,7 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashMap;
     use std::collections::hash_map::DefaultHasher;
 
     #[derive(Debug, Clone, Copy)]
@@ -1048,40 +1012,21 @@ mod test {
         let no_extension = Field::new("f", DataType::Null, false);
         assert!(!no_extension.has_valid_extension_type::<TestExtensionType>());
 
-        let matching_name = Field::new("f", DataType::Null, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                TestExtensionType::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let matching_name = Field::new("f", DataType::Null, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, TestExtensionType::NAME)]);
         assert!(matching_name.has_valid_extension_type::<TestExtensionType>());
 
         let matching_name_with_invalid_metadata = Field::new("f", DataType::Null, false)
-            .with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_owned(),
-                        TestExtensionType::NAME.to_owned(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_owned(), "invalid".to_owned()),
-                ]
-                .into_iter()
-                .collect(),
-            );
+            .with_metadata([
+                (EXTENSION_TYPE_NAME_KEY, TestExtensionType::NAME),
+                (EXTENSION_TYPE_METADATA_KEY, "invalid"),
+            ]);
         assert!(
             !matching_name_with_invalid_metadata.has_valid_extension_type::<TestExtensionType>()
         );
 
-        let different_name = Field::new("f", DataType::Null, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                "some.other_extension".to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let different_name = Field::new("f", DataType::Null, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, "some.other_extension")]);
         assert!(!different_name.has_valid_extension_type::<TestExtensionType>());
     }
 

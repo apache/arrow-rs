@@ -102,11 +102,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
-        let field = Field::new("", DataType::Int8, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Int8, false)
+            .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "")]);
         field.extension_type::<Bool8>();
     }
 
@@ -119,28 +116,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "Bool8 extension type expects an empty string as metadata")]
     fn missing_metadata() {
-        let field = Field::new("", DataType::Int8, false).with_metadata(
-            [(EXTENSION_TYPE_NAME_KEY.to_owned(), Bool8::NAME.to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Int8, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, Bool8::NAME)]);
         field.extension_type::<Bool8>();
     }
 
     #[test]
     #[should_panic(expected = "Bool8 extension type expects an empty string as metadata")]
     fn invalid_metadata() {
-        let field = Field::new("", DataType::Int8, false).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), Bool8::NAME.to_owned()),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "non-empty".to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Int8, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, Bool8::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "non-empty"),
+        ]);
         field.extension_type::<Bool8>();
     }
 }

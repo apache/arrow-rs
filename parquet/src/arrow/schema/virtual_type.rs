@@ -154,9 +154,7 @@ mod tests {
     #[should_panic(expected = "Extension type name missing")]
     fn row_number_missing_name() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                .into_iter()
-                .collect(),
+            [(EXTENSION_TYPE_METADATA_KEY, "")],
         );
         field.extension_type::<RowNumber>();
     }
@@ -172,11 +170,9 @@ mod tests {
     fn row_number_missing_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                RowNumber::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
+                EXTENSION_TYPE_NAME_KEY,
+                RowNumber::NAME,
+            )],
         );
         field.extension_type::<RowNumber>();
     }
@@ -187,16 +183,14 @@ mod tests {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [
                 (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    RowNumber::NAME.to_owned(),
+                    EXTENSION_TYPE_NAME_KEY,
+                    RowNumber::NAME,
                 ),
                 (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "non-empty".to_owned(),
+                    EXTENSION_TYPE_METADATA_KEY,
+                    "non-empty",
                 ),
-            ]
-            .into_iter()
-            .collect(),
+            ],
         );
         field.extension_type::<RowNumber>();
     }
@@ -214,9 +208,7 @@ mod tests {
     #[should_panic(expected = "Extension type name missing")]
     fn row_group_index_missing_name() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                .into_iter()
-                .collect(),
+            [(EXTENSION_TYPE_METADATA_KEY, "")],
         );
         field.extension_type::<RowGroupIndex>();
     }
@@ -232,11 +224,9 @@ mod tests {
     fn row_group_index_missing_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                RowGroupIndex::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
+                EXTENSION_TYPE_NAME_KEY,
+                RowGroupIndex::NAME,
+            )],
         );
         field.extension_type::<RowGroupIndex>();
     }
@@ -247,16 +237,14 @@ mod tests {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [
                 (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    RowGroupIndex::NAME.to_owned(),
+                    EXTENSION_TYPE_NAME_KEY,
+                    RowGroupIndex::NAME,
                 ),
                 (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "non-empty".to_owned(),
+                    EXTENSION_TYPE_METADATA_KEY,
+                    "non-empty",
                 ),
-            ]
-            .into_iter()
-            .collect(),
+            ],
         );
         field.extension_type::<RowGroupIndex>();
     }

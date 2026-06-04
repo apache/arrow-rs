@@ -548,11 +548,7 @@ mod tests {
             ],
             false,
         )
-        .with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "{}".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "{}")]);
         field.extension_type::<VariableShapeTensor>();
     }
 
@@ -601,14 +597,7 @@ mod tests {
             ],
             false,
         )
-        .with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                VariableShapeTensor::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        .with_metadata([(EXTENSION_TYPE_NAME_KEY, VariableShapeTensor::NAME)]);
         field.extension_type::<VariableShapeTensor>();
     }
 
@@ -632,20 +621,16 @@ mod tests {
             ],
             false,
         )
-        .with_metadata(
-            [
-                (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    VariableShapeTensor::NAME.to_owned(),
-                ),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    r#"{ "dim_names": [1, null, 3, 4] }"#.to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        .with_metadata([
+            (
+                EXTENSION_TYPE_NAME_KEY,
+                VariableShapeTensor::NAME.to_owned(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY,
+                r#"{ "dim_names": [1, null, 3, 4] }"#.to_owned(),
+            ),
+        ]);
         field.extension_type::<VariableShapeTensor>();
     }
 
