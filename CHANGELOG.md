@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [59.0.0](https://github.com/apache/arrow-rs/tree/59.0.0) (2026-06-03)
+## [59.0.0](https://github.com/apache/arrow-rs/tree/59.0.0) (2026-06-04)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.1...59.0.0)
 
@@ -80,6 +80,8 @@
 
 **Closed issues:**
 
+- Bound ArrowWriter peak memory  [\#10071](https://github.com/apache/arrow-rs/issues/10071)
+- Parquet writer can produce massively oversized data pages for large variable-width values [\#10061](https://github.com/apache/arrow-rs/issues/10061)
 - Remove the `fused_inline_view_columns` field from `BatchCoalescer` if possible [\#10055](https://github.com/apache/arrow-rs/issues/10055)
 - DataType parser permits negative FixedSizeBinary size [\#10033](https://github.com/apache/arrow-rs/issues/10033) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Parquet: return error for overlong INT96 column metadata statistics [\#10002](https://github.com/apache/arrow-rs/issues/10002) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -105,6 +107,7 @@
 - Call `align_buffers()` in `from_ffi`, remove redundant call from `arrow-pyarrow` [\#10030](https://github.com/apache/arrow-rs/pull/10030) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mbutrovich](https://github.com/mbutrovich))
 - Adjust Variant size expectation for s390x architecture [\#10027](https://github.com/apache/arrow-rs/pull/10027) ([frantisekz](https://github.com/frantisekz))
 - bench\(parquet\): add short and large string `arrow_writer` benchmarks [\#10021](https://github.com/apache/arrow-rs/pull/10021) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([adriangb](https://github.com/adriangb))
+- Pluggable page spilling API for the Parquet ArrowWriter \(PageStore\) [\#10020](https://github.com/apache/arrow-rs/pull/10020) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([adriangb](https://github.com/adriangb))
 - fix: Reject empty strings when casting strings to decimal [\#10010](https://github.com/apache/arrow-rs/pull/10010) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([neilconway](https://github.com/neilconway))
 - feat: Implement decimal \<-\> float16 casts [\#10008](https://github.com/apache/arrow-rs/pull/10008) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([neilconway](https://github.com/neilconway))
 - fix\(cast\): Trying to fix cast losting schema problem [\#10005](https://github.com/apache/arrow-rs/pull/10005) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mapleFU](https://github.com/mapleFU))
@@ -118,6 +121,7 @@
 - Adds is\_null function to RowAccessor [\#9979](https://github.com/apache/arrow-rs/pull/9979) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([choubacha](https://github.com/choubacha))
 - Fix parquet-variant build on wasm targets [\#9978](https://github.com/apache/arrow-rs/pull/9978) ([AdamGS](https://github.com/AdamGS))
 - Safely ignore Parquet fields with unimplemented Thrift types [\#9974](https://github.com/apache/arrow-rs/pull/9974) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
+- fix\(parquet\): bound data page byte size for large variable-width values [\#9972](https://github.com/apache/arrow-rs/pull/9972) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([adriangb](https://github.com/adriangb))
 - feat\(parquet\): Add `ParquetPushDecoder::into_builder` to allow swapping projections / row filters at row group boundaries [\#9968](https://github.com/apache/arrow-rs/pull/9968) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([adriangb](https://github.com/adriangb))
 - chore\(deps\): bump peaceiris/actions-gh-pages from 4.0.0 to 4.1.0 [\#9966](https://github.com/apache/arrow-rs/pull/9966) ([dependabot[bot]](https://github.com/apps/dependabot))
 - Add `DatePart` enum 1-indexed variants [\#9965](https://github.com/apache/arrow-rs/pull/9965) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([sdf-jkl](https://github.com/sdf-jkl))
