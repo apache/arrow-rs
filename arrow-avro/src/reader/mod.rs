@@ -5483,13 +5483,13 @@ mod test {
             {
                 let schema = Arc::new(Schema::new(vec![
                     Field::new("duration_time_nanos", DataType::Int64, false)
-                        .with_metadata([("logicalType", "arrow.duration-nanos")].into()),
+                        .with_metadata([("logicalType", "arrow.duration-nanos")]),
                     Field::new("duration_time_micros", DataType::Int64, false)
-                        .with_metadata([("logicalType", "arrow.duration-micros")].into()),
+                        .with_metadata([("logicalType", "arrow.duration-micros")]),
                     Field::new("duration_time_millis", DataType::Int64, false)
-                        .with_metadata([("logicalType", "arrow.duration-millis")].into()),
+                        .with_metadata([("logicalType", "arrow.duration-millis")]),
                     Field::new("duration_time_seconds", DataType::Int64, false)
-                        .with_metadata([("logicalType", "arrow.duration-seconds")].into()),
+                        .with_metadata([("logicalType", "arrow.duration-seconds")]),
                 ]));
 
                 let nanos =
