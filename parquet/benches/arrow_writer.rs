@@ -18,6 +18,71 @@
 #[macro_use]
 extern crate criterion;
 
+// Use jemalloc, with page decay disabled, for the writer benchmarks.
+//
+// Each criterion iteration builds a fresh `ArrowWriter`, so the writer's
+// internal encode buffers are allocated and freed every iteration. Whether
+// those buffers are served from warm (already-faulted) pages or fresh pages
+// depends on the heap state left by previously-run benchmarks in the same
+// process. The cold-page case pays a per-page minor fault on every byte
+// written, which roughly doubles the measured time for the byte-array writers
+// (e.g. `string/parquet_2` swings between ~106ms and ~190ms purely on
+// allocation order, with no code change).
+//
+// The retention policy is pinned, not left to the allocator default, via the
+// compiled-in `malloc_conf` symbol below: `dirty_decay_ms:-1,muzzy_decay_ms:-1`
+// disables jemalloc's page decay, so freed pages are kept mapped and reused
+// warm instead of being returned to the OS. That removes the per-iteration
+// fault tax and collapses the order-dependent bimodality, so the numbers
+// reflect encoder work. Pinning the setting (rather than relying on an
+// allocator's default) keeps the benchmark stable across allocator upgrades.
+//
+// Gated to Linux (see Cargo.toml): jemalloc does not build on some targets and
+// its unprefixed `malloc_conf` symbol is not honored on others; elsewhere the
+// bench just uses the default allocator (and `assert_page_decay_disabled` is a
+// no-op). Linux is where the canonical benchmark runner runs.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// jemalloc reads its options from a symbol named `malloc_conf`. The
+// `unprefixed_malloc_on_supported_platforms` feature (see Cargo.toml) is what
+// makes jemalloc look for the unprefixed name this defines; without it the
+// symbol would be silently ignored. `assert_page_decay_disabled` below guards
+// against exactly that, so a config that fails to apply fails loudly instead
+// of quietly reintroducing the instability.
+#[cfg(target_os = "linux")]
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static malloc_conf: &[u8] = b"dirty_decay_ms:-1,muzzy_decay_ms:-1\0";
+
+/// Assert the `malloc_conf` above actually took effect. If the symbol is ever
+/// silently ignored (feature dropped, unsupported platform, renamed symbol,
+/// allocator swapped), the byte-array writer benchmarks would quietly become
+/// order-dependent again; failing loudly here prevents that.
+#[cfg(target_os = "linux")]
+fn assert_page_decay_disabled() {
+    // SAFETY: reading immutable `opt.*` mallctl values; the type matches
+    // jemalloc's `ssize_t`.
+    let (dirty, muzzy): (isize, isize) = unsafe {
+        (
+            tikv_jemalloc_ctl::raw::read(b"opt.dirty_decay_ms\0").unwrap(),
+            tikv_jemalloc_ctl::raw::read(b"opt.muzzy_decay_ms\0").unwrap(),
+        )
+    };
+    assert!(
+        dirty == -1 && muzzy == -1,
+        "malloc_conf did not take effect (dirty_decay_ms={dirty}, muzzy_decay_ms={muzzy}, \
+         expected -1/-1); the arrow_writer benchmark would be order-dependent. Ensure the \
+         `unprefixed_malloc_on_supported_platforms` jemalloc feature is enabled.",
+    );
+}
+
+/// On non-Linux targets the benchmark uses the default allocator, so there is
+/// no jemalloc page-decay setting to check.
+#[cfg(not(target_os = "linux"))]
+fn assert_page_decay_disabled() {}
+
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
@@ -466,6 +531,7 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
 }
 
 fn bench_all_writers(c: &mut Criterion) {
+    assert_page_decay_disabled();
     let batches = create_batches();
     let props = create_writer_props();
 

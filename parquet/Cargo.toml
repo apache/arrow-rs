@@ -95,6 +95,21 @@ rand = { version = "0.9", default-features = false, features = ["std", "std_rng"
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.38.1", default-features = false, features = ["system"] }
 
+# Used as the global allocator in the `arrow_writer` benchmark, with its
+# page-decay policy pinned via a compiled-in `malloc_conf` symbol, to keep
+# per-iteration buffer allocations on warm pages (see that bench). The
+# `unprefixed_*` feature makes jemalloc read the unprefixed `malloc_conf`
+# symbol defined there; `tikv-jemalloc-ctl` is used to assert at startup that
+# the policy actually took effect (so a silently-ignored config fails loudly).
+#
+# Gated to Linux: jemalloc does not build on some targets (e.g. wasm, msvc), and
+# the unprefixed `malloc_conf` symbol it relies on is not honored on others
+# (e.g. apple, android). On every other target the bench falls back to the
+# default allocator. Linux is where the canonical benchmark runner runs.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator = { version = "0.7", default-features = false, features = ["unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-ctl = { version = "0.7", default-features = false }
+
 [package.metadata.docs.rs]
 all-features = true
 
