@@ -81,13 +81,13 @@ impl Iterator for SlicesIterator<'_> {
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
-struct IndexIterator<'a> {
+pub(crate) struct IndexIterator<'a> {
     remaining: usize,
     iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
+    pub(crate) fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let iter = filter.values().set_indices();
         Self { remaining, iter }
@@ -366,11 +366,85 @@ impl IterationStrategy {
     }
 }
 
+/// Borrowed description of which rows a [`FilterPredicate`] selects.
+///
+/// This is used for filtering multiple arrays with the same predicate without
+/// having to clone the predicate's internal data structures (e.g. the list of
+/// indices or slices).
+pub(crate) enum FilterSelection<'a> {
+    /// No rows are selected
+    None,
+    /// All `len` rows are selected
+    All { len: usize },
+    /// Iterator of `(start, end)` slices, each a run of contiguous selected rows
+    Slices(FilterSlices<'a>),
+    /// Iterator of the indices of the selected rows
+    Indices(FilterIndices<'a>),
+}
+
+pub(crate) type FilterSlices<'a> =
+    FilterIterator<std::iter::Copied<std::slice::Iter<'a, (usize, usize)>>, SlicesIterator<'a>>;
+
+pub(crate) type FilterIndices<'a> =
+    FilterIterator<std::iter::Copied<std::slice::Iter<'a, usize>>, IndexIterator<'a>>;
+
+/// Internal implementation of [`FilterSelection`] that holds either an iterator
+/// over a precomputed (materialized) list of rows, or a lazy iterator that
+/// derives the selected rows from the predicate on the fly.
+///
+/// This does not implement [`Iterator`] on purpose. Callers use
+/// [`Self::for_each`] or [`Self::try_for_each`] so the enum is matched once
+/// before the loop, not once per row in `next`.
+pub(crate) enum FilterIterator<M, I> {
+    Materialized(M),
+    Lazy(I),
+}
+
+impl<M, I> FilterIterator<M, I>
+where
+    M: Iterator,
+    I: Iterator<Item = M::Item>,
+{
+    /// Call the infallible function `f` for each item in this [`FilterIterator`]
+    pub(crate) fn for_each<F>(self, f: F)
+    where
+        F: FnMut(M::Item),
+    {
+        match self {
+            Self::Materialized(iter) => iter.for_each(f),
+            Self::Lazy(iter) => iter.for_each(f),
+        }
+    }
+
+    /// Call the fallible function `f` for each item in this [`FilterIterator`],
+    /// stopping and returning the error if `f` returns `Err`.
+    pub(crate) fn try_for_each<F, E>(self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(M::Item) -> Result<(), E>,
+    {
+        match self {
+            Self::Materialized(iter) => {
+                for item in iter {
+                    f(item)?;
+                }
+            }
+            Self::Lazy(iter) => {
+                for item in iter {
+                    f(item)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// A filtering predicate that can be applied to an [`Array`]
 #[derive(Debug)]
 pub struct FilterPredicate {
     filter: BooleanArray,
     count: usize,
+    /// Precomputed strategy for iterating over the selected rows of this predicate
     strategy: IterationStrategy,
 }
 
@@ -408,6 +482,27 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Return a [`FilterSelection`] for iterating over the rows selected by
+    /// this [`FilterPredicate`].
+    pub(crate) fn selection(&self) -> FilterSelection<'_> {
+        match &self.strategy {
+            IterationStrategy::None => FilterSelection::None,
+            IterationStrategy::All => FilterSelection::All { len: self.count },
+            IterationStrategy::Slices(slices) => {
+                FilterSelection::Slices(FilterIterator::Materialized(slices.iter().copied()))
+            }
+            IterationStrategy::SlicesIterator => {
+                FilterSelection::Slices(FilterIterator::Lazy(SlicesIterator::new(&self.filter)))
+            }
+            IterationStrategy::Indices(indices) => {
+                FilterSelection::Indices(FilterIterator::Materialized(indices.iter().copied()))
+            }
+            IterationStrategy::IndexIterator => FilterSelection::Indices(FilterIterator::Lazy(
+                IndexIterator::new(&self.filter, self.count),
+            )),
+        }
     }
 
     /// Filters the given `nulls` buffer using this predicate.
@@ -575,7 +670,7 @@ where
 /// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
 /// in the filtered output, and `null_buffer` is the filtered null buffer
 ///
-fn filter_null_mask(
+pub(crate) fn filter_null_mask(
     nulls: Option<&NullBuffer>,
     predicate: &FilterPredicate,
 ) -> Option<(usize, Buffer)> {
@@ -649,7 +744,10 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 }
 
 #[inline(never)]
-fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
+pub(crate) fn filter_native<T: ArrowNativeType>(
+    values: &[T],
+    predicate: &FilterPredicate,
+) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
     match &predicate.strategy {
@@ -1604,6 +1702,43 @@ mod tests {
 
         assert_eq!(chunks, vec![(1, 62), (63, 124), (125, 130)]);
         assert_eq!(filter_count, 61 + 61 + 5);
+    }
+
+    #[test]
+    fn test_filter_selection_iterators() {
+        let slices = [(0, 2), (4, 5)];
+        let mut ranges = Vec::new();
+        let selection: FilterSlices<'_> = FilterIterator::Materialized(slices.iter().copied());
+        selection.for_each(|range| ranges.push(range));
+        assert_eq!(ranges, slices);
+
+        let filter = BooleanArray::from(vec![true, true, false, false, true]);
+        let mut ranges = Vec::new();
+        let selection: FilterSlices<'_> = FilterIterator::Lazy(SlicesIterator::new(&filter));
+        selection
+            .try_for_each(|range| {
+                ranges.push(range);
+                Ok::<(), ArrowError>(())
+            })
+            .unwrap();
+        assert_eq!(ranges, vec![(0, 2), (4, 5)]);
+
+        let indices = [1, 3, 5];
+        let mut selected = Vec::new();
+        let selection: FilterIndices<'_> = FilterIterator::Materialized(indices.iter().copied());
+        selection.for_each(|idx| selected.push(idx));
+        assert_eq!(selected, indices);
+
+        let filter = BooleanArray::from(vec![false, true, false, true]);
+        let mut selected = Vec::new();
+        let selection: FilterIndices<'_> = FilterIterator::Lazy(IndexIterator::new(&filter, 2));
+        selection
+            .try_for_each(|idx| {
+                selected.push(idx);
+                Ok::<(), ArrowError>(())
+            })
+            .unwrap();
+        assert_eq!(selected, vec![1, 3]);
     }
 
     #[test]
