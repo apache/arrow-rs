@@ -815,10 +815,10 @@ impl ArrayData {
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
     ///
-    /// On an import boundary this must be called *before* validation: protocol-legal
-    /// but under-aligned input (e.g. 8-byte-aligned buffers over the C Data Interface)
-    /// would otherwise be rejected as an invariant violation. Prefer
-    /// [`ArrayDataBuilder::align_buffers`], which realigns before `build` validates.
+    /// On an import boundary this must run *before* validation, otherwise
+    /// protocol-legal but under-aligned input is rejected as an invariant
+    /// violation. Prefer [`ArrayDataBuilder::align_buffers`], which realigns
+    /// before `build` validates.
     ///
     /// This also aligns buffers of children data
     pub fn align_buffers(&mut self) {
