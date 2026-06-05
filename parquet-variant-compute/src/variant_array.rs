@@ -875,7 +875,7 @@ impl TryFrom<&StructArray> for ShreddingState {
 /// extension metadata on its field.
 fn typed_value_field(array: &ArrayRef) -> FieldRef {
     let mut field = Field::new("typed_value", array.data_type().clone(), true);
-    if array.data_type() == DataType::FixedSizeBinary(16) {
+    if matches!(array.data_type(), DataType::FixedSizeBinary(16)) {
         field = field.with_extension_type(UuidExtension);
     }
     Arc::new(field)
