@@ -1223,6 +1223,37 @@ mod tests {
     }
 
     #[test]
+    fn test_uuid_nested_shredding() {
+        let mock_uuid = Uuid::new_v4();
+        let input = build_variant_array(vec![VariantRow::Object(vec![(
+            "id",
+            VariantValue::from(mock_uuid),
+        )])]);
+        let target = ShreddedSchemaBuilder::default()
+            .with_path("id", DataType::FixedSizeBinary(16))
+            .unwrap()
+            .build();
+
+        let result = shred_variant(&input, &target).unwrap();
+
+        let typed_value = result.typed_value_field().unwrap();
+        let typed_struct = typed_value.as_any().downcast_ref::<StructArray>().unwrap();
+        let id =
+            ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("id").unwrap()).unwrap();
+
+        // The extension type lives on the field, not the array, so assert it on the inner struct.
+        let leaf = id
+            .inner()
+            .fields()
+            .iter()
+            .find(|f| f.name() == "typed_value")
+            .unwrap();
+
+        assert_eq!(leaf.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(leaf.has_valid_extension_type::<arrow_schema::extension::Uuid>());
+    }
+
+    #[test]
     fn test_primitive_shredding_comprehensive() {
         // Test mixed scenarios in a single array
         let input = VariantArray::from_iter(vec![
