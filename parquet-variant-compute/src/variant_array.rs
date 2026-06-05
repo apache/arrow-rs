@@ -1225,7 +1225,19 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
 }
 
 fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>> {
-    let Cow::Owned(new_data_type) = canonicalize_and_verify_data_type(field.data_type())? else {
+    let new_data_type = canonicalize_and_verify_data_type(field.data_type())?;
+
+    // A shredded FixedSizeBinary(16) column is always a UUID. Tag it with the UUID extension type
+    // on read, as a safety net against writers that emit the column without the extension metadata.
+    // Canonicalization never rewrites FixedSizeBinary(16), so the type is already correct here.
+    if matches!(new_data_type.as_ref(), DataType::FixedSizeBinary(16))
+        && !field.has_valid_extension_type::<UuidExtension>()
+    {
+        let new_field = field.as_ref().clone().with_extension_type(UuidExtension);
+        return Ok(Cow::Owned(Arc::new(new_field)));
+    }
+
+    let Cow::Owned(new_data_type) = new_data_type else {
         return Ok(Cow::Borrowed(field));
     };
     let new_field = field.as_ref().clone().with_data_type(new_data_type);
@@ -1239,9 +1251,9 @@ mod test {
 
     use super::*;
     use arrow::array::{
-        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        Time64MicrosecondArray,
+        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        FixedSizeBinaryArray, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
+        LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1350,6 +1362,50 @@ mod test {
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", typed_value, true)
             .build()
+    }
+
+    #[test]
+    fn try_new_tags_untagged_uuid_on_read() {
+        // Simulate a foreign writer that shredded a UUID column as bare FixedSizeBinary(16),
+        // omitting the UUID extension type.
+        let typed_value = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 2));
+        let input = make_variant_struct_with_typed_value(Arc::new(typed_value.unwrap()));
+
+        // try_new canonicalizes on the read path and attaches the extension.
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        let typed_value = variant_array
+            .inner()
+            .fields()
+            .iter()
+            .find(|f| f.name() == "typed_value")
+            .unwrap();
+        assert_eq!(typed_value.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(typed_value.has_valid_extension_type::<UuidExtension>());
+    }
+
+    #[test]
+    fn try_new_tags_untagged_nested_uuid_on_read() {
+        // A shredded object { id: { typed_value: FixedSizeBinary(16) } } whose inner UUID leaf
+        // carries no extension type; canonicalization must reach it recursively.
+        let leaf = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 1)).unwrap();
+        let inner = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(leaf), true)
+            .build();
+        let object = StructArrayBuilder::new()
+            .with_field("id", Arc::new(inner), false)
+            .build();
+        let input = make_variant_struct_with_typed_value(Arc::new(object));
+
+        // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        let object = variant_array.typed_value_field().unwrap().as_struct();
+        let id = object.column_by_name("id").unwrap().as_struct();
+        let uuid_leaf = id
+            .fields()
+            .iter()
+            .find(|f| f.name() == "typed_value")
+            .unwrap();
+        assert!(uuid_leaf.has_valid_extension_type::<UuidExtension>());
     }
 
     #[test]
