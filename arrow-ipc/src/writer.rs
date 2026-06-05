@@ -588,7 +588,8 @@ impl IpcDataGenerator {
 
         let mut nodes: Vec<crate::FieldNode> = vec![];
         let mut buffers: Vec<crate::Buffer> = vec![];
-        let mut encoded_buffers: Vec<EncodedBuffer> = vec![];
+        let mut encoded_buffers: Vec<EncodedBuffer> =
+            Vec::with_capacity(encoded_buffer_count(batch));
         let mut offset = 0i64;
 
         let batch_compression_type = write_options.batch_compression_type;
@@ -1976,6 +1977,16 @@ fn get_buffer(array_data: &ArrayData) -> Buffer {
     } else {
         buffer.clone()
     }
+}
+
+/// Returns the total number of [`EncodedBuffer`] entries that will be pushed during encoding of
+/// `batch`. Used to pre-allocate the `encoded_buffers` Vec and avoid repeated reallocations as
+/// columns are visited.
+fn encoded_buffer_count(batch: &RecordBatch) -> usize {
+    fn count(data: &ArrayData) -> usize {
+        data.buffers().len() + data.child_data().iter().map(count).sum::<usize>()
+    }
+    batch.columns().iter().map(|c| count(&c.to_data())).sum()
 }
 
 /// Write array data to a vector of bytes
