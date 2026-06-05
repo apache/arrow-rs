@@ -83,5 +83,37 @@ fn bench_roundtrip(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_encode, bench_roundtrip);
+async fn encode_and_send(channel: Channel, batch: RecordBatch) {
+    let mut client = FlightClient::new(channel);
+    let frames = FlightDataEncoderBuilder::new().build(futures::stream::iter([Ok(batch)]));
+    client
+        .do_put(frames)
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+}
+
+fn bench_encode_to_send(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (channel, _) = rt.block_on(start_server());
+    let mut g = c.benchmark_group("encode_to_send");
+
+    for &(name, build) in TYPES {
+        for &rows in &ROWS {
+            for &cols in &COLS {
+                let batch = build_batch(name, rows, cols, build);
+                let id = BenchmarkId::new(name, format!("{rows}x{cols}"));
+                g.throughput(Throughput::Bytes(batch.get_array_memory_size() as u64));
+                g.bench_with_input(id, &batch, |b, batch| {
+                    b.to_async(&rt)
+                        .iter(|| encode_and_send(channel.clone(), batch.clone()));
+                });
+            }
+        }
+    }
+}
+
+criterion_group!(benches, bench_encode, bench_roundtrip, bench_encode_to_send);
 criterion_main!(benches);
