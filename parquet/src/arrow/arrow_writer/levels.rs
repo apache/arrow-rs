@@ -444,8 +444,11 @@ impl LevelInfoBuilder {
                     let mut seen = 0usize;
 
                     for rep in rep_levels.iter_mut().rev() {
+                        // Count element starts by skipping nested reps (rep > ctx.rep_level).
+                        //
                         // This can uses `==`, since list write is recursive and the child is written
-                        // before the parent.
+                        // before the parent. However, benchmark shows there is no differences
+                        // between them, so uses `<=` here.
                         if *rep <= ctx.rep_level {
                             seen += 1;
                             if seen == next_stamp_at {
