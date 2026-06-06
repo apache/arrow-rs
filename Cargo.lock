@@ -3213,9 +3213,9 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "snipsnap"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "046c750b069a8cd6505ff58534a3a3c9340908b5e04a54ef6bc2645f3e8a9626"
+checksum = "777ffec062805c2b852a96078278359580ee45e7aeff9a89dce3ccf2857fb32e"
 
 [[package]]
 name = "socket2"

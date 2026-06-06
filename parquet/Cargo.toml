@@ -52,7 +52,7 @@ parquet-variant-compute = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-snipsnap = { version = "0.0.1", default-features = false, optional = true }
+snipsnap = { version = "0.0.2", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
@@ -80,7 +80,7 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
-snipsnap = { version = "0.0.1", default-features = false }
+snipsnap = { version = "0.0.2", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
