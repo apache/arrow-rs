@@ -361,9 +361,6 @@ impl LevelInfoBuilder {
         }
     }
 
-    /// Batch write for lists whose child has no nested repetition.
-    /// Each child element produces exactly one rep_level entry, so list-start
-    /// positions are directly computable from offsets.
     fn write_list_direct<O: OffsetSizeTrait>(
         child: &mut LevelInfoBuilder,
         ctx: &LevelContext,
@@ -374,12 +371,19 @@ impl LevelInfoBuilder {
         let list_start_rep = ctx.rep_level - 1;
 
         let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
             let values_start = run_offsets[0].as_usize();
             let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
 
             child.write(values_start..values_end);
 
+            // The first element of each list slot needs rep_level =
+            // list_start_rep to mark a new list boundary. Because there's a 1:1
+            // mapping between child elements and rep_level entries, the position
+            // of each slot's first element is directly computable from offsets.
             child.visit_leaves(|leaf| {
+                debug_assert!(leaf.max_rep_level == ctx.rep_level);
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                 let batch_len = values_end - values_start;
                 let batch_base = rep_levels.len() - batch_len;
@@ -394,8 +398,11 @@ impl LevelInfoBuilder {
     }
 
     /// Batch write for lists whose child has nested repetition.
+    ///
     /// After batch-writing child elements, scans backward through rep_levels
     /// counting child-element starts to find and stamp slot boundaries.
+    ///
+    /// Scan backward because we don't know start offset before writing.
     fn write_list_scan<O: OffsetSizeTrait>(
         child: &mut LevelInfoBuilder,
         ctx: &LevelContext,
@@ -406,29 +413,45 @@ impl LevelInfoBuilder {
         let list_start_rep = ctx.rep_level - 1;
 
         let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
             let values_start = run_offsets[0].as_usize();
             let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
 
             child.write(values_start..values_end);
 
-            // Backward scan: count child-element starts (rep <= ctx.rep_level)
-            // and stamp list_start_rep at slot boundaries.
             child.visit_leaves(|leaf| {
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
-                let mut seen = 0usize;
-                let mut next_slot_rev = run_offsets.len() - 2;
-                let mut next_stamp_at = values_end - run_offsets[next_slot_rev].as_usize();
 
-                for rep in rep_levels.iter_mut().rev() {
-                    if *rep <= ctx.rep_level {
-                        seen += 1;
-                        if seen == next_stamp_at {
-                            *rep = list_start_rep;
-                            if next_slot_rev > 0 {
-                                next_slot_rev -= 1;
-                                next_stamp_at = values_end - run_offsets[next_slot_rev].as_usize();
-                            } else {
-                                break;
+                if leaf.max_rep_level == ctx.rep_level {
+                    // This algorithm is same as write_list_direct.
+                    // Use separate function because the branch code size would affect codegen
+                    // quality of the hot loop of write_list_direct.
+                    let batch_len = values_end - values_start;
+                    let batch_base = rep_levels.len() - batch_len;
+                    for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                        let pos = batch_base + (slot_offset.as_usize() - values_start);
+                        rep_levels[pos] = list_start_rep;
+                    }
+                } else {
+                    // Backward scan: count child-element starts (rep <= ctx.rep_level)
+                    // and stamp list_start_rep at slot boundaries.
+                    let mut slot_bounds = run_offsets[..run_offsets.len() - 1].iter().rev();
+                    let mut next_stamp_at =
+                        values_end - slot_bounds.next().unwrap().as_usize();
+                    let mut seen = 0usize;
+
+                    for rep in rep_levels.iter_mut().rev() {
+                        if *rep <= ctx.rep_level {
+                            seen += 1;
+                            if seen == next_stamp_at {
+                                *rep = list_start_rep;
+                                match slot_bounds.next() {
+                                    Some(offset) => {
+                                        next_stamp_at = values_end - offset.as_usize()
+                                    }
+                                    None => break,
+                                }
                             }
                         }
                     }
