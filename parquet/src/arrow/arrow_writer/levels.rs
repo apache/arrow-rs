@@ -361,9 +361,9 @@ impl LevelInfoBuilder {
         }
     }
 
-    /// Batch write for lists whose child not has nested repetition.
+    /// Batch write for lists whose child has no nested repetition.
     ///
-    /// direct means direct write the child rep-levels by offsets without scan.
+    /// "direct" means writing the child rep levels using offsets without scanning.
     fn write_list_direct<O: OffsetSizeTrait>(
         child: &mut LevelInfoBuilder,
         ctx: &LevelContext,
@@ -427,8 +427,8 @@ impl LevelInfoBuilder {
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
 
                 if leaf.max_rep_level == ctx.rep_level {
-                    // This algorithm is same as write_list_direct.
-                    // Use separate function because the branch code size would affect codegen
+                    // This algorithm is the same as write_list_direct.
+                    // Use a separate function because the branch code size would affect codegen
                     // quality of the hot loop of write_list_direct.
                     let batch_len = values_end - values_start;
                     let batch_base = rep_levels.len() - batch_len;
