@@ -361,6 +361,9 @@ impl LevelInfoBuilder {
         }
     }
 
+    /// Batch write for lists whose child not has nested repetition.
+    ///
+    /// direct means direct write the child rep-levels by offsets without scan.
     fn write_list_direct<O: OffsetSizeTrait>(
         child: &mut LevelInfoBuilder,
         ctx: &LevelContext,
@@ -437,19 +440,18 @@ impl LevelInfoBuilder {
                     // Backward scan: count child-element starts (rep <= ctx.rep_level)
                     // and stamp list_start_rep at slot boundaries.
                     let mut slot_bounds = run_offsets[..run_offsets.len() - 1].iter().rev();
-                    let mut next_stamp_at =
-                        values_end - slot_bounds.next().unwrap().as_usize();
+                    let mut next_stamp_at = values_end - slot_bounds.next().unwrap().as_usize();
                     let mut seen = 0usize;
 
                     for rep in rep_levels.iter_mut().rev() {
+                        // This can uses `==`, since list write is recursive and the child is written
+                        // before the parent.
                         if *rep <= ctx.rep_level {
                             seen += 1;
                             if seen == next_stamp_at {
                                 *rep = list_start_rep;
                                 match slot_bounds.next() {
-                                    Some(offset) => {
-                                        next_stamp_at = values_end - offset.as_usize()
-                                    }
+                                    Some(offset) => next_stamp_at = values_end - offset.as_usize(),
                                     None => break,
                                 }
                             }
