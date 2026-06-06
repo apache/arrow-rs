@@ -1164,6 +1164,10 @@ impl Zero for i256 {
     }
 }
 
+impl ConstZero for i256 {
+    const ZERO: Self = i256::ZERO;
+}
+
 impl One for i256 {
     fn one() -> Self {
         i256::ONE
@@ -1172,6 +1176,10 @@ impl One for i256 {
     fn is_one(&self) -> bool {
         *self == i256::ONE
     }
+}
+
+impl ConstOne for i256 {
+    const ONE: Self = i256::ONE;
 }
 
 impl Num for i256 {
@@ -1220,6 +1228,15 @@ impl Bounded for i256 {
 
     fn max_value() -> Self {
         i256::MAX
+    }
+}
+
+impl Not for i256 {
+    type Output = i256;
+
+    #[inline]
+    fn not(self) -> Self::Output {
+        Self::from_parts(!self.low, !self.high)
     }
 }
 
@@ -1431,6 +1448,8 @@ mod tests {
             i256::ZERO,
             i256::ONE,
             i256::MINUS_ONE,
+            ConstZero::ZERO,
+            ConstOne::ONE,
             i256::from_i128(2),
             i256::from_i128(-2),
             i256::from_parts(u128::MAX, 1),
@@ -1792,6 +1811,11 @@ mod tests {
 
         assert_eq!(<i256 as Bounded>::min_value(), i256::MIN);
         assert_eq!(<i256 as Bounded>::max_value(), i256::MAX);
+
+        // Bitwise not
+        assert_eq!(!i256::ZERO, i256::MINUS_ONE);
+        assert_eq!(!i256::MINUS_ONE, i256::ZERO);
+        assert_eq!(!i256::ONE, i256::from_parts(u128::MAX - 1, -1));
     }
 
     #[should_panic]
