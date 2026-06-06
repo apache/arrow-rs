@@ -39,6 +39,7 @@ all-features = true
 default = ["deflate", "snappy", "zstd", "bzip2", "xz"]
 deflate = ["flate2"]
 snappy = ["snap", "crc"]
+snap = ["dep:snipsnap"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
@@ -65,7 +66,7 @@ flate2 = { version = "1.0", default-features = false, features = [
     "rust_backend",
 ], optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
-snap = { version = "1.0", default-features = false, optional = true }
+snipsnap = { version = "0.0.1", default-features = false, optional = true }
 zstd = { version = "0.13", default-features = false, optional = true }
 bzip2 = { version = "0.6.0", optional = true }
 xz = { package = "liblzma", version = "0.4", default-features = false, optional = true }
