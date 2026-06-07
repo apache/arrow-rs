@@ -101,8 +101,7 @@ impl EncodedBuffer {
 /// Per-message sizes produced by [`IpcDataGenerator::write_direct`].
 ///
 /// [`FileWriter`] uses these to build the Block index entries required by the IPC footer for
-/// random-access reads. Fields mirror those of [`crate::Block`]: a padded header length and a
-/// body length for the record batch, plus one pair per dictionary written before it.
+/// random-access reads.
 struct IpcWriteMetadata {
     /// Per-dictionary `(padded_header_len, body_len)` for each dictionary batch written
     /// before the record batch.
@@ -670,7 +669,6 @@ impl IpcDataGenerator {
             append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
-        // Build FlatBuffer header — same for both paths.
         let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
 
@@ -709,7 +707,7 @@ impl IpcDataGenerator {
         let ipc_message = fbb.finished_data().to_vec();
 
         if let Some(w) = writer {
-            // Stream header then each buffer directly — no intermediate Vec<u8>.
+            // Stream header then each buffer directly
             let a = usize::from(alignment - 1);
             let prefix_size = if write_options.write_legacy_ipc_format {
                 4
@@ -2422,11 +2420,9 @@ fn write_buffer(
 /// [`crate::Buffer`] metadata in `buffers`. Returns the updated byte offset
 /// after the buffer (including padding).
 ///
-/// Unlike [`write_buffer`], no bytes are written to a stream here — the
+/// Unlike [`write_buffer`], no bytes are written here. The
 /// [`EncodedBuffer`] segments are accumulated and streamed to the output
-/// writer *after* the FlatBuffer message header has been built. This lets
-/// [`FileWriter`] and [`StreamWriter`] avoid the intermediate
-/// `arrow_data: Vec<u8>` allocation used by the arrow-flight path.
+/// writer after the FlatBuffer message header has been built.
 fn collect_encoded_buffers(
     buffer: Buffer,
     buffers: &mut Vec<crate::Buffer>,
