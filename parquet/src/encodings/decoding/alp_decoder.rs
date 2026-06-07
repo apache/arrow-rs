@@ -469,22 +469,91 @@ fn decode_page_values_into<Value: AlpFloat>(
     Ok(())
 }
 
+/// Live decode state for the one vector currently being consumed.
+///
+/// Holds the bit position inside that vector's packed values plus the
+/// vector-level constants needed to turn each packed integer back into a float.
+/// `delivered` is the vector-local index of the next element to produce, so
+/// exception patches (which use vector-local positions) land in the right place
+/// even when a vector is split across several `get`/`skip` calls.
+struct CurrentVector<Value: AlpFloat> {
+    reader: BitReader,
+    bit_width: u8,
+    frame_of_reference: Value::Exact,
+    scale: Value::Scale,
+    /// Number of this vector's elements not yet delivered or skipped.
+    remaining: usize,
+    /// Vector-local index of the next element to produce.
+    delivered: usize,
+    exception_positions: Bytes,
+    exception_values: Bytes,
+}
+
+/// Decode the next `out.len()` elements of the current vector straight into
+/// `out`, with no intermediate buffer: unpack one packed integer at a time,
+/// apply inverse FOR + decimal decode, then patch any exceptions whose
+/// vector-local position falls in the just-produced sub-range.
+fn decode_range<Value: AlpFloat>(cur: &mut CurrentVector<Value>, out: &mut [Value]) -> Result<()> {
+    let frame_of_reference = cur.frame_of_reference;
+    if cur.bit_width == 0 {
+        // Every packed delta is zero, so all values share `frame_of_reference`.
+        let signed = frame_of_reference.reinterpret_as_signed();
+        out.fill(Value::decode_value(signed, cur.scale));
+    } else {
+        let bit_width = cur.bit_width as usize;
+        for slot in out.iter_mut() {
+            let delta = cur.reader.get_value::<Value::Exact>(bit_width).ok_or_else(|| {
+                general_err!("Invalid ALP page: not enough packed bits to decode vector")
+            })?;
+            let signed = delta.wrapping_add(frame_of_reference).reinterpret_as_signed();
+            *slot = Value::decode_value(signed, cur.scale);
+        }
+    }
+
+    // Patch exceptions landing in `[delivered, delivered + out.len())`. Positions
+    // were validated in bounds when the vector was parsed, and patching is a
+    // positional overwrite, so it is independent of exception ordering.
+    let lo = cur.delivered;
+    let hi = cur.delivered + out.len();
+    for (pos_chunk, value_chunk) in cur
+        .exception_positions
+        .chunks_exact(std::mem::size_of::<u16>())
+        .zip(cur.exception_values.chunks_exact(Value::Exact::WIDTH))
+    {
+        let pos = u16::from_le_bytes([pos_chunk[0], pos_chunk[1]]) as usize;
+        if (lo..hi).contains(&pos) {
+            out[pos - lo] = Value::from_exact_bits(Value::Exact::from_le_slice(value_chunk));
+        }
+    }
+
+    cur.delivered = hi;
+    cur.remaining -= out.len();
+    Ok(())
+}
+
 /// Decoder for ALP-encoded floating-point pages (`f32`/`f64`).
 ///
-/// Current behavior:
+/// Values are decoded directly into the caller's output buffer:
 /// - `set_data` parses + validates page metadata and stores ALP layout state.
-/// - `get` uses a fast path to decode directly to output when all values are requested.
-/// - otherwise, `get` lazily decodes the full page once, then copies from decoded buffer.
-/// - `skip` advances the decoded cursor.
+/// - a full read from a fresh page decodes the whole page directly into the
+///   output.
+/// - partial reads and skips advance a per-vector cursor, decoding each vector
+///   on demand into the output as it is reached.
 pub(crate) struct AlpDecoder<T: DataType>
 where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
 {
+    /// Parsed + validated page layout, or `None` before `set_data` (and after a
+    /// full-read fast path consumes the page).
     layout: Option<AlpPageLayout<<T::T as AlpFloat>::Exact>>,
-    decoded_values: Vec<T::T>,
-    current_offset: usize,
-    needs_decode: bool,
+    /// Index of the next vector to load once `current` is exhausted.
+    next_vector_idx: usize,
+    /// Live decode state for the vector currently being consumed.
+    current: Option<CurrentVector<T::T>>,
+    /// Whether the page is untouched, making the full-read fast path eligible.
+    fresh: bool,
+    /// Number of values still to be read from the page.
     num_values: usize,
 }
 
@@ -496,32 +565,49 @@ where
     pub(crate) fn new() -> Self {
         Self {
             layout: None,
-            decoded_values: Vec::new(),
-            current_offset: 0,
-            needs_decode: false,
+            next_vector_idx: 0,
+            current: None,
+            fresh: false,
             num_values: 0,
         }
     }
 
-    /// Decode the stored page into `decoded_values` if it hasn't been decoded yet.
-    ///
-    /// Used by partial `get` / `skip` paths that need a stable decoded buffer.
-    fn ensure_decoded(&mut self) -> Result<()> {
-        if !self.needs_decode {
-            return Ok(());
-        }
+    /// Load the next vector into `current`: build a live bit reader over its
+    /// packed values and slice its exception sections out of the page body.
+    fn load_current_vector(&mut self) -> Result<()> {
+        // Pull everything we need out of the borrowed layout first, so the
+        // borrow ends before we mutate `self`.
+        let (packed, positions, values, bit_width, frame_of_reference, exponent, factor, count) = {
+            let layout = self.layout.as_ref().ok_or_else(|| {
+                general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
+            })?;
+            let view = layout.vectors.get(self.next_vector_idx).ok_or_else(|| {
+                general_err!("Invalid ALP decoder state: no vector left to decode")
+            })?;
+            let body = &layout.body;
+            (
+                body.slice(view.packed_values_range()),
+                body.slice(view.exception_positions_range()),
+                body.slice(view.exception_values_range()),
+                view.for_info.bit_width,
+                view.for_info.frame_of_reference,
+                view.alp_info.exponent,
+                view.alp_info.factor,
+                view.num_elements as usize,
+            )
+        };
 
-        let layout = self.layout.take().ok_or_else(|| {
-            general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
-        })?;
-
-        // Reuse the buffer's capacity across pages instead of reallocating.
-        self.decoded_values.clear();
-        self.decoded_values
-            .resize(layout.header.num_elements, T::T::default());
-        decode_page_values_into::<T::T>(&layout, &mut self.decoded_values)?;
-        self.needs_decode = false;
-
+        self.current = Some(CurrentVector {
+            reader: BitReader::new(packed),
+            bit_width,
+            frame_of_reference,
+            scale: <T::T as AlpFloat>::decode_scale(exponent, factor),
+            remaining: count,
+            delivered: 0,
+            exception_positions: positions,
+            exception_values: values,
+        });
+        self.next_vector_idx += 1;
         Ok(())
     }
 }
@@ -533,7 +619,7 @@ where
 {
     /// Store validated page layout and reset read cursor state.
     ///
-    /// Actual value decoding is deferred until first `get`/`skip`.
+    /// Values are decoded lazily, on the first `get`/`skip`.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let layout = parse_alp_page_layout::<<T::T as AlpFloat>::Exact>(data)?;
 
@@ -546,43 +632,50 @@ where
         }
 
         self.layout = Some(layout);
-        self.decoded_values.clear();
-        self.current_offset = 0;
-        self.needs_decode = num_values > 0;
+        self.next_vector_idx = 0;
+        self.current = None;
+        self.fresh = num_values > 0;
         self.num_values = num_values;
         Ok(())
     }
 
     /// Read up to `buffer.len()` decoded values.
     ///
-    /// Fast path: if caller requests all remaining values from a fresh page,
-    /// decode directly into `buffer` (matching C++ ALP decoder behavior).
-    /// Otherwise decode once into internal storage and copy slices from there.
+    /// Fast path: a full read from an untouched page decodes the whole page
+    /// straight into `buffer`. Otherwise the per-vector cursor decodes each
+    /// vector on demand directly into `buffer`.
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         let target = buffer.len().min(self.num_values);
         if target == 0 {
             return Ok(0);
         }
 
-        // C++ parity fast path: decode directly into caller output when it asks
-        // for all remaining values from a fresh page.
-        if self.needs_decode && target == self.num_values {
+        // Fast path: caller asks for the whole page from an untouched page, so
+        // decode every vector directly into the caller's output in one shot.
+        if self.fresh && target == self.num_values {
             let layout = self.layout.take().ok_or_else(|| {
                 general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
             })?;
             decode_page_values_into::<T::T>(&layout, &mut buffer[..target])?;
-            self.needs_decode = false;
-            self.decoded_values.clear();
-            self.current_offset = 0;
+            self.fresh = false;
+            self.current = None;
+            self.next_vector_idx = 0;
             self.num_values = 0;
             return Ok(target);
         }
 
-        self.ensure_decoded()?;
-        let end = self.current_offset + target;
-        buffer[..target].copy_from_slice(&self.decoded_values[self.current_offset..end]);
-        self.current_offset = end;
-        self.num_values -= target;
+        self.fresh = false;
+        let mut written = 0;
+        while written < target {
+            if self.current.as_ref().is_none_or(|c| c.remaining == 0) {
+                self.load_current_vector()?;
+            }
+            let cur = self.current.as_mut().unwrap();
+            let n = cur.remaining.min(target - written);
+            decode_range::<T::T>(cur, &mut buffer[written..written + n])?;
+            written += n;
+            self.num_values -= n;
+        }
         Ok(target)
     }
 
@@ -594,19 +687,30 @@ where
         Encoding::ALP
     }
 
-    /// Skip up to `num_values` decoded values.
-    ///
-    /// For parity with C++ partial-read behavior, this may trigger deferred
-    /// page decoding before advancing the cursor.
+    /// Skip up to `num_values` values, advancing the per-vector cursor (and the
+    /// underlying bit reader) without decoding.
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = num_values.min(self.num_values);
         if to_skip == 0 {
             return Ok(0);
         }
 
-        self.ensure_decoded()?;
-        self.current_offset += to_skip;
-        self.num_values -= to_skip;
+        self.fresh = false;
+        let mut skipped = 0;
+        while skipped < to_skip {
+            if self.current.as_ref().is_none_or(|c| c.remaining == 0) {
+                self.load_current_vector()?;
+            }
+            let cur = self.current.as_mut().unwrap();
+            let n = cur.remaining.min(to_skip - skipped);
+            if cur.bit_width != 0 {
+                cur.reader.skip(n, cur.bit_width as usize);
+            }
+            cur.delivered += n;
+            cur.remaining -= n;
+            skipped += n;
+            self.num_values -= n;
+        }
         Ok(to_skip)
     }
 }
@@ -1282,8 +1386,11 @@ mod tests {
             ]
         );
         assert_eq!(decoder.values_left(), 0);
-        assert!(!decoder.needs_decode);
-        assert!(decoder.decoded_values.is_empty());
+        assert!(decoder.current.is_none());
         assert!(decoder.layout.is_none());
+
+        // The exhausted decoder yields nothing more.
+        let mut extra = [0.0f32; 1];
+        assert_eq!(decoder.get(&mut extra).unwrap(), 0);
     }
 }

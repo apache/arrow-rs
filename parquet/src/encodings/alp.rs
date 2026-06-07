@@ -370,7 +370,7 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
 
 pub(crate) trait AlpFloat: Copy + Default {
     type Exact: AlpExact + FromBytes;
-    type Scale: Copy;
+    type Scale: Copy + Send;
 
     /// Precompute vector-level ALP decimal scale constants for:
     /// `value = (encoded * 10^(factor)) * 10^(-exponent)`.
