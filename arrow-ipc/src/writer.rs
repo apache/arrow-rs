@@ -113,57 +113,6 @@ struct IpcWriteMetadata {
     body_len: usize,
 }
 
-/// Passes all writes through to `inner` while capturing the first 8 bytes of the stream
-/// (the IPC continuation header) and counting total bytes written. Used by
-/// [`IpcDataGenerator::write_direct`] to recover message sizes without an intermediate buffer.
-struct SizeCapture<'a, W: Write> {
-    inner: &'a mut W,
-    total: usize,
-    header: [u8; 8],
-    header_len: usize,
-}
-
-impl<'a, W: Write> SizeCapture<'a, W> {
-    fn new(writer: &'a mut W) -> Self {
-        Self {
-            inner: writer,
-            total: 0,
-            header: [0u8; 8],
-            header_len: 0,
-        }
-    }
-
-    fn sizes(&self, legacy: bool) -> (usize, usize) {
-        // write_continuation writes:
-        //   legacy:     4 bytes = total_len (= aligned_size - 4)
-        //   non-legacy: 4 bytes marker + 4 bytes total_len (= aligned_size - 8)
-        let (prefix_size, msg_bytes): (usize, [u8; 4]) = if legacy {
-            (4, self.header[0..4].try_into().unwrap())
-        } else {
-            (8, self.header[4..8].try_into().unwrap())
-        };
-        let meta = i32::from_le_bytes(msg_bytes) as usize + prefix_size;
-        let data = self.total - meta;
-        (meta, data)
-    }
-}
-
-impl<W: Write> Write for SizeCapture<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        if self.header_len < 8 {
-            let copy = (8 - self.header_len).min(n);
-            self.header[self.header_len..self.header_len + copy].copy_from_slice(&buf[..copy]);
-            self.header_len += copy;
-        }
-        self.total += n;
-        Ok(n)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 impl IpcWriteOptions {
     /// Configures compression when writing IPC files.
     ///
@@ -574,7 +523,7 @@ impl IpcDataGenerator {
             write_options,
             compression_context,
         )?;
-        let encoded_message =
+        let (encoded_message, _) =
             self.record_batch_to_bytes(batch, write_options, compression_context, None)?;
         Ok((encoded_dictionaries, encoded_message))
     }
@@ -627,14 +576,8 @@ impl IpcDataGenerator {
             dictionary_block_sizes.push(write_message(&mut *writer, dict, write_options)?);
         }
 
-        let mut capture = SizeCapture::new(writer);
-        self.record_batch_to_bytes(
-            batch,
-            write_options,
-            compression_context,
-            Some(&mut capture),
-        )?;
-        let (padded_header_len, body_len) = capture.sizes(write_options.write_legacy_ipc_format);
+        let (_, (padded_header_len, body_len)) =
+            self.record_batch_to_bytes(batch, write_options, compression_context, Some(writer))?;
 
         Ok(IpcWriteMetadata {
             dictionary_block_sizes,
@@ -667,13 +610,17 @@ impl IpcDataGenerator {
     /// When `writer` is `Some`, the message is written directly to it and an empty
     /// [`EncodedData`] is returned (the data has already been flushed). When `writer`
     /// is `None` the encoded bytes are returned for the caller to write.
+    ///
+    /// The second tuple element is `(padded_header_len, body_len)` — the padded flatbuffer header
+    /// size and total body size. These are populated when `writer` is `Some` (for block tracking
+    /// in [`FileWriter`]) and are `(0, 0)` otherwise.
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
         writer: Option<&mut dyn Write>,
-    ) -> Result<EncodedData, ArrowError> {
+    ) -> Result<(EncodedData, (usize, usize)), ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
         let mut nodes: Vec<crate::FieldNode> = vec![];
@@ -779,17 +726,23 @@ impl IpcDataGenerator {
                 w.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
             }
             w.write_all(&PADDING[..tail_pad])?;
-            return Ok(EncodedData {
-                ipc_message: vec![],
-                arrow_data: vec![],
-            });
+            return Ok((
+                EncodedData {
+                    ipc_message: vec![],
+                    arrow_data: vec![],
+                },
+                (aligned_size, body_len),
+            ));
         }
 
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-        Ok(EncodedData {
-            ipc_message,
-            arrow_data,
-        })
+        Ok((
+            EncodedData {
+                ipc_message,
+                arrow_data,
+            },
+            (0, 0),
+        ))
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
