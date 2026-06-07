@@ -83,9 +83,27 @@ impl Metadata {
 
     /// Inserts a key-value pair, returning the old value of the key, if any.
     ///
+    /// If the map already contained this key, the value is replaced.
+    ///
     /// Clones the underlying map if (and only if) it is shared.
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) -> Option<String> {
         Arc::make_mut(self.0.get_or_insert_default()).insert(key.into(), value.into())
+    }
+
+    /// Inserts a key-value pair and returns `self`, for builder-style chaining.
+    ///
+    /// If the map already contained this key, the value is replaced.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::Metadata;
+    /// let metadata = Metadata::new().with("a", "1").with("b", "2");
+    /// assert_eq!(metadata.len(), 2);
+    /// ```
+    #[must_use]
+    pub fn with(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.insert(key, value);
+        self
     }
 
     /// Removes a key from the map, returning the value at the key
