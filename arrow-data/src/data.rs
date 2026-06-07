@@ -134,6 +134,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
         ],
         DataType::FixedSizeBinary(size) => {
+            if *size < 0 {
+                panic!("cannot construct buffers from FixedSizeBinary({size})");
+            }
             [MutableBuffer::new(capacity * *size as usize), empty_buffer]
         }
         DataType::Dictionary(k, _) => [
@@ -589,9 +592,12 @@ impl ArrayData {
     ///
     /// # Panics
     ///
-    /// Panics if `offset + length > self.len()`.
+    /// Panics if `offset + length` overflows or is greater than `self.len()`.
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
-        assert!((offset + length) <= self.len());
+        let end = offset
+            .checked_add(length)
+            .expect("offset + length overflow");
+        assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
@@ -631,6 +637,10 @@ impl ArrayData {
     }
 
     /// Returns a new [`ArrayData`] valid for `data_type` containing `len` null values
+    ///
+    /// # Panics
+    /// This function panics if:
+    /// * the datatype `data_type` has incorrect layout
     pub fn new_null(data_type: &DataType, len: usize) -> Self {
         let bit_len = bit_util::ceil(len, 8);
         let zeroed = |len: usize| Buffer::from(MutableBuffer::from_len_zeroed(len));
@@ -647,7 +657,12 @@ impl ArrayData {
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
-                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![], true),
+                DataType::FixedSizeBinary(i) => {
+                    if *i < 0 {
+                        panic!("cannot construct null data from FixedSizeBinary({i})");
+                    }
+                    (vec![zeroed(*i as usize * len)], vec![], true)
+                }
                 DataType::List(f) | DataType::Map(f, _) => (
                     vec![zeroed((len + 1) * 4)],
                     vec![ArrayData::new_empty(f.data_type())],
@@ -2195,12 +2210,6 @@ impl ArrayDataBuilder {
         Ok(data)
     }
 
-    /// Creates an array data, validating all inputs, and aligning any buffers
-    #[deprecated(since = "54.1.0", note = "Use ArrayData::align_buffers instead")]
-    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
-        self.align_buffers(true).build()
-    }
-
     /// Ensure that all buffers are aligned, copying data if necessary
     ///
     /// Rust requires that arrays are aligned to their corresponding primitive,
@@ -2256,6 +2265,22 @@ impl From<ArrayData> for ArrayDataBuilder {
             align_buffers: false,
             skip_validation: UnsafeFlag::new(),
         }
+    }
+}
+
+/// Get byte width of FixedSizeBinary size
+/// # Panics:
+/// - Panics if the `data_type` is not FixedSizeBinary
+/// - Panics if byte width is negative
+pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::FixedSizeBinary(i) => {
+            if *i < 0 {
+                panic!("cannot compare FixedSizeBinary({})", *i);
+            }
+            *i as usize
+        }
+        _ => unreachable!(),
     }
 }
 
@@ -2395,6 +2420,19 @@ mod tests {
         assert_eq!(data.len() - 2, new_data.len());
         assert_eq!(2, new_data.offset());
         assert_eq!(data.null_count() - 1, new_data.null_count());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + length overflow")]
+    fn test_slice_panics_on_offset_length_overflow() {
+        let data = ArrayData::builder(DataType::Int32)
+            .len(4)
+            .add_buffer(make_i32_buffer(4))
+            .build()
+            .unwrap();
+        let sliced = data.slice(1, 3);
+
+        sliced.slice(1, usize::MAX);
     }
 
     #[test]

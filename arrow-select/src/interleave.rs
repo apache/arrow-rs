@@ -108,6 +108,14 @@ pub fn interleave(
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
         DataType::List(field) => interleave_list::<i32>(values, indices, field),
         DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
+        DataType::RunEndEncoded(r, _) => match r.data_type() {
+            DataType::Int16 => interleave_run_end::<Int16Type>(values, indices),
+            DataType::Int32 => interleave_run_end::<Int32Type>(values, indices),
+            DataType::Int64 => interleave_run_end::<Int64Type>(values, indices),
+            t => unreachable!("illegal run-end type {t}"),
+        },
+        DataType::ListView(field) => interleave_list_view::<i32>(values, indices, field),
+        DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -409,6 +417,179 @@ fn interleave_list<O: OffsetSizeTrait>(
     );
 
     Ok(Arc::new(list_array))
+}
+
+/// Specialized [`interleave`] for [`RunArray`].
+fn interleave_run_end<R: RunEndIndexType>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    if indices.is_empty() {
+        return Ok(new_empty_array(values[0].data_type()));
+    }
+
+    let n = indices.len();
+    R::Native::from_usize(n).ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "interleave_run_end: output length {n} does not fit run-end type"
+        ))
+    })?;
+
+    let runs: Vec<&RunArray<R>> = values.iter().map(|a| a.as_run::<R>()).collect();
+    let value_arrays: Vec<&dyn Array> = runs.iter().map(|r| r.values().as_ref()).collect();
+
+    // Resolve each (array, logical_row) to (array, physical_row), so we can
+    // lookup physical indices by batch.
+    let mut phys_pairs: Vec<(usize, usize)> = vec![(0, 0); n];
+    let mut grouped: Vec<(Vec<R::Native>, Vec<usize>)> =
+        (0..runs.len()).map(|_| (Vec::new(), Vec::new())).collect();
+    for (out_pos, &(arr, row)) in indices.iter().enumerate() {
+        let row = R::Native::from_usize(row).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "interleave_run_end: row index {row} not representable as run-end type {}",
+                R::DATA_TYPE
+            ))
+        })?;
+        grouped[arr].0.push(row);
+        grouped[arr].1.push(out_pos);
+    }
+    for (arr_idx, (logical_rows, out_positions)) in grouped.into_iter().enumerate() {
+        let phys = runs[arr_idx].get_physical_indices(&logical_rows)?;
+        for (p, out_pos) in phys.iter().zip(out_positions.iter()) {
+            phys_pairs[*out_pos] = (arr_idx, *p);
+        }
+    }
+
+    // Coalesce by physical-pair equality only: emit a new run when the
+    // (array_idx, physical_idx) pair changes between adjacent output rows.
+    // TODO: We could perform an equality check across sources to extend the
+    // output run, but we can't call make_comparator from this crate.
+    let mut run_ends_buf: Vec<R::Native> = Vec::with_capacity(n);
+    let mut dedup_pairs: Vec<(usize, usize)> = Vec::with_capacity(n);
+    dedup_pairs.push(phys_pairs[0]);
+    for i in 1..n {
+        if phys_pairs[i] != phys_pairs[i - 1] {
+            run_ends_buf.push(R::Native::from_usize(i).unwrap());
+            dedup_pairs.push(phys_pairs[i]);
+        }
+    }
+    run_ends_buf.push(R::Native::from_usize(n).unwrap());
+
+    let taken_values = interleave(&value_arrays, &dedup_pairs)?;
+    let run_ends = PrimitiveArray::<R>::from_iter_values(run_ends_buf);
+
+    Ok(Arc::new(RunArray::<R>::try_new(
+        &run_ends,
+        taken_values.as_ref(),
+    )?))
+}
+
+fn interleave_list_view<O: OffsetSizeTrait>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, GenericListViewArray<O>>::new(values, indices);
+
+    // Pick whichever strategy produces fewer child elements:
+    // - Per-row copy: total = sum of selected sizes. Better for sparse selections.
+    // - Concat + offset adjustment: total = sum of source backing array lengths.
+    //   Better when rows share backing elements via overlapping offset/size ranges.
+    let concat_cost: usize = interleaved.arrays.iter().map(|lv| lv.values().len()).sum();
+    let per_row_cost: usize = indices
+        .iter()
+        .map(|&(a, r)| interleaved.arrays[a].sizes()[r].as_usize())
+        .sum();
+
+    if per_row_cost <= concat_cost {
+        interleave_list_view_copy::<O>(&interleaved, indices, field)
+    } else {
+        interleave_list_view_concat::<O>(&interleaved, indices, field)
+    }
+}
+
+/// Per-row copy: copies each selected row's child elements into a new flat array.
+fn interleave_list_view_copy<O: OffsetSizeTrait>(
+    interleaved: &Interleave<'_, GenericListViewArray<O>>,
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let mut capacity = 0usize;
+    let mut offsets = Vec::with_capacity(indices.len());
+    let mut sizes = Vec::with_capacity(indices.len());
+    for &(array_idx, row_idx) in indices {
+        let list = interleaved.arrays[array_idx];
+        let size = list.sizes()[row_idx].as_usize();
+        offsets.push(
+            O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+        sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(size))?);
+        capacity += size;
+    }
+
+    let child_data: Vec<_> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().to_data())
+        .collect();
+    let child_data_refs: Vec<_> = child_data.iter().collect();
+    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
+    for &(array_idx, row_idx) in indices {
+        let list = interleaved.arrays[array_idx];
+        let start = list.offsets()[row_idx].as_usize();
+        let size = list.sizes()[row_idx].as_usize();
+        if size > 0 {
+            mutable_child.extend(array_idx, start, start + size);
+        }
+    }
+
+    Ok(Arc::new(GenericListViewArray::<O>::new(
+        field.clone(),
+        offsets.into(),
+        sizes.into(),
+        make_array(mutable_child.freeze()),
+        interleaved.nulls.clone(),
+    )))
+}
+
+/// Concat backing arrays: concatenates all source value arrays and adjusts offsets.
+/// Preserves within-source element sharing.
+fn interleave_list_view_concat<O: OffsetSizeTrait>(
+    interleaved: &Interleave<'_, GenericListViewArray<O>>,
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|lv| lv.values().as_ref())
+        .collect();
+    let mut base_offsets = Vec::with_capacity(interleaved.arrays.len());
+    let mut running = 0usize;
+    for lv in &interleaved.arrays {
+        base_offsets.push(running);
+        running += lv.values().len();
+    }
+    let combined_values = concat(&child_arrays)?;
+
+    let mut new_offsets = Vec::with_capacity(indices.len());
+    let mut new_sizes = Vec::with_capacity(indices.len());
+    for &(array_idx, row_idx) in indices {
+        let lv = interleaved.arrays[array_idx];
+        let adjusted = lv.offsets()[row_idx].as_usize() + base_offsets[array_idx];
+        new_offsets.push(
+            O::from_usize(adjusted).ok_or_else(|| ArrowError::OffsetOverflowError(adjusted))?,
+        );
+        new_sizes.push(lv.sizes()[row_idx]);
+    }
+
+    Ok(Arc::new(GenericListViewArray::<O>::new(
+        field.clone(),
+        new_offsets.into(),
+        new_sizes.into(),
+        combined_values,
+        interleaved.nulls.clone(),
+    )))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
@@ -768,6 +949,128 @@ mod tests {
     #[test]
     fn test_large_lists() {
         test_interleave_lists::<i64>();
+    }
+
+    fn test_interleave_list_views<O: OffsetSizeTrait>() {
+        // [[1, 2], null, [3]]
+        let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        a.values().append_value(1);
+        a.values().append_value(2);
+        a.append(true);
+        a.append(false);
+        a.values().append_value(3);
+        a.append(true);
+        let a: GenericListViewArray<O> = a.finish().into();
+
+        // [[4], null, [5, 6, null]]
+        let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        b.values().append_value(4);
+        b.append(true);
+        b.append(false);
+        b.values().append_value(5);
+        b.values().append_value(6);
+        b.values().append_null();
+        b.append(true);
+        let b: GenericListViewArray<O> = b.finish().into();
+
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        // [[3], null, [4], [5, 6, null], null]
+        let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        expected.values().append_value(3);
+        expected.append(true);
+        expected.append(false);
+        expected.values().append_value(4);
+        expected.append(true);
+        expected.values().append_value(5);
+        expected.values().append_value(6);
+        expected.values().append_null();
+        expected.append(true);
+        expected.append(false);
+        let expected: GenericListViewArray<O> = expected.finish().into();
+
+        assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn test_list_views() {
+        test_interleave_list_views::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_views() {
+        test_interleave_list_views::<i64>();
+    }
+
+    #[test]
+    fn test_interleave_list_view_overlapping() {
+        let field = Arc::new(Field::new_list_field(DataType::Int64, false));
+
+        // lv_a: 10 rows, two groups of 5 sharing the same backing elements.
+        //   rows 0-4 → offset 0, size 5 → [0,1,2,3,4]
+        //   rows 5-9 → offset 5, size 5 → [5,6,7,8,9]
+        let lv_a = ListViewArray::new(
+            Arc::clone(&field),
+            ScalarBuffer::from(vec![0i32, 0, 0, 0, 0, 5, 5, 5, 5, 5]),
+            ScalarBuffer::from(vec![5i32; 10]),
+            Arc::new(Int64Array::from_iter_values(0..10)),
+            None,
+        );
+
+        // lv_b: 8 rows, two groups of 4 sharing the same backing elements.
+        //   rows 0-3 → offset 0, size 3 → [100,101,102]
+        //   rows 4-7 → offset 3, size 3 → [103,104,105]
+        let lv_b = ListViewArray::new(
+            Arc::clone(&field),
+            ScalarBuffer::from(vec![0i32, 0, 0, 0, 3, 3, 3, 3]),
+            ScalarBuffer::from(vec![3i32; 8]),
+            Arc::new(Int64Array::from_iter_values(100..106)),
+            None,
+        );
+
+        let indices: Vec<(usize, usize)> = vec![
+            (0, 0),
+            (1, 0),
+            (0, 5),
+            (1, 4),
+            (0, 1),
+            (1, 1),
+            (0, 6),
+            (1, 5),
+        ];
+        let result = interleave(&[&lv_a as &dyn Array, &lv_b as &dyn Array], &indices).unwrap();
+        result
+            .to_data()
+            .validate_full()
+            .expect("result must be valid");
+
+        let result_lv = result.as_list_view::<i32>();
+        assert_eq!(result_lv.len(), 8);
+        assert_eq!(
+            result_lv.value(0).as_primitive::<Int64Type>().values(),
+            &[0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            result_lv.value(1).as_primitive::<Int64Type>().values(),
+            &[100, 101, 102]
+        );
+        assert_eq!(
+            result_lv.value(2).as_primitive::<Int64Type>().values(),
+            &[5, 6, 7, 8, 9]
+        );
+        assert_eq!(
+            result_lv.value(3).as_primitive::<Int64Type>().values(),
+            &[103, 104, 105]
+        );
+
+        // Backing elements = sum of source arrays (10 + 6 = 16), not per-row
+        // expansion (8 rows × avg ~4 = 32). Overlapping sharing is preserved.
+        let total_input_elements = lv_a.values().len() + lv_b.values().len();
+        assert_eq!(result_lv.values().len(), total_input_elements);
     }
 
     #[test]

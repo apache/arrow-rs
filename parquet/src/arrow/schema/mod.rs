@@ -556,18 +556,12 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::Int8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 8,
-                is_signed: true,
-            }))
+            .with_logical_type(Some(LogicalType::integer(8, true)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::Int16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 16,
-                is_signed: true,
-            }))
+            .with_logical_type(Some(LogicalType::integer(16, true)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -580,34 +574,22 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::UInt8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 8,
-                is_signed: false,
-            }))
+            .with_logical_type(Some(LogicalType::integer(8, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 16,
-                is_signed: false,
-            }))
+            .with_logical_type(Some(LogicalType::integer(16, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 32,
-                is_signed: false,
-            }))
+            .with_logical_type(Some(LogicalType::integer(32, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::UInt64 => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::Integer {
-                bit_width: 64,
-                is_signed: false,
-            }))
+            .with_logical_type(Some(LogicalType::integer(64, false)))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -634,16 +616,16 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         }
         DataType::Timestamp(time_unit, tz) => {
             Type::primitive_type_builder(name, PhysicalType::INT64)
-                .with_logical_type(Some(LogicalType::Timestamp {
+                .with_logical_type(Some(LogicalType::timestamp(
                     // If timezone set, values are normalized to UTC timezone
-                    is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_ref().is_empty()),
-                    unit: match time_unit {
+                    matches!(tz, Some(z) if !z.as_ref().is_empty()),
+                    match time_unit {
                         TimeUnit::Second => unreachable!(),
                         TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
                         TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
                         TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     },
-                }))
+                )))
                 .with_repetition(repetition)
                 .with_id(id)
                 .build()
@@ -675,25 +657,25 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .build()
         }
         DataType::Time32(unit) => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
-                unit: match unit {
+            .with_logical_type(Some(LogicalType::time(
+                field.metadata().contains_key("adjusted_to_utc"),
+                match unit {
                     TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
                 },
-            }))
+            )))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
-                unit: match unit {
+            .with_logical_type(Some(LogicalType::time(
+                field.metadata().contains_key("adjusted_to_utc"),
+                match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     u => unreachable!("Invalid unit for Time64: {:?}", u),
                 },
-            }))
+            )))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -749,10 +731,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(length)
-                .with_logical_type(Some(LogicalType::Decimal {
-                    scale: *scale as i32,
-                    precision: *precision as i32,
-                }))
+                .with_logical_type(Some(LogicalType::decimal(*scale as i32, *precision as i32)))
                 .with_precision(*precision as i32)
                 .with_scale(*scale as i32)
                 .build()

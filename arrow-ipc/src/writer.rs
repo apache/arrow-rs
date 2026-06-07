@@ -1351,7 +1351,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 /// // You must set `.with_dictionary_handling(DictionaryHandling::Delta)` to
 /// // enable delta dictionaries in the writer
 /// let options = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
-/// let mut writer = StreamWriter::try_new(&mut stream, &schema).unwrap();
+/// let mut writer = StreamWriter::try_new_with_options(&mut stream, &schema, options).unwrap();
 ///
 /// // When writing the first batch, a dictionary message with 'a' and 'b' will be written
 /// // prior to the record batch.
