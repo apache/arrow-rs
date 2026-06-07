@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
 use std::ops::Range;
 
 use bytes::Bytes;
@@ -392,15 +391,8 @@ fn bit_unpack_integers<Exact: AlpExact + FromBytes + FromBitpacked>(
     Ok(out)
 }
 
-/// Apply inverse FOR: `decoded = delta + frame_of_reference`.
-fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact) {
-    for value in deltas {
-        *value = value.wrapping_add(frame_of_reference);
-    }
-}
-
 /// Decode one vector directly into `out` (whose length must equal the vector's
-/// element count): bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
+/// element count): bit-unpack -> inverse FOR + decimal decode -> patch exceptions.
 fn decode_vector_values<Value: AlpFloat>(
     body: &Bytes,
     vector: &AlpEncodedVectorView<Value::Exact>,
@@ -408,22 +400,25 @@ fn decode_vector_values<Value: AlpFloat>(
 ) -> Result<()> {
     debug_assert_eq!(out.len(), vector.num_elements as usize);
 
-    let mut exact_values = bit_unpack_integers(
+    let exact_values = bit_unpack_integers::<Value::Exact>(
         body.slice(vector.packed_values_range()),
         vector.for_info.bit_width,
         vector.num_elements,
     )?;
-    inverse_for(&mut exact_values, vector.for_info.frame_of_reference);
 
+    let frame_of_reference = vector.for_info.frame_of_reference;
     let scale = Value::decode_scale(vector.alp_info.exponent, vector.alp_info.factor);
 
+    // Inverse FOR (`delta + frame_of_reference`) and decimal decode in one pass.
     for (slot, exact_value) in out.iter_mut().zip(exact_values) {
-        let signed_value = exact_value.reinterpret_as_signed();
+        let signed_value = exact_value.wrapping_add(frame_of_reference).reinterpret_as_signed();
         *slot = Value::decode_value(signed_value, scale);
     }
 
     // Positions and values are equal-count by construction (both sized from
-    // `num_exceptions`), so zipping the body sections never drops a pair.
+    // `num_exceptions`), so zipping the body sections never drops a pair. Every
+    // position was validated in bounds against `num_elements` in
+    // `parse_vector_view`, so indexing `out[pos]` cannot be out of range.
     let positions = &body[vector.exception_positions_range()];
     let values = &body[vector.exception_values_range()];
     for (pos_chunk, value_chunk) in positions
@@ -431,13 +426,7 @@ fn decode_vector_values<Value: AlpFloat>(
         .zip(values.chunks_exact(Value::Exact::WIDTH))
     {
         let pos = u16::from_le_bytes([pos_chunk[0], pos_chunk[1]]) as usize;
-        if pos >= out.len() {
-            return Err(general_err!(
-                "Invalid ALP page: exception position {} out of bounds for vector length {}",
-                pos,
-                out.len()
-            ));
-        }
+        debug_assert!(pos < out.len());
         out[pos] = Value::from_exact_bits(Value::Exact::from_le_slice(value_chunk));
     }
 
@@ -497,7 +486,6 @@ where
     current_offset: usize,
     needs_decode: bool,
     num_values: usize,
-    _marker: PhantomData<T>,
 }
 
 impl<T: DataType> AlpDecoder<T>
@@ -512,7 +500,6 @@ where
             current_offset: 0,
             needs_decode: false,
             num_values: 0,
-            _marker: PhantomData,
         }
     }
 
@@ -1061,13 +1048,6 @@ mod tests {
         let unpacked =
             bit_unpack_integers::<u32>(Bytes::from_static(&[0b0010_0111]), 2, 3).unwrap();
         assert_eq!(unpacked, vec![3, 1, 2]);
-    }
-
-    #[test]
-    fn test_inverse_for() {
-        let mut decoded = vec![0u32, 3, 2];
-        inverse_for(&mut decoded, 10);
-        assert_eq!(decoded, vec![10, 13, 12]);
     }
 
     #[test]
