@@ -517,11 +517,8 @@ mod tests {
     #[test]
     fn empty_metadata() {
         let field = make_valid_field_primitive(TimeUnit::Second).with_metadata([
-            (
-                EXTENSION_TYPE_NAME_KEY,
-                TimestampWithOffset::NAME.to_owned(),
-            ),
-            (EXTENSION_TYPE_METADATA_KEY, String::new()),
+            (EXTENSION_TYPE_NAME_KEY, TimestampWithOffset::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, ""),
         ]);
         field.extension_type::<TimestampWithOffset>();
     }

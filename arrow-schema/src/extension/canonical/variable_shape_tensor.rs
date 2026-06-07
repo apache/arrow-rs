@@ -622,13 +622,10 @@ mod tests {
             false,
         )
         .with_metadata([
-            (
-                EXTENSION_TYPE_NAME_KEY,
-                VariableShapeTensor::NAME.to_owned(),
-            ),
+            (EXTENSION_TYPE_NAME_KEY, VariableShapeTensor::NAME),
             (
                 EXTENSION_TYPE_METADATA_KEY,
-                r#"{ "dim_names": [1, null, 3, 4] }"#.to_owned(),
+                r#"{ "dim_names": [1, null, 3, 4] }"#,
             ),
         ]);
         field.extension_type::<VariableShapeTensor>();

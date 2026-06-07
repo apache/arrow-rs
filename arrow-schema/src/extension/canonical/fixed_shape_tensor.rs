@@ -477,7 +477,7 @@ mod tests {
             Field::new_fixed_size_list("", Field::new("", DataType::Float32, false), 3, false)
                 .with_metadata([(
                     EXTENSION_TYPE_METADATA_KEY,
-                    r#"{ "shape": [100, 200, 500], }"#.to_owned(),
+                    r#"{ "shape": [100, 200, 500], }"#,
                 )]);
         field.extension_type::<FixedShapeTensor>();
     }
@@ -518,11 +518,8 @@ mod tests {
             false,
         )
         .with_metadata([
-            (EXTENSION_TYPE_NAME_KEY, FixedShapeTensor::NAME.to_owned()),
-            (
-                EXTENSION_TYPE_METADATA_KEY,
-                r#"{ "not-shape": [] }"#.to_owned(),
-            ),
+            (EXTENSION_TYPE_NAME_KEY, FixedShapeTensor::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, r#"{ "not-shape": [] }"#),
         ]);
         field.extension_type::<FixedShapeTensor>();
     }
