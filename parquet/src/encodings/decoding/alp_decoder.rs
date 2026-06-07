@@ -399,12 +399,15 @@ fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact)
     }
 }
 
-/// Decode one vector into output floating values:
-/// bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
+/// Decode one vector directly into `out` (whose length must equal the vector's
+/// element count): bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
 fn decode_vector_values<Value: AlpFloat>(
     body: &Bytes,
     vector: &AlpEncodedVectorView<Value::Exact>,
-) -> Result<Vec<Value>> {
+    out: &mut [Value],
+) -> Result<()> {
+    debug_assert_eq!(out.len(), vector.num_elements as usize);
+
     let mut exact_values = bit_unpack_integers(
         body.slice(vector.packed_values_range()),
         vector.for_info.bit_width,
@@ -414,10 +417,9 @@ fn decode_vector_values<Value: AlpFloat>(
 
     let scale = Value::decode_scale(vector.alp_info.exponent, vector.alp_info.factor);
 
-    let mut out = Vec::with_capacity(vector.num_elements as usize);
-    for exact_value in exact_values {
+    for (slot, exact_value) in out.iter_mut().zip(exact_values) {
         let signed_value = exact_value.reinterpret_as_signed();
-        out.push(Value::decode_value(signed_value, scale));
+        *slot = Value::decode_value(signed_value, scale);
     }
 
     // Positions and values are equal-count by construction (both sized from
@@ -439,14 +441,7 @@ fn decode_vector_values<Value: AlpFloat>(
         out[pos] = Value::from_exact_bits(Value::Exact::from_le_slice(value_chunk));
     }
 
-    Ok(out)
-}
-
-fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> Result<Vec<Value>> {
-    let total = layout.header.num_elements;
-    let mut out = vec![Value::default(); total];
-    decode_page_values_into::<Value>(layout, &mut out)?;
-    Ok(out)
+    Ok(())
 }
 
 /// Decode a full ALP page into an existing output slice.
@@ -467,9 +462,12 @@ fn decode_page_values_into<Value: AlpFloat>(
 
     let mut output_offset = 0usize;
     for vector in &layout.vectors {
-        let vector_values = decode_vector_values::<Value>(&layout.body, vector)?;
-        let next_offset = output_offset + vector_values.len();
-        out[output_offset..next_offset].copy_from_slice(&vector_values);
+        let next_offset = output_offset + vector.num_elements as usize;
+        decode_vector_values::<Value>(
+            &layout.body,
+            vector,
+            &mut out[output_offset..next_offset],
+        )?;
         output_offset = next_offset;
     }
     if output_offset != total {
@@ -530,7 +528,11 @@ where
             general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
         })?;
 
-        self.decoded_values = decode_page_values::<T::T>(&layout)?;
+        // Reuse the buffer's capacity across pages instead of reallocating.
+        self.decoded_values.clear();
+        self.decoded_values
+            .resize(layout.header.num_elements, T::T::default());
+        decode_page_values_into::<T::T>(&layout, &mut self.decoded_values)?;
         self.needs_decode = false;
 
         Ok(())
@@ -694,6 +696,12 @@ mod tests {
         for value in spec.exception_values {
             value.append_le_bytes(&mut out);
         }
+        out
+    }
+
+    fn decode_page<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> Vec<Value> {
+        let mut out = vec![Value::default(); layout.header.num_elements];
+        decode_page_values_into::<Value>(layout, &mut out).unwrap();
         out
     }
 
@@ -1075,7 +1083,7 @@ mod tests {
         });
         let page = make_page_from_vectors(3, 4, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
-        let decoded = decode_page_values::<f32>(&layout).unwrap();
+        let decoded = decode_page::<f32>(&layout);
         assert_eq!(decoded, vec![10.0, 11.0, 12.0, 13.0]);
     }
 
@@ -1101,7 +1109,7 @@ mod tests {
         });
         let page = make_page_from_vectors(3, 9, &[vector0, vector1]);
         let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
-        let decoded = decode_page_values::<f64>(&layout).unwrap();
+        let decoded = decode_page::<f64>(&layout);
         assert_eq!(
             decoded,
             vec![10.0, 42.5, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 7.0]
@@ -1126,7 +1134,7 @@ mod tests {
         });
         let page = make_page_from_vectors(3, 3, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
-        let decoded = decode_page_values::<f32>(&layout).unwrap();
+        let decoded = decode_page::<f32>(&layout);
 
         assert!(decoded[0].is_nan());
         assert_eq!(decoded[1], -0.0);
@@ -1148,7 +1156,7 @@ mod tests {
         });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
-        let decoded = decode_page_values::<f32>(&layout).unwrap();
+        let decoded = decode_page::<f32>(&layout);
 
         let expected_two_step = ((encoded as f32) * ALP_POW10_F32[1]) * ALP_NEG_POW10_F32[1];
         let one_step_scale = ALP_POW10_F32[1] * ALP_NEG_POW10_F32[1];
@@ -1172,7 +1180,7 @@ mod tests {
         });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
-        let decoded = decode_page_values::<f64>(&layout).unwrap();
+        let decoded = decode_page::<f64>(&layout);
 
         let expected_two_step = ((encoded as f64) * ALP_POW10_F64[1]) * ALP_NEG_POW10_F64[1];
         let one_step_scale = ALP_POW10_F64[1] * ALP_NEG_POW10_F64[1];
