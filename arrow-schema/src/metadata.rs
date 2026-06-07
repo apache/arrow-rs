@@ -50,6 +50,7 @@ pub struct Metadata(
     // Invariant: the inner map is never empty (`None` encodes the empty map).
     // This ensures the derived implementations of `PartialEq`, `Ord`, `Hash`, …
     // treat an empty `Metadata` consistently, and the empty case never allocates.
+    // We use `BTreeMap` for deterministic iteration order.
     Option<Arc<BTreeMap<String, String>>>,
 );
 
