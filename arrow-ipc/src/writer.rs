@@ -69,51 +69,22 @@ pub struct IpcWriteOptions {
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
 }
-/// Return value for [`IpcDataGenerator::write_batch_direct`].
-///
-/// `IPCMetadata` contains per-dictionary sizes written before the record
-/// batch (`dictionary_block_sizes`) and the padded header length and body
-/// length for the record batch itself. [`FileWriter`] uses these sizes to
-/// build the Block index entries required by the IPC footer for
-/// random-access reads.
-struct IPCMetadata {
-    /// Per-dictionary (meta_bytes, body_bytes) sizes for dictionaries written
-    /// before the record batch.
-    dictionary_block_sizes: Vec<(usize, usize)>,
-    /// Flatbuffer header size including continuation prefix and padding.
-    padded_header_len: usize,
-    /// Total length of the record-batch body (after padding).
-    body_len: usize,
-}
-/// Return type of [`IpcDataGenerator::encode_record_batch`].
-///
-/// Exactly one variant is produced per call depending on whether a writer was supplied:
-/// - `Encoded` — body was flattened into `EncodedData`; used by `record_batch_to_bytes`.
-/// - `Written` — body was streamed to the writer; used by `write_batch_direct` to build
-///   the `IPCMetadata` block sizes that `FileWriter` needs for its footer index.
-enum BatchEncoding {
-    Encoded(EncodedData),
-    Written {
-        padded_header_len: usize,
-        body_len: usize,
-    },
-}
 
 /// A single buffer segment ready to be written to the output stream.
 ///
-/// Used by [`IpcDataGenerator::write_batch_direct`] to avoid staging all buffer
-/// data through a flat `arrow_data: Vec<u8>` accumulator.
+/// For the uncompressed path the original Arc-backed [`Buffer`] is stored
+/// directly (zero copy). For the compressed path the compressed bytes are
+/// owned by a scratch `Vec<u8>`.
 enum EncodedBuffer {
-    /// Uncompressed : an Arc-backed reference to the original array buffer.
+    /// Uncompressed: Arc-backed reference to the original array buffer.
     Raw(Buffer),
-    /// Compressed : owned scratch bytes produced by the codec.
+    /// Compressed: owned scratch bytes produced by the codec.
     Compressed(Vec<u8>),
 }
 
 impl EncodedBuffer {
     fn as_slice(&self) -> &[u8] {
         match self {
-            // Cloning is a reference-count bump
             EncodedBuffer::Raw(b) => b.as_slice(),
             EncodedBuffer::Compressed(v) => v.as_slice(),
         }
@@ -126,6 +97,73 @@ impl EncodedBuffer {
         }
     }
 }
+
+/// Per-message sizes produced by [`IpcDataGenerator::write_direct`].
+///
+/// [`FileWriter`] uses these to build the Block index entries required by the IPC footer for
+/// random-access reads. Fields mirror those of [`crate::Block`]: a padded header length and a
+/// body length for the record batch, plus one pair per dictionary written before it.
+struct IpcWriteMetadata {
+    /// Per-dictionary `(padded_header_len, body_len)` for each dictionary batch written
+    /// before the record batch.
+    dictionary_block_sizes: Vec<(usize, usize)>,
+    /// Flatbuffer header size including continuation prefix and alignment padding.
+    padded_header_len: usize,
+    /// Total length of the record-batch body including trailing alignment padding.
+    body_len: usize,
+}
+
+/// Passes all writes through to `inner` while capturing the first 8 bytes of the stream
+/// (the IPC continuation header) and counting total bytes written. Used by
+/// [`IpcDataGenerator::write_direct`] to recover message sizes without an intermediate buffer.
+struct SizeCapture<'a, W: Write> {
+    inner: &'a mut W,
+    total: usize,
+    header: [u8; 8],
+    header_len: usize,
+}
+
+impl<'a, W: Write> SizeCapture<'a, W> {
+    fn new(writer: &'a mut W) -> Self {
+        Self {
+            inner: writer,
+            total: 0,
+            header: [0u8; 8],
+            header_len: 0,
+        }
+    }
+
+    fn sizes(&self, legacy: bool) -> (usize, usize) {
+        // write_continuation writes:
+        //   legacy:     4 bytes = total_len (= aligned_size - 4)
+        //   non-legacy: 4 bytes marker + 4 bytes total_len (= aligned_size - 8)
+        let (prefix_size, msg_bytes): (usize, [u8; 4]) = if legacy {
+            (4, self.header[0..4].try_into().unwrap())
+        } else {
+            (8, self.header[4..8].try_into().unwrap())
+        };
+        let meta = i32::from_le_bytes(msg_bytes) as usize + prefix_size;
+        let data = self.total - meta;
+        (meta, data)
+    }
+}
+
+impl<W: Write> Write for SizeCapture<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        if self.header_len < 8 {
+            let copy = (8 - self.header_len).min(n);
+            self.header[self.header_len..self.header_len + copy].copy_from_slice(&buf[..copy]);
+            self.header_len += copy;
+        }
+        self.total += n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 impl IpcWriteOptions {
     /// Configures compression when writing IPC files.
     ///
@@ -530,16 +568,32 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
+        let encoded_dictionaries = self.encode_all_dicts(
+            batch,
+            dictionary_tracker,
+            write_options,
+            compression_context,
+        )?;
+        let encoded_message =
+            self.record_batch_to_bytes(batch, write_options, compression_context, None)?;
+        Ok((encoded_dictionaries, encoded_message))
+    }
+
+    /// Encode dictionary batches for all columns in `batch`.
+    fn encode_all_dicts(
+        &self,
+        batch: &RecordBatch,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+        compression_context: &mut CompressionContext,
+    ) -> Result<Vec<EncodedData>, ArrowError> {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
-
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
-
         for (i, field) in schema.fields().iter().enumerate() {
-            let column = batch.column(i);
             self.encode_dictionaries(
                 field,
-                column,
+                batch.column(i),
                 &mut encoded_dictionaries,
                 dictionary_tracker,
                 write_options,
@@ -547,10 +601,46 @@ impl IpcDataGenerator {
                 compression_context,
             )?;
         }
+        Ok(encoded_dictionaries)
+    }
 
-        let encoded_message =
-            self.record_batch_to_bytes(batch, write_options, compression_context)?;
-        Ok((encoded_dictionaries, encoded_message))
+    /// Write dictionary batches and the record batch directly to `writer`, skipping the
+    /// intermediate body `Vec<u8>` allocations
+    /// Returns [`IpcWriteMetadata`] with the sizes needed to build footer blocks.
+    fn write_direct<W: Write>(
+        &self,
+        batch: &RecordBatch,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+        compression_context: &mut CompressionContext,
+        writer: &mut W,
+    ) -> Result<IpcWriteMetadata, ArrowError> {
+        let encoded_dictionaries = self.encode_all_dicts(
+            batch,
+            dictionary_tracker,
+            write_options,
+            compression_context,
+        )?;
+
+        let mut dictionary_block_sizes = Vec::with_capacity(encoded_dictionaries.len());
+        for dict in encoded_dictionaries {
+            dictionary_block_sizes.push(write_message(&mut *writer, dict, write_options)?);
+        }
+
+        let mut capture = SizeCapture::new(writer);
+        self.record_batch_to_bytes(
+            batch,
+            write_options,
+            compression_context,
+            Some(&mut capture),
+        )?;
+        let (padded_header_len, body_len) = capture.sizes(write_options.write_legacy_ipc_format);
+
+        Ok(IpcWriteMetadata {
+            dictionary_block_sizes,
+            padded_header_len,
+            body_len,
+        })
     }
 
     /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
@@ -571,27 +661,25 @@ impl IpcDataGenerator {
         )
     }
 
-    /// Shared core used by both [`Self::record_batch_to_bytes`] and [`Self::write_batch_direct`].
+    /// Write a `RecordBatch` into two sets of bytes, one for the header (crate::Message) and the
+    /// other for the batch's data.
     ///
-    /// Builds the FlatBuffer header and encodes all array buffers.  When `writer` is `Some`
-    /// the header and body are streamed directly to the writer and [`BatchEncoding::Written`]
-    /// is returned; when `None` the body is flattened into an owned `Vec<u8>` and
-    /// [`BatchEncoding::Encoded`] is returned.
-    fn encode_record_batch(
+    /// When `writer` is `Some`, the message is written directly to it and an empty
+    /// [`EncodedData`] is returned (the data has already been flushed). When `writer`
+    /// is `None` the encoded bytes are returned for the caller to write.
+    fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
         writer: Option<&mut dyn Write>,
-    ) -> Result<BatchEncoding, ArrowError> {
+    ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
         let mut nodes: Vec<crate::FieldNode> = vec![];
         let mut buffers: Vec<crate::Buffer> = vec![];
-        let mut encoded_buffers: Vec<EncodedBuffer> =
-            Vec::with_capacity(encoded_buffer_count(batch));
-        let mut offset = 0i64;
 
+        // get the type of compression
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -604,13 +692,24 @@ impl IpcDataGenerator {
         let compression_codec: Option<CompressionCodec> =
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
+        let alignment = write_options.alignment;
         let mut variadic_buffer_counts = vec![];
+        let mut offset = 0i64;
+        let mut arrow_data: Vec<u8> = vec![];
+        let capacity = batch
+            .columns()
+            .iter()
+            .map(|a| estimate_encoded_buffer_count(a.data_type()))
+            .sum();
+        let mut encoded_buffers: Vec<EncodedBuffer> = Vec::with_capacity(capacity);
+        let is_direct = writer.is_some();
 
         for array in batch.columns() {
             let array_data = array.to_data();
             offset = write_array_data(
                 &array_data,
                 &mut buffers,
+                &mut arrow_data,
                 &mut encoded_buffers,
                 &mut nodes,
                 offset,
@@ -619,16 +718,19 @@ impl IpcDataGenerator {
                 compression_codec,
                 compression_context,
                 write_options,
+                is_direct,
             )?;
             append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
-        let tail_pad = pad_to_alignment(write_options.alignment, offset as usize);
+        // Build FlatBuffer header — same for both paths.
+        let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
 
+        // write data
         let buffers_fb = fbb.create_vector(&buffers);
         let nodes_fb = fbb.create_vector(&nodes);
-        let variadic_fb = if variadic_buffer_counts.is_empty() {
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
             None
         } else {
             Some(fbb.create_vector(&variadic_buffer_counts))
@@ -642,12 +744,14 @@ impl IpcDataGenerator {
             if let Some(c) = compression {
                 batch_builder.add_compression(c);
             }
-            if let Some(v) = variadic_fb {
+
+            if let Some(v) = variadic_buffer {
                 batch_builder.add_variadicBufferCounts(v);
             }
-            batch_builder.finish().as_union_value()
+            let b = batch_builder.finish();
+            b.as_union_value()
         };
-
+        // create an crate::Message
         let mut message = crate::MessageBuilder::new(&mut fbb);
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
@@ -657,81 +761,35 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
         let ipc_message = fbb.finished_data().to_vec();
 
-        let a = usize::from(write_options.alignment - 1);
-        let prefix_size = if write_options.write_legacy_ipc_format {
-            4
-        } else {
-            8
-        };
-        let padded_header_len = (ipc_message.len() + prefix_size + a) & !a;
-
         if let Some(w) = writer {
-            // Stream header + body directly — no intermediate Vec<u8>.
-            let padding_bytes = padded_header_len - ipc_message.len() - prefix_size;
-            match write_options.metadata_version {
-                crate::MetadataVersion::V1
-                | crate::MetadataVersion::V2
-                | crate::MetadataVersion::V3 => {
-                    unreachable!("Options with this metadata version cannot be created")
-                }
-                crate::MetadataVersion::V4 => {
-                    if !write_options.write_legacy_ipc_format {
-                        w.write_all(&CONTINUATION_MARKER)?;
-                    }
-                    w.write_all(&((padded_header_len - prefix_size) as i32).to_le_bytes())?;
-                }
-                crate::MetadataVersion::V5 => {
-                    w.write_all(&CONTINUATION_MARKER)?;
-                    w.write_all(&((padded_header_len - prefix_size) as i32).to_le_bytes())?;
-                }
-                z => panic!("Unsupported MetadataVersion {z:?}"),
-            }
+            // Stream header then each buffer directly — no intermediate Vec<u8>.
+            let a = usize::from(alignment - 1);
+            let prefix_size = if write_options.write_legacy_ipc_format {
+                4
+            } else {
+                8
+            };
+            let aligned_size = (ipc_message.len() + prefix_size + a) & !a;
+            let padding_bytes = aligned_size - ipc_message.len() - prefix_size;
+            write_continuation(&mut *w, write_options, (aligned_size - prefix_size) as i32)?;
             w.write_all(&ipc_message)?;
             w.write_all(&PADDING[..padding_bytes])?;
-            if body_len > 0 {
-                for encoded in &encoded_buffers {
-                    let data = encoded.as_slice();
-                    w.write_all(data)?;
-                    w.write_all(&PADDING[..pad_to_alignment(write_options.alignment, data.len())])?;
-                }
-                w.write_all(&PADDING[..tail_pad])?;
+            for enc in &encoded_buffers {
+                w.write_all(enc.as_slice())?;
+                w.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
             }
-            Ok(BatchEncoding::Written {
-                padded_header_len,
-                body_len,
-            })
-        } else {
-            // Flatten body segments into a contiguous Vec<u8>.
-            let mut arrow_data: Vec<u8> = Vec::with_capacity(body_len);
-            for encoded in &encoded_buffers {
-                arrow_data.extend_from_slice(encoded.as_slice());
-                arrow_data.extend_from_slice(
-                    &PADDING[..pad_to_alignment(write_options.alignment, encoded.len())],
-                );
-            }
-            arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-            Ok(BatchEncoding::Encoded(EncodedData {
-                ipc_message,
-                arrow_data,
-            }))
+            w.write_all(&PADDING[..tail_pad])?;
+            return Ok(EncodedData {
+                ipc_message: vec![],
+                arrow_data: vec![],
+            });
         }
-    }
 
-    /// Write a `RecordBatch` into two sets of bytes, one for the header (crate::Message) and the
-    /// other for the batch's data
-    fn record_batch_to_bytes(
-        &self,
-        batch: &RecordBatch,
-        write_options: &IpcWriteOptions,
-        compression_context: &mut CompressionContext,
-    ) -> Result<EncodedData, ArrowError> {
-        if let BatchEncoding::Encoded(data) =
-            self.encode_record_batch(batch, write_options, compression_context, None)?
-        {
-            Ok(data)
-        } else {
-            unreachable!()
-        }
+        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
+        Ok(EncodedData {
+            ipc_message,
+            arrow_data,
+        })
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
@@ -748,8 +806,9 @@ impl IpcDataGenerator {
 
         let mut nodes: Vec<crate::FieldNode> = vec![];
         let mut buffers: Vec<crate::Buffer> = vec![];
-        let mut encoded_buffers: Vec<EncodedBuffer> = vec![];
+        let mut arrow_data: Vec<u8> = vec![];
 
+        // get the type of compression
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -763,9 +822,13 @@ impl IpcDataGenerator {
             .map(|batch_compression_type| batch_compression_type.try_into())
             .transpose()?;
 
+        let alignment = write_options.alignment;
+        let mut encoded_buffers: Vec<EncodedBuffer> =
+            Vec::with_capacity(estimate_encoded_buffer_count(array_data.data_type()));
         let offset = write_array_data(
             array_data,
             &mut buffers,
+            &mut arrow_data,
             &mut encoded_buffers,
             &mut nodes,
             0,
@@ -774,14 +837,16 @@ impl IpcDataGenerator {
             compression_codec,
             compression_context,
             write_options,
+            false,
         )?;
 
         let mut variadic_buffer_counts = vec![];
         append_variadic_buffer_counts(&mut variadic_buffer_counts, array_data);
 
         // pad the tail of body data
-        let tail_pad = pad_to_alignment(write_options.alignment, offset as usize);
+        let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
+        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
 
         // write data
         let buffers = fbb.create_vector(&buffers);
@@ -826,69 +891,10 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
         let finished_data = fbb.finished_data();
 
-        let mut arrow_data: Vec<u8> = Vec::with_capacity(body_len);
-        for encoded in &encoded_buffers {
-            arrow_data.extend_from_slice(encoded.as_slice());
-            arrow_data.extend_from_slice(
-                &PADDING[..pad_to_alignment(write_options.alignment, encoded.len())],
-            );
-        }
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-
         Ok(EncodedData {
             ipc_message: finished_data.to_vec(),
             arrow_data,
         })
-    }
-
-    /// Write dictionaries and record batch's directly to `writer`, skipping the
-    /// intermediate `arrow_data: Vec<u8>` accumulator used by [`Self::record_batch_to_bytes`].
-    ///
-    /// For the uncompressed path each array buffer is held as an Arc-backed slice and
-    /// written straight to `writer`. one copy instead of two.  For the compressed path
-    /// each buffer is compressed into a per-buffer scratch `Vec<u8>` and written from
-    /// there, eliminating the extra copy that `write_buffer` -> `arrow_data` ->
-    /// `write_body_buffers` would otherwise incur.
-    fn write_batch_direct<W: Write>(
-        &self,
-        batch: &RecordBatch,
-        dictionary_tracker: &mut DictionaryTracker,
-        write_options: &IpcWriteOptions,
-        compression_context: &mut CompressionContext,
-        writer: &mut W,
-    ) -> Result<IPCMetadata, ArrowError> {
-        let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::new();
-        let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
-        for (i, field) in schema.fields().iter().enumerate() {
-            self.encode_dictionaries(
-                field,
-                batch.column(i),
-                &mut encoded_dictionaries,
-                dictionary_tracker,
-                write_options,
-                &mut dict_id,
-                compression_context,
-            )?;
-        }
-        let mut dict_sizes = Vec::with_capacity(encoded_dictionaries.len());
-        for dict in encoded_dictionaries {
-            dict_sizes.push(write_message(&mut *writer, dict, write_options)?);
-        }
-
-        if let BatchEncoding::Written {
-            padded_header_len,
-            body_len,
-        } = self.encode_record_batch(batch, write_options, compression_context, Some(writer))?
-        {
-            Ok(IPCMetadata {
-                dictionary_block_sizes: dict_sizes,
-                padded_header_len,
-                body_len,
-            })
-        } else {
-            unreachable!()
-        }
     }
 }
 
@@ -1349,7 +1355,7 @@ impl<W: Write> FileWriter<W> {
             ));
         }
 
-        let ipc_meta = self.data_gen.write_batch_direct(
+        let meta = self.data_gen.write_direct(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
@@ -1357,24 +1363,24 @@ impl<W: Write> FileWriter<W> {
             &mut self.writer,
         )?;
 
-        for (dict_meta_bytes, dict_body_bytes) in ipc_meta.dictionary_block_sizes {
+        for (header_len, body_len) in meta.dictionary_block_sizes {
             let block = crate::Block::new(
                 self.block_offsets as i64,
-                dict_meta_bytes as i32,
-                dict_body_bytes as i64,
+                header_len as i32,
+                body_len as i64,
             );
             self.dictionary_blocks.push(block);
-            self.block_offsets += dict_meta_bytes + dict_body_bytes;
+            self.block_offsets += header_len + body_len;
         }
 
         // add a record block for the footer
         let block = crate::Block::new(
             self.block_offsets as i64,
-            ipc_meta.padded_header_len as i32, // header size (padded)
-            ipc_meta.body_len as i64,
+            meta.padded_header_len as i32,
+            meta.body_len as i64,
         );
         self.record_blocks.push(block);
-        self.block_offsets += ipc_meta.padded_header_len + ipc_meta.body_len;
+        self.block_offsets += meta.padded_header_len + meta.body_len;
         Ok(())
     }
 
@@ -1624,14 +1630,13 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        self.data_gen.write_batch_direct(
+        self.data_gen.write_direct(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
             &mut self.compression_context,
             &mut self.writer,
         )?;
-
         Ok(())
     }
 
@@ -1963,7 +1968,7 @@ fn get_list_view_array_buffers<O: OffsetSizeTrait>(
 /// the array's offset and length. This helps reduce the encoded size of sliced
 /// arrays
 ///
-fn get_buffer(array_data: &ArrayData) -> Buffer {
+fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
     let buffer = &array_data.buffers()[0];
     let layout = layout(array_data.data_type());
     let spec = &layout.buffers[0];
@@ -1979,21 +1984,12 @@ fn get_buffer(array_data: &ArrayData) -> Buffer {
     }
 }
 
-/// Returns the total number of [`EncodedBuffer`] entries that will be pushed during encoding of
-/// `batch`. Used to pre-allocate the `encoded_buffers` Vec and avoid repeated reallocations as
-/// columns are visited.
-fn encoded_buffer_count(batch: &RecordBatch) -> usize {
-    fn count(data: &ArrayData) -> usize {
-        data.buffers().len() + data.child_data().iter().map(count).sum::<usize>()
-    }
-    batch.columns().iter().map(|c| count(&c.to_data())).sum()
-}
-
 /// Write array data to a vector of bytes
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
     array_data: &ArrayData,
     buffers: &mut Vec<crate::Buffer>,
+    arrow_data: &mut Vec<u8>,
     encoded_buffers: &mut Vec<EncodedBuffer>,
     nodes: &mut Vec<crate::FieldNode>,
     offset: i64,
@@ -2002,6 +1998,7 @@ fn write_array_data(
     compression_codec: Option<CompressionCodec>,
     compression_context: &mut CompressionContext,
     write_options: &IpcWriteOptions,
+    is_direct: bool,
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
     if !matches!(array_data.data_type(), DataType::Null) {
@@ -2013,7 +2010,7 @@ fn write_array_data(
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
-        let null_buffer = match array_data.nulls() {
+        let null_buffer: Buffer = match array_data.nulls() {
             None => {
                 // create a buffer and fill it with valid bits
                 let num_bytes = bit_util::ceil(num_rows, 8);
@@ -2024,23 +2021,9 @@ fn write_array_data(
             Some(buffer) => buffer.inner().sliced(),
         };
 
-        offset = collect_encoded_buffers(
-            null_buffer,
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
-    }
-
-    let data_type = array_data.data_type();
-    if matches!(data_type, DataType::Binary | DataType::Utf8) {
-        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
-        for buffer in [offsets, values] {
+        if is_direct {
             offset = collect_encoded_buffers(
-                buffer,
+                null_buffer,
                 buffers,
                 encoded_buffers,
                 offset,
@@ -2048,6 +2031,44 @@ fn write_array_data(
                 compression_context,
                 write_options.alignment,
             )?;
+        } else {
+            offset = write_buffer(
+                null_buffer.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        }
+    }
+
+    let data_type = array_data.data_type();
+    if matches!(data_type, DataType::Binary | DataType::Utf8) {
+        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
+        for buffer in [offsets, values] {
+            if is_direct {
+                offset = collect_encoded_buffers(
+                    buffer,
+                    buffers,
+                    encoded_buffers,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            } else {
+                offset = write_buffer(
+                    buffer.as_slice(),
+                    buffers,
+                    arrow_data,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            }
         }
     } else if matches!(data_type, DataType::BinaryView | DataType::Utf8View) {
         // Slicing the views buffer is safe and easy,
@@ -2056,39 +2077,76 @@ fn write_array_data(
         // Current implementation just serialize the raw arrays as given and not try to optimize anything.
         // If users wants to "compact" the arrays prior to sending them over IPC,
         // they should consider the gc API suggested in #5513
-        offset = collect_encoded_buffers(
-            get_buffer(array_data),
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
-
-        for buffer in array_data.buffers().iter().skip(1) {
+        let views = get_or_truncate_buffer(array_data);
+        if is_direct {
             offset = collect_encoded_buffers(
-                buffer.clone(),
+                views,
                 buffers,
                 encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        } else {
+            offset = write_buffer(
+                views.as_slice(),
+                buffers,
+                arrow_data,
                 offset,
                 compression_codec,
                 compression_context,
                 write_options.alignment,
             )?;
         }
+
+        for buffer in array_data.buffers().iter().skip(1) {
+            if is_direct {
+                offset = collect_encoded_buffers(
+                    buffer.clone(),
+                    buffers,
+                    encoded_buffers,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            } else {
+                offset = write_buffer(
+                    buffer.as_slice(),
+                    buffers,
+                    arrow_data,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            }
+        }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
         let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
         for buffer in [offsets, values] {
-            offset = collect_encoded_buffers(
-                buffer,
-                buffers,
-                encoded_buffers,
-                offset,
-                compression_codec,
-                compression_context,
-                write_options.alignment,
-            )?;
+            if is_direct {
+                offset = collect_encoded_buffers(
+                    buffer,
+                    buffers,
+                    encoded_buffers,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            } else {
+                offset = write_buffer(
+                    buffer.as_slice(),
+                    buffers,
+                    arrow_data,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            }
         }
     } else if DataType::is_numeric(data_type)
         || DataType::is_temporal(data_type)
@@ -2100,30 +2158,56 @@ fn write_array_data(
         // Truncate values
         assert_eq!(array_data.buffers().len(), 1);
 
-        offset = collect_encoded_buffers(
-            get_buffer(array_data),
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
+        let buffer = get_or_truncate_buffer(array_data);
+        if is_direct {
+            offset = collect_encoded_buffers(
+                buffer,
+                buffers,
+                encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        } else {
+            offset = write_buffer(
+                buffer.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        }
     } else if matches!(data_type, DataType::Boolean) {
         // Bools are special because the payload (= 1 bit) is smaller than the physical container elements (= bytes).
         // The array data may not start at the physical boundary of the underlying buffer, so we need to shift bits around.
         assert_eq!(array_data.buffers().len(), 1);
 
-        let buffer = array_data.buffers()[0].bit_slice(array_data.offset(), array_data.len());
-        offset = collect_encoded_buffers(
-            buffer,
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
+        let buffer = &array_data.buffers()[0];
+        let buffer = buffer.bit_slice(array_data.offset(), array_data.len());
+        if is_direct {
+            offset = collect_encoded_buffers(
+                buffer,
+                buffers,
+                encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        } else {
+            offset = write_buffer(
+                buffer.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        }
     } else if matches!(
         data_type,
         DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _)
@@ -2138,18 +2222,31 @@ fn write_array_data(
             DataType::LargeList(_) => get_list_array_buffers::<i64>(array_data),
             _ => unreachable!(),
         };
-        offset = collect_encoded_buffers(
-            offsets,
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
+        if is_direct {
+            offset = collect_encoded_buffers(
+                offsets,
+                buffers,
+                encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        } else {
+            offset = write_buffer(
+                offsets.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        }
         offset = write_array_data(
             &sliced_child_data,
             buffers,
+            arrow_data,
             encoded_buffers,
             nodes,
             offset,
@@ -2158,6 +2255,7 @@ fn write_array_data(
             compression_codec,
             compression_context,
             write_options,
+            is_direct,
         )?;
         return Ok(offset);
     } else if matches!(
@@ -2173,29 +2271,50 @@ fn write_array_data(
             _ => unreachable!(),
         };
 
-        offset = collect_encoded_buffers(
-            offsets,
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
-
-        offset = collect_encoded_buffers(
-            sizes,
-            buffers,
-            encoded_buffers,
-            offset,
-            compression_codec,
-            compression_context,
-            write_options.alignment,
-        )?;
+        if is_direct {
+            offset = collect_encoded_buffers(
+                offsets,
+                buffers,
+                encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+            offset = collect_encoded_buffers(
+                sizes,
+                buffers,
+                encoded_buffers,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        } else {
+            offset = write_buffer(
+                offsets.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+            offset = write_buffer(
+                sizes.as_slice(),
+                buffers,
+                arrow_data,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options.alignment,
+            )?;
+        }
 
         offset = write_array_data(
             &child_data,
             buffers,
+            arrow_data,
             encoded_buffers,
             nodes,
             offset,
@@ -2204,6 +2323,7 @@ fn write_array_data(
             compression_codec,
             compression_context,
             write_options,
+            is_direct,
         )?;
         return Ok(offset);
     } else if let DataType::FixedSizeList(_, fixed_size) = data_type {
@@ -2217,6 +2337,7 @@ fn write_array_data(
         offset = write_array_data(
             &child_data,
             buffers,
+            arrow_data,
             encoded_buffers,
             nodes,
             offset,
@@ -2225,19 +2346,32 @@ fn write_array_data(
             compression_codec,
             compression_context,
             write_options,
+            is_direct,
         )?;
         return Ok(offset);
     } else {
         for buffer in array_data.buffers() {
-            offset = collect_encoded_buffers(
-                buffer.clone(),
-                buffers,
-                encoded_buffers,
-                offset,
-                compression_codec,
-                compression_context,
-                write_options.alignment,
-            )?;
+            if is_direct {
+                offset = collect_encoded_buffers(
+                    buffer.clone(),
+                    buffers,
+                    encoded_buffers,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            } else {
+                offset = write_buffer(
+                    buffer.as_slice(),
+                    buffers,
+                    arrow_data,
+                    offset,
+                    compression_codec,
+                    compression_context,
+                    write_options.alignment,
+                )?;
+            }
         }
     }
 
@@ -2246,10 +2380,13 @@ fn write_array_data(
         DataType::RunEndEncoded(_, _) => {
             // unslice the run encoded array.
             let arr = unslice_run_array(array_data.clone())?;
+            // recursively write out nested structures
             for data_ref in arr.child_data() {
+                // write the nested data (e.g list data)
                 offset = write_array_data(
                     data_ref,
                     buffers,
+                    arrow_data,
                     encoded_buffers,
                     nodes,
                     offset,
@@ -2258,14 +2395,18 @@ fn write_array_data(
                     compression_codec,
                     compression_context,
                     write_options,
+                    is_direct,
                 )?;
             }
         }
         _ => {
+            // recursively write out nested structures
             for data_ref in array_data.child_data() {
+                // write the nested data (e.g list data)
                 offset = write_array_data(
                     data_ref,
                     buffers,
+                    arrow_data,
                     encoded_buffers,
                     nodes,
                     offset,
@@ -2274,6 +2415,7 @@ fn write_array_data(
                     compression_codec,
                     compression_context,
                     write_options,
+                    is_direct,
                 )?;
             }
         }
@@ -2281,20 +2423,62 @@ fn write_array_data(
     Ok(offset)
 }
 
-/// Append a single array buffer to the outgoing IPC body and record its
-/// corresponding `crate::Buffer` metadata into `buffers`. Returns the
-/// updated byte `offset` after the buffer (including any padding).
+/// Write a buffer into `arrow_data`, a vector of bytes, and adds its
+/// [`crate::Buffer`] to `buffers`. Returns the new offset in `arrow_data`
 ///
-/// See <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
-/// for the on-wire layout: each buffer is optionally compressed and then
-/// written as the 8-byte little-endian uncompressed length (or `-1` to
-/// indicate uncompressed data) followed by the (compressed) bytes and
-/// protocol-required padding.
+///
+/// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
+/// Each constituent buffer is first compressed with the indicated
+/// compressor, and then written with the uncompressed length in the first 8
+/// bytes as a 64-bit little-endian signed integer followed by the compressed
+/// buffer bytes (and then padding as required by the protocol). The
+/// uncompressed length may be set to -1 to indicate that the data that
+/// follows is not compressed, which can be useful for cases where
+/// compression does not yield appreciable savings.
+fn write_buffer(
+    buffer: &[u8],                    // input
+    buffers: &mut Vec<crate::Buffer>, // output buffer descriptors
+    arrow_data: &mut Vec<u8>,         // output stream
+    offset: i64,                      // current output stream offset
+    compression_codec: Option<CompressionCodec>,
+    compression_context: &mut CompressionContext,
+    alignment: u8,
+) -> Result<i64, ArrowError> {
+    let len: i64 = match compression_codec {
+        Some(compressor) => compressor.compress_to_vec(buffer, arrow_data, compression_context)?,
+        None => {
+            arrow_data.extend_from_slice(buffer);
+            buffer.len()
+        }
+    }
+    .try_into()
+    .map_err(|e| {
+        ArrowError::InvalidArgumentError(format!("Could not convert compressed size to i64: {e}"))
+    })?;
+
+    // make new index entry
+    buffers.push(crate::Buffer::new(offset, len));
+    // padding and make offset aligned
+    let pad_len = pad_to_alignment(alignment, len as usize);
+    arrow_data.extend_from_slice(&PADDING[..pad_len]);
+
+    Ok(offset + len + (pad_len as i64))
+}
+
+/// Collect a single array buffer into `encoded_buffers` and record its
+/// [`crate::Buffer`] metadata in `buffers`. Returns the updated byte offset
+/// after the buffer (including padding).
+///
+/// Unlike [`write_buffer`], no bytes are written to a stream here — the
+/// [`EncodedBuffer`] segments are accumulated and streamed to the output
+/// writer *after* the FlatBuffer message header has been built. This lets
+/// [`FileWriter`] and [`StreamWriter`] avoid the intermediate
+/// `arrow_data: Vec<u8>` allocation used by the arrow-flight path.
 fn collect_encoded_buffers(
-    buffer: Buffer,                           // input array buffer to encode
-    buffers: &mut Vec<crate::Buffer>, // IPC buffer metadata (offset + length) for the FlatBuffer message
-    encoded_buffers: &mut Vec<EncodedBuffer>, // accumulated encoded segments, written to output after the message header
-    offset: i64,                              // current output stream offset
+    buffer: Buffer,
+    buffers: &mut Vec<crate::Buffer>,
+    encoded_buffers: &mut Vec<EncodedBuffer>,
+    offset: i64,
     compression_codec: Option<CompressionCodec>,
     compression_context: &mut CompressionContext,
     alignment: u8,
@@ -2314,13 +2498,83 @@ fn collect_encoded_buffers(
         }
     };
     buffers.push(crate::Buffer::new(offset, len));
-    // Defer the actual write. segments are streamed to the output after the FlatBuffer header is built.
     encoded_buffers.push(encoded);
     let pad_len = pad_to_alignment(alignment, len as usize) as i64;
     Ok(offset + len + pad_len)
 }
 
 const PADDING: [u8; 64] = [0; 64];
+
+/// Estimates the number of [`EncodedBuffer`] segments that [`write_array_data`]
+/// will produce for a column of the given type.
+///
+/// Based on the Arrow IPC buffer layout
+/// (<https://arrow.apache.org/docs/format/Columnar.html#recordbatch-message>):
+///
+/// | Type family | Buffers |
+/// |---|---|
+/// | Null | 0 |
+/// | Primitive / Bool / FixedSizeBinary | 2 (validity + values) |
+/// | Binary / Utf8 / LargeBinary / LargeUtf8 | 3 (validity + offsets + data) |
+/// | BinaryView / Utf8View | 3 estimate (validity + views + ≥1 variadic data buf) |
+/// | List / LargeList / Map | 2 (validity + offsets) + child |
+/// | ListView / LargeListView | 3 (validity + offsets + sizes) + child |
+/// | FixedSizeList | 1 (validity) + child |
+/// | Struct | 1 (validity) + Σ children |
+/// | Dictionary | 2 (validity + indices); dict body is a separate IPC message |
+/// | Union (sparse) | 1 (type_ids) + Σ children |
+/// | Union (dense) | 2 (type_ids + offsets) + Σ children |
+/// | RunEndEncoded | Σ of run-ends child + values child |
+#[inline]
+fn estimate_encoded_buffer_count(dt: &DataType) -> usize {
+    match dt {
+        DataType::Null => 0,
+
+        DataType::Binary | DataType::Utf8 | DataType::LargeBinary | DataType::LargeUtf8 => 3,
+
+        DataType::BinaryView | DataType::Utf8View => 3,
+
+        DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
+            2 + estimate_encoded_buffer_count(f.data_type())
+        }
+
+        DataType::ListView(f) | DataType::LargeListView(f) => {
+            3 + estimate_encoded_buffer_count(f.data_type())
+        }
+
+        DataType::FixedSizeList(f, _) => 1 + estimate_encoded_buffer_count(f.data_type()),
+
+        DataType::Struct(fields) => {
+            1 + fields
+                .iter()
+                .map(|f| estimate_encoded_buffer_count(f.data_type()))
+                .sum::<usize>()
+        }
+
+        // Dictionary indices only; dictionary body is a separate IPC message.
+        DataType::Dictionary(_, _) => 2,
+
+        DataType::Union(fields, UnionMode::Sparse) => {
+            1 + fields
+                .iter()
+                .map(|(_, f)| estimate_encoded_buffer_count(f.data_type()))
+                .sum::<usize>()
+        }
+        DataType::Union(fields, UnionMode::Dense) => {
+            2 + fields
+                .iter()
+                .map(|(_, f)| estimate_encoded_buffer_count(f.data_type()))
+                .sum::<usize>()
+        }
+
+        DataType::RunEndEncoded(run_ends, values) => {
+            estimate_encoded_buffer_count(run_ends.data_type())
+                + estimate_encoded_buffer_count(values.data_type())
+        }
+        // Primitive, Bool, temporal, Decimal*, FixedSizeBinary: validity + values.
+        _ => 2,
+    }
+}
 
 /// Calculate an alignment boundary and return the number of bytes needed to pad to the alignment boundary
 #[inline]
