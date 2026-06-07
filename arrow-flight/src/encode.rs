@@ -731,6 +731,7 @@ impl FlightIpcEncoder {
             &self.options,
             &mut self.compression_context,
         )?;
+
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
         let flight_batch = encoded_batch.into();
 
