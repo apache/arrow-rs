@@ -31,18 +31,22 @@ use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{BitReader, FromBitpacked, FromBytes};
 
-/// Parsed view of one vector's metadata and data slices.
+/// Parsed view of one vector's metadata and data sections.
 ///
-/// `packed_values` is a zero-copy range into page body bytes.
-/// Exception positions/values are copied for straightforward decode handling.
-#[derive(Debug)]
+/// Each data section is described by its start offset into the page body; the
+/// section bytes themselves stay in the body and are decoded lazily when the
+/// vector is decoded. Section lengths are fully determined by the fixed-size
+/// metadata at the front of the vector (`bit_width` for `packed_values`,
+/// `num_exceptions` for both exception sections), so only the start offset is
+/// stored.
+#[derive(Debug, Clone, Copy)]
 struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
     alp_info: AlpInfo,
     for_info: ForInfo<Exact>,
-    packed_values: Range<usize>,
-    exception_positions: Vec<u16>,
-    exception_values: Vec<Exact>,
+    packed_values: usize,
+    exception_positions: usize,
+    exception_values: usize,
 }
 
 impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
@@ -52,6 +56,24 @@ impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
             + self
                 .for_info
                 .get_data_stored_size(self.num_elements, self.alp_info.num_exceptions)
+    }
+
+    /// Byte range of the bit-packed values section in the page body.
+    fn packed_values_range(&self) -> Range<usize> {
+        let len = self.for_info.get_bit_packed_size(self.num_elements);
+        self.packed_values..self.packed_values + len
+    }
+
+    /// Byte range of the exception positions section (`u16` each) in the page body.
+    fn exception_positions_range(&self) -> Range<usize> {
+        let len = self.alp_info.num_exceptions as usize * std::mem::size_of::<u16>();
+        self.exception_positions..self.exception_positions + len
+    }
+
+    /// Byte range of the exception values section (`Exact::WIDTH` each) in the page body.
+    fn exception_values_range(&self) -> Range<usize> {
+        let len = self.alp_info.num_exceptions as usize * Exact::WIDTH;
+        self.exception_values..self.exception_values + len
     }
 }
 
@@ -301,17 +323,16 @@ fn parse_vector_view<Exact: AlpExact>(
     let data = &vector_bytes[metadata_size..expected_size];
     let packed_size = for_info.get_bit_packed_size(num_elements);
     let positions_size = alp_info.num_exceptions as usize * std::mem::size_of::<u16>();
-    let values_size = alp_info.num_exceptions as usize * Exact::WIDTH;
 
-    let packed_start = 0;
-    let packed_end = packed_start + packed_size;
-    let positions_start = packed_end;
-    let positions_end = positions_start + positions_size;
-    let values_start = positions_end;
-    let values_end = values_start + values_size;
+    // Section offsets relative to the start of the data section: packed values
+    // first, then exception positions, then exception values.
+    let positions_start = packed_size;
+    let values_start = positions_start + positions_size;
 
-    let mut exception_positions = Vec::with_capacity(alp_info.num_exceptions as usize);
-    for chunk in data[positions_start..positions_end].chunks_exact(2) {
+    // Validate exception positions without materializing them. They are decoded
+    // straight from the body when the vector is decoded; here we only enforce
+    // that every position is in range so the whole page is validated up front.
+    for chunk in data[positions_start..values_start].chunks_exact(2) {
         let position = u16::from_le_bytes([chunk[0], chunk[1]]);
         if position >= num_elements {
             return Err(general_err!(
@@ -320,16 +341,14 @@ fn parse_vector_view<Exact: AlpExact>(
                 num_elements
             ));
         }
-        exception_positions.push(position);
     }
 
-    let packed_values =
-        (vector_start + metadata_size + packed_start)..(vector_start + metadata_size + packed_end);
-
-    let mut exception_values = Vec::with_capacity(alp_info.num_exceptions as usize);
-    for chunk in data[values_start..values_end].chunks_exact(Exact::WIDTH) {
-        exception_values.push(Exact::from_le_slice(chunk));
-    }
+    // Store each section's start offset into the page body. Lengths are derived
+    // from the vector metadata at decode time, so no end offset is stored.
+    let data_start = vector_start + metadata_size;
+    let packed_values = data_start;
+    let exception_positions = data_start + positions_start;
+    let exception_values = data_start + values_start;
 
     Ok(AlpEncodedVectorView {
         num_elements,
@@ -387,7 +406,7 @@ fn decode_vector_values<Value: AlpFloat>(
     vector: &AlpEncodedVectorView<Value::Exact>,
 ) -> Result<Vec<Value>> {
     let mut exact_values = bit_unpack_integers(
-        body.slice(vector.packed_values.clone()),
+        body.slice(vector.packed_values_range()),
         vector.for_info.bit_width,
         vector.num_elements,
     )?;
@@ -401,20 +420,15 @@ fn decode_vector_values<Value: AlpFloat>(
         out.push(Value::decode_value(signed_value, scale));
     }
 
-    if vector.exception_positions.len() != vector.exception_values.len() {
-        return Err(general_err!(
-            "Invalid ALP page: exception positions ({}) and values ({}) length mismatch",
-            vector.exception_positions.len(),
-            vector.exception_values.len()
-        ));
-    }
-
-    for (pos, value_bits) in vector
-        .exception_positions
-        .iter()
-        .zip(vector.exception_values.iter())
+    // Positions and values are equal-count by construction (both sized from
+    // `num_exceptions`), so zipping the body sections never drops a pair.
+    let positions = &body[vector.exception_positions_range()];
+    let values = &body[vector.exception_values_range()];
+    for (pos_chunk, value_chunk) in positions
+        .chunks_exact(std::mem::size_of::<u16>())
+        .zip(values.chunks_exact(Value::Exact::WIDTH))
     {
-        let pos = *pos as usize;
+        let pos = u16::from_le_bytes([pos_chunk[0], pos_chunk[1]]) as usize;
         if pos >= out.len() {
             return Err(general_err!(
                 "Invalid ALP page: exception position {} out of bounds for vector length {}",
@@ -422,7 +436,7 @@ fn decode_vector_values<Value: AlpFloat>(
                 out.len()
             ));
         }
-        out[pos] = Value::from_exact_bits(*value_bits);
+        out[pos] = Value::from_exact_bits(Value::Exact::from_le_slice(value_chunk));
     }
 
     Ok(out)
@@ -1015,8 +1029,17 @@ mod tests {
         assert_eq!(parsed_vector.num_elements, 1);
         assert_eq!(parsed_vector.alp_info.num_exceptions, 1);
         assert_eq!(parsed_vector.for_info.bit_width, 0);
-        assert_eq!(parsed_vector.exception_positions, vec![0]);
-        assert_eq!(parsed_vector.exception_values, vec![42.5_f64.to_bits()]);
+
+        let positions: Vec<u16> = parsed.body[parsed_vector.exception_positions_range()]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let values: Vec<u64> = parsed.body[parsed_vector.exception_values_range()]
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(positions, vec![0]);
+        assert_eq!(values, vec![42.5_f64.to_bits()]);
     }
 
     #[test]
