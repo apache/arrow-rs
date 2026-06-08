@@ -62,7 +62,10 @@ fn expand_ree_array(array: &ArrayRef) -> Result<ArrayRef> {
             DataType::Int16 => expand_typed_ree(array.as_run::<arrow_array::types::Int16Type>()),
             DataType::Int32 => expand_typed_ree(array.as_run::<arrow_array::types::Int32Type>()),
             DataType::Int64 => expand_typed_ree(array.as_run::<arrow_array::types::Int64Type>()),
-            dt => Err(arrow_err!("Unsupported run-end type for REE expansion: {}", dt)),
+            dt => Err(arrow_err!(
+                "Unsupported run-end type for REE expansion: {}",
+                dt
+            )),
         },
         _ => unreachable!("expand_ree_array called on non-REE array"),
     }

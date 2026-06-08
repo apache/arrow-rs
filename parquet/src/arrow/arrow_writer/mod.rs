@@ -5343,4 +5343,94 @@ mod tests {
         let flat: ArrayRef = Arc::new(StringArray::from(vec!["x", "x", "x"]));
         ree_write_read_roundtrip(ree, flat);
     }
+
+    #[test]
+    fn ree_float32() {
+        // run_ends [2, 4, 5] → [1.0, 1.0, null, null, 2.5]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![2, 4, 5]),
+                &Float32Array::from(vec![Some(1.0_f32), None, Some(2.5_f32)]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(1.0_f32),
+            Some(1.0_f32),
+            None,
+            None,
+            Some(2.5_f32),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_sliced() {
+        // A sliced (non-zero offset) REE array: verify that get_physical_index
+        // correctly accounts for the logical offset when expanding.
+        // Full array: run_ends [3, 5, 7] → [a,a,a, b,b, c,c]
+        // After slice(2, 5) the logical view is [a, b, b, c, c].
+        let full: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![3, 5, 7]),
+                &StringArray::from(vec!["a", "b", "c"]),
+            )
+            .unwrap(),
+        );
+        let sliced = full.slice(2, 5);
+        let flat: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "b", "c", "c"]));
+        ree_write_read_roundtrip(sliced, flat);
+    }
+
+    #[test]
+    fn ree_struct_with_ree_child() {
+        // Struct with a REE string field and a REE int field — confirms
+        // recursion visits every child and each collapses to the right leaf type.
+        let run_ends = Int32Array::from(vec![2i32, 3, 5]);
+
+        let col_a: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &run_ends,
+                &StringArray::from(vec![Some("foo"), None, Some("bar")]),
+            )
+            .unwrap(),
+        );
+        let col_b: ArrayRef = Arc::new(
+            RunArray::try_new(&run_ends, &Int32Array::from(vec![Some(1), None, Some(2)])).unwrap(),
+        );
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("a", col_a.data_type().clone(), true),
+                Field::new("b", col_b.data_type().clone(), true),
+            ]),
+            vec![col_a, col_b],
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "row",
+            struct_array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![struct_array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        assert_eq!(parquet_schema.num_columns(), 2);
+        assert_eq!(
+            parquet_schema.column(0).physical_type(),
+            crate::basic::Type::BYTE_ARRAY
+        );
+        assert_eq!(parquet_schema.column(0).path().string(), "row.a");
+        assert_eq!(
+            parquet_schema.column(1).physical_type(),
+            crate::basic::Type::INT32
+        );
+        assert_eq!(parquet_schema.column(1).path().string(), "row.b");
+    }
 }
