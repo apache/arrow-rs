@@ -45,6 +45,9 @@ pub(crate) const ALP_COMPRESSION_MODE: u8 = 0;
 pub(crate) const ALP_INTEGER_ENCODING_FOR_BIT_PACK: u8 = 0;
 pub(crate) const ALP_MIN_LOG_VECTOR_SIZE: u8 = 3;
 pub(crate) const ALP_MAX_LOG_VECTOR_SIZE: u8 = 15;
+/// Spec-recommended default `log_vector_size`: 1024-value vectors, the canonical
+/// ALP/FastLanes vector size.
+pub(crate) const ALP_DEFAULT_LOG_VECTOR_SIZE: u8 = 10;
 pub(crate) const ALP_MAX_EXPONENT_F32: u8 = 10;
 pub(crate) const ALP_MAX_EXPONENT_F64: u8 = 18;
 
@@ -244,7 +247,7 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// - FOR stores non-negative deltas optimized for bitpacking.
 /// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
 /// - Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact: Copy + std::fmt::Debug + FromBitpacked {
+pub(crate) trait AlpExact: Copy + std::fmt::Debug + FromBitpacked + Default {
     const WIDTH: usize;
     type Signed: Copy;
     fn from_le_slice(slice: &[u8]) -> Self;

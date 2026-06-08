@@ -22,9 +22,10 @@ use bytes::Bytes;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::alp::{
-    ALP_COMPRESSION_MODE, ALP_HEADER_SIZE, ALP_INTEGER_ENCODING_FOR_BIT_PACK, ALP_MAX_EXPONENT_F32,
-    ALP_MAX_EXPONENT_F64, ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE, AlpExact, AlpFloat,
-    AlpHeader, AlpInfo, ForInfo,
+    ALP_COMPRESSION_MODE, ALP_DEFAULT_LOG_VECTOR_SIZE, ALP_HEADER_SIZE,
+    ALP_INTEGER_ENCODING_FOR_BIT_PACK, ALP_MAX_EXPONENT_F32, ALP_MAX_EXPONENT_F64,
+    ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE, AlpExact, AlpFloat, AlpHeader, AlpInfo,
+    ForInfo,
 };
 use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
@@ -271,11 +272,31 @@ struct CurrentVector<Value: AlpFloat> {
     exception_values: Bytes,
 }
 
-/// Decode the next `out.len()` elements of the current vector straight into
-/// `out`, with no intermediate buffer: unpack one packed integer at a time,
-/// apply inverse FOR + decimal decode, then patch any exceptions whose
-/// vector-local position falls in the just-produced sub-range.
-fn decode_range<Value: AlpFloat>(cur: &mut CurrentVector<Value>, out: &mut [Value]) -> Result<()> {
+/// Largest slice decoded in one unpack-then-decode pass: the canonical ALP
+/// vector size - 1024.
+///
+/// The unpack scratch is sized to `min(vector_size, this)`, so vectors at the
+/// default size or smaller are decoded whole, while larger (non-default) vectors
+/// are decoded in canonical-vector-sized tiles.
+///
+/// Bounding the tile to one canonical vector keeps the scratch L1-resident, which
+/// is what makes the staged unpack-then-decode beat an in-place decode.
+const DECODE_TILE_CAP: usize = 1 << ALP_DEFAULT_LOG_VECTOR_SIZE;
+
+/// Decode the next `out.len()` elements of the current vector into `out`,
+/// patching any exceptions whose vector-local position falls in the
+/// just-produced sub-range.
+///
+/// Deltas are bulk-unpacked a tile at a time into the caller-provided `scratch`
+/// via `get_batch` (which dispatches to the SIMD-friendly fixed-width `unpack`
+/// kernels), then the inverse FOR and decimal decode run as one branchless,
+/// state-free loop over that contiguous tile so the compiler can autovectorize
+/// it.
+fn decode_range<Value: AlpFloat>(
+    cur: &mut CurrentVector<Value>,
+    scratch: &mut [Value::Exact],
+    out: &mut [Value],
+) -> Result<()> {
     let frame_of_reference = cur.frame_of_reference;
     if cur.bit_width == 0 {
         // Every packed delta is zero, so all values share `frame_of_reference`.
@@ -283,12 +304,21 @@ fn decode_range<Value: AlpFloat>(cur: &mut CurrentVector<Value>, out: &mut [Valu
         out.fill(Value::decode_value(signed, cur.scale));
     } else {
         let bit_width = cur.bit_width as usize;
-        for slot in out.iter_mut() {
-            let delta = cur.reader.get_value::<Value::Exact>(bit_width).ok_or_else(|| {
-                general_err!("Invalid ALP page: not enough packed bits to decode vector")
-            })?;
-            let signed = delta.wrapping_add(frame_of_reference).reinterpret_as_signed();
-            *slot = Value::decode_value(signed, cur.scale);
+        let scale = cur.scale;
+        for chunk in out.chunks_mut(scratch.len()) {
+            let deltas = &mut scratch[..chunk.len()];
+            let unpacked = cur.reader.get_batch::<Value::Exact>(deltas, bit_width);
+            if unpacked != chunk.len() {
+                return Err(general_err!(
+                    "Invalid ALP page: not enough packed bits to decode vector"
+                ));
+            }
+            for (slot, &delta) in chunk.iter_mut().zip(deltas.iter()) {
+                let signed = delta
+                    .wrapping_add(frame_of_reference)
+                    .reinterpret_as_signed();
+                *slot = Value::decode_value(signed, scale);
+            }
         }
     }
 
@@ -334,6 +364,9 @@ where
     expected_next_offset: usize,
     /// Live decode state for the vector currently being consumed.
     current: Option<CurrentVector<T::T>>,
+    /// Reused unpack buffer, sized once per page to `min(vector_size, cap)` and
+    /// shared across all vectors; holds bulk-unpacked deltas for one tile.
+    scratch: Vec<<T::T as AlpFloat>::Exact>,
     /// Number of values still to be read from the page.
     num_values: usize,
 }
@@ -357,6 +390,7 @@ where
             next_vector_idx: 0,
             expected_next_offset: 0,
             current: None,
+            scratch: Vec::new(),
             num_values: 0,
         }
     }
@@ -451,6 +485,18 @@ where
             ));
         }
 
+        // Size the reused unpack buffer to one vector, capped to stay L1-resident
+        // and to the page's value count so tiny pages don't over-allocate. The
+        // `.max(1)` keeps a non-empty tile so the `chunks_mut` decode never hits a
+        // zero stride (an empty page returns before any decode anyway).
+        let tile = header
+            .vector_size
+            .min(DECODE_TILE_CAP)
+            .min(num_values)
+            .max(1);
+        self.scratch.clear();
+        self.scratch.resize(tile, Default::default());
+
         self.header = header;
         self.body = body;
         self.next_vector_idx = 0;
@@ -475,7 +521,7 @@ where
             }
             let cur = self.current.as_mut().unwrap();
             let n = cur.remaining.min(target - written);
-            decode_range::<T::T>(cur, &mut buffer[written..written + n])?;
+            decode_range::<T::T>(cur, &mut self.scratch, &mut buffer[written..written + n])?;
             written += n;
             self.num_values -= n;
         }
@@ -1150,6 +1196,174 @@ mod tests {
         assert_eq!(read, 1);
         assert_eq!(out[0], 21.0);
         assert_eq!(decoder.values_left(), 2);
+    }
+
+    /// Microbenchmark comparing three decode inner loops on identical packed
+    /// data, decoding into an 8 MB output to expose memory traffic:
+    /// 1. scalar `get_value` per element;
+    /// 2. bulk `get_batch` into a stack scratch tile, then a fused
+    ///    inverse-FOR + decimal-decode pass writing into the output;
+    /// 3. in-place: `get_batch` straight into the output (viewed as packed
+    ///    integers), then decode each slot over its own bytes — no scratch.
+    ///
+    /// Ignored by default; run with:
+    /// `cargo test -p parquet --release decode_inner_loop -- --ignored --nocapture`
+    #[test]
+    #[ignore = "microbenchmark"]
+    fn bench_decode_inner_loop_f64() {
+        use crate::util::bit_util::BitWriter;
+        use std::time::Instant;
+
+        let n = 1024usize; // values per vector
+        let vectors = 1024usize; // -> 1M values, 8 MB output, well past L2
+        let total = n * vectors;
+        let bit_width = 12usize;
+        let base = 1_000_000u64;
+        let scale = <f64 as AlpFloat>::decode_scale(4, 2);
+
+        let mut writer = BitWriter::new(n * 8);
+        for i in 0..n as u64 {
+            let delta = i.wrapping_mul(2_654_435_761) & ((1 << bit_width) - 1);
+            writer.put_value(delta, bit_width);
+        }
+        writer.flush();
+        let packed = Bytes::from(writer.consume());
+
+        let iters = 30usize;
+        let mut out = vec![0.0f64; total];
+        let mut sink = 0.0f64;
+
+        // 1. scalar get_value
+        let t0 = Instant::now();
+        for _ in 0..iters {
+            for chunk in out.chunks_mut(n) {
+                let mut reader = BitReader::new(packed.clone());
+                for slot in chunk.iter_mut() {
+                    let delta = reader.get_value::<u64>(bit_width).unwrap();
+                    let signed = delta.wrapping_add(base) as i64;
+                    *slot = ((signed as f64) * scale.0) * scale.1;
+                }
+            }
+            sink += out[total - 1];
+        }
+        let scalar = t0.elapsed();
+
+        // 2. batched into a stack scratch tile
+        let t1 = Instant::now();
+        for _ in 0..iters {
+            let mut scratch = [0u64; 1024];
+            for chunk in out.chunks_mut(n) {
+                let len = chunk.len();
+                let mut reader = BitReader::new(packed.clone());
+                reader.get_batch::<u64>(&mut scratch[..len], bit_width);
+                for (slot, &delta) in chunk.iter_mut().zip(scratch[..len].iter()) {
+                    let signed = delta.wrapping_add(base) as i64;
+                    *slot = ((signed as f64) * scale.0) * scale.1;
+                }
+            }
+            sink += out[total - 1];
+        }
+        let scratch_t = t1.elapsed();
+
+        // 3. in-place, no scratch
+        let t2 = Instant::now();
+        for _ in 0..iters {
+            for chunk in out.chunks_mut(n) {
+                let mut reader = BitReader::new(packed.clone());
+                // SAFETY: f64 and u64 share size and alignment, so the output
+                // chunk can hold the unpacked integers and then be overwritten
+                // with the decoded float bit patterns.
+                let int_out: &mut [u64] = unsafe {
+                    std::slice::from_raw_parts_mut(chunk.as_mut_ptr() as *mut u64, chunk.len())
+                };
+                reader.get_batch::<u64>(int_out, bit_width);
+                for slot in int_out.iter_mut() {
+                    let signed = slot.wrapping_add(base) as i64;
+                    *slot = (((signed as f64) * scale.0) * scale.1).to_bits();
+                }
+            }
+            sink += out[total - 1];
+        }
+        let inplace = t2.elapsed();
+
+        let total_vals = (iters * total) as f64;
+        let ns = |d: std::time::Duration| d.as_nanos() as f64 / total_vals;
+        println!(
+            "f64 decode ({} MB out)  scalar: {:.3}  scratch: {:.3}  in-place: {:.3} ns/val  |  \
+             scratch {:.2}x scalar, in-place {:.2}x scalar, in-place {:.2}x scratch  (sink={sink})",
+            total * 8 / (1 << 20),
+            ns(scalar),
+            ns(scratch_t),
+            ns(inplace),
+            scalar.as_nanos() as f64 / scratch_t.as_nanos() as f64,
+            scalar.as_nanos() as f64 / inplace.as_nanos() as f64,
+            scratch_t.as_nanos() as f64 / inplace.as_nanos() as f64,
+        );
+    }
+
+    /// End-to-end decoder throughput on a real multi-vector page, across a few
+    /// `vector_size` values, exercising the production path: `set_data` (scratch
+    /// sizing), per-vector `load_current_vector`, and the tiled `decode_range`
+    /// over the reused buffer.
+    ///
+    /// `cargo test -p parquet --release decode_end_to_end -- --ignored --nocapture`
+    #[test]
+    #[ignore = "microbenchmark"]
+    fn bench_decode_end_to_end() {
+        use crate::util::bit_util::BitWriter;
+        use std::time::Instant;
+
+        fn pack(count: usize, bit_width: usize) -> Vec<u8> {
+            let mut w = BitWriter::new(count * 8);
+            for i in 0..count as u64 {
+                let delta = i.wrapping_mul(2_654_435_761) & ((1u64 << bit_width) - 1);
+                w.put_value(delta, bit_width);
+            }
+            w.flush();
+            w.consume()
+        }
+
+        let total = 1usize << 20; // ~1M values
+        let bit_width = 12usize;
+        let iters = 50usize;
+
+        for &log_vs in &[8u8, 10, 13] {
+            let vector_size = 1usize << log_vs;
+            let full_vectors = total / vector_size;
+            let packed = pack(vector_size, bit_width);
+            let vectors: Vec<Vec<u8>> = (0..full_vectors)
+                .map(|_| {
+                    make_vector(VectorSpec {
+                        exponent: 4,
+                        factor: 2,
+                        frame_of_reference: 1_000_000u64,
+                        bit_width: bit_width as u8,
+                        packed_values: &packed,
+                        exception_positions: &[],
+                        exception_values: &[],
+                    })
+                })
+                .collect();
+            let n = full_vectors * vector_size;
+            let page = Bytes::from(make_page_from_vectors(log_vs, n as i32, &vectors));
+
+            let mut out = vec![0.0f64; n];
+            let mut decoder = AlpDecoder::<DoubleType>::new();
+            let mut sink = 0.0f64;
+            let t = Instant::now();
+            for _ in 0..iters {
+                decoder.set_data(page.clone(), n).unwrap();
+                decoder.get(&mut out).unwrap();
+                sink += out[n - 1];
+            }
+            let el = t.elapsed();
+            println!(
+                "vector_size {:>5} ({:>4} vectors):  {:.3} ns/val  (sink={sink})",
+                vector_size,
+                full_vectors,
+                el.as_nanos() as f64 / (iters * n) as f64,
+            );
+        }
     }
 
     #[test]
