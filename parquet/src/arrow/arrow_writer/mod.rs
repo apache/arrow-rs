@@ -1285,6 +1285,9 @@ impl ArrowColumnWriterFactory {
                 ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
                 _ => out.push(col(leaves.next().unwrap())?),
             },
+            ArrowDataType::RunEndEncoded(_, value_field) => {
+                self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
+            }
             _ => {
                 return Err(ParquetError::NYI(format!(
                     "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
