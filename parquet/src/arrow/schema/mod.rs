@@ -67,17 +67,40 @@ pub fn parquet_to_arrow_schema_by_columns(
     Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata, &[])?.0)
 }
 
-/// Determines the Arrow Schema from a Parquet schema
+/// Convert a parquet [`SchemaDescriptor`] into both the arrow [`Schema`]
+/// and matching [`FieldLevels`] in a single walk.
 ///
-/// Looks for an Arrow schema metadata "hint" (see
-/// [`parquet_to_arrow_field_levels`]), and uses it if present to ensure
-/// lossless round trips.
-pub(crate) fn parquet_to_arrow_schema_and_fields(
+/// This is a convenience around [`parquet_to_arrow_field_levels`] that
+/// also produces a [`Schema`] (with the parquet file's key/value metadata
+/// attached). Useful for callers that want to pre-compute and reuse both
+/// for [`ArrowReaderMetadata::from_field_levels`].
+///
+/// [`ArrowReaderMetadata::from_field_levels`]: crate::arrow::arrow_reader::ArrowReaderMetadata::from_field_levels
+pub fn parquet_to_arrow_schema_and_field_levels(
+    parquet_schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    key_value_metadata: Option<&Vec<KeyValue>>,
+) -> Result<(Schema, FieldLevels)> {
+    parquet_to_arrow_schema_and_field_levels_with_virtual(
+        parquet_schema,
+        mask,
+        key_value_metadata,
+        &[],
+    )
+}
+
+/// As [`parquet_to_arrow_schema_and_field_levels`] but also appends the
+/// given `virtual_columns` to the resulting schema and field levels.
+///
+/// This is the single schema-walk used by [`parquet_to_arrow_schema_and_fields`]
+/// (which discards the [`FieldLevels`] wrapper) and by
+/// [`parquet_to_arrow_schema_and_field_levels`] (which keeps it).
+pub(crate) fn parquet_to_arrow_schema_and_field_levels_with_virtual(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
     virtual_columns: &[FieldRef],
-) -> Result<(Schema, Option<ParquetField>)> {
+) -> Result<(Schema, FieldLevels)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
@@ -94,7 +117,27 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     let hint = maybe_schema.as_ref().map(|s| s.fields());
     let field_levels =
         parquet_to_arrow_field_levels_with_virtual(parquet_schema, mask, hint, virtual_columns)?;
-    let schema = Schema::new_with_metadata(field_levels.fields, metadata);
+    let schema = Schema::new_with_metadata(field_levels.fields.clone(), metadata);
+    Ok((schema, field_levels))
+}
+
+/// Determines the Arrow Schema from a Parquet schema
+///
+/// Looks for an Arrow schema metadata "hint" (see
+/// [`parquet_to_arrow_field_levels`]), and uses it if present to ensure
+/// lossless round trips.
+pub(crate) fn parquet_to_arrow_schema_and_fields(
+    parquet_schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    key_value_metadata: Option<&Vec<KeyValue>>,
+    virtual_columns: &[FieldRef],
+) -> Result<(Schema, Option<ParquetField>)> {
+    let (schema, field_levels) = parquet_to_arrow_schema_and_field_levels_with_virtual(
+        parquet_schema,
+        mask,
+        key_value_metadata,
+        virtual_columns,
+    )?;
     Ok((schema, field_levels.levels))
 }
 
