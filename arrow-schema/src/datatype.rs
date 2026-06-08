@@ -722,6 +722,13 @@ impl DataType {
                         })
                     })
             }
+            // Timestamps with matching unit whose timezones are both recognized UTC
+            // aliases are considered equivalent.
+            (DataType::Timestamp(a_unit, Some(a_tz)), DataType::Timestamp(b_unit, Some(b_tz)))
+                if a_unit == b_unit && a_tz != b_tz =>
+            {
+                is_utc_alias(a_tz) && is_utc_alias(b_tz)
+            }
             _ => self == other,
         }
     }
@@ -872,6 +879,16 @@ impl DataType {
     pub fn new_fixed_size_list(data_type: DataType, size: i32, nullable: bool) -> Self {
         DataType::FixedSizeList(Arc::new(Field::new_list_field(data_type, nullable)), size)
     }
+}
+
+/// Returns true when `tz` is one of the recognized UTC timezone aliases.
+///
+/// Producers of arrow batches use a variety of strings to denote UTC: `"UTC"`,
+/// `"+00:00"` and `"Z"` are all common and semantically
+/// identical. Treating these as interchangeable lets writers accept batches from
+/// upstream systems that disagree on the canonical spelling.
+pub fn is_utc_alias(tz: &str) -> bool {
+    matches!(tz, "UTC" | "+00:00" | "Z")
 }
 
 /// The maximum precision for [DataType::Decimal32] values
@@ -1289,5 +1306,102 @@ mod tests {
             },
         )
         ");
+    }
+
+    #[test]
+    fn test_is_utc_alias() {
+        assert!(is_utc_alias("UTC"));
+        assert!(is_utc_alias("+00:00"));
+        assert!(is_utc_alias("Z"));
+        assert!(!is_utc_alias("America/New_York"));
+        assert!(!is_utc_alias("+05:30"));
+        assert!(!is_utc_alias(""));
+        assert!(!is_utc_alias("utc"));
+        assert!(!is_utc_alias("+0000"));
+        assert!(!is_utc_alias("+00"));
+    }
+
+    #[test]
+    fn test_equals_datatype_utc_aliases_flat() {
+        use crate::TimeUnit;
+        let aliases = ["UTC", "+00:00", "Z"];
+        for a in &aliases {
+            for b in &aliases {
+                let ta = DataType::Timestamp(TimeUnit::Microsecond, Some((*a).into()));
+                let tb = DataType::Timestamp(TimeUnit::Microsecond, Some((*b).into()));
+                assert!(ta.equals_datatype(&tb), "{a} should be equivalent to {b}",);
+            }
+        }
+    }
+
+    #[test]
+    fn test_equals_datatype_utc_aliases_nested() {
+        use crate::TimeUnit;
+        let leaf_a = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
+        let leaf_b = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+
+        // List
+        let list_a = DataType::List(Arc::new(Field::new("item", leaf_a.clone(), true)));
+        let list_b = DataType::List(Arc::new(Field::new("item", leaf_b.clone(), true)));
+        assert!(list_a.equals_datatype(&list_b));
+
+        // LargeList
+        let ll_a = DataType::LargeList(Arc::new(Field::new("item", leaf_a.clone(), true)));
+        let ll_b = DataType::LargeList(Arc::new(Field::new("item", leaf_b.clone(), true)));
+        assert!(ll_a.equals_datatype(&ll_b));
+
+        // FixedSizeList
+        let fsl_a = DataType::FixedSizeList(Arc::new(Field::new("item", leaf_a.clone(), true)), 3);
+        let fsl_b = DataType::FixedSizeList(Arc::new(Field::new("item", leaf_b.clone(), true)), 3);
+        assert!(fsl_a.equals_datatype(&fsl_b));
+
+        // Struct
+        let struct_a = DataType::Struct(vec![Field::new("ts", leaf_a.clone(), true)].into());
+        let struct_b = DataType::Struct(vec![Field::new("ts", leaf_b.clone(), true)].into());
+        assert!(struct_a.equals_datatype(&struct_b));
+
+        // Map
+        let map_a = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", leaf_a.clone(), true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let map_b = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", leaf_b.clone(), true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        assert!(map_a.equals_datatype(&map_b));
+    }
+
+    #[test]
+    fn test_equals_datatype_non_utc_timezones_differ() {
+        use crate::TimeUnit;
+        let utc = DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into()));
+        let est = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+        let offset = DataType::Timestamp(TimeUnit::Microsecond, Some("+05:30".into()));
+        let diff_unit = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+
+        assert!(!utc.equals_datatype(&est));
+        assert!(!utc.equals_datatype(&offset));
+        assert!(!utc.equals_datatype(&diff_unit));
     }
 }
