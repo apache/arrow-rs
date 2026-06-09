@@ -987,6 +987,8 @@ pub enum SortOrder {
     UNDEFINED,
     /// Use IEEE 754 total order.
     TOTAL_ORDER,
+    /// Use INT96 timestamp order (see ref)
+    INT96_TIMESTAMP,
 }
 
 impl SortOrder {
@@ -1009,6 +1011,8 @@ pub enum ColumnOrder {
     TYPE_DEFINED_ORDER(SortOrder),
     /// Column ordering to use for floating point types.
     IEEE_754_TOTAL_ORDER,
+    /// Column ordering to use for INT96 types.
+    INT96_ORDER,
     // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
@@ -1043,6 +1047,8 @@ impl ColumnOrder {
             || matches!(physical_type, Type::FLOAT | Type::DOUBLE)
         {
             ColumnOrder::IEEE_754_TOTAL_ORDER
+        } else if matches!(physical_type, Type::INT96) {
+            ColumnOrder::INT96_ORDER
         } else {
             let sort_order =
                 Self::get_sort_order_for_type(logical_type, converted_type, physical_type, true);
@@ -1161,7 +1167,13 @@ impl ColumnOrder {
             // Order: false, true
             Type::BOOLEAN => SortOrder::UNSIGNED,
             Type::INT32 | Type::INT64 => SortOrder::SIGNED,
-            Type::INT96 => SortOrder::UNDEFINED,
+            Type::INT96 => {
+                if is_type_defined {
+                    SortOrder::UNDEFINED
+                } else {
+                    SortOrder::INT96_TIMESTAMP
+                }
+            }
             // Notes to remember when comparing float/double values:
             // If legacy TYPE_DEFINED_ORDER is specified:
             //   If the min is a NaN, it should be ignored.
@@ -1190,6 +1202,7 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
+            ColumnOrder::INT96_ORDER => SortOrder::INT96_TIMESTAMP,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
             ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
@@ -2040,6 +2053,7 @@ mod tests {
         assert_eq!(SortOrder::UNSIGNED.to_string(), "UNSIGNED");
         assert_eq!(SortOrder::UNDEFINED.to_string(), "UNDEFINED");
         assert_eq!(SortOrder::TOTAL_ORDER.to_string(), "TOTAL_ORDER");
+        assert_eq!(SortOrder::INT96_TIMESTAMP.to_string(), "INT96_TIMESTAMP");
     }
 
     #[test]
@@ -2060,6 +2074,7 @@ mod tests {
             ColumnOrder::IEEE_754_TOTAL_ORDER.to_string(),
             "IEEE_754_TOTAL_ORDER"
         );
+        assert_eq!(ColumnOrder::INT96_ORDER.to_string(), "INT96_ORDER");
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
     }
 
@@ -2207,6 +2222,10 @@ mod tests {
             SortOrder::UNDEFINED
         );
         assert_eq!(
+            ColumnOrder::get_default_sort_order(Type::INT96, false),
+            SortOrder::INT96_TIMESTAMP
+        );
+        assert_eq!(
             ColumnOrder::get_default_sort_order(Type::FLOAT, false),
             SortOrder::TOTAL_ORDER
         );
@@ -2249,6 +2268,10 @@ mod tests {
         assert_eq!(
             ColumnOrder::IEEE_754_TOTAL_ORDER.sort_order(),
             SortOrder::TOTAL_ORDER
+        );
+        assert_eq!(
+            ColumnOrder::INT96_ORDER.sort_order(),
+            SortOrder::INT96_TIMESTAMP
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
     }
