@@ -187,7 +187,12 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
                 let crs = match &wkb_type.metadata().crs {
                     None => Some("srid:0".to_string()),
                     Some(_) if wkb_type.metadata().crs_is_lon_lat() => None,
-                    Some(c) => Some(c.to_string()),
+                    // For string values, use the raw string; for objects, use JSON representation
+                    Some(c) => Some(
+                        c.as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| c.to_string()),
+                    ),
                 };
                 // Convert Arrow edges to Parquet algorithm:
                 // - Spherical → None (default for Geography)

@@ -542,7 +542,7 @@ mod test {
             // Geometry with string CRS
             (
                 r#"{"crs":"EPSG:4267"}"#,
-                LogicalType::geometry(Some("\"EPSG:4267\"".to_string())),
+                LogicalType::geometry(Some("EPSG:4267".to_string())),
             ),
             // Geometry with PROJJSON CRS
             (
@@ -598,7 +598,7 @@ mod test {
             (
                 r#"{"crs":"EPSG:4267","edges":"karney"}"#,
                 LogicalType::geography(
-                    Some("\"EPSG:4267\"".to_string()),
+                    Some("EPSG:4267".to_string()),
                     Some(EdgeInterpolationAlgorithm::KARNEY),
                 ),
             ),
