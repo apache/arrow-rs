@@ -1056,7 +1056,7 @@ impl ColumnOrder {
     /// [`ColumnOrder::TYPE_DEFINED_ORDER`].
     ///
     /// It is now prefered to obtain this via [`Self::sort_order`].
-    #[deprecated(since = "59.0.0", note = "use `ColumnOrder::sort_order` instead")]
+    #[deprecated(since = "60.0.0", note = "use `ColumnOrder::sort_order` instead")]
     pub fn sort_order_for_type(
         logical_type: Option<&LogicalType>,
         converted_type: ConvertedType,
