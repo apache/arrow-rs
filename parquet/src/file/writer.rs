@@ -684,6 +684,30 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     pub fn append_column<R: ChunkReader>(
         &mut self,
         reader: &R,
+        close: ColumnCloseResult,
+    ) -> Result<()> {
+        // Position a reader at the start of the buffered chunk, then splice the
+        // bytes through the shared streaming path.
+        let metadata = &close.metadata;
+        let src_offset = metadata
+            .dictionary_page_offset()
+            .unwrap_or_else(|| metadata.data_page_offset());
+        let read = reader.get_read(src_offset as _)?;
+        self.append_column_from_read(read, close)
+    }
+
+    /// Splice an already-encoded column chunk into the row group, reading its
+    /// bytes sequentially from `read`.
+    ///
+    /// `read` must be positioned at the start of the chunk (the dictionary page
+    /// if present, otherwise the first data page — i.e. `src_offset` below) and
+    /// yield exactly the chunk's compressed bytes. Unlike [`Self::append_column`]
+    /// this consumes an owned [`Read`], which lets the caller stream the bytes
+    /// back from a [`PageStore`](crate::column::page_store::PageStore) one page
+    /// at a time without materializing the whole chunk in memory.
+    pub(crate) fn append_column_from_read<R: Read>(
+        &mut self,
+        read: R,
         mut close: ColumnCloseResult,
     ) -> Result<()> {
         self.assert_previous_writer_closed()?;
@@ -707,7 +731,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let src_length = metadata.compressed_size();
 
         let write_offset = self.buf.bytes_written();
-        let mut read = reader.get_read(src_offset as _)?.take(src_length as _);
+        let mut read = read.take(src_length as _);
         let write_length = std::io::copy(&mut read, &mut self.buf)?;
 
         if src_length as u64 != write_length {

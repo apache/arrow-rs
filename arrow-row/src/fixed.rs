@@ -475,6 +475,9 @@ where
 }
 
 /// Decodes a `FixedLengthBinary` from rows
+///
+/// # Panics:
+/// Panics if `size` is negative
 pub fn decode_fixed_size_binary(
     rows: &mut [&[u8]],
     size: i32,
@@ -482,6 +485,9 @@ pub fn decode_fixed_size_binary(
 ) -> FixedSizeBinaryArray {
     let len = rows.len();
 
+    if size < 0 {
+        panic!("cannot decode FixedSizeBinary({size})");
+    }
     let mut values = MutableBuffer::new(size as usize * rows.len());
     let (null_count, nulls) = decode_nulls(rows);
 
