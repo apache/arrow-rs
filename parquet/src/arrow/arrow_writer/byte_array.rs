@@ -30,10 +30,12 @@ use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
+use arrow_array::types::ByteArrayType;
 use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
-    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
 };
+use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 
 macro_rules! downcast_dict_impl {
@@ -481,6 +483,84 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Ok(())
     }
 
+    fn count_values_within_byte_budget_gather(
+        values: &Self::Values,
+        indices: &[usize],
+        byte_budget: usize,
+    ) -> Option<usize> {
+        // `ByteArrayEncoder` only ever writes via `write_gather`, so this
+        // is the relevant method.
+        //
+        // Two-stage walk for the simple offset-buffer byte array types:
+        //   1. If indices are contiguous, compute the total payload in
+        //      O(1) via a single subtraction on the offsets buffer.
+        //      When the total fits the budget — the overwhelmingly
+        //      common "small values" case — return immediately.
+        //   2. Otherwise, walk per-value byte sizes from the offsets
+        //      buffer (still cheap, no slice/UTF-8 construction) and
+        //      exit at the first value that pushes the cumulative sum
+        //      past the budget. This bounds skewed distributions: an
+        //      outlier value is caught wherever it lands in the chunk.
+        let count = match values.data_type() {
+            DataType::Utf8 => count_within_budget_offsets(
+                values.as_any().downcast_ref::<StringArray>().unwrap(),
+                indices,
+                byte_budget,
+            ),
+            DataType::LargeUtf8 => count_within_budget_offsets(
+                values.as_any().downcast_ref::<LargeStringArray>().unwrap(),
+                indices,
+                byte_budget,
+            ),
+            DataType::Binary => count_within_budget_offsets(
+                values.as_any().downcast_ref::<BinaryArray>().unwrap(),
+                indices,
+                byte_budget,
+            ),
+            DataType::LargeBinary => count_within_budget_offsets(
+                values.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
+                indices,
+                byte_budget,
+            ),
+            // View arrays carry each value's length in the low 32 bits of
+            // its u128 view word, so lengths are scannable without touching
+            // any data buffer — and the common small-value case skips even
+            // that scan via an O(1) conservative bound.
+            DataType::Utf8View => {
+                let array = values.as_any().downcast_ref::<StringViewArray>().unwrap();
+                count_within_budget_views(
+                    array.views(),
+                    indices,
+                    byte_budget,
+                    max_view_value_len(array.data_buffers()),
+                )
+            }
+            DataType::BinaryView => {
+                let array = values.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+                count_within_budget_views(
+                    array.views(),
+                    indices,
+                    byte_budget,
+                    max_view_value_len(array.data_buffers()),
+                )
+            }
+            // The values in an arrow dictionary are already small and
+            // deduplicated, so there is nothing to bound — treat every
+            // chunk as fitting and stay on the batched path. (A per-value
+            // walk through dict keys on every chunk also measured ~+30-80%
+            // slower than `main`.)
+            DataType::Dictionary(_, _) => indices.len(),
+            // Every byte-array type `ByteArrayEncoder` is constructed for
+            // has an explicit arm above. A `Dictionary(value = FixedSizeBinary)`
+            // column hits the `Dictionary(_, _)` arm (its `values.data_type()`
+            // is `Dictionary`), and a bare `FixedSizeBinary` column is routed
+            // to the generic column writer, never this encoder — so no other
+            // type can reach here.
+            data_type => unreachable!("ByteArrayEncoder cannot be constructed for {data_type:?}"),
+        };
+        Some(count)
+    }
+
     fn num_values(&self) -> usize {
         match &self.dict_encoder {
             Some(encoder) => encoder.indices.len(),
@@ -591,6 +671,105 @@ where
         Some(dict_encoder) => dict_encoder.encode(values, indices),
         None => encoder.fallback.encode(values, indices),
     }
+}
+
+/// Upper bound on any single value's byte length in a view array.
+fn max_view_value_len(buffers: &[Buffer]) -> usize {
+    /// Bytes that fit inline in a u128 view word (the rest is len + prefix).
+    const MAX_INLINE_VIEW_LEN: usize = 12;
+    // An out-of-line view's data is a contiguous slice of exactly one data
+    // buffer, so it cannot exceed the largest buffer; inline views hold at
+    // most `MAX_INLINE_VIEW_LEN`. Loose (a value is usually far smaller than
+    // a whole buffer) but O(number of buffers) and always sound.
+    buffers
+        .iter()
+        .map(|b| b.len())
+        .max()
+        .unwrap_or(0)
+        .max(MAX_INLINE_VIEW_LEN)
+}
+
+/// Number of leading `indices` whose cumulative plain-encoded size fits
+/// `byte_budget` (boundary value included), for view arrays (`Utf8View`,
+/// `BinaryView`).
+fn count_within_budget_views(
+    views: &[u128],
+    indices: &[usize],
+    byte_budget: usize,
+    max_value_len: usize,
+) -> usize {
+    // Each plain-encoded BYTE_ARRAY value carries a 4-byte length prefix, so
+    // the budget is compared against `value_len + size_of::<u32>()` — the
+    // bytes actually written to the page, not just the payload.
+    //
+    // Stage 1: O(1) conservative bound. View arrays have no prefix-sum
+    // offsets buffer, so the exact span subtraction used by
+    // `count_within_budget_offsets` is unavailable; instead bound every
+    // value by `max_value_len`. Skips the walk for the common small-value
+    // case (what view arrays are built for, and where there is nothing to
+    // bound).
+    let per_value = max_value_len + std::mem::size_of::<u32>();
+    if indices.len().saturating_mul(per_value) <= byte_budget {
+        return indices.len();
+    }
+    // Stage 2: exact per-value scan, reading each length from the low 32
+    // bits of its u128 view word (no data-buffer dereference).
+    let mut cum: usize = 0;
+    for (i, idx) in indices.iter().enumerate() {
+        let len = (views[*idx] as u32) as usize;
+        cum = cum.saturating_add(len + std::mem::size_of::<u32>());
+        if cum > byte_budget {
+            return i + 1;
+        }
+    }
+    indices.len()
+}
+
+/// Number of leading `indices` whose cumulative plain-encoded size fits
+/// `byte_budget` (boundary value included), for offset-buffer byte arrays
+/// (`Utf8`/`LargeUtf8`/`Binary`/`LargeBinary`).
+///
+/// `indices` are assumed sorted ascending — they always are here, since
+/// they come from `non_null_indices`, which is built in array order.
+fn count_within_budget_offsets<T: ByteArrayType>(
+    values: &GenericByteArray<T>,
+    indices: &[usize],
+    byte_budget: usize,
+) -> usize {
+    if indices.is_empty() {
+        return 0;
+    }
+    let n = indices.len();
+    let first = indices[0];
+    let last = indices[n - 1];
+    let offsets = values.value_offsets();
+    // Each plain-encoded value carries a 4-byte length prefix on the page.
+    let prefix_overhead = std::mem::size_of::<u32>();
+
+    // Stage 1: O(1) span upper bound. The span `offsets[last+1] -
+    // offsets[first]` covers every array position in `[first, last]`, a
+    // superset of `indices` — and the skipped positions in a nullable
+    // column are nulls with zero offset delta, so the span still equals the
+    // exact payload. If it fits the budget, every value fits. Covers the
+    // common small-value case for both non-null and (sparse) nullable
+    // columns.
+    if last >= first {
+        let payload = (offsets[last + 1] - offsets[first]).as_usize();
+        if payload + n * prefix_overhead <= byte_budget {
+            return n;
+        }
+    }
+
+    // Stage 2: scan per-index lengths from the offsets buffer.
+    let mut cum: usize = 0;
+    for (i, idx) in indices.iter().enumerate() {
+        let len = (offsets[idx + 1] - offsets[*idx]).as_usize() + prefix_overhead;
+        cum = cum.saturating_add(len);
+        if cum > byte_budget {
+            return i + 1;
+        }
+    }
+    n
 }
 
 /// Computes the min and max for the provided array and indices

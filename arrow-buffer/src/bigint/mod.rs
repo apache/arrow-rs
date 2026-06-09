@@ -130,6 +130,12 @@ impl From<i64> for i256 {
     }
 }
 
+impl From<i128> for i256 {
+    fn from(value: i128) -> Self {
+        Self::from_i128(value)
+    }
+}
+
 /// Parse `s` with any sign and leading 0s removed
 fn parse_impl(s: &str, negative: bool) -> Result<i256, ParseI256Error> {
     if s.len() <= 38 {
