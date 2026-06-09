@@ -25,11 +25,13 @@ use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
+use dictionary::merge_dictionaries;
 use half::f16;
 use num_integer::Integer;
 use std::mem;
 
 mod boolean;
+mod dictionary;
 mod fixed_binary;
 mod fixed_size_list;
 mod list;
@@ -191,12 +193,20 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
+fn build_extend_dictionary(
+    array: &ArrayData,
+    offset: usize,
+    max: usize,
+) -> Result<Extend<'_>, ArrowError> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
-            let _: $dt = max.try_into().ok()?;
-            let offset: $dt = offset.try_into().ok()?;
-            Some(primitive::build_extend_with_offset(array, offset))
+            let _: $dt = max
+                .try_into()
+                .map_err(|_| ArrowError::DictionaryKeyOverflowError)?;
+            let offset: $dt = offset
+                .try_into()
+                .map_err(|_| ArrowError::DictionaryKeyOverflowError)?;
+            Ok(primitive::build_extend_with_offset(array, offset))
         }};
     }
     match array.data_type() {
@@ -211,7 +221,7 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
             DataType::Int64 => validate_and_build!(i64),
             _ => unreachable!(),
         },
-        _ => None,
+        _ => unreachable!(),
     }
 }
 
@@ -604,13 +614,12 @@ impl<'a> MutableArrayData<'a> {
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
-        let (dictionary, dict_concat) = match &data_type {
+        let (mut dictionary, dict_concat) = match &data_type {
             DataType::Dictionary(_, _) => {
                 // If more than one dictionary, concatenate dictionaries together
                 let dict_concat = !arrays
                     .windows(2)
                     .all(|a| a[0].child_data()[0].ptr_eq(&a[1].child_data()[0]));
-
                 match dict_concat {
                     false => (Some(arrays[0].child_data()[0].clone()), false),
                     true => {
@@ -660,9 +669,9 @@ impl<'a> MutableArrayData<'a> {
         });
 
         let extend_values = match &data_type {
-            DataType::Dictionary(_, _) => {
+            DataType::Dictionary(key_data_type, value_data_type) => {
                 let mut next_offset = 0;
-                let extend_values: Result<Vec<_>, _> = arrays
+                let result = arrays
                     .iter()
                     .map(|array| {
                         let offset = next_offset;
@@ -672,12 +681,32 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        build_extend_dictionary(array, offset, offset + dict_len)
-                            .ok_or(ArrowError::DictionaryKeyOverflowError)
+                        // -1 since offset is exclusive
+                        build_extend_dictionary(array, offset, 1.max(offset + dict_len) - 1)
                     })
-                    .collect();
-
-                extend_values.expect("MutableArrayData::new is infallible")
+                    .collect::<Result<Vec<_>, ArrowError>>();
+                match result {
+                    // This can happen if dict_concat is set to true, while the underlying
+                    // values of dictionaries are logically equal (dict_concat is determined only
+                    // by ptr comparison which is not always correct), or because they just have
+                    // lots of duplicate values
+                    // If this happens then fallback to a slower path of merging/deduplicating
+                    // the values
+                    Err(ArrowError::DictionaryKeyOverflowError) => {
+                        let (extends, merged_dictionary_values) = merge_dictionaries(
+                            key_data_type.as_ref(),
+                            value_data_type.as_ref(),
+                            &arrays,
+                        )
+                        .expect("fail merging dictionary");
+                        dictionary = Some(merged_dictionary_values);
+                        extends
+                    }
+                    Err(e) => {
+                        unreachable!("failed to build extend dictionary {e}")
+                    }
+                    Ok(extends) => extends,
+                }
             }
             DataType::BinaryView | DataType::Utf8View => {
                 let mut next_offset = 0u32;
@@ -705,6 +734,7 @@ impl<'a> MutableArrayData<'a> {
             buffer2,
             child_data,
         };
+
         Self {
             arrays,
             data,
