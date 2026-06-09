@@ -24,7 +24,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Implementation of list view array reader.
-/// This wraps a ListArrayReader and converts the result to ListViewArray.
+///
+/// This wraps a [`ListArrayReader`] and converts the result to a
+/// `ListView`/`LargeListView`. Definition and repetition levels are interpreted
+/// identically to [`ListArrayReader`].
 pub struct ListViewArrayReader<OffsetSize: OffsetSizeTrait> {
     inner: ListArrayReader<OffsetSize>,
     data_type: ArrowType,

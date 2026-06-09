@@ -85,6 +85,66 @@ pub use struct_array::StructArrayReader;
 ///
 /// Data can either be read in batches using [`ArrayReader::next_batch`] or
 /// incrementally using [`ArrayReader::read_records`] and [`ArrayReader::skip_records`].
+///
+/// # Definition and repetition levels
+///
+/// Parquet encodes nesting, nulls, and empty lists using *definition* and
+/// *repetition* levels, based on the [Dremel paper]. Some example nested
+/// readers are:
+/// * [`ListArrayReader`]
+/// * [`FixedSizeListArrayReader`]
+/// * [`MapArrayReader`]
+/// * [`StructArrayReader`]
+///
+/// Each nested reader accesses the levels via [`ArrayReader::get_def_levels`]
+/// and [`ArrayReader::get_rep_levels`] and uses them to reconstruct nulls,
+/// empty lists, and list boundaries.
+///
+/// Each nested reader is built with a definition level `D` and a repetition
+/// level `R` taken from its [`ParquetField`] (see its `def_level` / `rep_level`
+/// fields). Given a child's level pair `(d, r)`, the two levels are interpreted
+/// as follows.
+///
+/// **Definition level** — how "present" the value is at this level:
+///
+/// ```text
+/// ┌───────────────────────────┬────────────────────────────────────┐
+/// │           State           │             def level (d)          │
+/// ├───────────────────────────┼────────────────────────────────────┤
+/// │ present, with a value     │ d >= D                             │
+/// │ present but empty (list)  │ d == D - 1                         │
+/// │ null                      │ d <= D - 2   ← "lower still"       │
+/// └───────────────────────────┴────────────────────────────────────┘
+/// ```
+///
+/// Note that not every reader uses all three states:
+/// * a non-nullable list has no `null` row — only `d >= D` (has values) vs the
+///   empty `d == D - 1`;
+/// * a [`StructArrayReader`] has no `empty` row — only present `d >= D` vs null
+///   `d < D`.
+///
+/// **Repetition level** — where a value attaches relative to this reader's list:
+///
+/// ```text
+/// ┌──────────┬──────────────────────────────────────────────────────────┐
+/// │  r vs R  │ meaning                                                    │
+/// ├──────────┼──────────────────────────────────────────────────────────┤
+/// │  r <  R  │ start of a new row at this level (outer/record boundary)   │
+/// │  r == R  │ another element appended to the current list row           │
+/// │  r >  R  │ belongs to a more deeply nested child; already handled by  │
+/// │          │ the child reader                                           │
+/// └──────────┴──────────────────────────────────────────────────────────┘
+/// ```
+///
+/// # See Also
+///
+/// See  [`arrow_writer`] module for more details on how repetition and
+/// definition levels are produced.
+///
+/// [Dremel paper]: https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets-2/
+/// [`arrow_writer`]: crate::arrow::arrow_writer
+/// [`ParquetField`]: crate::arrow::schema::ParquetField
+#[allow(rustdoc::private_intra_doc_links)]
 pub trait ArrayReader: Send {
     // TODO: this function is never used, and the trait is not public. Perhaps this should be
     // removed.
