@@ -1969,8 +1969,12 @@ mod tests {
         assert_eq!(&[2, 3, 5], run_ends);
     }
 
+    /// A single row of a {String -> Int32} map: `None` for a null row, otherwise
+    /// the list of (key, optional value) entries.
+    type StringIntMapRow<'a> = Option<Vec<(&'a str, Option<i32>)>>;
+
     /// Helper to build a MapArray of {String -> Int32} from a list of entries per row.
-    fn build_string_int_map(rows: Vec<Option<Vec<(&str, Option<i32>)>>>) -> MapArray {
+    fn build_string_int_map(rows: Vec<StringIntMapRow>) -> MapArray {
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32ArrayBuilder::new());
         for row in rows {
             match row {
