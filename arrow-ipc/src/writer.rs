@@ -106,10 +106,11 @@ enum IpcBodySink<'a> {
 }
 impl<'a> IpcBodySink<'a> {
     /// Writes the encoded buffer to the sink.
-    pub fn write(&mut self, buffer: EncodedBuffer) {
+    pub fn write(&mut self, pad_len: usize, buffer: EncodedBuffer) {
         match self {
             IpcBodySink::Write(vec) => {
                 vec.extend_from_slice(buffer.as_slice());
+                vec.extend_from_slice(&PADDING[..pad_len]);
             }
             IpcBodySink::Collect(vec) => {
                 vec.push(buffer);
@@ -2266,23 +2267,23 @@ fn encode_sink_buffer(
     compression_context: &mut CompressionContext,
     alignment: u8,
 ) -> Result<i64, ArrowError> {
-    let len = match compression_codec {
+    let (encoded, len) = match compression_codec {
         None => {
             let len = buffer.len() as i64;
-            sink.write(EncodedBuffer::Raw(buffer));
-            len
+            (EncodedBuffer::Raw(buffer), len)
         }
         Some(codec) => {
             let mut scratch = Vec::new();
             let written =
                 codec.compress_to_vec(buffer.as_slice(), &mut scratch, compression_context)?;
-            sink.write(EncodedBuffer::Compressed(scratch));
-            i64::try_from(written).map_err(|e| ArrowError::InvalidArgumentError(format!("{e}")))?
+            let len = i64::try_from(written)
+                .map_err(|e| ArrowError::InvalidArgumentError(format!("{e}")))?;
+            (EncodedBuffer::Compressed(scratch), len)
         }
     };
 
     let pad_len = pad_to_alignment(alignment, len as usize);
-
+    sink.write(pad_len, encoded);
     buffers.push(crate::Buffer::new(offset, len));
     Ok(offset + len + pad_len as i64)
 }
