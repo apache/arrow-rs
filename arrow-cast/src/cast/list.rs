@@ -102,7 +102,7 @@ fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST
     let DataType::FixedSizeList(inner_field, size) = array.data_type() else {
         unreachable!()
     };
-    let array = if to.data_type() != inner_field.data_type() {
+    let array = if to != inner_field {
         // To transform inner type, can first cast to FSL with new inner type.
         let fsl_to = DataType::FixedSizeList(to.clone(), *size);
         let array = cast_with_options(array, &fsl_to, cast_options)?;

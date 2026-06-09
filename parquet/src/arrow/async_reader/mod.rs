@@ -1634,7 +1634,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1642,7 +1641,7 @@ mod tests {
         let mut file = File::open(&path).await.unwrap();
         let file_size = file.metadata().await.unwrap().len();
         let mut metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .load_and_finish(&mut file, file_size)
             .await
             .unwrap();
@@ -1660,7 +1659,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn non_empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1668,7 +1666,7 @@ mod tests {
         let mut file = File::open(&path).await.unwrap();
         let file_size = file.metadata().await.unwrap().len();
         let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .load_and_finish(&mut file, file_size)
             .await
             .unwrap();
@@ -1685,7 +1683,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn empty_offset_index_doesnt_panic_in_column_chunks() {
         use tempfile::TempDir;
         use tokio::fs::File;
@@ -1705,7 +1702,7 @@ mod tests {
             use std::fs::File;
             let file = File::open(file).unwrap();
             ParquetMetaDataReader::new()
-                .with_page_indexes(true)
+                .with_page_index_policy(PageIndexPolicy::Required)
                 .parse_and_finish(&file)
                 .unwrap()
         }
@@ -1715,7 +1712,7 @@ mod tests {
         let mut file = File::open(&path).await.unwrap();
         let file_size = file.metadata().await.unwrap().len();
         let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .load_and_finish(&mut file, file_size)
             .await
             .unwrap();

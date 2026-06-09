@@ -90,6 +90,42 @@ pub trait ColumnValueEncoder {
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
+    /// Returns the largest `k` such that the first `k` values in
+    /// `values[offset..offset + len]` encode to at most `byte_budget`
+    /// bytes — i.e. how many values fit in a single page byte budget.
+    ///
+    /// Returns `len` if every value fits. Returns at least 1 if a single
+    /// value alone exceeds the budget, matching parquet's "at least one
+    /// value per data page" rule.
+    ///
+    /// `None` means "no cheap estimate available"; the caller stays on
+    /// the batched fast path and lets the post-write
+    /// `should_add_data_page` check handle bounding.
+    ///
+    /// Implementations should short-circuit aggressively: the typical
+    /// case is "everything fits, return `len`", and the next-most-common
+    /// case is "one wide value, return 1." The variable-width walk only
+    /// needs to be precise when the chunk is genuinely near the budget.
+    fn count_values_within_byte_budget(
+        _values: &Self::Values,
+        _offset: usize,
+        _len: usize,
+        _byte_budget: usize,
+    ) -> Option<usize> {
+        None
+    }
+
+    /// As [`Self::count_values_within_byte_budget`] but using gather
+    /// `indices` rather than a contiguous range. Returns the number of
+    /// `indices` that fit, not the maximum index value.
+    fn count_values_within_byte_budget_gather(
+        _values: &Self::Values,
+        _indices: &[usize],
+        _byte_budget: usize,
+    ) -> Option<usize> {
+        None
+    }
+
     /// Returns the number of buffered values
     fn num_values(&self) -> usize;
 
@@ -245,6 +281,39 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)
+    }
+
+    fn count_values_within_byte_budget(
+        values: &[T::T],
+        offset: usize,
+        len: usize,
+        byte_budget: usize,
+    ) -> Option<usize> {
+        // Clamp so that a caller-supplied `len` that overruns the input
+        // (e.g. a level/value mismatch the encoder will reject later)
+        // returns an estimate instead of panicking here.
+        let end = (offset + len).min(values.len());
+        let start = offset.min(end);
+        count_within_budget::<T>(
+            end - start,
+            byte_budget,
+            values[start..end].iter().map(Some),
+        )
+    }
+
+    fn count_values_within_byte_budget_gather(
+        values: &[T::T],
+        indices: &[usize],
+        byte_budget: usize,
+    ) -> Option<usize> {
+        // `values.get` yields `None` for an out-of-range index (defensive
+        // against a level/value mismatch the encoder rejects later); such a
+        // position is counted but contributes no bytes.
+        count_within_budget::<T>(
+            indices.len(),
+            byte_budget,
+            indices.iter().map(|&i| values.get(i)),
+        )
     }
 
     fn num_values(&self) -> usize {
@@ -410,4 +479,76 @@ where
             bounder.update_wkb(val.as_bytes());
         }
     }
+}
+
+/// Plain-encoded byte cost of a single value of type `T::T`.
+///
+/// Derived from [`ParquetValueType::dict_encoding_size`] (which returns
+/// `(per-value overhead, value-bytes)`) so we don't add a parallel
+/// per-value-size hook to the trait. Mirrors the dispatch in
+/// `KeyStorage::push` (`encodings/encoding/dict_encoder.rs`).
+///
+/// Placed at the end of the module deliberately. Inserting it above the
+/// `ColumnValueEncoder` trait shifts the trait and `ColumnValueEncoderImpl`
+/// within the compiled module enough to perturb downstream code placement,
+/// which measurably regresses unrelated arrow-writer string benchmarks
+/// (~5-9% on `string` / `string_and_binary_view`). Defining it last keeps
+/// the hot encoder code at the offsets it has on `main`.
+#[inline]
+fn plain_encoded_byte_size<T: DataType>(value: &T::T) -> usize {
+    let (overhead, bytes) = value.dict_encoding_size();
+    match <T::T as ParquetValueType>::PHYSICAL_TYPE {
+        // Plain BYTE_ARRAY = 4-byte length prefix + payload.
+        Type::BYTE_ARRAY => overhead + bytes,
+        // Plain FLBA = raw bytes only; `dict_encoding_size`'s length prefix
+        // is irrelevant here, so the encoder passes `type_length` directly.
+        Type::FIXED_LEN_BYTE_ARRAY => bytes,
+        // Numeric/bool are short-circuited by the caller via
+        // `mem::size_of`, so this is unreachable in practice; fall back to
+        // `overhead` defensively.
+        _ => overhead,
+    }
+}
+
+/// How many leading values fit in `byte_budget` bytes, shared by the two
+/// `ColumnValueEncoder::count_values_within_byte_budget*` methods (one walks a
+/// contiguous slice, the other gathers by index).
+///
+/// `n` is the answer when everything fits; `vals` yields each candidate value,
+/// or `None` for a position that should still be counted but contributes no
+/// bytes (an out-of-range gather index). The boundary value that crosses the
+/// budget is included in the count so the caller's page-flush check trips on
+/// this mini-batch rather than leaving a sliver for the next page; this also
+/// catches a lone outlier wherever it lands among small values.
+///
+/// Defined at the end of the module alongside `plain_encoded_byte_size` for
+/// the same reason — see that function's note on code placement and the
+/// `string` / `string_and_binary_view` benchmarks.
+#[inline]
+fn count_within_budget<'a, T: DataType>(
+    n: usize,
+    byte_budget: usize,
+    vals: impl Iterator<Item = Option<&'a T::T>>,
+) -> Option<usize>
+where
+    T::T: 'a,
+{
+    // Fixed-size physical types have a constant per-value byte cost, so the
+    // answer is one division — no walk needed.
+    let phys = <T::T as ParquetValueType>::PHYSICAL_TYPE;
+    if phys != Type::BYTE_ARRAY && phys != Type::FIXED_LEN_BYTE_ARRAY {
+        let per = std::mem::size_of::<T::T>().max(1);
+        return Some((byte_budget / per).max(1).min(n));
+    }
+    // Variable-width: accumulate, exit at the first value past the budget.
+    let mut cum: usize = 0;
+    for (i, v) in vals.enumerate() {
+        if let Some(v) = v {
+            cum = cum.saturating_add(plain_encoded_byte_size::<T>(v));
+        }
+        if cum > byte_budget {
+            return Some(i + 1);
+        }
+    }
+    Some(n)
 }
