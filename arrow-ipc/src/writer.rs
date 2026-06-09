@@ -2277,9 +2277,7 @@ fn encode_sink_buffer(
             let written =
                 codec.compress_to_vec(buffer.as_slice(), &mut scratch, compression_context)?;
             sink.write(EncodedBuffer::Compressed(scratch));
-            let len = i64::try_from(written)
-                .map_err(|e| ArrowError::InvalidArgumentError(format!("{e}")))?;
-            len
+            i64::try_from(written).map_err(|e| ArrowError::InvalidArgumentError(format!("{e}")))?
         }
     };
 
