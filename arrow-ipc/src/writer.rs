@@ -104,6 +104,19 @@ enum IpcBodySink<'a> {
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
+impl<'a> IpcBodySink<'a> {
+    /// Writes the encoded buffer to the sink.
+    pub fn write(&mut self, buffer: EncodedBuffer) {
+        match self {
+            IpcBodySink::Write(vec) => {
+                vec.extend_from_slice(buffer.as_slice());
+            }
+            IpcBodySink::Collect(vec) => {
+                vec.push(buffer);
+            }
+        }
+    }
+}
 
 /// Per-message sizes produced by [`IpcDataGenerator::write`].
 ///
@@ -1928,7 +1941,12 @@ fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
     }
 }
 
-/// Write array data to a vector of bytes
+/// Recursively encodes `array_data` into its IPC representation.
+///
+/// Output goes to two separate channels:
+/// - `buffers` / `nodes`: IPC metadata (offsets, lengths, null counts) that will be
+///   serialised into the flatbuffer `RecordBatch` header.
+/// - `sink`: the raw Arrow data bytes that form the IPC message body.
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
     array_data: &ArrayData,
@@ -2226,6 +2244,19 @@ fn write_array_data(
     Ok(offset)
 }
 
+/// Encodes a single Arrow [`Buffer`] into the IPC body and records its metadata.
+///
+/// - `buffer`: the Arrow data buffer to encode (validity bitmap, offsets, values, etc.)
+/// - `buffers`: in-progress list of IPC `Buffer` metadata entries (body offset + length) that
+///   will eventually be serialised into the flatbuffer `RecordBatch` header.
+/// - `sink`: destination for the actual encoded bytes; either a contiguous `Vec<u8>` for
+///   in-memory writes, or a list of [`EncodedBuffer`] segments for deferred zero-copy streaming.
+/// - `offset`: running byte offset into the IPC message body, used to compute the metadata entry.
+/// - `compression_codec` / `compression_context`: if `Some`, the buffer is compressed before
+///   writing; `compression_context` provides reusable scratch space across calls.
+/// - `alignment`: each buffer is padded to this many bytes so the next buffer starts aligned.
+///
+/// Returns the updated `offset` (advanced by the encoded length plus any alignment padding).
 fn encode_sink_buffer(
     buffer: Buffer,
     buffers: &mut Vec<crate::Buffer>,
@@ -2235,32 +2266,24 @@ fn encode_sink_buffer(
     compression_context: &mut CompressionContext,
     alignment: u8,
 ) -> Result<i64, ArrowError> {
-    let (encoded, len) = match compression_codec {
+    let len = match compression_codec {
         None => {
             let len = buffer.len() as i64;
-            (EncodedBuffer::Raw(buffer), len)
+            sink.write(EncodedBuffer::Raw(buffer));
+            len
         }
         Some(codec) => {
             let mut scratch = Vec::new();
             let written =
                 codec.compress_to_vec(buffer.as_slice(), &mut scratch, compression_context)?;
+            sink.write(EncodedBuffer::Compressed(scratch));
             let len = i64::try_from(written)
                 .map_err(|e| ArrowError::InvalidArgumentError(format!("{e}")))?;
-            (EncodedBuffer::Compressed(scratch), len)
+            len
         }
     };
 
     let pad_len = pad_to_alignment(alignment, len as usize);
-    match sink {
-        IpcBodySink::Write(arrow_data) => {
-            match &encoded {
-                EncodedBuffer::Raw(b) => arrow_data.extend_from_slice(b.as_slice()),
-                EncodedBuffer::Compressed(v) => arrow_data.extend_from_slice(v),
-            }
-            arrow_data.extend_from_slice(&PADDING[..pad_len]);
-        }
-        IpcBodySink::Collect(encoded_buffers) => encoded_buffers.push(encoded),
-    }
 
     buffers.push(crate::Buffer::new(offset, len));
     Ok(offset + len + pad_len as i64)
