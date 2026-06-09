@@ -98,14 +98,14 @@ impl EncodedBuffer {
     }
 }
 /// Destination for per-buffer encoded output produced by [`write_array_data`].
-enum BufferSink<'a> {
+enum IpcBodySink<'a> {
     /// Serialize buffer bytes (with padding) into a contiguous byte vec.
     Write(&'a mut Vec<u8>),
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
 
-/// Per-message sizes produced by [`IpcDataGenerator::write_direct`].
+/// Per-message sizes produced by [`IpcDataGenerator::write`].
 ///
 /// [`FileWriter`] uses these to build the Block index entries required by the IPC footer for
 /// random-access reads.
@@ -534,7 +534,7 @@ impl IpcDataGenerator {
             batch,
             write_options,
             compression_context,
-            &mut BufferSink::Write(&mut arrow_data),
+            &mut IpcBodySink::Write(&mut arrow_data),
         )?;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
         Ok((
@@ -574,7 +574,7 @@ impl IpcDataGenerator {
     /// Write dictionary batches and the record batch directly to `writer`, skipping the
     /// intermediate body `Vec<u8>` allocations
     /// Returns [`IpcWriteMetadata`] with the sizes needed to build footer blocks.
-    fn write_direct<W: Write>(
+    fn write<W: Write>(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
@@ -604,7 +604,7 @@ impl IpcDataGenerator {
             batch,
             write_options,
             compression_context,
-            &mut BufferSink::Collect(&mut encoded_buffers),
+            &mut IpcBodySink::Collect(&mut encoded_buffers),
         )?;
 
         let alignment = write_options.alignment;
@@ -655,12 +655,15 @@ impl IpcDataGenerator {
 
     /// Encodes a `RecordBatch` into a flatbuffer IPC message and fills `sink` with the
     /// serialised buffer data.
+    ///
+    /// Returns `(ipc_message, body_len, tail_pad)`: the flatbuffer header bytes, the
+    /// total body length including trailing padding, and the trailing alignment padding byte count.
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
-        sink: &mut BufferSink<'_>,
+        sink: &mut IpcBodySink<'_>,
     ) -> Result<(Vec<u8>, usize, usize), ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
@@ -767,7 +770,7 @@ impl IpcDataGenerator {
             .transpose()?;
 
         let alignment = write_options.alignment;
-        let mut sink = BufferSink::Write(&mut arrow_data);
+        let mut sink = IpcBodySink::Write(&mut arrow_data);
         let offset = write_array_data(
             array_data,
             &mut buffers,
@@ -1296,7 +1299,7 @@ impl<W: Write> FileWriter<W> {
             ));
         }
 
-        let meta = self.data_gen.write_direct(
+        let meta = self.data_gen.write(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
@@ -1571,7 +1574,7 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        self.data_gen.write_direct(
+        self.data_gen.write(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
@@ -1930,7 +1933,7 @@ fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
 fn write_array_data(
     array_data: &ArrayData,
     buffers: &mut Vec<crate::Buffer>,
-    sink: &mut BufferSink<'_>,
+    sink: &mut IpcBodySink<'_>,
     nodes: &mut Vec<crate::FieldNode>,
     offset: i64,
     num_rows: usize,
@@ -2226,7 +2229,7 @@ fn write_array_data(
 fn encode_sink_buffer(
     buffer: Buffer,
     buffers: &mut Vec<crate::Buffer>,
-    sink: &mut BufferSink<'_>,
+    sink: &mut IpcBodySink<'_>,
     offset: i64,
     compression_codec: Option<CompressionCodec>,
     compression_context: &mut CompressionContext,
@@ -2249,14 +2252,14 @@ fn encode_sink_buffer(
 
     let pad_len = pad_to_alignment(alignment, len as usize);
     match sink {
-        BufferSink::Write(arrow_data) => {
+        IpcBodySink::Write(arrow_data) => {
             match &encoded {
                 EncodedBuffer::Raw(b) => arrow_data.extend_from_slice(b.as_slice()),
                 EncodedBuffer::Compressed(v) => arrow_data.extend_from_slice(v),
             }
             arrow_data.extend_from_slice(&PADDING[..pad_len]);
         }
-        BufferSink::Collect(encoded_buffers) => encoded_buffers.push(encoded),
+        IpcBodySink::Collect(encoded_buffers) => encoded_buffers.push(encoded),
     }
 
     buffers.push(crate::Buffer::new(offset, len));
