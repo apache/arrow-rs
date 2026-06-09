@@ -896,48 +896,70 @@ mod tests {
         assert_eq!(string_result, vec!["v0", "v0", "v49"]);
     }
 
+    /// The `a`/`b` inputs, interleave indices, and `expected` output list arrays
+    /// shared by the `List` and `ListView` interleave tests.
+    struct InterleaveListFixture<O: OffsetSizeTrait> {
+        a: GenericListArray<O>,
+        b: GenericListArray<O>,
+        indices: Vec<(usize, usize)>,
+        expected: GenericListArray<O>,
+    }
+
+    impl<O: OffsetSizeTrait> InterleaveListFixture<O> {
+        fn new() -> Self {
+            // [[1, 2], null, [3]]
+            let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
+            a.values().append_value(1);
+            a.values().append_value(2);
+            a.append(true);
+            a.append(false);
+            a.values().append_value(3);
+            a.append(true);
+
+            // [[4], null, [5, 6, null]]
+            let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
+            b.values().append_value(4);
+            b.append(true);
+            b.append(false);
+            b.values().append_value(5);
+            b.values().append_value(6);
+            b.values().append_null();
+            b.append(true);
+
+            // [[3], null, [4], [5, 6, null], null]
+            let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
+            expected.values().append_value(3);
+            expected.append(true);
+            expected.append(false);
+            expected.values().append_value(4);
+            expected.append(true);
+            expected.values().append_value(5);
+            expected.values().append_value(6);
+            expected.values().append_null();
+            expected.append(true);
+            expected.append(false);
+
+            Self {
+                a: a.finish(),
+                b: b.finish(),
+                indices: vec![(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)],
+                expected: expected.finish(),
+            }
+        }
+    }
+
     fn test_interleave_lists<O: OffsetSizeTrait>() {
-        // [[1, 2], null, [3]]
-        let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        a.values().append_value(1);
-        a.values().append_value(2);
-        a.append(true);
-        a.append(false);
-        a.values().append_value(3);
-        a.append(true);
-        let a = a.finish();
-
-        // [[4], null, [5, 6, null]]
-        let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        b.values().append_value(4);
-        b.append(true);
-        b.append(false);
-        b.values().append_value(5);
-        b.values().append_value(6);
-        b.values().append_null();
-        b.append(true);
-        let b = b.finish();
-
-        let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        let InterleaveListFixture {
+            a,
+            b,
+            indices,
+            expected,
+        } = InterleaveListFixture::<O>::new();
+        let values = interleave(&[&a, &b], &indices).unwrap();
         let v = values
             .as_any()
             .downcast_ref::<GenericListArray<O>>()
             .unwrap();
-
-        // [[3], null, [4], [5, 6, null], null]
-        let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        expected.values().append_value(3);
-        expected.append(true);
-        expected.append(false);
-        expected.values().append_value(4);
-        expected.append(true);
-        expected.values().append_value(5);
-        expected.values().append_value(6);
-        expected.values().append_null();
-        expected.append(true);
-        expected.append(false);
-        let expected = expected.finish();
-
         assert_eq!(v, &expected);
     }
 
@@ -952,47 +974,23 @@ mod tests {
     }
 
     fn test_interleave_list_views<O: OffsetSizeTrait>() {
-        // [[1, 2], null, [3]]
-        let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        a.values().append_value(1);
-        a.values().append_value(2);
-        a.append(true);
-        a.append(false);
-        a.values().append_value(3);
-        a.append(true);
-        let a: GenericListViewArray<O> = a.finish().into();
+        // Reuse the same fixture as the `List` test, viewed as `ListView`s.
+        let InterleaveListFixture {
+            a,
+            b,
+            indices,
+            expected,
+        } = InterleaveListFixture::<O>::new();
+        let a: GenericListViewArray<O> = a.into();
+        let b: GenericListViewArray<O> = b.into();
 
-        // [[4], null, [5, 6, null]]
-        let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        b.values().append_value(4);
-        b.append(true);
-        b.append(false);
-        b.values().append_value(5);
-        b.values().append_value(6);
-        b.values().append_null();
-        b.append(true);
-        let b: GenericListViewArray<O> = b.finish().into();
-
-        let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        let values = interleave(&[&a, &b], &indices).unwrap();
         let v = values
             .as_any()
             .downcast_ref::<GenericListViewArray<O>>()
             .unwrap();
 
-        // [[3], null, [4], [5, 6, null], null]
-        let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
-        expected.values().append_value(3);
-        expected.append(true);
-        expected.append(false);
-        expected.values().append_value(4);
-        expected.append(true);
-        expected.values().append_value(5);
-        expected.values().append_value(6);
-        expected.values().append_null();
-        expected.append(true);
-        expected.append(false);
-        let expected: GenericListViewArray<O> = expected.finish().into();
-
+        let expected: GenericListViewArray<O> = expected.into();
         assert_eq!(v, &expected);
     }
 
