@@ -911,4 +911,37 @@ mod tests {
         let expected: Int32Array = vec![40, 40, 32].into();
         assert_eq!(&expected, result_values);
     }
+
+    #[test]
+    fn length_test_ree_sliced_does_less_work() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        // ["hello","hello","hello","world","world","world","foo","foo","foo","bar","bar","bar","baz","baz","baz"]
+        let values = StringArray::from(vec!["hello", "world", "foo", "bar", "baz"]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![3i32, 6, 9, 12, 15]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        assert_eq!(ree_array.values().len(), 5);
+
+        // ["foo","foo","foo","bar","bar","bar"]
+        let sliced = ree_array.slice(6, 6);
+        assert_eq!(sliced.values().len(), 2);
+
+        // length() only runs on ["foo","bar"] — not all 5 original physical values
+        let result_arr = length(&sliced).unwrap();
+        let result_ree = result_arr
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(
+            result_ree
+                .values()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
+            &Int32Array::from(vec![3, 3])
+        );
+        assert_eq!(result_ree.run_ends().values(), &[3i32, 6]);
+    }
 }

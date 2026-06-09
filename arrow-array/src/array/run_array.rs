@@ -341,14 +341,43 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     ///
+    /// The returned slice has its `values` and physical `run_ends` trimmed to only
+    /// the entries covering the requested logical range.
+    ///
     /// # Panics
     ///
     /// - Specified slice (`offset` + `length`) exceeds existing length
     pub fn slice(&self, offset: usize, length: usize) -> Self {
+        let run_ends = self.run_ends.slice(offset, length);
+        let (run_ends, values) = if length == 0 {
+            let inner = ScalarBuffer::from(vec![]);
+            let run_ends = unsafe { RunEndBuffer::new_unchecked(inner, 0, 0) };
+            (run_ends, self.values.slice(0, 0))
+        } else {
+            let start = run_ends.get_start_physical_index();
+            let end = run_ends.get_end_physical_index();
+            let values = self.values.slice(start, end - start + 1);
+            let logical_offset = run_ends.offset();
+            let logical_length = run_ends.len();
+            // Trim to the physical entries covering this slice and normalize the run_end
+            // values: subtract the logical offset and cap at the logical length.
+            // After this, run_ends[i] is the cumulative element count through run i,
+            // measured from position 0 of this slice, with no hidden offset context.
+            let adjusted: ScalarBuffer<R::Native> = run_ends.inner()[start..=end]
+                .iter()
+                .map(|v| {
+                    R::Native::from_usize((v.as_usize() - logical_offset).min(logical_length))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+                .into();
+            let run_ends = unsafe { RunEndBuffer::new_unchecked(adjusted, 0, run_ends.len()) };
+            (run_ends, values)
+        };
         Self {
             data_type: self.data_type.clone(),
-            run_ends: self.run_ends.slice(offset, length),
-            values: self.values.clone(),
+            run_ends,
+            values,
         }
     }
 }
@@ -462,6 +491,9 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
         let len = self.len();
+        if len == 0 {
+            return None;
+        }
         let nulls = self.values.logical_nulls()?;
         let mut out = BooleanBufferBuilder::new(len);
         let offset = self.run_ends.offset();
@@ -1220,7 +1252,6 @@ mod tests {
             PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
         builder.extend(input_array.iter().copied());
         let run_array = builder.finish();
-        let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
         // test for all slice lengths.
         for slice_len in 1..=total_len {
@@ -1248,7 +1279,7 @@ mod tests {
                 &logical_indices,
                 sliced_input_array,
                 &physical_indices,
-                physical_values_array,
+                sliced_run_array.values().as_primitive::<Int32Type>(),
             );
 
             // test for offset = total_len - slice_len and slice length = slice_len
@@ -1270,7 +1301,7 @@ mod tests {
                 &logical_indices,
                 sliced_input_array,
                 &physical_indices,
-                physical_values_array,
+                sliced_run_array.values().as_primitive::<Int32Type>(),
             );
         }
     }
@@ -1291,8 +1322,12 @@ mod tests {
         let slices = [(0, 12), (0, 2), (2, 5), (3, 0), (3, 3), (3, 4), (4, 8)];
         for (offset, length) in slices {
             let a = array.slice(offset, length);
-            let n = a.logical_nulls().unwrap();
-            let n = n.into_iter().collect::<Vec<_>>();
+            // After trimming values in slice(), some sub-slices may have no nulls in their
+            // trimmed values, so logical_nulls() returns None (meaning all valid).
+            let n = match a.logical_nulls() {
+                Some(n) => n.into_iter().collect::<Vec<_>>(),
+                None => vec![true; length],
+            };
             assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
     }
@@ -1385,8 +1420,9 @@ mod tests {
         let slice2 = array.slice(2, 3); // 1, 1, 1
         // logical indices: 2, 3, 4
         // physical indices: 1, 1, 1
-        assert_eq!(slice2.get_start_physical_index(), 1);
-        assert_eq!(slice2.get_end_physical_index(), 1);
+        // After values trimming, physical indices are 0-based relative to the trimmed values.
+        assert_eq!(slice2.get_start_physical_index(), 0);
+        assert_eq!(slice2.get_end_physical_index(), 0);
 
         let values_slice2 = slice2.values_slice();
         let values_slice2 = values_slice2.as_primitive::<Int32Type>();
@@ -1506,6 +1542,112 @@ mod tests {
             // mismatch data type
             RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
         };
+    }
+
+    mod slice_trims_values {
+        use super::*;
+
+        fn make_array() -> RunArray<Int32Type> {
+            let run_ends = Int32Array::from(vec![2, 5, 8]);
+            let values = StringArray::from(vec!["a", "b", "c"]);
+            // Logical: [a, a, b, b, b, c, c, c]
+            RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap()
+        }
+
+        fn physical_values(array: &RunArray<Int32Type>) -> Vec<&str> {
+            array.values().as_string::<i32>().iter().flatten().collect()
+        }
+
+        fn logical_values(array: &RunArray<Int32Type>) -> Vec<&str> {
+            array
+                .downcast::<StringArray>()
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+
+        #[test]
+        fn test_slice_trims_values() {
+            // slice(2,4) → ["b","b","b","c"]
+            let sliced = make_array().slice(2, 4);
+            assert_eq!(physical_values(&sliced), vec!["b", "c"]);
+            assert_eq!(sliced.run_ends().values(), &[3i32, 4]);
+        }
+
+        #[test]
+        fn test_slice_entirely_within_one_run() {
+            //slice(3,2) → ["b","b"]
+            let sliced = make_array().slice(3, 2);
+            assert_eq!(physical_values(&sliced), vec!["b"]);
+            assert_eq!(sliced.run_ends().values(), &[2i32]);
+        }
+
+        #[test]
+        fn test_slice_crosses_multiple_run_boundaries() {
+            //slice(1,6) → ["a","b","b","b","c","c"]
+            let sliced = make_array().slice(1, 6);
+            assert_eq!(physical_values(&sliced), vec!["a", "b", "c"]);
+            assert_eq!(sliced.run_ends().values(), &[1i32, 4, 6]);
+        }
+
+        #[test]
+        fn test_double_slice_preserves_normalization() {
+            //slice(2,6) → ["b","b","b","c","c","c"]
+            let first = make_array().slice(2, 6);
+            assert_eq!(physical_values(&first), vec!["b", "c"]);
+            assert_eq!(first.run_ends().values(), &[3i32, 6]);
+
+            // slice(1,4) → ["b","b","c","c"]
+            let second = first.slice(1, 4);
+            assert_eq!(physical_values(&second), vec!["b", "c"]);
+            assert_eq!(second.run_ends().values(), &[2i32, 4]);
+        }
+
+        #[test]
+        fn test_repeated_slice_normalization() {
+            let run_ends = Int32Array::from(vec![4, 8, 12, 16, 20]);
+            let values = StringArray::from(vec!["a", "b", "c", "d", "e"]);
+            let base = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // ["a","a","a","a","b","b","b","b","c","c","c","c","d","d","d","d","e","e","e","e"]
+            let l1 = base.slice(3, 14);
+            // ["a","b","b","b","b","c","c","c","c","d","d","d","d","e"]
+            assert_eq!(l1.run_ends().values(), &[1i32, 5, 9, 13, 14]);
+            assert_eq!(
+                logical_values(&l1),
+                vec![
+                    "a", "b", "b", "b", "b", "c", "c", "c", "c", "d", "d", "d", "d", "e"
+                ]
+            );
+
+            // ["a","b","b","b","b","c","c","c","c","d","d","d","d","e"]
+            let l2 = l1.slice(1, 10);
+            // ["b","b","b","b","c","c","c","c","d","d"]
+            assert_eq!(l2.run_ends().values(), &[4i32, 8, 10]);
+            assert_eq!(
+                logical_values(&l2),
+                vec!["b", "b", "b", "b", "c", "c", "c", "c", "d", "d"]
+            );
+
+            // ["b","b","b","b","c","c","c","c","d","d"]
+            let l3 = l2.slice(0, 6);
+            // ["b","b","b","b","c","c"]
+            assert_eq!(l3.run_ends().values(), &[4i32, 6]);
+            assert_eq!(logical_values(&l3), vec!["b", "b", "b", "b", "c", "c"]);
+
+            // ["b","b","b","b","c","c"]
+            let l4 = l3.slice(3, 3);
+            // ["b","c","c"]
+            assert_eq!(l4.run_ends().values(), &[1i32, 3]);
+            assert_eq!(logical_values(&l4), vec!["b", "c", "c"]);
+
+            // ["b","c","c"]
+            let l5 = l4.slice(1, 2);
+            // ["c","c"]
+            assert_eq!(l5.run_ends().values(), &[2i32]);
+            assert_eq!(logical_values(&l5), vec!["c", "c"]);
+        }
     }
 
     #[test]
