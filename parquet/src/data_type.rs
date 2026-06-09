@@ -146,7 +146,9 @@ impl Ord for Int96 {
     /// Note: this is done even though the Int96 type is deprecated.
     /// Because some engines, notably Spark and Databricks Photon, still write
     /// Int96 timestamps, a new `ColumnOrder` variant has been added to
-    /// the Parquet specification. Ref PR#
+    /// the Parquet specification. See [parquet-format/#584].
+    ///
+    /// [parquet-format/#584]: https://github.com/apache/parquet-format/pull/584
     fn cmp(&self, other: &Self) -> Ordering {
         match self.get_days().cmp(&other.get_days()) {
             Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
