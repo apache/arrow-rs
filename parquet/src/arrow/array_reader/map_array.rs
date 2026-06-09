@@ -26,11 +26,11 @@ use std::sync::Arc;
 ///
 /// A Parquet map is encoded as `List(Struct(key, value))`, so this reader is a
 /// thin wrapper around a [`ListArrayReader`] whose item is a
-/// [`StructArrayReader`]. 
-/// 
-/// See [`ArrayReader`] for how definition and repetition
-/// levels are interpreted; the map's own `def_level`/`rep_level` drive the
-/// outer list, while the key/value struct is one repetition level deeper:
+/// [`StructArrayReader`].
+///
+/// See [`ArrayReader`] for how definition and repetition levels are
+/// interpreted; the map's own `def_level`/`rep_level` drive the outer list,
+/// while the key/value struct is one repetition level deeper:
 ///
 /// ```text
 /// struct_rep_level = rep_level + 1

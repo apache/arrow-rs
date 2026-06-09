@@ -118,10 +118,10 @@ pub use struct_array::StructArrayReader;
 /// ```
 ///
 /// Note that not every reader uses all three states:
-/// * a non-nullable list has no `null` row — only `d >= D` (has values) vs the
-///   empty `d == D - 1`;
-/// * a [`StructArrayReader`] has no `empty` row — only present `d >= D` vs null
-///   `d < D`.
+/// * a non-nullable list has no `null` state — only `d >= D` (has values) vs
+///   the empty `d == D - 1`;
+/// * a [`StructArrayReader`] has no `empty` state — only present `d >= D` vs
+///   null `d < D`.
 ///
 /// **Repetition level** — where a value attaches relative to this reader's list:
 ///
@@ -138,7 +138,7 @@ pub use struct_array::StructArrayReader;
 ///
 /// # See Also
 ///
-/// See  [`arrow_writer`] module for more details on how repetition and
+/// See the [`arrow_writer`] module for more details on how repetition and
 /// definition levels are produced.
 ///
 /// [Dremel paper]: https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets-2/
