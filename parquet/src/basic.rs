@@ -1012,7 +1012,7 @@ pub enum ColumnOrder {
     /// Column ordering to use for floating point types.
     IEEE_754_TOTAL_ORDER,
     /// Column ordering to use for INT96 types.
-    INT96_ORDER,
+    INT96_TIMESTAMP_ORDER,
     // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
@@ -1048,7 +1048,7 @@ impl ColumnOrder {
         {
             ColumnOrder::IEEE_754_TOTAL_ORDER
         } else if matches!(physical_type, Type::INT96) {
-            ColumnOrder::INT96_ORDER
+            ColumnOrder::INT96_TIMESTAMP_ORDER
         } else {
             let sort_order =
                 Self::get_sort_order_for_type(logical_type, converted_type, physical_type, true);
@@ -1202,7 +1202,7 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
-            ColumnOrder::INT96_ORDER => SortOrder::INT96_TIMESTAMP,
+            ColumnOrder::INT96_TIMESTAMP_ORDER => SortOrder::INT96_TIMESTAMP,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
             ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
@@ -1224,6 +1224,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
             2 => {
                 prot.skip_empty_struct()?;
                 Self::IEEE_754_TOTAL_ORDER
+            }
+            3 => {
+                prot.skip_empty_struct()?;
+                Self::INT96_TIMESTAMP_ORDER
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -1251,6 +1255,10 @@ impl WriteThrift for ColumnOrder {
             }
             Self::IEEE_754_TOTAL_ORDER => {
                 writer.write_field_begin(FieldType::Struct, 2, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::INT96_TIMESTAMP_ORDER => {
+                writer.write_field_begin(FieldType::Struct, 3, 0)?;
                 writer.write_struct_end()?;
             }
             _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
@@ -2074,7 +2082,10 @@ mod tests {
             ColumnOrder::IEEE_754_TOTAL_ORDER.to_string(),
             "IEEE_754_TOTAL_ORDER"
         );
-        assert_eq!(ColumnOrder::INT96_ORDER.to_string(), "INT96_ORDER");
+        assert_eq!(
+            ColumnOrder::INT96_TIMESTAMP_ORDER.to_string(),
+            "INT96_TIMESTAMP_ORDER"
+        );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
     }
 
@@ -2270,7 +2281,7 @@ mod tests {
             SortOrder::TOTAL_ORDER
         );
         assert_eq!(
-            ColumnOrder::INT96_ORDER.sort_order(),
+            ColumnOrder::INT96_TIMESTAMP_ORDER.sort_order(),
             SortOrder::INT96_TIMESTAMP
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
