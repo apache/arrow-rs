@@ -1987,7 +1987,7 @@ fn write_array_data(
 
         offset = encode_sink_buffer(
             null_buffer,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2002,7 +2002,7 @@ fn write_array_data(
         for buffer in [offsets, values] {
             offset = encode_sink_buffer(
                 buffer,
-                &mut meta.buffers,
+                meta,
                 sink,
                 offset,
                 compression_codec,
@@ -2020,7 +2020,7 @@ fn write_array_data(
         let views = get_or_truncate_buffer(array_data);
         offset = encode_sink_buffer(
             views,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2031,7 +2031,7 @@ fn write_array_data(
         for buffer in array_data.buffers().iter().skip(1) {
             offset = encode_sink_buffer(
                 buffer.clone(),
-                &mut meta.buffers,
+                meta,
                 sink,
                 offset,
                 compression_codec,
@@ -2044,7 +2044,7 @@ fn write_array_data(
         for buffer in [offsets, values] {
             offset = encode_sink_buffer(
                 buffer,
-                &mut meta.buffers,
+                meta,
                 sink,
                 offset,
                 compression_codec,
@@ -2065,7 +2065,7 @@ fn write_array_data(
         let buffer = get_or_truncate_buffer(array_data);
         offset = encode_sink_buffer(
             buffer,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2081,7 +2081,7 @@ fn write_array_data(
         let buffer = buffer.bit_slice(array_data.offset(), array_data.len());
         offset = encode_sink_buffer(
             buffer,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2104,7 +2104,7 @@ fn write_array_data(
         };
         offset = encode_sink_buffer(
             offsets,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2136,7 +2136,7 @@ fn write_array_data(
 
         offset = encode_sink_buffer(
             offsets,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2145,7 +2145,7 @@ fn write_array_data(
         )?;
         offset = encode_sink_buffer(
             sizes,
-            &mut meta.buffers,
+            meta,
             sink,
             offset,
             compression_codec,
@@ -2185,7 +2185,7 @@ fn write_array_data(
         for buffer in array_data.buffers() {
             offset = encode_sink_buffer(
                 buffer.clone(),
-                &mut meta.buffers,
+                meta,
                 sink,
                 offset,
                 compression_codec,
@@ -2248,7 +2248,7 @@ fn write_array_data(
 /// Returns the updated `offset` (advanced by the encoded length plus any alignment padding).
 fn encode_sink_buffer(
     buffer: Buffer,
-    buffers: &mut Vec<crate::Buffer>,
+    ipc_meta_data: &mut IpcMetadataBuilder,
     sink: &mut IpcBodySink<'_>,
     offset: i64,
     compression_codec: Option<CompressionCodec>,
@@ -2272,7 +2272,7 @@ fn encode_sink_buffer(
 
     let pad_len = pad_to_alignment(alignment, len as usize);
     sink.write(pad_len, encoded);
-    buffers.push(crate::Buffer::new(offset, len));
+    ipc_meta_data.buffers.push(crate::Buffer::new(offset, len));
     Ok(offset + len + pad_len as i64)
 }
 
