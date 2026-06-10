@@ -321,7 +321,6 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id: &mut I,
-        compression_context: &mut CompressionContext,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Struct(fields) => {
@@ -334,7 +333,6 @@ impl IpcDataGenerator {
                         dictionary_tracker,
                         write_options,
                         dict_id,
-                        compression_context,
                     )?;
                 }
             }
@@ -356,7 +354,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::List(field) => {
@@ -368,7 +365,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::LargeList(field) => {
@@ -380,7 +376,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::ListView(field) => {
@@ -392,7 +387,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::LargeListView(field) => {
@@ -404,7 +398,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::FixedSizeList(field, _) => {
@@ -419,7 +412,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::Map(field, _) => {
@@ -438,7 +430,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
 
                 // values
@@ -449,7 +440,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    compression_context,
                 )?;
             }
             DataType::Union(fields, _) => {
@@ -463,7 +453,6 @@ impl IpcDataGenerator {
                         dictionary_tracker,
                         write_options,
                         dict_id,
-                        compression_context,
                     )?;
                 }
             }
@@ -482,7 +471,6 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id_seq: &mut I,
-        compression_context: &mut CompressionContext,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
@@ -497,7 +485,6 @@ impl IpcDataGenerator {
                     dictionary_tracker,
                     write_options,
                     dict_id_seq,
-                    compression_context,
                 )?;
 
                 // It's important to only take the dict_id at this point, because the dict ID
@@ -540,7 +527,6 @@ impl IpcDataGenerator {
                 dictionary_tracker,
                 write_options,
                 dict_id_seq,
-                compression_context,
             )?,
         }
 
@@ -557,12 +543,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
-        let dictionaries = self.encode_all_dicts(
-            batch,
-            dictionary_tracker,
-            write_options,
-            compression_context,
-        )?;
+        let dictionaries = self.collect_all_dicts(batch, dictionary_tracker, write_options)?;
         let mut encoded_dictionaries = Vec::with_capacity(dictionaries.len());
         for dict in dictionaries {
             encoded_dictionaries.push(self.dictionary_batch_to_bytes(
@@ -592,13 +573,12 @@ impl IpcDataGenerator {
         ))
     }
 
-    /// Encode dictionary batches for all columns in `batch`.
-    fn encode_all_dicts(
+    /// Walk the record batch and collect dictionaries for later encoding.
+    fn collect_all_dicts(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-        compression_context: &mut CompressionContext,
     ) -> Result<Vec<DictionaryToEncode>, ArrowError> {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
@@ -611,7 +591,6 @@ impl IpcDataGenerator {
                 dictionary_tracker,
                 write_options,
                 &mut dict_id,
-                compression_context,
             )?;
         }
         Ok(encoded_dictionaries)
@@ -629,15 +608,8 @@ impl IpcDataGenerator {
         writer: &mut W,
         fbb: &mut FlatBufferBuilder<'static>,
     ) -> Result<IpcWriteMetadata, ArrowError> {
-        let dictionaries = self.encode_all_dicts(
-            batch,
-            dictionary_tracker,
-            write_options,
-            compression_context,
-        )?;
+        let dictionaries = self.collect_all_dicts(batch, dictionary_tracker, write_options)?;
 
-        // Scratch reused for every message's body buffers; dictionaries and the
-        // record batch all stream their (zero-copy) buffers through it.
         let capacity = batch
             .columns()
             .iter()
@@ -799,6 +771,7 @@ impl IpcDataGenerator {
     ///
     /// Returns `(body_len, tail_pad)`: the total body length including trailing
     /// padding, and the trailing alignment padding byte count.
+    #[allow(clippy::too_many_arguments)]
     fn dictionary_batch_to_sink(
         &self,
         dict_id: i64,
