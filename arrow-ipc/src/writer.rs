@@ -314,7 +314,7 @@ impl IpcDataGenerator {
         }
     }
 
-    fn _encode_dictionaries<I: Iterator<Item = i64>>(
+    fn _collect_dict_updates<I: Iterator<Item = i64>>(
         &self,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<DictionaryToEncode>,
@@ -326,7 +326,7 @@ impl IpcDataGenerator {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
                 for (field, column) in fields.iter().zip(s.columns()) {
-                    self.encode_dictionaries(
+                    self.collect_dict_updates(
                         field,
                         column,
                         encoded_dictionaries,
@@ -347,7 +347,7 @@ impl IpcDataGenerator {
                 // The run_ends array is not expected to be dictionary encoded. Hence encode dictionaries
                 // only for values array.
                 let values_array = make_array(data.child_data()[1].clone());
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     values,
                     &values_array,
                     encoded_dictionaries,
@@ -358,7 +358,7 @@ impl IpcDataGenerator {
             }
             DataType::List(field) => {
                 let list = as_list_array(column);
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
@@ -369,7 +369,7 @@ impl IpcDataGenerator {
             }
             DataType::LargeList(field) => {
                 let list = as_large_list_array(column);
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
@@ -380,7 +380,7 @@ impl IpcDataGenerator {
             }
             DataType::ListView(field) => {
                 let list = column.as_list_view::<i32>();
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
@@ -391,7 +391,7 @@ impl IpcDataGenerator {
             }
             DataType::LargeListView(field) => {
                 let list = column.as_list_view::<i64>();
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
@@ -405,7 +405,7 @@ impl IpcDataGenerator {
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .expect("Unable to downcast to fixed size list array");
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
@@ -423,7 +423,7 @@ impl IpcDataGenerator {
                 };
 
                 // keys
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     keys,
                     map_array.keys(),
                     encoded_dictionaries,
@@ -433,7 +433,7 @@ impl IpcDataGenerator {
                 )?;
 
                 // values
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     values,
                     map_array.values(),
                     encoded_dictionaries,
@@ -446,7 +446,7 @@ impl IpcDataGenerator {
                 let union = as_union_array(column);
                 for (type_id, field) in fields.iter() {
                     let column = union.child(type_id);
-                    self.encode_dictionaries(
+                    self.collect_dict_updates(
                         field,
                         column,
                         encoded_dictionaries,
@@ -462,12 +462,15 @@ impl IpcDataGenerator {
         Ok(())
     }
 
+    // Collect all dicts that need a dictionary message i.e. ones that were
+    // either not in the tracker previously or ones that were but need a
+    // replacement or delta.
     #[allow(clippy::too_many_arguments)]
-    fn encode_dictionaries<I: Iterator<Item = i64>>(
+    fn collect_dict_updates<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
         column: &ArrayRef,
-        encoded_dictionaries: &mut Vec<DictionaryToEncode>,
+        dictionaries: &mut Vec<DictionaryToEncode>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id_seq: &mut I,
@@ -479,9 +482,9 @@ impl IpcDataGenerator {
 
                 let values = make_array(dict_data.child_data()[0].clone());
 
-                self._encode_dictionaries(
+                self._collect_dict_updates(
                     &values,
-                    encoded_dictionaries,
+                    dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id_seq,
@@ -506,14 +509,14 @@ impl IpcDataGenerator {
                 )? {
                     DictionaryUpdate::None => {}
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
-                        encoded_dictionaries.push(DictionaryToEncode {
+                        dictionaries.push(DictionaryToEncode {
                             dict_id,
                             data: dict_values.clone(),
                             is_delta: false,
                         });
                     }
                     DictionaryUpdate::Delta(data) => {
-                        encoded_dictionaries.push(DictionaryToEncode {
+                        dictionaries.push(DictionaryToEncode {
                             dict_id,
                             data,
                             is_delta: true,
@@ -521,9 +524,9 @@ impl IpcDataGenerator {
                     }
                 }
             }
-            _ => self._encode_dictionaries(
+            _ => self._collect_dict_updates(
                 column,
-                encoded_dictionaries,
+                dictionaries,
                 dictionary_tracker,
                 write_options,
                 dict_id_seq,
@@ -581,19 +584,19 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<Vec<DictionaryToEncode>, ArrowError> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
+        let mut dictionaries = Vec::with_capacity(schema.flattened_fields().len());
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
         for (i, field) in schema.fields().iter().enumerate() {
-            self.encode_dictionaries(
+            self.collect_dict_updates(
                 field,
                 batch.column(i),
-                &mut encoded_dictionaries,
+                &mut dictionaries,
                 dictionary_tracker,
                 write_options,
                 &mut dict_id,
             )?;
         }
-        Ok(encoded_dictionaries)
+        Ok(dictionaries)
     }
 
     /// Write dictionary batches and the record batch directly to `writer`, skipping the
