@@ -321,10 +321,9 @@ impl StructArray {
     /// the first field will always be selected.
     /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
     pub fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
-        self.column_names()
-            .iter()
-            .position(|c| c == &column_name)
-            .map(|pos| self.column(pos))
+        self.fields()
+            .find(column_name)
+            .map(|(pos, _)| self.column(pos))
     }
 
     /// Returns the [`FieldRef`] at `pos`.
@@ -338,7 +337,7 @@ impl StructArray {
     /// the first field will always be selected.
     /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
     pub fn field_by_name(&self, field_name: &str) -> Option<&FieldRef> {
-        self.fields().iter().find(|f| f.name() == field_name)
+        self.fields().find(field_name).map(|(_, field)| field)
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
