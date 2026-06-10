@@ -363,14 +363,22 @@ impl<R: RunEndIndexType> RunArray<R> {
             // values: subtract the logical offset and cap at the logical length.
             // After this, run_ends[i] is the cumulative element count through run i,
             // measured from position 0 of this slice, with no hidden offset context.
-            let adjusted: ScalarBuffer<R::Native> = run_ends.inner()[start..=end]
-                .iter()
-                .map(|v| {
-                    R::Native::from_usize((v.as_usize() - logical_offset).min(logical_length))
-                        .unwrap()
-                })
-                .collect::<Vec<_>>()
-                .into();
+            let adjusted: ScalarBuffer<R::Native> =
+                if logical_offset == 0 && run_ends.inner()[end].as_usize() == logical_length {
+                    // Already zero-based and last run end is exactly at the slice boundary,
+                    // so no value transformation is needed — slice the buffer directly.
+                    run_ends.inner().slice(start, end - start + 1)
+                } else {
+                    run_ends.inner()[start..=end]
+                        .iter()
+                        .map(|v| {
+                            R::Native::from_usize(
+                                (v.as_usize() - logical_offset).min(logical_length),
+                            )
+                            .expect("logical length fits in run-end type")
+                        })
+                        .collect()
+                };
             let run_ends = unsafe { RunEndBuffer::new_unchecked(adjusted, 0, run_ends.len()) };
             (run_ends, values)
         };
@@ -1602,6 +1610,30 @@ mod tests {
             let second = first.slice(1, 4);
             assert_eq!(physical_values(&second), vec!["b", "c"]);
             assert_eq!(second.run_ends().values(), &[2i32, 4]);
+        }
+
+        #[test]
+        fn test_slice_with_nulls_preserves_logical_nulls() {
+            // Logical: [null, null, "a", "a", null, null, "b", "b"]
+            // Physical values: [null, "a", null, "b"], run_ends: [2, 4, 6, 8]
+            let run_ends = Int32Array::from(vec![2, 4, 6, 8]);
+            let values = StringArray::from(vec![None, Some("a"), None, Some("b")]);
+            let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // slice(1, 6) → [null, "a", "a", null, null, "b"]
+            let sliced = array.slice(1, 6);
+            assert_eq!(physical_values(&sliced), vec!["a", "b"]); // nulls excluded by flatten
+            let nulls = sliced.logical_nulls().unwrap();
+            assert_eq!(nulls.null_count(), 3);
+            let actual: Vec<bool> = nulls.into_iter().collect();
+            assert_eq!(actual, vec![false, true, true, false, false, true]);
+
+            // slice(2, 4) → ["a", "a", null, null]
+            let sliced2 = array.slice(2, 4);
+            let nulls2 = sliced2.logical_nulls().unwrap();
+            assert_eq!(nulls2.null_count(), 2);
+            let actual2: Vec<bool> = nulls2.into_iter().collect();
+            assert_eq!(actual2, vec![true, true, false, false]);
         }
 
         #[test]
