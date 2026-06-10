@@ -21,8 +21,8 @@ use crate::shred_variant::{
 };
 use crate::type_conversion::{
     PrimitiveFromVariant, ShredDecimalVariant, TimestampFromVariant,
-    shred_variant_to_unscaled_decimal, variant_cast_with_options, variant_to_boolean,
-    variant_to_unscaled_decimal,
+    shred_variant_to_unscaled_decimal, variant_cast_with_options, variant_to_binary,
+    variant_to_boolean, variant_to_string, variant_to_unscaled_decimal,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
@@ -204,6 +204,62 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     Ok(builder)
 }
 
+pub(crate) enum VariantToStringArrowRowBuilder<'a, B: StringLikeArrayBuilder> {
+    Get(VariantToStringGetArrowBuilder<'a, B>),
+    Shred(VariantToStringShredArrowBuilder<'a, B>),
+}
+
+impl<'a, B: StringLikeArrayBuilder> VariantToStringArrowRowBuilder<'a, B> {
+    fn append_null(&mut self) -> Result<()> {
+        match self {
+            Self::Get(b) => b.append_null(),
+            Self::Shred(b) => b.append_null(),
+        }
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match self {
+            Self::Get(b) => b.append_value(value),
+            Self::Shred(b) => b.append_value(value),
+        }
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        match self {
+            Self::Get(b) => b.finish(),
+            Self::Shred(b) => b.finish(),
+        }
+    }
+}
+
+pub(crate) enum VariantToBinaryArrowRowBuilder<'a, B: BinaryLikeArrayBuilder> {
+    Get(VariantToBinaryGetArrowRowBuilder<'a, B>),
+    Shred(VariantToBinaryShredArrowRowBuilder<'a, B>),
+}
+
+impl<'a, B: BinaryLikeArrayBuilder> VariantToBinaryArrowRowBuilder<'a, B> {
+    fn append_null(&mut self) -> Result<()> {
+        match self {
+            Self::Get(b) => b.append_null(),
+            Self::Shred(b) => b.append_null(),
+        }
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match self {
+            Self::Get(b) => b.append_value(value),
+            Self::Shred(b) => b.append_value(value),
+        }
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        match self {
+            Self::Get(b) => b.finish(),
+            Self::Shred(b) => b.finish(),
+        }
+    }
+}
+
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
@@ -244,9 +300,9 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Date32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
     Date64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date64Type>),
     Uuid(VariantToUuidArrowRowBuilder<'a>),
-    String(VariantToStringArrowBuilder<'a, StringBuilder>),
-    LargeString(VariantToStringArrowBuilder<'a, LargeStringBuilder>),
-    StringView(VariantToStringArrowBuilder<'a, StringViewBuilder>),
+    String(VariantToStringArrowRowBuilder<'a, StringBuilder>),
+    LargeString(VariantToStringArrowRowBuilder<'a, LargeStringBuilder>),
+    StringView(VariantToStringArrowRowBuilder<'a, StringViewBuilder>),
     Binary(VariantToBinaryArrowRowBuilder<'a, BinaryBuilder>),
     LargeBinary(VariantToBinaryArrowRowBuilder<'a, LargeBinaryBuilder>),
     BinaryView(VariantToBinaryArrowRowBuilder<'a, BinaryViewBuilder>),
@@ -590,13 +646,34 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                     .to_string(),
             ));
         }
-        DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity)),
-        DataType::LargeBinary => {
-            LargeBinary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
-        DataType::BinaryView => {
-            BinaryView(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
+        DataType::Binary => Binary({
+            match shred {
+                true => VariantToBinaryArrowRowBuilder::Shred(
+                    VariantToBinaryShredArrowRowBuilder::new(cast_options, capacity),
+                ),
+                false => VariantToBinaryArrowRowBuilder::Get(
+                    VariantToBinaryGetArrowRowBuilder::new(cast_options, capacity),
+                ),
+            }
+        }),
+        DataType::LargeBinary => LargeBinary(match shred {
+            true => VariantToBinaryArrowRowBuilder::Shred(
+                VariantToBinaryShredArrowRowBuilder::new(cast_options, capacity),
+            ),
+            false => VariantToBinaryArrowRowBuilder::Get(VariantToBinaryGetArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+        }),
+        DataType::BinaryView => BinaryView(match shred {
+            true => VariantToBinaryArrowRowBuilder::Shred(
+                VariantToBinaryShredArrowRowBuilder::new(cast_options, capacity),
+            ),
+            false => VariantToBinaryArrowRowBuilder::Get(VariantToBinaryGetArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+        }),
         DataType::FixedSizeBinary(16) => {
             Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
         }
@@ -605,11 +682,31 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 "DataType {data_type:?} not yet implemented"
             )));
         }
-        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::LargeUtf8 => {
-            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-        }
-        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
+
+        DataType::Utf8 => match shred {
+            true => String(VariantToStringArrowRowBuilder::Shred(
+                VariantToStringShredArrowBuilder::new(cast_options, capacity),
+            )),
+            false => String(VariantToStringArrowRowBuilder::Get(
+                VariantToStringGetArrowBuilder::new(cast_options, capacity),
+            )),
+        },
+        DataType::LargeUtf8 => match shred {
+            true => LargeString(VariantToStringArrowRowBuilder::Shred(
+                VariantToStringShredArrowBuilder::new(cast_options, capacity),
+            )),
+            false => LargeString(VariantToStringArrowRowBuilder::Get(
+                VariantToStringGetArrowBuilder::new(cast_options, capacity),
+            )),
+        },
+        DataType::Utf8View => match shred {
+            true => StringView(VariantToStringArrowRowBuilder::Shred(
+                VariantToStringShredArrowBuilder::new(cast_options, capacity),
+            )),
+            false => StringView(VariantToStringArrowRowBuilder::Get(
+                VariantToStringGetArrowBuilder::new(cast_options, capacity),
+            )),
+        },
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
@@ -1209,6 +1306,20 @@ macro_rules! define_variant_to_primitive_builder {
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
     |$value: ident $(, $shred: ident)?| $value_transform:expr,
     type_name: $type_name:expr) => {
+        define_variant_to_primitive_builder!(
+            struct $name<$lifetime $(, $generic: $bound )?>
+            |$array_param $(, $field: $field_type)?| -> $builder_name $(< $array_type >)? { $init_expr },
+            |$value $(,$shred)?| $value_transform,
+            type_name: $type_name,
+            append_value: |builder, v| builder.append_value(v)
+        );
+    };
+
+    (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
+    |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
+    |$value: ident $(, $shred: ident)?| $value_transform:expr,
+    type_name: $type_name:expr,
+    append_value: |$builder:ident, $append_value:ident| $append_expr:expr) => {
         pub(crate) struct $name<$lifetime $(, $generic : $bound )?>
         {
             builder: $builder_name $(<$array_type>)?,
@@ -1244,7 +1355,9 @@ macro_rules! define_variant_to_primitive_builder {
                     |$value| $value_transform,
                 ) {
                     Ok(Some(v)) => {
-                        self.builder.append_value(v);
+                        let $builder = &mut self.builder;
+                        let $append_value = v;
+                        $append_expr;
                         Ok(true)
                     }
                     Ok(None) => {
@@ -1274,7 +1387,15 @@ macro_rules! define_variant_to_primitive_builder {
 }
 
 define_variant_to_primitive_builder!(
-    struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
+    struct VariantToStringGetArrowBuilder<'a, B: StringLikeArrayBuilder>
+    |capacity| -> B { B::with_capacity(capacity) },
+    |value| variant_to_string(value),
+    type_name: B::type_name(),
+    append_value: |builder, v| builder.append_value(&v)
+);
+
+define_variant_to_primitive_builder!(
+    struct VariantToStringShredArrowBuilder<'a, B: StringLikeArrayBuilder>
     |capacity| -> B { B::with_capacity(capacity) },
     |value| value.as_string(),
     type_name: B::type_name()
@@ -1311,9 +1432,16 @@ define_variant_to_primitive_builder!(
 );
 
 define_variant_to_primitive_builder!(
-    struct VariantToBinaryArrowRowBuilder<'a, B: BinaryLikeArrayBuilder>
+    struct VariantToBinaryShredArrowRowBuilder<'a, B: BinaryLikeArrayBuilder>
     |capacity| -> B { B::with_capacity(capacity) },
     |value| value.as_u8_slice(),
+    type_name: B::type_name()
+);
+
+define_variant_to_primitive_builder!(
+    struct VariantToBinaryGetArrowRowBuilder<'a, B: BinaryLikeArrayBuilder>
+    |capacity| -> B { B::with_capacity(capacity) },
+    |value| variant_to_binary(value),
     type_name: B::type_name()
 );
 

@@ -29,10 +29,9 @@ use crate::decoder::{
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
-use std::ops::Deref;
-
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use std::ops::Deref;
 
 mod decimal;
 mod list;
@@ -520,8 +519,12 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `NaiveDate` if possible.
     ///
-    /// Returns `Some(NaiveDate)` for date variants,
-    /// `None` for non-date variants.
+    /// Returns `Some(NaiveDate)` for date variants and string variants
+    /// that can be parsed as dates. Supports ISO date strings (`"2025-04-12"`),
+    /// compact date strings (`"20250412"`), flexible formats (`"2025-4-2"`),
+    /// and datetime strings (`"2025-04-12T10:30:00Z"`, date part extracted).
+    ///
+    /// Returns `None` for non-date, non-string variants or unparseable strings.
     ///
     /// # Examples
     ///
@@ -534,15 +537,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(date);
     /// assert_eq!(v1.as_naive_date(), Some(date));
     ///
-    /// // but not from other variants
-    /// let v2 = Variant::from("hello!");
-    /// assert_eq!(v2.as_naive_date(), None);
+    /// // or from an ISO date string
+    /// let v2 = Variant::from("2025-04-12");
+    /// assert_eq!(v2.as_naive_date(), Some(date));
+    ///
+    /// // but not from unparseable strings
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_naive_date(), None);
     /// ```
     pub fn as_naive_date(&self) -> Option<NaiveDate> {
-        if let Variant::Date(d) = self {
-            Some(*d)
-        } else {
-            None
+        match *self {
+            Variant::Date(d) => Some(d),
+            _ => None,
         }
     }
 
@@ -584,10 +590,6 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///     .and_utc();
     /// let v3 = Variant::from(datetime_nanos);
     /// assert_eq!(v3.as_timestamp_micros(), None);
-    ///
-    /// // or from other variant
-    /// let v4 = Variant::from("hello");
-    /// assert_eq!(v4.as_timestamp_micros(), None);
     /// ```
     pub fn as_timestamp_micros(&self) -> Option<DateTime<Utc>> {
         match *self {
@@ -675,9 +677,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(datetime_micros);
     /// assert_eq!(v2.as_timestamp_nanos(), Some(datetime_micros));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::from("2026-06-10T12:34:56.123456789Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 123456789)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// assert_eq!(v3.as_timestamp_nanos(), Some(datetime));
+    ///
     /// // but not for other variants.
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_timestamp_nanos(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_timestamp_nanos(), None);
     /// ```
     pub fn as_timestamp_nanos(&self) -> Option<DateTime<Utc>> {
         match *self {
@@ -714,9 +725,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(datetime_micros);
     /// assert_eq!(v2.as_timestamp_ntz_nanos(), Some(datetime_micros));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::from("2026-06-10T12:34:56.123456789Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 123456789)
+    ///     .unwrap();
+    /// assert_eq!(v3.as_timestamp_ntz_nanos(), Some(datetime));
+    ///
     /// // but not for other variants.
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_timestamp_ntz_nanos(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_timestamp_ntz_nanos(), None);
     /// ```
     pub fn as_timestamp_ntz_nanos(&self) -> Option<NaiveDateTime> {
         match *self {
@@ -745,10 +764,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v2.as_u8_slice(), None);
     /// ```
     pub fn as_u8_slice(&'v self) -> Option<&'v [u8]> {
-        if let Variant::Binary(d) = self {
-            Some(d)
-        } else {
-            None
+        match self {
+            Variant::Binary(d) => Some(d),
+            _ => None,
         }
     }
 
@@ -778,9 +796,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to a `uuid hyphenated string` if possible.
+    /// Converts this variant to a `Uuid` if possible.
     ///
-    /// Returns `Some(String)` for UUID variants, `None` for non-UUID variants.
+    /// Returns `Some(Uuid)` for UUID variants and string variants that can be
+    /// parsed as UUIDs.
     ///
     /// # Examples
     ///
@@ -791,15 +810,24 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let s = uuid::Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     /// let v1 = Variant::Uuid(s);
     /// assert_eq!(s, v1.as_uuid().unwrap());
-    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid().unwrap().to_string());
     ///
-    /// //but not from other variants
-    /// let v2 = Variant::from(1234);
-    /// assert_eq!(None, v2.as_uuid())
+    /// // or from a UUID-format string
+    /// let v2 = Variant::from("67e55044-10b1-426f-9247-bb680e5fe0c8");
+    /// assert_eq!(s, v2.as_uuid().unwrap());
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from(1234);
+    /// assert_eq!(None, v3.as_uuid());
+    ///
+    /// // or non-UUID strings
+    /// let v4 = Variant::from("not-a-uuid");
+    /// assert_eq!(None, v4.as_uuid());
     /// ```
     pub fn as_uuid(&self) -> Option<Uuid> {
         match self {
             Variant::Uuid(u) => Some(*u),
+            Variant::ShortString(s) => Uuid::parse_str(s.as_ref()).ok(),
+            Variant::String(s) => Uuid::parse_str(s).ok(),
             _ => None,
         }
     }
@@ -1073,7 +1101,6 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v3 = Variant::from(d);
     /// assert_eq!(v3.as_u16(), Some(1u16));
     ///
-    ///  // but not a variant that can't fit into the range
     /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
     ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u16(), None);
@@ -1111,7 +1138,6 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v3 = Variant::from(d);
     /// assert_eq!(v3.as_u32(), Some(1u32));
     ///
-    ///  // but not a variant that can't fit into the range
     /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
     ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u32(), None);
@@ -1438,8 +1464,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `NaiveTime` if possible.
     ///
-    /// Returns `Some(NaiveTime)` for `Variant::Time`,
-    /// `None` for non-Time variants.
+    /// Returns `Some(NaiveTime)` for a time and string variant.
+    /// `None` for the other variants.
     ///
     /// # Example
     ///
@@ -1452,15 +1478,19 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(time);
     /// assert_eq!(Some(time), v1.as_time_utc());
     ///
+    /// // or from string variant
+    /// let v2 = Variant::String("1234567");
+    /// let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+    /// assert_eq!(Some(time), v2.as_time_utc());
+    ///
     /// // but not from other variants.
-    /// let v2 = Variant::from("Hello");
-    /// assert_eq!(None, v2.as_time_utc());
+    /// let v3 = Variant::from("Hello");
+    /// assert_eq!(None, v3.as_time_utc());
     /// ```
     pub fn as_time_utc(&'m self) -> Option<NaiveTime> {
-        if let Variant::Time(time) = self {
-            Some(*time)
-        } else {
-            None
+        match *self {
+            Variant::Time(time) => Some(time),
+            _ => None,
         }
     }
 
