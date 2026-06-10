@@ -268,14 +268,10 @@ fn shredded_get_path(
                 let num_rows = input.len();
                 if as_field.is_some_and(Field::has_valid_extension_type::<VariantType>) {
                     let all_nulls = Some(arrow::buffer::NullBuffer::from(vec![false; num_rows]));
-                    let arr = VariantArray::from_parts(
-                        // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
-                        // a new empty metadata array. (n * 3 bytes vs Arc bump)
-                        input.metadata_field().clone(),
-                        None,
-                        None,
-                        all_nulls,
-                    );
+                    // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
+                    // a new empty metadata array. (n * 3 bytes vs Arc bump)
+                    let metadata = input.metadata_field().clone();
+                    Ok(ArrayRef::from(VariantArray::from_parts(metadata, None, None, all_nulls)))
                     return Ok(ArrayRef::from(arr));
                 }
                 let arr = match as_field.map(|f| f.data_type()) {
@@ -330,12 +326,8 @@ fn shredded_get_path(
             let children = fields
                 .iter()
                 .map(|field| {
-                    shredded_get_path(
-                        &target,
-                        &[VariantPathElement::from(field.name().as_str())],
-                        Some(field),
-                        cast_options,
-                    )
+                    let path = &[VariantPathElement::from(field.name().as_str())];
+                    shredded_get_path(&target, path, Some(field), cast_options)
                 })
                 .collect::<Result<Vec<_>>>()?;
 
