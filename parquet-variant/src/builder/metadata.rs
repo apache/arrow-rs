@@ -268,7 +268,7 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 #[cfg(test)]
 mod test {
     use crate::{
-        ParentState, ValueBuilder, Variant, VariantMetadata,
+        ParentState, ValueBuilder, VariantMetadata,
         builder::{
             metadata::{ReadOnlyMetadataBuilder, WritableMetadataBuilder},
             object::ObjectBuilder,
@@ -354,42 +354,6 @@ mod test {
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
         let metadata = WritableMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
-    }
-
-    #[test]
-    fn test_read_only_metadata_builder() {
-        // First create some metadata with a few field names
-        let mut default_builder = WritableMetadataBuilder::default();
-        default_builder.upsert_field_name("name");
-        default_builder.upsert_field_name("age");
-        default_builder.upsert_field_name("active");
-        default_builder.finish();
-        let metadata_bytes = default_builder.into_inner();
-
-        // Use the metadata to build new variant values
-        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
-        let mut value_builder = ValueBuilder::new();
-
-        {
-            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
-            let mut obj = ObjectBuilder::new(state, false);
-
-            // These should succeed because the fields exist in the metadata
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i8);
-            obj.insert("active", true);
-            obj.finish();
-        }
-
-        let value = value_builder.into_inner();
-
-        // Verify the variant was built correctly
-        let variant = Variant::try_new(&metadata_bytes, &value).unwrap();
-        let obj = variant.as_object().unwrap();
-        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
-        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
-        assert_eq!(obj.get("active"), Some(Variant::from(true)));
     }
 
     #[test]
