@@ -271,8 +271,9 @@ fn shredded_get_path(
                     // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
                     // a new empty metadata array. (n * 3 bytes vs Arc bump)
                     let metadata = input.metadata_field().clone();
-                    Ok(ArrayRef::from(VariantArray::from_parts(metadata, None, None, all_nulls)))
-                    return Ok(ArrayRef::from(arr));
+                    return Ok(ArrayRef::from(VariantArray::from_parts(
+                        metadata, None, None, all_nulls,
+                    )));
                 }
                 let arr = match as_field.map(|f| f.data_type()) {
                     Some(data_type) => array::new_null_array(data_type, num_rows),
