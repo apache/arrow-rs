@@ -29,10 +29,9 @@ use crate::decoder::{
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
-use std::ops::Deref;
-
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use std::ops::Deref;
 
 mod decimal;
 mod list;
