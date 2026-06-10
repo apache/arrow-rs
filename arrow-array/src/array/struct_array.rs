@@ -319,12 +319,26 @@ impl StructArray {
     ///
     /// Note: A schema can currently have duplicate field names, in which case
     /// the first field will always be selected.
-    /// This issue will be addressed in [ARROW-11178](https://issues.apache.org/jira/browse/ARROW-11178)
+    /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
     pub fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
         self.column_names()
             .iter()
             .position(|c| c == &column_name)
             .map(|pos| self.column(pos))
+    }
+
+    /// Returns the [`FieldRef`] at `pos`.
+    pub fn field(&self, pos: usize) -> &FieldRef {
+        &self.fields()[pos]
+    }
+
+    /// Return the [`FieldRef`] whose name equals to `field_name`
+    ///
+    /// Note: A schema can currently have duplicate field names, in which case
+    /// the first field will always be selected.
+    /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
+    pub fn field_by_name(&self, field_name: &str) -> Option<&FieldRef> {
+        self.fields().iter().find(|f| f.name() == field_name)
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -754,6 +768,27 @@ mod tests {
         ]);
         assert_eq!(struct_array["b"].as_ref(), boolean.as_ref());
         assert_eq!(struct_array["c"].as_ref(), int.as_ref());
+    }
+
+    #[test]
+    fn test_struct_array_field_access() {
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+
+        let b_field = Arc::new(Field::new("b", DataType::Boolean, false));
+        let c_field = Arc::new(Field::new("c", DataType::Int32, false));
+
+        let struct_array = StructArray::from(vec![
+            (b_field.clone(), boolean as ArrayRef),
+            (c_field.clone(), int as ArrayRef),
+        ]);
+
+        assert_eq!(struct_array.field(0), &b_field);
+        assert_eq!(struct_array.field(1), &c_field);
+
+        assert_eq!(struct_array.field_by_name("b"), Some(&b_field));
+        assert_eq!(struct_array.field_by_name("c"), Some(&c_field));
+        assert_eq!(struct_array.field_by_name("d"), None);
     }
 
     /// validates that the in-memory representation follows [the spec](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
