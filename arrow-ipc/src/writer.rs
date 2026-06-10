@@ -276,7 +276,7 @@ pub struct IpcDataGenerator {}
 /// serialisation, so the latter can reuse a single [`FlatBufferBuilder`] and
 /// stream bodies zero-copy.
 struct DictionaryToEncode {
-    dict_id: i64,
+    id: i64,
     data: ArrayData,
     is_delta: bool,
 }
@@ -510,14 +510,14 @@ impl IpcDataGenerator {
                     DictionaryUpdate::None => {}
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
                         dictionaries.push(DictionaryToEncode {
-                            dict_id,
+                            id: dict_id,
                             data: dict_values.clone(),
                             is_delta: false,
                         });
                     }
                     DictionaryUpdate::Delta(data) => {
                         dictionaries.push(DictionaryToEncode {
-                            dict_id,
+                            id: dict_id,
                             data,
                             is_delta: true,
                         });
@@ -550,10 +550,8 @@ impl IpcDataGenerator {
         let mut encoded_dictionaries = Vec::with_capacity(dictionaries.len());
         for dict in dictionaries {
             encoded_dictionaries.push(self.dictionary_batch_to_bytes(
-                dict.dict_id,
-                &dict.data,
+                dict,
                 write_options,
-                dict.is_delta,
                 compression_context,
             )?);
         }
@@ -612,6 +610,7 @@ impl IpcDataGenerator {
         fbb: &mut FlatBufferBuilder<'static>,
     ) -> Result<IpcWriteMetadata, ArrowError> {
         let dictionaries = self.collect_all_dicts(batch, dictionary_tracker, write_options)?;
+        let mut dictionary_block_sizes = Vec::with_capacity(dictionaries.len());
 
         let capacity = batch
             .columns()
@@ -620,14 +619,11 @@ impl IpcDataGenerator {
             .sum();
         let mut encoded_buffers: Vec<EncodedBuffer> = Vec::with_capacity(capacity);
 
-        let mut dictionary_block_sizes = Vec::with_capacity(dictionaries.len());
         for dict in &dictionaries {
             encoded_buffers.clear();
             let (body_len, tail_pad) = self.dictionary_batch_to_sink(
-                dict.dict_id,
-                &dict.data,
+                dict,
                 write_options,
-                dict.is_delta,
                 compression_context,
                 &mut IpcBodySink::Collect(&mut encoded_buffers),
                 fbb,
@@ -774,13 +770,10 @@ impl IpcDataGenerator {
     ///
     /// Returns `(body_len, tail_pad)`: the total body length including trailing
     /// padding, and the trailing alignment padding byte count.
-    #[allow(clippy::too_many_arguments)]
     fn dictionary_batch_to_sink(
         &self,
-        dict_id: i64,
-        array_data: &ArrayData,
+        dict: &DictionaryToEncode,
         write_options: &IpcWriteOptions,
-        is_delta: bool,
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
         fbb: &mut FlatBufferBuilder<'static>,
@@ -808,18 +801,20 @@ impl IpcDataGenerator {
 
         let alignment = write_options.alignment;
         let offset = write_array_data(
-            array_data,
+            &dict.data,
             &mut buffers,
             sink,
             &mut nodes,
             0,
+            dict.data.len(),
+            dict.data.null_count(),
             compression_codec,
             compression_context,
             write_options,
         )?;
 
         let mut variadic_buffer_counts = vec![];
-        append_variadic_buffer_counts(&mut variadic_buffer_counts, array_data);
+        append_variadic_buffer_counts(&mut variadic_buffer_counts, &dict.data);
 
         let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
@@ -835,7 +830,7 @@ impl IpcDataGenerator {
 
         let root = {
             let mut batch_builder = crate::RecordBatchBuilder::new(&mut *fbb);
-            batch_builder.add_length(array_data.len() as i64);
+            batch_builder.add_length(dict.data.len() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
             if let Some(c) = compression {
@@ -849,9 +844,9 @@ impl IpcDataGenerator {
 
         let root = {
             let mut batch_builder = crate::DictionaryBatchBuilder::new(&mut *fbb);
-            batch_builder.add_id(dict_id);
+            batch_builder.add_id(dict.id);
             batch_builder.add_data(root);
-            batch_builder.add_isDelta(is_delta);
+            batch_builder.add_isDelta(dict.is_delta);
             batch_builder.finish().as_union_value()
         };
 
@@ -873,19 +868,15 @@ impl IpcDataGenerator {
     /// other for the data
     fn dictionary_batch_to_bytes(
         &self,
-        dict_id: i64,
-        array_data: &ArrayData,
+        dict: DictionaryToEncode,
         write_options: &IpcWriteOptions,
-        is_delta: bool,
         compression_context: &mut CompressionContext,
     ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
         let mut arrow_data: Vec<u8> = vec![];
         let (_, tail_pad) = self.dictionary_batch_to_sink(
-            dict_id,
-            array_data,
+            &dict,
             write_options,
-            is_delta,
             compression_context,
             &mut IpcBodySink::Write(&mut arrow_data),
             &mut fbb,
