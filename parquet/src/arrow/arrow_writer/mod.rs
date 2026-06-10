@@ -5204,13 +5204,10 @@ mod tests {
             array.data_type().clone(),
             true,
         )]));
-        let mut buf = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, schema.clone(), None).expect("create writer");
-        writer
-            .write(&RecordBatch::try_new(schema, vec![array]).unwrap())
-            .unwrap();
-        writer.close().unwrap();
+        let buf = get_bytes_after_close(
+            schema.clone(),
+            &RecordBatch::try_new(schema, vec![array]).unwrap(),
+        );
         Bytes::from(buf)
     }
 

@@ -45,7 +45,7 @@ use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray};
+use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray, downcast_run_array};
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
@@ -57,18 +57,10 @@ use std::sync::Arc;
 /// use `arrow_select::take` to materialize the  full-length flat array.
 /// This is intentionally simple (O(n)); efficiency can/should be improved
 fn expand_ree_array(array: &ArrayRef) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::RunEndEncoded(run_ends_field, _) => match run_ends_field.data_type() {
-            DataType::Int16 => expand_typed_ree(array.as_run::<arrow_array::types::Int16Type>()),
-            DataType::Int32 => expand_typed_ree(array.as_run::<arrow_array::types::Int32Type>()),
-            DataType::Int64 => expand_typed_ree(array.as_run::<arrow_array::types::Int64Type>()),
-            dt => Err(arrow_err!(
-                "Unsupported run-end type for REE expansion: {}",
-                dt
-            )),
-        },
+    downcast_run_array!(
+        array => expand_typed_ree(array),
         _ => unreachable!("expand_ree_array called on non-REE array"),
-    }
+    )
 }
 
 fn expand_typed_ree<R: RunEndIndexType>(run_array: &RunArray<R>) -> Result<ArrayRef> {
