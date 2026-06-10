@@ -150,7 +150,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 cast_options,
                 capacity,
                 null_value,
-                shred,
+                shred
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -1135,7 +1135,7 @@ mod tests {
 
     #[test]
     fn test_already_shredded_input_error() {
-        // Create a VariantArray that already has typed_value_field
+        // Create a VariantArray that already has typed_value_column
         // First create a valid VariantArray, then extract its parts to construct a shredded one
         let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
         let metadata = temp_array.metadata_column().clone();
@@ -1266,8 +1266,8 @@ mod tests {
 
         // Verify structure
         let metadata_field = result.metadata_column();
-        let value_field = result.value_column();
-        let typed_value_field = result
+        let value_column = result.value_column();
+        let typed_value_column = result
             .typed_value_column()
             .unwrap()
             .as_any()
@@ -1279,41 +1279,41 @@ mod tests {
 
         // Row 0: 42 -> should shred successfully
         assert!(!result.is_null(0));
-        assert!(value_field.is_null(0)); // value should be null when shredded
-        assert!(!typed_value_field.is_null(0));
-        assert_eq!(typed_value_field.value(0), 42);
+        assert!(value_column.is_null(0)); // value should be null when shredded
+        assert!(!typed_value_column.is_null(0));
+        assert_eq!(typed_value_column.value(0), 42);
 
         // Row 1: "hello" -> should fail to shred
         assert!(!result.is_null(1));
-        assert!(!value_field.is_null(1)); // value should contain original
-        assert!(typed_value_field.is_null(1)); // typed_value should be null
+        assert!(!value_column.is_null(1)); // value should contain original
+        assert!(typed_value_column.is_null(1)); // typed_value should be null
         assert_eq!(
-            variant_from_arrays_at(metadata_field, value_field, 1).unwrap(),
+            variant_from_arrays_at(metadata_field, value_column, 1).unwrap(),
             Variant::from("hello")
         );
 
         // Row 2: 100 -> should shred successfully
         assert!(!result.is_null(2));
-        assert!(value_field.is_null(2));
-        assert_eq!(typed_value_field.value(2), 100);
+        assert!(value_column.is_null(2));
+        assert_eq!(typed_value_column.value(2), 100);
 
         // Row 3: array null -> should be null in result
         assert!(result.is_null(3));
 
         // Row 4: Variant::Null -> should not shred (it's a null variant, not an integer)
         assert!(!result.is_null(4));
-        assert!(!value_field.is_null(4)); // should contain Variant::Null
+        assert!(!value_column.is_null(4)); // should contain Variant::Null
         assert_eq!(
-            variant_from_arrays_at(metadata_field, value_field, 4).unwrap(),
+            variant_from_arrays_at(metadata_field, value_column, 4).unwrap(),
             Variant::Null
         );
-        assert!(typed_value_field.is_null(4));
+        assert!(typed_value_column.is_null(4));
 
         // Row 5: 3i8 -> should shred successfully (int8->int64 conversion)
         assert!(!result.is_null(5));
-        assert!(value_field.is_null(5)); // value should be null when shredded
-        assert!(!typed_value_field.is_null(5));
-        assert_eq!(typed_value_field.value(5), 3);
+        assert!(value_column.is_null(5)); // value should be null when shredded
+        assert!(!typed_value_column.is_null(5));
+        assert_eq!(typed_value_column.value(5), 3);
     }
 
     #[test]
@@ -1333,7 +1333,7 @@ mod tests {
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         assert_eq!(typed_value_int32.value(0), 42);
-        assert!(typed_value_int32.is_null(1)); // float doesn't shred to int32
+        assert!(typed_value_int32.is_null(1)); // float doesn't convert to int32
         assert!(typed_value_int32.is_null(2)); // string doesn't convert to int32
 
         // Test Float64 target
@@ -1344,7 +1344,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(typed_value_float64.is_null(0)); // int doesn't shred to float
+        assert!(typed_value_float64.is_null(0)); // int doesn't convert to float
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
     }
@@ -2299,7 +2299,7 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         // Access base value/typed_value columns
-        let value_field = result.value_column();
+        let value_column = result.value_column();
         let typed_struct = result
             .typed_value_column()
             .unwrap()
@@ -2308,15 +2308,15 @@ mod tests {
             .unwrap();
 
         // Validate base value fallbacks for non-object rows
-        assert!(value_field.is_null(0));
-        assert!(value_field.is_null(1));
-        assert!(value_field.is_null(2));
-        assert!(value_field.is_valid(3));
+        assert!(value_column.is_null(0));
+        assert!(value_column.is_null(1));
+        assert!(value_column.is_null(2));
+        assert!(value_column.is_valid(3));
         assert_eq!(
-            variant_from_arrays_at(result.metadata_column(), value_field, 3).unwrap(),
+            variant_from_arrays_at(result.metadata_column(), value_column, 3).unwrap(),
             Variant::from("not an object")
         );
-        assert!(value_field.is_null(4));
+        assert!(value_column.is_null(4));
 
         // Typed struct should only be null for the fallback row
         assert!(typed_struct.is_valid(0));
@@ -2364,8 +2364,8 @@ mod tests {
             .with_path("id", &DataType::Int32)?
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
-        let value_field1 = result1.value_column();
-        assert!(!value_field1.is_null(0)); // should contain {"age": 25, "score": 95.5}
+        let value_column1 = result1.value_column();
+        assert!(!value_column1.is_null(0)); // should contain {"age": 25, "score": 95.5}
 
         // Test with schema containing id and age fields
         let schema2 = ShreddedSchemaBuilder::default()
@@ -2373,8 +2373,8 @@ mod tests {
             .with_path("age", &DataType::Int64)?
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
-        let value_field2 = result2.value_column();
-        assert!(!value_field2.is_null(0)); // should contain {"score": 95.5}
+        let value_column2 = result2.value_column();
+        assert!(!value_column2.is_null(0)); // should contain {"score": 95.5}
 
         // Test with schema containing all fields
         let schema3 = ShreddedSchemaBuilder::default()
@@ -2383,8 +2383,8 @@ mod tests {
             .with_path("score", &DataType::Float64)?
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
-        let value_field3 = result3.value_column();
-        assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
+        let value_column3 = result3.value_column();
+        assert!(value_column3.is_null(0)); // fully shredded, no remaining fields
 
         Ok(())
     }
@@ -2575,7 +2575,7 @@ mod tests {
                 .unwrap();
 
             $(assert_eq!(typed_value.precision(), $expected_precision);)?
-            $(assert_eq!(typed_value.scale(), $expected_scale);)?
+                     $(assert_eq!(typed_value.scale(), $expected_scale);)?
 
             for i in 0..$expected_typed_value.len() {
                 assert_eq!(value.is_valid(i), $expected_typed_value.is_null(i));
@@ -2830,8 +2830,8 @@ mod tests {
 
         // For primitive shredding, verify that value and typed_value are never both non-null
         // (This rule applies to primitives; for objects, both can be non-null for partial shredding)
-        let value_field = result.value_column();
-        let typed_value_field = result
+        let value_column = result.value_column();
+        let typed_value_column = result
             .typed_value_column()
             .unwrap()
             .as_any()
@@ -2840,8 +2840,8 @@ mod tests {
 
         for i in 0..result.len() {
             if !result.is_null(i) {
-                let value_is_null = value_field.is_null(i);
-                let typed_value_is_null = typed_value_field.is_null(i);
+                let value_is_null = value_column.is_null(i);
+                let typed_value_is_null = typed_value_column.is_null(i);
                 // For primitive shredding, at least one should be null
                 assert!(
                     value_is_null || typed_value_is_null,

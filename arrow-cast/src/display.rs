@@ -40,10 +40,14 @@ use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
 
-struct CompiledItems<'a>(Vec<Item<'a>>);
+/// A compiled items used to format the time
+pub struct CompiledItems<'a>(Vec<Item<'a>>);
 
-enum CompiledTimeFormat<'a> {
+/// A format which used to display the given time.
+pub enum CompiledTimeFormat<'a> {
+    /// The default time format, will use rfc3339 format
     Default,
+    /// A user custom time format
     Custom(Box<CompiledItems<'a>>),
 }
 
@@ -752,7 +756,8 @@ macro_rules! decimal_display {
 
 decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
-fn write_timestamp(
+/// Writes a timestamp value to the output using the given representation.
+pub fn write_timestamp(
     f: &mut dyn Write,
     naive: NaiveDateTime,
     timezone: Option<Tz>,

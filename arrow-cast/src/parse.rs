@@ -646,7 +646,36 @@ fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
     Some((year, month, day))
 }
 
-fn parse_date(string: &str) -> Option<NaiveDate> {
+/// Parse a given date string into a `NaiveDate`.
+///
+/// ```
+///  /// You can parse from ISO date strings
+/// use chrono::NaiveDate;
+/// use arrow_cast::parse::{parse_date, parse_decimal};
+/// let s1 = "2026-06-10";
+/// let d1 = parse_date(s1).unwrap();
+/// let expected_d1 = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+/// assert_eq!(expected_d1, d1);
+///
+/// // or from ISO extended(signed) year date strings
+/// let s2 = "+2026-06-10";
+/// let d2 = parse_date(s2).unwrap();
+/// let expected_d2 = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+/// assert_eq!(expected_d2, d2);
+///
+/// // or from date strings without hyphen
+/// let s3 = "20260610";
+/// let d3 = parse_date(s3).unwrap();
+/// let expected_d3 = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+/// assert_eq!(expected_d3, d3);
+///
+/// // or from datetime strings
+/// let s4 = "2026-06-10T14:23:45";
+/// let d4 = parse_date(s4).unwrap();
+/// let expected_d4 = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+/// assert_eq!(expected_d4, d4);
+/// ```
+pub fn parse_date(string: &str) -> Option<NaiveDate> {
     // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
     //
     // According to [ISO 8601], years have:
