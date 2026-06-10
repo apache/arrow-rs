@@ -20,7 +20,7 @@ use crate::shred_variant::{
     make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
-    PrimitiveFromVariant, TimestampFromVariant, variant_cast_with_options,
+    PrimitiveFromVariant, TimestampFromVariant, variant_cast_with_options, variant_to_string,
     variant_to_unscaled_decimal,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
@@ -762,6 +762,20 @@ macro_rules! define_variant_to_primitive_builder {
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
     |$value: ident| $value_transform:expr,
     type_name: $type_name:expr) => {
+        define_variant_to_primitive_builder!(
+            struct $name<$lifetime $(, $generic: $bound )?>
+            |$array_param $(, $field: $field_type)?| -> $builder_name $(< $array_type >)? { $init_expr },
+            |$value| $value_transform,
+            type_name: $type_name,
+            append_value: |builder, v| builder.append_value(v)
+        );
+    };
+
+    (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
+    |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
+    |$value: ident| $value_transform:expr,
+    type_name: $type_name:expr,
+    append_value: |$builder:ident, $append_value:ident| $append_expr:expr) => {
         pub(crate) struct $name<$lifetime $(, $generic : $bound )?>
         {
             builder: $builder_name $(<$array_type>)?,
@@ -793,7 +807,9 @@ macro_rules! define_variant_to_primitive_builder {
                     |$value| $value_transform,
                 ) {
                     Ok(Some(v)) => {
-                        self.builder.append_value(v);
+                        let $builder = &mut self.builder;
+                        let $append_value = v;
+                        $append_expr;
                         Ok(true)
                     }
                     Ok(None) => {
@@ -824,8 +840,9 @@ macro_rules! define_variant_to_primitive_builder {
 define_variant_to_primitive_builder!(
     struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
     |capacity| -> B { B::with_capacity(capacity) },
-    |value| value.as_string(),
-    type_name: B::type_name()
+    |value| variant_to_string(value),
+    type_name: B::type_name(),
+    append_value: |builder, v| builder.append_value(&v)
 );
 
 define_variant_to_primitive_builder!(
