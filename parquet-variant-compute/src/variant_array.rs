@@ -396,7 +396,7 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
-        match (self.typed_value_field(), self.value_field()) {
+        match (self.typed_value_column(), self.value_column()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
                 typed_value_to_variant(typed_value, value, index)
@@ -420,19 +420,36 @@ impl VariantArray {
         }
     }
 
-    /// Return a reference to the metadata field of the [`StructArray`]
-    pub fn metadata_field(&self) -> &ArrayRef {
+    /// Return a reference to the `metadata` column of the [`StructArray`]
+    pub fn metadata_column(&self) -> &ArrayRef {
         &self.metadata
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
+    }
+
+    /// Return the [`FieldRef`] of the `metadata` column of the [`StructArray`]
+    pub fn metadata_field(&self) -> &FieldRef {
+        self.inner
+            .field_by_name("metadata")
+            .expect("VariantArray always has a metadata field")
+    }
+
+    /// Return the [`FieldRef`] of the `value` column of the [`StructArray`], if present
+    pub fn value_field(&self) -> Option<&FieldRef> {
+        self.inner.field_by_name("value")
+    }
+
+    /// Return the [`FieldRef`] of the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_field(&self) -> Option<&FieldRef> {
+        self.inner.field_by_name("typed_value")
     }
 
     /// Return a field to represent this VariantArray in a `Schema` with
@@ -688,14 +705,24 @@ impl ShreddedVariantFieldArray {
         &self.shredding_state
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
+    }
+
+    /// Return the [`FieldRef`] of the `value` column of the [`StructArray`], if present
+    pub fn value_field(&self) -> Option<&FieldRef> {
+        self.inner.field_by_name("value")
+    }
+
+    /// Return the [`FieldRef`] of the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_field(&self) -> Option<&FieldRef> {
+        self.inner.field_by_name("typed_value")
     }
 
     /// Returns a reference to the underlying [`StructArray`].
@@ -833,13 +860,13 @@ impl ShreddingState {
         Self { value, typed_value }
     }
 
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `value` column, if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
         self.value.as_ref()
     }
 
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `typed_value` column, if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
         self.typed_value.as_ref()
     }
 
@@ -1216,11 +1243,12 @@ mod test {
 
     use super::*;
     use arrow::array::{
-        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        Time64MicrosecondArray,
+        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        FixedSizeBinaryArray, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
+        LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow_schema::extension::Uuid;
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
@@ -1484,10 +1512,46 @@ mod test {
             let input = make_variant_struct_with_typed_value(typed_value.clone());
             let variant_array = VariantArray::try_new(&input).unwrap();
             assert_eq!(
-                variant_array.typed_value_field().unwrap().data_type(),
+                variant_array.typed_value_column().unwrap().data_type(),
                 typed_value.data_type(),
             );
         }
+    }
+
+    #[test]
+    fn field_apis_return_inner_struct_fields() {
+        let typed_value = make_int32_array();
+        let input = make_variant_struct_with_typed_value(typed_value.clone());
+        let variant_array = VariantArray::try_new(&input).unwrap();
+
+        assert_eq!(variant_array.metadata_field().name(), "metadata");
+        assert!(variant_array.value_field().is_none());
+
+        let typed_value_field = variant_array.typed_value_field().unwrap();
+        assert_eq!(typed_value_field.name(), "typed_value");
+        assert_eq!(typed_value_field.data_type(), typed_value.data_type());
+        assert_eq!(
+            typed_value_field.data_type(),
+            variant_array.typed_value_column().unwrap().data_type(),
+        );
+    }
+
+    #[test]
+    fn field_apis_preserve_extension_type() {
+        // Built directly, not via `from_parts`, which would drop the extension type.
+        let metadata = Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]));
+        let typed_value =
+            Arc::new(FixedSizeBinaryArray::try_from_iter(std::iter::once([0u8; 16])).unwrap());
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("typed_value", DataType::FixedSizeBinary(16), true)
+                .with_extension_type(Uuid),
+        ]);
+        let struct_array = StructArray::new(fields, vec![metadata, typed_value], None);
+
+        let variant_array = VariantArray::try_new(&struct_array).unwrap();
+        let typed_value_field = variant_array.typed_value_field().unwrap();
+        assert!(typed_value_field.has_valid_extension_type::<Uuid>());
     }
 
     #[test]
