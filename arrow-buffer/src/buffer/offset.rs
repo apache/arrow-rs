@@ -346,10 +346,15 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
             self[len - 1].checked_sub(&rhs).expect("must not overflow");
         }
 
-        let output_buffer = match self.into_inner().into_inner().into_mutable() {
+        let original_buffer = self.into_inner().into_inner();
+        let original_buffer_offset = original_buffer.ptr_offset();
+        let original_buffer_len = original_buffer.len();
+        
+        let output_buffer = match original_buffer.into_mutable() {
             Ok(mut mutable) => {
                 // TODO - add test when the offsets are sliced and the first offset outside the slice is 0 and we shift by > 0
-                mutable.typed_data_mut::<O>()
+                mutable
+                  .typed_data_mut::<O>()
                   .iter_mut()
                   .for_each(|offset| *offset = *offset - rhs);
 
