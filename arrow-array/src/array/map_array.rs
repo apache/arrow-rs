@@ -20,8 +20,9 @@ use crate::iterator::MapArrayIter;
 use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// An array of key-value maps
@@ -270,6 +271,7 @@ impl From<MapArray> for ArrayData {
     }
 }
 
+
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
@@ -360,6 +362,61 @@ impl MapArray {
 
         Ok(MapArray::from(map_data))
     }
+
+
+    fn from_vec_of_maps<KeyArray, ValueArray>(input: Vec<Option<HashMap<for <'a> <&'a KeyArray as ArrayAccessor>::Item, Option<for <'a> <&'a ValueArray as ArrayAccessor>::Item>>>>) -> Self
+    where KeyArray: Array + 'static,
+
+      for <'a> &'a KeyArray: ArrayAccessor + 'static,
+          for <'a> <&'a KeyArray as ArrayAccessor>::Item: Clone,
+          for <'a> Vec<<&'a KeyArray as ArrayAccessor>::Item>: Into<KeyArray>,
+          
+          for <'a> &'a ValueArray: ArrayAccessor,
+              for <'a> <&'a ValueArray as ArrayAccessor>::Item: Clone,
+              for <'a> Vec<Option<<&'a ValueArray as ArrayAccessor>::Item>>: Into<ValueArray>,
+    {
+            let offsets = OffsetBuffer::<i32>::from_lengths(
+                input.iter().map(|v| v.as_ref().map_or(0, |m| m.len())),
+            );
+            let nulls = NullBuffer::from_iter(input.iter().map(|v| v.is_some()));
+            let nulls = Some(nulls).filter(|b| b.null_count() > 0);
+            let keys = input
+              .iter()
+              .flatten()
+              .flat_map(|v| v.keys())
+              .cloned()
+              .collect::<Vec<KeyArray::Item>>();
+            let values = input
+              .iter()
+              .flatten()
+              .flat_map(|v| v.values())
+              .cloned()
+              .collect::<Vec<Option<ValueArray::Item>>>();
+
+            let keys_array = Arc::new(KeyArray::from(keys));
+            let values_array = Arc::new(ValueArray::from(values));
+
+            let entries = StructArray::new(
+                Fields::from(vec![
+                    Field::new("keys", keys_array.data_type().clone(), false),
+                    Field::new(
+                        "values",
+                        values_array.data_type().clone(),
+                        values_array.is_nullable(),
+                    ),
+                ]),
+                vec![keys_array, values_array],
+                None,
+            );
+
+            MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                offsets,
+                entries,
+                nulls,
+                false,
+            )
+        }
 }
 
 /// SAFETY: Correctly implements the contract of Arrow Arrays
@@ -480,7 +537,7 @@ impl From<MapArray> for ListArray {
 #[cfg(test)]
 mod tests {
     use crate::cast::AsArray;
-    use crate::types::UInt32Type;
+    use crate::types::{Int32Type, UInt32Type};
     use crate::{Int32Array, UInt32Array};
     use arrow_schema::Fields;
 
@@ -839,5 +896,34 @@ mod tests {
             err.to_string(),
             "Invalid argument error: MapArray entries must contain two children, got 3"
         );
+    }
+
+    #[test]
+    fn test_from_vec_of_hash_maps() {
+        let map = vec![
+            Some(HashMap::new()),
+            None,
+            Some(HashMap::from([
+                ("a", Some(1)),
+                ("b", None),
+                ("cd", Some(4)),
+            ])),
+            Some(HashMap::from([("e", Some(0))])),
+        ];
+
+        let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array>(map);
+        assert_eq!(map_array.len(), 4);
+
+        assert_eq!(map_array.null_count(), 1);
+        assert_eq!(map_array.offsets().lengths().collect::<Vec<_>>(), vec![0, 0, 3, 1]);
+
+        let keys = map_array.keys().as_string::<i32>();
+        assert_eq!(keys.null_count(), 0);
+        assert_eq!(keys.iter().flatten().collect::<Vec<_>>(), vec!["a", "b", "cd", "e"]);
+
+        let values = map_array.values().as_primitive::<Int32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), None, Some(4), Some(0)]);
+
+
     }
 }
