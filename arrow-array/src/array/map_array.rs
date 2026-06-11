@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::array::{get_offsets_from_buffer, print_long_array};
+use crate::builder::MapFieldNames;
 use crate::iterator::MapArrayIter;
 use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
@@ -435,11 +436,13 @@ impl MapArray {
         let keys_array: ArrayRef = Arc::new(<Vec<K> as Into<KeyArray>>::into(keys));
         let values_array: ArrayRef = Arc::new(<Vec<Option<V>> as Into<ValueArray>>::into(values));
 
+        let field_names = MapFieldNames::default();
+
         let entries = StructArray::new(
             Fields::from(vec![
-                Field::new("keys", keys_array.data_type().clone(), false),
+                Field::new(field_names.key, keys_array.data_type().clone(), false),
                 Field::new(
-                    "values",
+                    field_names.value,
                     values_array.data_type().clone(),
                     values_array.is_nullable(),
                 ),
@@ -449,7 +452,11 @@ impl MapArray {
         );
 
         MapArray::new(
-            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            Arc::new(Field::new(
+                field_names.entry,
+                entries.data_type().clone(),
+                false,
+            )),
             offsets,
             entries,
             nulls,

@@ -10025,13 +10025,27 @@ mod tests {
 
     #[test]
     fn test_cast_map_dont_allow_change_of_order() {
-        let array = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
-            vec![
-                Some(vec![("0", Some("test_val_1"))]),
-                Some(vec![("1", Some("test_val_2"))]),
-            ],
-            false,
+        let string_builder = StringBuilder::new();
+        let value_builder = StringBuilder::new();
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
         );
+
+        builder.keys().append_value("0");
+        builder.values().append_value("test_val_1");
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value("test_val_2");
+        builder.append(true).unwrap();
+
+        // map builder returns unsorted map by default
+        let array = builder.finish();
 
         let new_ordered = true;
         let new_type = DataType::Map(
@@ -10187,10 +10201,26 @@ mod tests {
 
     #[test]
     fn test_cast_map_contained_values() {
-        let array = MapArray::from_vec_of_maps::<StringArray, Int8Array, _, _>(
-            vec![Some(vec![("0", Some(44))]), Some(vec![("1", Some(22))])],
-            false,
+        let string_builder = StringBuilder::new();
+        let value_builder = Int8Builder::new();
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            string_builder,
+            value_builder,
         );
+
+        builder.keys().append_value("0");
+        builder.values().append_value(44);
+        builder.append(true).unwrap();
+        builder.keys().append_value("1");
+        builder.values().append_value(22);
+        builder.append(true).unwrap();
+
+        let array = builder.finish();
 
         let new_type = DataType::Map(
             Arc::new(Field::new(
@@ -10208,13 +10238,31 @@ mod tests {
         );
 
         let new_array = cast(&array, &new_type.clone()).unwrap();
+        assert_eq!(new_type, new_array.data_type().clone());
+        let map_array = new_array.as_map();
 
-        let expected_map = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
-            vec![Some(vec![("0", Some("44"))]), Some(vec![("1", Some("22"))])],
-            false,
-        );
+        assert_ne!(new_type, array.data_type().clone());
+        assert_eq!(new_type, map_array.data_type().clone());
 
-        assert_eq!(new_array.as_map(), &expected_map);
+        let key_string = map_array
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&key_string, &vec!["0", "1"]);
+
+        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
+        let values_string = values_string_array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(&values_string, &vec!["44", "22"]);
     }
 
     #[test]
