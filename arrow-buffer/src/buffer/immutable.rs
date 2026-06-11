@@ -113,7 +113,7 @@ impl Buffer {
         unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
     }
 
-    /// Returns whether the buffer is sliced (does not point to entire original data) 
+    /// Returns whether the buffer is sliced (does not point to entire original data)
     pub fn is_sliced(&self) -> bool {
         self.length != self.data.len()
     }
@@ -398,16 +398,16 @@ impl Buffer {
         let length = self.length;
 
         Arc::try_unwrap(self.data)
-          .and_then(|bytes| {
-              // The pointer of underlying buffer should be the same
-              assert_eq!(data_ptr, bytes.ptr());
-              MutableBuffer::from_bytes(bytes).map_err(Arc::new)
-          })
-          .map_err(|bytes| Buffer {
-              data: bytes,
-              ptr,
-              length,
-          })
+            .and_then(|bytes| {
+                // The pointer of underlying buffer should be the same
+                assert_eq!(data_ptr, bytes.ptr());
+                MutableBuffer::from_bytes(bytes).map_err(Arc::new)
+            })
+            .map_err(|bytes| Buffer {
+                data: bytes,
+                ptr,
+                length,
+            })
     }
 
     /// Converts self into a `Vec`, if possible.
@@ -1097,47 +1097,53 @@ mod tests {
 
     #[test]
     fn test_is_sliced() {
-      let buffer = Buffer::from(&[1, 2, 3, 4]);
-      assert!(!buffer.is_sliced());
-      assert!(!buffer.clone().is_sliced());
-      {
-        let mut advanced = buffer.clone();
-        advanced.advance(0);
-        assert!(!advanced.is_sliced());
-      }
-      {
-        let mut advanced = buffer.clone();
-        advanced.advance(1);
-        assert!(advanced.is_sliced());
-      }
-      
-      assert!(!buffer.slice(0).is_sliced());
-      assert!(buffer.slice(1).is_sliced());
-      
-      assert!(buffer.slice_with_length(1, 3).is_sliced());
-      assert!(!buffer.slice_with_length(0, 4).is_sliced());
-      assert!(buffer.slice_with_length(0, 3).is_sliced());
-      assert!(buffer.slice_with_length(0, 0).is_sliced());
+        let buffer = Buffer::from(&[1, 2, 3, 4]);
+        assert!(!buffer.is_sliced());
+        assert!(!buffer.clone().is_sliced());
+        {
+            let mut advanced = buffer.clone();
+            advanced.advance(0);
+            assert!(!advanced.is_sliced());
+        }
+        {
+            let mut advanced = buffer.clone();
+            advanced.advance(1);
+            assert!(advanced.is_sliced());
+        }
+
+        assert!(!buffer.slice(0).is_sliced());
+        assert!(buffer.slice(1).is_sliced());
+
+        assert!(buffer.slice_with_length(1, 3).is_sliced());
+        assert!(!buffer.slice_with_length(0, 4).is_sliced());
+        assert!(buffer.slice_with_length(0, 3).is_sliced());
+        assert!(buffer.slice_with_length(0, 0).is_sliced());
     }
-    
+
     #[test]
     fn into_mutable_should_return_the_entire_data_regardless_of_slicing() {
-      let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
-      for (slice_from, slice_length) in [(0, 0), (0, original_buffer_data.len()), (original_buffer_data.len(), 0), (2, 4), (2, original_buffer_data.len() - 2)] {
-        let buffer = Buffer::from(original_buffer_data.clone());
-        let original_buffer_len = buffer.len();
-        let original_data_ptr = buffer.data_ptr();
-        let sliced = buffer.slice_with_length(slice_from, slice_length);
-        drop(buffer); // Keep only 1 owner
-        
-        let mutable = sliced.into_mutable().expect("should convert to mutable");
-        assert_eq!(mutable.len(), original_buffer_len);
-        let new_buffer = Buffer::from(mutable);
-        assert_eq!(new_buffer.data_ptr(), original_data_ptr);
-        assert_eq!(new_buffer.len(), original_buffer_len);
-        assert!(!new_buffer.is_sliced());
-        
-        assert_eq!(new_buffer.as_slice(), &original_buffer_data);
-      }
+        let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        for (slice_from, slice_length) in [
+            (0, 0),
+            (0, original_buffer_data.len()),
+            (original_buffer_data.len(), 0),
+            (2, 4),
+            (2, original_buffer_data.len() - 2),
+        ] {
+            let buffer = Buffer::from(original_buffer_data.clone());
+            let original_buffer_len = buffer.len();
+            let original_data_ptr = buffer.data_ptr();
+            let sliced = buffer.slice_with_length(slice_from, slice_length);
+            drop(buffer); // Keep only 1 owner
+
+            let mutable = sliced.into_mutable().expect("should convert to mutable");
+            assert_eq!(mutable.len(), original_buffer_len);
+            let new_buffer = Buffer::from(mutable);
+            assert_eq!(new_buffer.data_ptr(), original_data_ptr);
+            assert_eq!(new_buffer.len(), original_buffer_len);
+            assert!(!new_buffer.is_sliced());
+
+            assert_eq!(new_buffer.as_slice(), &original_buffer_data);
+        }
     }
 }
