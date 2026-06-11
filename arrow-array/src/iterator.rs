@@ -72,6 +72,121 @@ impl<T: ArrayAccessor> ArrayIter<T> {
             .map(|x| x.is_null(idx))
             .unwrap_or_default()
     }
+
+    /// Get iterator when there are nulls
+    ///
+    /// # Panics
+    /// If `self.logical_nulls` is `None`
+    #[inline]
+    fn get_iterator_for_nullable(&mut self) -> impl Iterator<Item = <Self as Iterator>::Item> {
+        self.logical_nulls
+            .as_ref()
+            .expect("logical_nulls must exists when this function is called")
+            .iter()
+            .skip(self.current)
+            .take(self.current_end - self.current)
+            .map(|is_valid| {
+                if is_valid {
+                    // Safety:
+                    // we are in bounds as i < self.array.len()
+                    let value = unsafe { self.array.value_unchecked(self.current) };
+                    self.current += 1;
+                    Some(value)
+                } else {
+                    self.current += 1;
+                    None
+                }
+            })
+    }
+
+    /// Get iterator when there are no null
+    ///
+    /// # Panics
+    /// If `self.logical_nulls` is `Some(_)`
+    #[inline]
+    fn get_iterator_for_non_nullable(&mut self) -> impl Iterator<Item = <Self as Iterator>::Item> {
+        assert_eq!(
+            self.logical_nulls, None,
+            "logical_nulls must be None when this function is called"
+        );
+
+        // Skip null checks
+        (self.current..self.current_end).map(|_| {
+            debug_assert!(
+                !self.is_null(self.current),
+                "Value at index {} is null for non_nullable",
+                self.current
+            );
+
+            // Safety:
+            // we are in bounds as self.current < self.array.len()
+            let val = unsafe { self.array.value_unchecked(self.current) };
+
+            self.current += 1;
+
+            Some(val)
+        })
+    }
+
+    /// Get reverse iterator when there are nulls
+    ///
+    /// # Panics
+    /// If `self.logical_nulls` is `None`
+    #[inline]
+    fn get_reverse_iterator_for_nullable(
+        &mut self,
+    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
+        self.logical_nulls
+            .as_ref()
+            .expect("logical_nulls must exists when this function is called")
+            .iter()
+            .rev()
+            .skip(self.array.len() - self.current_end)
+            .take(self.current_end - self.current)
+            .map(|is_valid| {
+                self.current_end -= 1;
+
+                if is_valid {
+                    // Safety:
+                    // we are in bounds as i < self.array.len()
+                    let value = unsafe { self.array.value_unchecked(self.current_end) };
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Get reverse iterator when there are no null
+    ///
+    /// # Panics
+    /// If `self.logical_nulls` is `Some(_)`
+    #[inline]
+    fn get_reverse_iterator_for_non_nullable(
+        &mut self,
+    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
+        assert_eq!(
+            self.logical_nulls, None,
+            "logical_nulls must be None when this function is called"
+        );
+
+        // Skip null checks
+        (self.current..self.current_end).map(|_| {
+            self.current_end -= 1;
+
+            debug_assert!(
+                !self.is_null(self.current_end),
+                "Value at index {} is null for non_nullable",
+                self.current_end
+            );
+
+            // Safety:
+            // we are in bounds as self.current < self.array.len()
+            let val = unsafe { self.array.value_unchecked(self.current_end) };
+
+            Some(val)
+        })
+    }
 }
 
 impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
@@ -103,7 +218,6 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         )
     }
 
-    #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         // Check if we can advance to the desired offset
         match self.current.checked_add(n) {
@@ -122,9 +236,17 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         self.next()
     }
 
-    #[inline]
     fn last(mut self) -> Option<Self::Item> {
-        self.next_back()
+        // If already at the end, return None
+        if self.current == self.current_end {
+            return None;
+        }
+
+        // Go to the one before the last value
+        self.current = self.current_end - 1;
+
+        // Return the last value
+        self.next()
     }
 
     #[inline]
@@ -133,6 +255,119 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         Self: Sized,
     {
         self.len()
+    }
+
+    fn for_each<F>(mut self, f: F)
+    where
+        Self: Sized,
+        F: FnMut(Self::Item),
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().for_each(f)
+        } else {
+            self.get_iterator_for_non_nullable().for_each(f)
+        }
+    }
+
+    fn fold<B, F>(mut self, init: B, f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().fold(init, f)
+        } else {
+            self.get_iterator_for_non_nullable().fold(init, f)
+        }
+    }
+
+    fn all<F>(&mut self, f: F) -> bool
+    where
+        Self: Sized,
+        F: FnMut(Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().all(f)
+        } else {
+            self.get_iterator_for_non_nullable().all(f)
+        }
+    }
+
+    fn any<F>(&mut self, f: F) -> bool
+    where
+        Self: Sized,
+        F: FnMut(Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().any(f)
+        } else {
+            self.get_iterator_for_non_nullable().any(f)
+        }
+    }
+
+    fn find_map<B, F>(&mut self, f: F) -> Option<B>
+    where
+        Self: Sized,
+        F: FnMut(Self::Item) -> Option<B>,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().find_map(f)
+        } else {
+            self.get_iterator_for_non_nullable().find_map(f)
+        }
+    }
+
+    fn find<P>(&mut self, predicate: P) -> Option<Self::Item>
+    where
+        Self: Sized,
+        P: FnMut(&Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().find(predicate)
+        } else {
+            self.get_iterator_for_non_nullable().find(predicate)
+        }
+    }
+
+    fn partition<B, F>(mut self, f: F) -> (B, B)
+    where
+        Self: Sized,
+        B: Default + Extend<Self::Item>,
+        F: FnMut(&Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().partition(f)
+        } else {
+            self.get_iterator_for_non_nullable().partition(f)
+        }
+    }
+
+    fn position<P>(&mut self, predicate: P) -> Option<usize>
+    where
+        Self: Sized,
+        P: FnMut(Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_iterator_for_nullable().position(predicate)
+        } else {
+            self.get_iterator_for_non_nullable().position(predicate)
+        }
+    }
+
+    fn rposition<P>(&mut self, predicate: P) -> Option<usize>
+    where
+        P: FnMut(Self::Item) -> bool,
+        Self: Sized + ExactSizeIterator + DoubleEndedIterator,
+    {
+        let len = self.len();
+        let position = if self.logical_nulls.is_some() {
+            self.get_reverse_iterator_for_nullable().position(predicate)
+        } else {
+            self.get_reverse_iterator_for_non_nullable()
+                .position(predicate)
+        };
+
+        position.map(|pos| len - pos - 1)
     }
 }
 
@@ -172,6 +407,30 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
         }
 
         self.next_back()
+    }
+
+    fn rfold<B, F>(mut self, init: B, f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_reverse_iterator_for_nullable().fold(init, f)
+        } else {
+            self.get_reverse_iterator_for_non_nullable().fold(init, f)
+        }
+    }
+
+    fn rfind<P>(&mut self, predicate: P) -> Option<Self::Item>
+    where
+        Self: Sized,
+        P: FnMut(&Self::Item) -> bool,
+    {
+        if self.logical_nulls.is_some() {
+            self.get_reverse_iterator_for_nullable().find(predicate)
+        } else {
+            self.get_reverse_iterator_for_non_nullable().find(predicate)
+        }
     }
 }
 
