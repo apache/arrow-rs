@@ -108,6 +108,30 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
+
+    // The file writer rejects dictionary replacement, so only the delta case is
+    // exercised here (growing dictionaries that are prefixes of one another).
+    group.bench_function("FileWriter/write_10/dict/delta", |b| {
+        let batches = create_delta_dict_batches(10, 8192);
+        let schema = batches[0].schema();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+
+        b.iter(move || {
+            buffer.clear();
+
+            let mut writer =
+                FileWriter::try_new_with_options(&mut buffer, schema.as_ref(), options.clone())
+                    .unwrap();
+
+            for batch in &batches {
+                writer.write(batch).unwrap();
+            }
+
+            writer.finish().unwrap();
+        })
+    });
 }
 
 fn dict_schema() -> Arc<Schema> {
@@ -119,21 +143,20 @@ fn dict_schema() -> Arc<Schema> {
 }
 
 /// Build `n` record batches with a single `Dictionary(UInt32, Utf8)` column whose
-/// dictionary grows across batches. A single builder is reused and
-/// `finish_preserve_values`  so each batch's dictionary has the previous batch's
-/// as a prefix which allows `DictionaryHandling::Delta` emit delta messages instead
-/// of full replacements.
+/// dictionary grows across batches. A single builder is reused with `finish_preserve_values`
+/// so each batch's dictionary has the previous batch's as a prefix which allows
+/// us to emit deltas.
 fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     let schema = dict_schema();
     let mut builder = StringDictionaryBuilder::<UInt32Type>::new();
 
     let mut batches = Vec::with_capacity(n);
     for i in 0..n {
-        // 1/4 of the rows reuse values shared by every batch (deduped to existing keys);
-        // the other half introduce values unique to this batch (extend the dictionary).
+        // 3/4 of the rows reuse values shared by every batch (deduped to existing keys);
+        // the other 1/4 introduce values unique to this batch (extend the dictionary).
         for r in 0..num_rows {
             if r < num_rows / 4 {
-                builder.append_value(format!("batch {i} value {}", r - num_rows / 2));
+                builder.append_value(format!("batch {i} value {}", r));
             } else {
                 builder.append_value(format!("shared {r}"));
             }
@@ -146,8 +169,7 @@ fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     batches
 }
 
-/// Build `n` record batches each with a completely distinct `Dictionary(UInt32, Utf8)`
-/// dictionary for each batch.
+/// Build `n` record batches each with a completely distinct dictionary for each batch.
 fn create_unique_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     let schema = dict_schema();
 
