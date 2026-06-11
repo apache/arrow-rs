@@ -22,7 +22,6 @@ use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlic
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// An array of key-value maps
@@ -362,7 +361,7 @@ impl MapArray {
         Ok(MapArray::from(map_data))
     }
 
-    /// Helper to create [`MapArray`] from [`HashMap`]s so the code will look clean and straightforward
+    /// Helper to create [`MapArray`] from [`Vec`]s of entries so the code will look clean and straightforward
     ///
     /// Useful for tests, this should not be used for performance sensitive operations
     ///
@@ -371,28 +370,28 @@ impl MapArray {
     /// # use arrow_array::{MapArray, Int32Array, StringArray};
     ///
     /// let map = vec![
-    ///    Some(HashMap::new()),
+    ///    Some(vec![]),
     ///    None,
-    ///    Some(HashMap::from([
+    ///    Some(vec![
     ///        ("a", Some(1)),
     ///        ("b", None),
     ///        ("cd", Some(4)),
-    ///    ])),
-    ///    Some(HashMap::from([("e", Some(0))])),
+    ///    ]),
+    ///    Some(vec![("e", Some(0))]),
     /// ];
     ///
     /// let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map);
     /// // Or you could fill the last 2 generics manually for the key array item and value array item
     /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map);
     ///```
+    #[allow(clippy::type_complexity)]
     pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
-        input: Vec<Option<HashMap<K, Option<V>>>>,
+        input: Vec<Option<Vec<(K, Option<V>)>>>,
+        ordered: bool,
     ) -> Self
     where
         KeyArray: Array + 'static,
         ValueArray: Array + 'static,
-        K: Clone,
-        V: Clone,
         Vec<K>: Into<KeyArray>,
         Vec<Option<V>>: Into<ValueArray>,
     {
@@ -402,18 +401,11 @@ impl MapArray {
         let nulls = NullBuffer::from_iter(input.iter().map(|v| v.is_some()));
         let nulls = Some(nulls).filter(|b| b.null_count() > 0);
 
-        let keys = input
-            .iter()
+        let (keys, values): (Vec<K>, Vec<Option<V>>) = input
+            .into_iter()
             .flatten()
-            .flat_map(|m| m.keys())
-            .cloned()
-            .collect::<Vec<K>>();
-        let values = input
-            .iter()
-            .flatten()
-            .flat_map(|m| m.values())
-            .cloned()
-            .collect::<Vec<Option<V>>>();
+            .flat_map(|m| m.into_iter())
+            .unzip();
 
         let keys_array: ArrayRef = Arc::new(<Vec<K> as Into<KeyArray>>::into(keys));
         let values_array: ArrayRef = Arc::new(<Vec<Option<V>> as Into<ValueArray>>::into(values));
@@ -436,7 +428,7 @@ impl MapArray {
             offsets,
             entries,
             nulls,
-            false,
+            ordered,
         )
     }
 }
@@ -560,7 +552,7 @@ impl From<MapArray> for ListArray {
 mod tests {
     use crate::builder::{Int32Builder, MapBuilder, StringBuilder};
     use crate::cast::AsArray;
-    use crate::types::{Int32Type, UInt32Type};
+    use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
     use arrow_schema::Fields;
 
@@ -922,62 +914,38 @@ mod tests {
     }
 
     #[test]
-    fn test_from_vec_of_hash_maps() {
-        let map = vec![
-            Some(HashMap::new()),
-            None,
-            Some(HashMap::from([
-                ("a", Some(1)),
-                ("b", None),
-                ("cd", Some(4)),
-            ])),
-            Some(HashMap::from([("e", Some(0))])),
-        ];
+    fn test_from_vec_of_maps() {
+        for ordered in [true, false] {
+            let map = vec![
+                Some(vec![]),
+                None,
+                Some(vec![("a", Some(1)), ("b", None), ("cd", Some(4))]),
+                Some(vec![("e", Some(0))]),
+            ];
 
-        let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map);
-        assert_eq!(map_array.len(), 4);
+            let map_array =
+                MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map, ordered);
+            assert_eq!(map_array.len(), 4);
 
-        // Because getting the entries from `HashMap` is not deterministic, we build every possible order
-        fn build_expected_map(
-            order_of_3_items: &[&str],
-            expected_values: &HashMap<&str, Option<i32>>,
-        ) -> MapArray {
             let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::default());
             builder.append(true).unwrap();
             builder.append_nulls(1).unwrap();
-            order_of_3_items.iter().for_each(|key| {
-                builder.keys().append_value(*key);
-                builder
-                    .values()
-                    .append_option(*expected_values.get(*key).unwrap());
-            });
+            builder.keys().append_value("a");
+            builder.values().append_value(1);
+            builder.keys().append_value("b");
+            builder.values().append_null();
+            builder.keys().append_value("cd");
+            builder.values().append_value(4);
             builder.append(true).unwrap();
-
             builder.keys().append_value("e");
             builder.values().append_value(0);
             builder.append(true).unwrap();
 
-            builder.finish()
+            let (field, offsets, entries, null_buffer, _) = builder.finish().into_parts();
+
+            let expected_map = MapArray::new(field, offsets, entries, null_buffer, ordered);
+
+            assert_eq!(map_array, expected_map);
         }
-
-        let ref_map = HashMap::from([("a", Some(1)), ("b", None), ("cd", Some(4))]);
-
-        let possibilities = vec![
-            ["a", "b", "cd"],
-            ["a", "cd", "b"],
-            ["b", "a", "cd"],
-            ["b", "cd", "a"],
-            ["cd", "a", "b"],
-            ["cd", "b", "a"],
-        ];
-
-        let possible_maps = possibilities
-            .iter()
-            .map(|item| build_expected_map(item, &ref_map))
-            .collect::<Vec<_>>();
-
-        let found_map = possible_maps.iter().any(|expected| expected == &map_array);
-
-        assert!(found_map);
     }
 }
