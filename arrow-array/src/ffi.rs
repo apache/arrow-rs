@@ -105,7 +105,7 @@ use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_buffer::{Buffer, MutableBuffer, bit_util};
 pub use arrow_data::ffi::FFI_ArrowArray;
-use arrow_data::{ArrayData, layout};
+use arrow_data::{ArrayData, ArrayDataBuilder, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
 
@@ -287,14 +287,9 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` realigns buffers before validating, so no separate
+    // `align_buffers()` is needed here.
+    tmp.consume()
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -312,14 +307,9 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` realigns buffers before validating, so no separate
+    // `align_buffers()` is needed here.
+    tmp.consume()
 }
 
 #[derive(Debug)]
@@ -356,18 +346,23 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Should FFI be checking validity?
-        Ok(unsafe {
-            ArrayData::new_unchecked(
-                self.data_type,
-                len,
-                null_count,
-                null_bit_buffer,
-                offset,
-                buffers,
-                child_data,
-            )
-        })
+        // The C Data Interface permits weaker buffer alignment than arrow-rs's
+        // `ArrayData` invariant, so realign the imported buffers *before*
+        // validating them. `align_buffers(true)` realigns, then `build`
+        // validates the realigned buffers under `force_validate`.
+        let mut builder = ArrayDataBuilder::new(self.data_type)
+            .len(len)
+            .offset(offset)
+            .null_bit_buffer(null_bit_buffer)
+            .buffers(buffers)
+            .child_data(child_data)
+            .align_buffers(true);
+        if let Some(null_count) = null_count {
+            builder = builder.null_count(null_count);
+        }
+        // SAFETY: `align_buffers(true)` above upholds the alignment invariant
+        // that `skip_validation` would otherwise leave unchecked.
+        unsafe { builder.skip_validation(true) }.build()
     }
 
     fn consume_children(&self) -> Result<Vec<ArrayData>> {
@@ -687,30 +682,40 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
+    // Round-trip coverage for importing an under-aligned `Decimal128` buffer.
+    // This is not the `force_validate` regression guard: `arrow-array`'s
+    // `force_validate` feature does not forward to `arrow-data`, so it cannot
+    // reach the validation gate. That guard lives in
+    // `arrow/tests/ffi_from_ffi.rs`.
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_decimal128_under_aligned_round_trip() -> Result<()> {
-        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
-        // an FFI producer that only guarantees the C Data Interface's
-        // recommended 8-byte alignment (e.g. arrow-java).
+        // An i128 buffer that is 8-aligned but not 16-aligned, modeling an FFI
+        // producer that only guarantees the C Data Interface's recommended
+        // 8-byte alignment (e.g. arrow-java).
         let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
         let under_aligned = aligned.slice(8);
         assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
         assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
 
-        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
-        // input is the condition under test.
-        let data = unsafe {
-            ArrayData::builder(DataType::Decimal128(10, 2))
-                .len(2)
-                .add_buffer(under_aligned)
-                .build_unchecked()
-        };
+        // Export the bytes as a `UInt8` array (alignment 1, valid even under
+        // `force_validate`) then re-import as `Decimal128`, reproducing an
+        // under-aligned buffer arriving over the C Data Interface.
+        let producer = ArrayData::builder(DataType::UInt8)
+            .len(under_aligned.len())
+            .add_buffer(under_aligned)
+            .build()?;
 
-        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
-        let array = FFI_ArrowArray::new(&data);
+        let mut array = FFI_ArrowArray::new(&producer);
+        // Re-describe the 32 data bytes as 2 `Decimal128` elements; the data
+        // pointer is unchanged and still only 8-aligned.
+        array.length = 2;
+        array.null_count = 0;
 
-        let imported = unsafe { from_ffi(array, &schema) }?;
+        // SAFETY: 32 bytes = 2 little-endian i128 values, matching
+        // `Decimal128(10, 2)` of length 2.
+        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
+        // Import must realign the buffer to arrow-rs's 16-byte `i128` alignment.
+        assert_eq!(imported.buffers()[0].as_ptr().align_offset(16), 0);
         let array = Decimal128Array::from(imported);
 
         // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
