@@ -330,33 +330,20 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Subtract `rhs` from all offsets
     /// This will try to reuse the existing allocation as much as possible
     ///
-    /// Panics: this will panic if `rhs` > first offset or if `rhs` will lead to overflow (when `rhs` is negative)
-    ///
-    /// TODO - add examples
-    pub fn subtract(self, rhs: O) -> Self where O: std::ops::Sub<Output = O> + std::cmp::Ord {
+    /// Panics: this will panic if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
+    pub fn subtract(self, rhs: O) -> Self where O: std::ops::Sub<Output = O> + std::cmp::PartialOrd + num_traits::CheckedSub {
         if rhs == O::usize_as(0) {
             return self;
         }
 
         let len = self.len();
 
-        self[0].checked_sub(rhs).is_some)
-
         // Offset buffer is guaranteed to be non-empty
-        assert!(self[0] >= rhs, "shifted offsets will become negative which is not allowed ");
+        assert!(self[0] >= rhs, "shifted offsets will become negative which is not allowed");
 
-        // If negative
+        // If negative, make sure that this will not create an overflow
         if rhs < O::usize_as(0) {
-            let last_value = self[len - 1];
-
-            let last_value = i32::MAX - 5;
-            let rhs = -6;
-            // last_value - rhs == last_value - (-6) == last_value + 6 = i32::MAX - 5 + 6 = i32::MAX + 1 >= i32::MAX
-
-            // i32::MAX - last_value == i32::MAX - (i32::MAX - 5) == i32::MAX - i32::MAX + 5 == 5
-            //
-            let will_overflow = 0 - (O::MAX - last_value) > rhs
-            assert!(last_value - rhs >= O::MAX);
+            self[len - 1].checked_sub(rhs).expect("must not overflow");
         }
 
         let output_buffer = match self.into_inner().into_inner().into_mutable() {
@@ -885,7 +872,52 @@ mod tests {
     }
 
     #[test]
-    fn subtract_by_value_that_will_cause_overflow() {
+    fn should_panic_for_subtract_by_value_that_will_cause_offsets_to_be_less_than_zero() {
+        todo!()
+    }
 
+    #[test]
+    fn subtract_by_value_that_will_cause_offsets_to_be_less_than_zero_for_outside_the_slice() {
+        todo!()
+    }
+
+    #[test]
+    fn should_panic_subtract_by_value_that_will_cause_offsets_to_overflow() {
+        todo!()
+    }
+
+    #[test]
+    fn subtract_by_value_that_will_cause_offsets_to_overflow_outside_the_slice() {
+        todo!()
+    }
+
+    #[test]
+    fn when_shift_is_0_subtract_should_reuse_the_buffer_even_when_it_is_shared() {
+        todo!()
+    }
+
+    #[test]
+    fn should_reuse_the_underline_data_when_the_buffer_is_not_shared() {
+        todo!()
+    }
+
+    #[test]
+    fn should_create_a_new_buffer_when_the_buffer_is_shared() {
+        todo!()
+    }
+
+    #[test]
+    fn when_shift_is_negative_it_should_shift_offsets_in_the_right_direction() {
+        todo!()
+    }
+
+    #[test]
+    fn for_sliced_unshared_buffer_shift_should_reuse_buffer_but_only_modify_the_data_in_slice() {
+        todo!()
+    }
+
+    #[test]
+    fn for_sliced_shared_buffer_shifted_buffer_should_only_include_the_sliced_data() {
+        todo!()
     }
 }
