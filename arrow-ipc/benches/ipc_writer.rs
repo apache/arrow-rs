@@ -16,10 +16,9 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::types::Int32Type;
 use arrow_array::{DictionaryArray, RecordBatch, builder::StringBuilder};
 use arrow_ipc::CompressionType;
-use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_ipc::writer::{DictionaryHandling, FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::Arc;
@@ -71,11 +70,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Each batch carries a distinct dictionary, so every `write` emits a
-    // dictionary (replacement) message followed by the record batch. This
-    // exercises the dictionary-message encoding path.
     group.bench_function("StreamWriter/write_10/dict", |b| {
-        let batches = create_dict_batches(10, 8192, 2048);
+        let batches = create_dict_batches(10, 8192);
         let schema = batches[0].schema();
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
         b.iter(move || {
@@ -87,28 +83,57 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
+
+    group.bench_function("StreamWriter/write_10/dict/delta", |b| {
+        let batches = create_dict_batches(10, 8192);
+        let schema = batches[0].schema();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+
+        b.iter(move || {
+            buffer.clear();
+
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut buffer, schema.as_ref(), options.clone())
+                    .unwrap();
+
+            for batch in &batches {
+                writer.write(batch).unwrap();
+            }
+
+            writer.finish().unwrap();
+        })
+    });
 }
 
-/// Build `n` record batches, each with a single `Dictionary(Int32, Utf8)`
-/// column. Each batch uses a distinct set of dictionary values so that the
-/// writer must emit a fresh dictionary message for every batch.
-fn create_dict_batches(n: usize, num_rows: usize, dict_len: usize) -> Vec<RecordBatch> {
+fn create_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "d0",
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
         false,
     )]));
-    (0..n)
-        .map(|batch_idx| {
-            // Distinct values per batch force a new dictionary message each time.
-            let values: Vec<String> = (0..dict_len)
-                .map(|v| format!("batch {batch_idx} dictionary value number {v}"))
-                .collect();
-            let keys = (0..num_rows).map(|i| values[i % dict_len].as_str());
-            let dict: DictionaryArray<Int32Type> = keys.collect();
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap()
-        })
-        .collect()
+
+    let mut batches = Vec::with_capacity(n);
+    for i in 0..n {
+        // Half of the keys will be present in every batch and have stable values
+        // The other half of the keys will be specific to each batch. This gives us
+        // some delta opportunities and does not require dictionary replacement.
+        let keys = 0..(num_rows / 2);
+        let keys2 = (0..num_rows - keys.len()).map(|x| (n * i) + x);
+        let keys: Vec<u32> = keys.chain(keys2).map(|x| x as u32).collect();
+
+        let values = (0..num_rows / 2).map(|x| format!("Value {x}"));
+        let values2 = (0..num_rows - values.len()).map(|x| format!("Value {i}{x}"));
+        let mut builder = StringBuilder::new();
+        values.chain(values2).for_each(|s| builder.append_value(s));
+        let values = builder.finish();
+
+        let a = DictionaryArray::new(keys.into(), Arc::new(values));
+        batches.push(RecordBatch::try_new(schema.clone(), vec![Arc::new(a)]).unwrap());
+    }
+
+    batches
 }
 
 fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
