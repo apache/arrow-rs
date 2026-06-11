@@ -326,6 +326,79 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         end_offset_of_last_valid_value != last_offset
     }
+
+    /// Subtract `rhs` from all offsets
+    /// This will try to reuse the existing allocation as much as possible
+    ///
+    /// Panics: this will panic if `rhs` > first offset or if `rhs` will lead to overflow (when `rhs` is negative)
+    ///
+    /// TODO - add examples
+    pub fn subtract(self, rhs: O) -> Self where O: std::ops::Sub<Output = O> + std::cmp::Ord {
+        if rhs == O::usize_as(0) {
+            return self;
+        }
+
+        let len = self.len();
+
+        self[0].checked_sub(rhs).is_some)
+
+        // Offset buffer is guaranteed to be non-empty
+        assert!(self[0] >= rhs, "shifted offsets will become negative which is not allowed ");
+
+        // If negative
+        if rhs < O::usize_as(0) {
+            let last_value = self[len - 1];
+
+            let last_value = i32::MAX - 5;
+            let rhs = -6;
+            // last_value - rhs == last_value - (-6) == last_value + 6 = i32::MAX - 5 + 6 = i32::MAX + 1 >= i32::MAX
+
+            // i32::MAX - last_value == i32::MAX - (i32::MAX - 5) == i32::MAX - i32::MAX + 5 == 5
+            //
+            let will_overflow = 0 - (O::MAX - last_value) > rhs
+            assert!(last_value - rhs >= O::MAX);
+        }
+
+        let output_buffer = match self.into_inner().into_inner().into_mutable() {
+            Ok(mut mutable) => {
+                // TODO - add test when the offsets are sliced and the first offset outside the slice is 0 and we shift by > 0
+                mutable.typed_data_mut::<O>()
+                  .iter_mut()
+                  .for_each(|offset| *offset = *offset - rhs);
+
+                mutable
+            }
+            Err(original_buffer) => {
+                let mut output_buffer = MutableBuffer::new(len * size_of::<O>());
+
+                let underlying_buffer = original_buffer.typed_data::<O>();
+
+                for i in 0..len {
+                    unsafe {
+                        // SAFETY: Already allocated sufficient capacity
+                        output_buffer.push_unchecked(
+                            // SAFETY:
+                            // 1. `i` is within bounds
+                            // 2. we will not cause underflow as we checked that the first offset is greater than or equal to the shift
+                            *underlying_buffer.get_unchecked(i) - rhs,
+                        )
+                    }
+                }
+
+                output_buffer
+            }
+        };
+
+        let output_buffer = ScalarBuffer::<O>::from(output_buffer);
+
+        // This is safe as we keep the following properties:
+        // 1. buffer is non-empty - the output buffer is derived from a valid offset buffer
+        // 2. values are greater than or equal to zero - we validated before that the first offset is greater than or equal to the shift
+        //    and the first buffer value is coming from a valid offset buffer,
+        //    and the input values are monotonically increasing since they are coming from a valid offset buffer so checking the first offset is enough
+        // 3. monotonically increasing values - we subtract from all offset the same value, thus keeping the same property as the input buffer which is a valid offset buffer
+        unsafe { OffsetBuffer::new_unchecked(output_buffer) }
+    }
 }
 
 impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {
@@ -809,5 +882,10 @@ mod tests {
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
         let nulls = NullBuffer::new_valid(5); // expects 3
         offsets.has_non_empty_nulls(Some(&nulls));
+    }
+
+    #[test]
+    fn subtract_by_value_that_will_cause_overflow() {
+
     }
 }
