@@ -366,23 +366,7 @@ impl MapArray {
 
     /// Helper to create [`MapArray`] from [`Vec`]s of entries so the code will look clean and straightforward
     ///
-    /// the input is:
-    /// ```no_run
-    /// // Maps
-    /// Vec<
-    ///   // Map
-    ///   Option<
-    ///     // Entries
-    ///     Vec<
-    ///       // Entry
-    ///       (
-    ///         Key,
-    ///         Option<Value>
-    ///       )
-    ///     >
-    ///   >
-    /// >
-    /// ```
+    /// the input is: `Vec<Option<Map>>` where each `Map` is `Vec<(Key, Option<Value>)>`
     ///
     /// Useful for tests, this should not be used for performance sensitive operations
     ///
