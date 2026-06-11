@@ -404,11 +404,12 @@ impl MapArray {
     ///    // { "e": 0 }
     ///    Some(vec![("e", Some(0))]),
     /// ];
+    /// let ordered = true;
     ///
     /// // created map: [{}, null, {"a": 1, "b": null, "cd": 4}, {"e": 0}]
-    /// let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map);
+    /// let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map, ordered);
     /// // Or you could fill the last 2 generics manually for the key array item and value array item
-    /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map);
+    /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map, ordered);
     ///```
     #[allow(clippy::type_complexity)]
     pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
