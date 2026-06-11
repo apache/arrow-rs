@@ -808,8 +808,6 @@ impl IpcDataGenerator {
             sink,
             &mut nodes,
             0,
-            dict.data.len(),
-            dict.data.null_count(),
             compression_codec,
             compression_context,
             write_options,
@@ -2044,6 +2042,7 @@ fn write_array_data(
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
     let num_rows = array_data.len();
+    let null_count = array_data.null_count();
     if !matches!(array_data.data_type(), DataType::Null) {
         meta.nodes.push(crate::FieldNode::new(
             num_rows as i64,
