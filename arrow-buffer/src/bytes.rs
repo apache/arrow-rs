@@ -45,7 +45,7 @@ use std::sync::Mutex;
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
 ///
-pub struct Bytes {
+pub(crate) struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
 
@@ -89,21 +89,21 @@ impl Bytes {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     #[inline]
-    pub fn ptr(&self) -> NonNull<u8> {
+    pub(crate) fn ptr(&self) -> NonNull<u8> {
         self.ptr
     }
 
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         match self.deallocation {
             Deallocation::Standard(layout) => layout.size(),
             // we only know the size of the custom allocation
@@ -114,7 +114,7 @@ impl Bytes {
 
     /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior reservation.
     #[cfg(feature = "pool")]
-    pub fn claim(&self, pool: &dyn MemoryPool) {
+    pub(crate) fn claim(&self, pool: &dyn MemoryPool) {
         *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
     }
 
@@ -139,7 +139,7 @@ impl Bytes {
     /// Returns `Err` if the memory was allocated with a custom allocator,
     /// or the call to `realloc` failed, for whatever reason.
     /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
-    pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+    pub(crate) fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
         if let Deallocation::Standard(old_layout) = self.deallocation {
             if old_layout.size() == new_len {
                 return Ok(()); // Nothing to do
