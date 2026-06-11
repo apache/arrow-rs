@@ -89,13 +89,6 @@ impl EncodedBuffer {
             EncodedBuffer::Compressed(v) => v.as_slice(),
         }
     }
-
-    fn len(&self) -> usize {
-        match self {
-            EncodedBuffer::Raw(b) => b.len(),
-            EncodedBuffer::Compressed(v) => v.len(),
-        }
-    }
 }
 /// Accumulates the IPC metadata produced by [`write_array_data`].
 ///
@@ -1769,8 +1762,7 @@ fn write_encoded_message_direct<W: Write>(
 
     let alignment = write_options.alignment;
     for enc in encoded_buffers {
-        writer.write_all(enc.as_slice())?;
-        writer.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
+        write_body_buffer(&mut *writer, enc.as_slice(), alignment)?;
     }
     Ok(aligned_size)
 }
