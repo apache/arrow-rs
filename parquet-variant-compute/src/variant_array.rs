@@ -1373,12 +1373,7 @@ mod test {
 
         // try_new canonicalizes on the read path and attaches the extension.
         let variant_array = VariantArray::try_new(&input).unwrap();
-        let typed_value = variant_array
-            .inner()
-            .fields()
-            .iter()
-            .find(|f| f.name() == "typed_value")
-            .unwrap();
+        let typed_value = variant_array.inner().field_by_name("typed_value").unwrap();
         assert_eq!(typed_value.data_type(), &DataType::FixedSizeBinary(16));
         assert!(typed_value.has_valid_extension_type::<UuidExtension>());
     }
@@ -1400,11 +1395,7 @@ mod test {
         let variant_array = VariantArray::try_new(&input).unwrap();
         let object = variant_array.typed_value_field().unwrap().as_struct();
         let id = object.column_by_name("id").unwrap().as_struct();
-        let uuid_leaf = id
-            .fields()
-            .iter()
-            .find(|f| f.name() == "typed_value")
-            .unwrap();
+        let uuid_leaf = id.field_by_name("typed_value").unwrap();
         assert!(uuid_leaf.has_valid_extension_type::<UuidExtension>());
     }
 

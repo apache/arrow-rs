@@ -1191,9 +1191,7 @@ mod tests {
 
         let typed_value_field = variant_array
             .inner()
-            .fields()
-            .into_iter()
-            .find(|f| f.name() == "typed_value")
+            .field_by_name("typed_value")
             .unwrap();
 
         assert!(typed_value_field.has_valid_extension_type::<arrow_schema::extension::Uuid>());
@@ -1242,12 +1240,7 @@ mod tests {
             ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("id").unwrap()).unwrap();
 
         // The extension type lives on the field, not the array, so assert it on the inner struct.
-        let leaf = id
-            .inner()
-            .fields()
-            .iter()
-            .find(|f| f.name() == "typed_value")
-            .unwrap();
+        let leaf = id.inner().field_by_name("typed_value").unwrap();
 
         assert_eq!(leaf.data_type(), &DataType::FixedSizeBinary(16));
         assert!(leaf.has_valid_extension_type::<arrow_schema::extension::Uuid>());
