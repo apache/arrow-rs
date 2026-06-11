@@ -47,9 +47,10 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 /// Returns an array of Int32/Int64 denoting the length of each value in the array.
 ///
 /// For list array, length is the number of elements in each list.
+/// For map array, length is the number of entries in each map.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, FixedSizeListArray,
+/// * this only accepts ListArray/LargeListArray, MapArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, FixedSizeListArray,
 ///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values, or
 ///   RunEndEncoded arrays with above arrays as values
 /// * length of null is null.
@@ -84,6 +85,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 list.sizes().clone(),
                 list.nulls().cloned(),
             )))
+        }
+        DataType::Map(_, _) => {
+            let map = array.as_map();
+            Ok(length_impl::<Int32Type>(map.offsets(), map.nulls()))
         }
         DataType::Utf8 => {
             let list = array.as_string::<i32>();
@@ -196,10 +201,11 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use super::*;
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ArrayData;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Fields};
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
@@ -340,6 +346,50 @@ mod tests {
         length_list_helper!(i64, Int64Array, Float32Type, value, result)
     }
 
+    fn convert_vec_to_map<K, V, KeyArray: Array, ValueArray: Array>(input: Vec<Option<HashMap<K, Option<V>>>>) -> MapArray
+    where K: Clone,
+          Vec<K>: Into<KeyArray>,
+    Vec<Option<V>>: Into<ValueArray>
+    {
+        let offsets = OffsetBuffer::<i32>::from_lengths(input.iter().map(|v| v.map_or(0, |m| m.len())).collect());
+        let nulls = NullBuffer::from_iter(input.iter().map(|v| v.is_some()));
+        let nulls = Some(nulls).filter(|b| b.null_count() > 0);
+        let keys = input.iter().flatten().flat_map(|v| v.keys()).cloned().collect::<Vec<K>>();
+        let values = input.iter().flatten().flat_map(|v| v.values()).collect::<Vec<Option<V>>>();
+
+        let keys_array = keys.into();
+        let values_array = values.into();
+
+        let entries = StructArray::new(
+            Fields::from(vec![
+                Field::new("keys", keys_array.data_type().clone(), false),
+                Field::new("values", values_array.data_type().clone(), values_array.is_nullable()),
+            ]),
+            vec![keys_array, values_array],
+            None,
+        );
+
+        MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            offsets,
+            entries,
+            nulls,
+            false,
+        )
+    }
+
+    #[test]
+    fn length_test_map() {
+        let map = convert_vec_to_map(vec![
+            Some(HashMap::new()),
+            Some(HashMap::from([("a", Some(1)), ("b", Some(2)), ("cd", Some(4))])),
+            Some(HashMap::from([("e", Some(0))])),
+        ]);
+        let lengths = length(&map).unwrap();
+        let lengths = lengths.as_primitive::<Int32Type>();
+        assert_eq!(lengths, &Int32Array::from(vec![0, 3, 1]));
+    }
+
     type OptionStr = Option<&'static str>;
 
     fn length_null_cases_string() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
@@ -423,6 +473,19 @@ mod tests {
         ];
         let result: Vec<Option<i64>> = vec![Some(0), None, Some(3), Some(1)];
         length_list_helper!(i64, Int64Array, Float32Type, value, result)
+    }
+
+    #[test]
+    fn length_test_null_map() {
+        let map = convert_vec_to_map(vec![
+            Some(HashMap::new()),
+            None,
+            Some(HashMap::from([("a", Some(1)), ("b", None), ("cd", Some(4))])),
+            Some(HashMap::from([("e", Some(0))])),
+        ]);
+        let lengths = length(&map).unwrap();
+        let lengths = lengths.as_primitive::<Int32Type>();
+        assert_eq!(lengths, &Int32Array::from(vec![Some(0), None, Some(3), Some(1)]));
     }
 
     #[test]
