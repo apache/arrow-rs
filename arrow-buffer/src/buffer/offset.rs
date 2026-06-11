@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder};
+use crate::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, OffsetBufferBuilder};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -347,37 +347,39 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         }
 
         let original_buffer = self.into_inner().into_inner();
-        let original_buffer_offset = original_buffer.ptr_offset();
-        let original_buffer_len = original_buffer.len();
-        
-        let output_buffer = match original_buffer.into_mutable() {
+        let original_length = original_buffer.len();
+
+        // Remove this once https://github.com/apache/arrow-rs/issues/10117 is resolved
+        let into_mutable_buffer_result = if original_buffer.ptr_offset() != 0 {
+            Err(original_buffer)
+        } else {
+            original_buffer.into_mutable()
+        };
+
+        let output_buffer = match into_mutable_buffer_result {
             Ok(mut mutable) => {
-                // TODO - add test when the offsets are sliced and the first offset outside the slice is 0 and we shift by > 0
-                mutable
-                  .typed_data_mut::<O>()
+                let mut_sliced = mutable
+                  .typed_data_mut::<O>();
+
+                // Remove this once https://github.com/apache/arrow-rs/pull/10118 is merged
+                let mut_sliced = &mut mut_sliced[0..original_length / O::get_byte_width()];
+
+                mut_sliced
                   .iter_mut()
                   .for_each(|offset| *offset = *offset - rhs);
 
-                mutable
+                Buffer::from(mutable)
             }
             Err(original_buffer) => {
-                let mut output_buffer = MutableBuffer::new(len * size_of::<O>());
+                let shifted = original_buffer
+                  .typed_data::<O>()
+                  .iter()
+                  .map(|item| {
+                    *item - rhs
+                })
+                  .collect::<Vec<O>>();
 
-                let underlying_buffer = original_buffer.typed_data::<O>();
-
-                for i in 0..len {
-                    unsafe {
-                        // SAFETY: Already allocated sufficient capacity
-                        output_buffer.push_unchecked(
-                            // SAFETY:
-                            // 1. `i` is within bounds
-                            // 2. we will not cause underflow as we checked that the first offset is greater than or equal to the shift
-                            *underlying_buffer.get_unchecked(i) - rhs,
-                        )
-                    }
-                }
-
-                output_buffer
+                Buffer::from_vec(shifted)
             }
         };
 
@@ -968,34 +970,25 @@ mod tests {
         assert_eq!(result.as_ref(), &[2, 5, 8]);
     }
 
+    // Replace this test with test that assert a reuse after PR #10118 is merged
     #[test]
-    fn for_sliced_unshared_buffer_shift_should_reuse_buffer_but_only_modify_the_data_in_slice() {
+    fn for_sliced_unshared_buffer_shift_should_not_reuse_buffer() {
         // Underlying [0, 3, 6, 9, 12]; slice -> view [3, 6, 9].
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![1, 3, 6, 9, 12]));
         let sliced = offsets.slice(1, 2); // [3, 6, 9]
-        drop(offsets); // uniquely owned -> eligible for in-place reuse
+        drop(offsets); // uniquely owned
         assert_eq!(sliced.as_ref(), &[3, 6, 9]);
 
         let ptr_before = sliced.as_ptr();
         let result = sliced.subtract(1);
 
-        // Reuses the allocation...
-        assert_eq!(
+        assert_ne!(
             ptr_before,
             result.as_ptr(),
-            "uniquely-owned sliced buffer should be mutated in place"
+            "should not be reused until #10118 is merged"
         );
-        // ...but only the slice is shifted, and the length stays the slice length.
+
         assert_eq!(result.as_ref(), &[2, 5, 8]);
-        assert_eq!(result.len(), 3);
-        let underlying_buffer = result.inner().inner();
-        // data should be shifted by 1
-        assert_eq!(underlying_buffer.ptr_offset(), std::mem::size_of::<i32>());
-        let original_value_ptr = unsafe {underlying_buffer.data_ptr().as_ptr() as *mut i32};
-        let value_in_ptr = unsafe {*original_value_ptr};
-        assert_eq!(value_in_ptr, 1);
-        let last_value_ptr = unsafe {(underlying_buffer.data_ptr().as_ptr() as *mut i32).add(5)};
-        assert_eq!(unsafe {*last_value_ptr}, 12);
     }
 
     #[test]
