@@ -191,11 +191,9 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
         LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
         dt => {
             if !dt.is_primitive() {
-                return (
-                    false,
-                    K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum())
-                        .is_none(),
-                );
+                let total_values: usize = dictionaries.iter().map(|d| d.values().len()).sum();
+                let max_key_value = total_values.saturating_sub(1);
+                return (false, K::Native::from_usize(max_key_value).is_none());
             }
             |a, b| a.to_data().ptr_eq(&b.to_data())
         }
@@ -211,7 +209,11 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
         }
     }
 
-    let overflow = K::Native::from_usize(total_values).is_none();
+    // Check if the maximum key value (not total_values) fits in the key type
+    // For u8: 256 values means keys 0-255, so max_key_value = 255 (fits in u8)
+    // For u8: 257 values means keys 0-256, so max_key_value = 256 (doesn't fit in u8)
+    let max_key_value = total_values.saturating_sub(1);
+    let overflow = K::Native::from_usize(max_key_value).is_none();
     let values_exceed_length = total_values >= len;
 
     (
