@@ -270,6 +270,8 @@ impl From<MapArray> for ArrayData {
     }
 }
 
+type Entries<Key, Value> = Vec<(Key, Value)>;
+
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
@@ -363,6 +365,24 @@ impl MapArray {
 
     /// Helper to create [`MapArray`] from [`Vec`]s of entries so the code will look clean and straightforward
     ///
+    /// the input is:
+    /// ```no_run
+    /// // Maps
+    /// Vec<
+    ///   // Map
+    ///   Option<
+    ///     // Entries
+    ///     Vec<
+    ///       // Entry
+    ///       (
+    ///         Key,
+    ///         Option<Value>
+    ///       )
+    ///     >
+    ///   >
+    /// >
+    /// ```
+    ///
     /// Useful for tests, this should not be used for performance sensitive operations
     ///
     /// ```
@@ -370,23 +390,28 @@ impl MapArray {
     /// # use arrow_array::{MapArray, Int32Array, StringArray};
     ///
     /// let map = vec![
+    ///    // {}
     ///    Some(vec![]),
+    ///    // null
     ///    None,
+    ///    // { "a": 1, "b": null, "cd": 4 }
     ///    Some(vec![
     ///        ("a", Some(1)),
     ///        ("b", None),
     ///        ("cd", Some(4)),
     ///    ]),
+    ///    // { "e": 0 }
     ///    Some(vec![("e", Some(0))]),
     /// ];
     ///
+    /// // created map: [{}, null, {"a": 1, "b": null, "cd": 4}, {"e": 0}]
     /// let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map);
     /// // Or you could fill the last 2 generics manually for the key array item and value array item
     /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map);
     ///```
     #[allow(clippy::type_complexity)]
     pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
-        input: Vec<Option<Vec<(K, Option<V>)>>>,
+        input: Vec<Option<Entries<K, Option<V>>>>,
         ordered: bool,
     ) -> Self
     where

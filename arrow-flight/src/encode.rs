@@ -795,7 +795,7 @@ mod tests {
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_ipc::MetadataVersion;
     use arrow_schema::{UnionFields, UnionMode};
-    use builder::{GenericStringBuilder, MapBuilder};
+    use builder::MapBuilder;
     use std::collections::HashMap;
 
     use super::*;
@@ -1505,34 +1505,24 @@ mod tests {
 
         let expected_schema = Arc::new(expected_schema);
 
-        // Builder without dictionary fields
-        let mut builder = MapBuilder::new(
-            None,
-            GenericStringBuilder::<i32>::new(),
-            GenericStringBuilder::<i32>::new(),
+        // array without dictionary fields
+        let arr1 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("a")),
+                ("k2", None),
+                ("k3", Some("b")),
+            ])],
+            false,
         );
 
-        // {"k1":"a","k2":null,"k3":"b"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("a");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("b");
-        builder.append(true).unwrap();
-
-        let arr1 = builder.finish();
-
-        // {"k1":"c","k2":null,"k3":"d"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("c");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("d");
-        builder.append(true).unwrap();
-
-        let arr2 = builder.finish();
+        let arr2 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("c")),
+                ("k2", None),
+                ("k3", Some("d")),
+            ])],
+            false,
+        );
 
         let mut expected_arrays = vec![arr1, arr2].into_iter();
 
