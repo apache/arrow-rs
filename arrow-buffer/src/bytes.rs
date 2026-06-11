@@ -94,11 +94,6 @@ impl Bytes {
     }
 
     #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[inline]
     pub(crate) fn ptr(&self) -> NonNull<u8> {
         self.ptr
     }
