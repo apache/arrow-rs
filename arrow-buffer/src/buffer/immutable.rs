@@ -1167,12 +1167,10 @@ mod tests {
             (2, original_buffer_data.len() - 2),
         ] {
             let buffer = Buffer::from(original_buffer_data);
-            let original_buffer_len = buffer.len();
-            let original_data_ptr = buffer.data_ptr();
             let sliced = buffer.slice_with_length(slice_from, slice_length);
             drop(buffer); // Keep only 1 owner
 
-            assert!(buffer.is_sliced());
+            assert!(sliced.is_sliced());
             sliced
                 .into_mutable()
                 .expect_err("should not convert sliced buffer");
