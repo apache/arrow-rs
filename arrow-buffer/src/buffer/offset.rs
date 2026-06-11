@@ -343,7 +343,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         // If negative, make sure that this will not create an overflow
         if rhs < O::usize_as(0) {
-            self[len - 1].checked_sub(rhs).expect("must not overflow");
+            self[len - 1].checked_sub(&rhs).expect("must not overflow");
         }
 
         let output_buffer = match self.into_inner().into_inner().into_mutable() {
@@ -872,52 +872,149 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "shifted offsets will become negative which is not allowed")]
     fn should_panic_for_subtract_by_value_that_will_cause_offsets_to_be_less_than_zero() {
-        todo!()
+        // self[0] = 0, rhs = 1 -> 0 >= 1 is false -> assert fires
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        offsets.subtract(1);
     }
 
     #[test]
     fn subtract_by_value_that_will_cause_offsets_to_be_less_than_zero_for_outside_the_slice() {
-        todo!()
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 7]));
+        let sliced = offsets.slice(1, 2); // [1, 4, 7]
+        drop(offsets);
+        assert_eq!(sliced.as_ref(), &[1, 4, 7]);
+
+        let result = sliced.subtract(1);
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
+        assert_eq!(result.len(), 3);
     }
 
     #[test]
+    #[should_panic(expected = "must not overflow")]
     fn should_panic_subtract_by_value_that_will_cause_offsets_to_overflow() {
-        todo!()
+        // rhs = -1 (negative). self[0] = 0 >= -1 passes.
+        // last offset i32::MAX - (-1) = i32::MAX + 1 -> checked_sub returns None -> expect fires
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5, i32::MAX]));
+        offsets.subtract(-1);
     }
 
     #[test]
     fn subtract_by_value_that_will_cause_offsets_to_overflow_outside_the_slice() {
-        todo!()
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, i32::MAX]));
+        let sliced = offsets.slice(0, 2); // [0, 3, 6]
+        assert_eq!(sliced.as_ref(), &[0, 3, 6]);
+
+        let result = sliced.subtract(-1);
+        assert_eq!(result.as_ref(), &[1, 4, 7]);
+        assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn when_shift_is_0_subtract_should_reuse_the_buffer_even_when_it_is_shared() {
-        todo!()
+        // subtract(0) hits the early `return self` before any into_mutable,
+        // so the returned buffer is the exact same allocation even while shared.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        let shared = offsets.clone(); // refcount now 2 -> shared
+        let result = offsets.subtract(0);
+        assert!(
+            result.ptr_eq(&shared),
+            "subtract(0) must return the same underlying buffer, even when shared"
+        );
     }
 
     #[test]
     fn should_reuse_the_underline_data_when_the_buffer_is_not_shared() {
-        todo!()
+        // Unique ownership, offset 0 -> into_mutable succeeds -> mutate in place,
+        // and MutableBuffer -> Buffer keeps the same allocation.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![2, 5, 8]));
+        let ptr_before = offsets.as_ptr();
+        let result = offsets.subtract(2);
+        assert_eq!(
+            ptr_before,
+            result.as_ptr(),
+            "a non-shared buffer should be mutated in place, reusing the allocation"
+        );
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
     }
 
     #[test]
     fn should_create_a_new_buffer_when_the_buffer_is_shared() {
-        todo!()
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![2, 5, 8]));
+        let shared = offsets.clone();
+        let ptr_before = offsets.as_ptr();
+        let result = offsets.subtract(2);
+        assert_ne!(
+            ptr_before,
+            result.as_ptr(),
+            "a shared buffer must not be mutated in place; a new allocation is created"
+        );
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
+        // The shared view is untouched.
+        assert_eq!(shared.as_ref(), &[2, 5, 8]);
     }
 
     #[test]
     fn when_shift_is_negative_it_should_shift_offsets_in_the_right_direction() {
-        todo!()
+        // rhs = -2 -> offset - (-2) = offset + 2, so all offsets move up.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        let result = offsets.subtract(-2);
+        assert_eq!(result.as_ref(), &[2, 5, 8]);
     }
 
     #[test]
     fn for_sliced_unshared_buffer_shift_should_reuse_buffer_but_only_modify_the_data_in_slice() {
-        todo!()
+        // Underlying [0, 3, 6, 9, 12]; slice -> view [3, 6, 9].
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![1, 3, 6, 9, 12]));
+        let sliced = offsets.slice(1, 2); // [3, 6, 9]
+        drop(offsets); // uniquely owned -> eligible for in-place reuse
+        assert_eq!(sliced.as_ref(), &[3, 6, 9]);
+
+        let ptr_before = sliced.as_ptr();
+        let result = sliced.subtract(1);
+
+        // Reuses the allocation...
+        assert_eq!(
+            ptr_before,
+            result.as_ptr(),
+            "uniquely-owned sliced buffer should be mutated in place"
+        );
+        // ...but only the slice is shifted, and the length stays the slice length.
+        assert_eq!(result.as_ref(), &[2, 5, 8]);
+        assert_eq!(result.len(), 3);
+        let underlying_buffer = result.inner().inner();
+        // data should be shifted by 1
+        assert_eq!(underlying_buffer.ptr_offset(), std::mem::size_of::<i32>());
+        let original_value_ptr = unsafe {underlying_buffer.data_ptr().as_ptr() as *mut i32};
+        let value_in_ptr = unsafe {*original_value_ptr};
+        assert_eq!(value_in_ptr, 1);
+        let last_value_ptr = unsafe {(underlying_buffer.data_ptr().as_ptr() as *mut i32).add(5)};
+        assert_eq!(unsafe {*last_value_ptr}, 12);
     }
 
     #[test]
     fn for_sliced_shared_buffer_shifted_buffer_should_only_include_the_sliced_data() {
-        todo!()
+        // Underlying: [0, 3, 6, 9, 12]; slice(1, 2) -> view [3, 6, 9].
+        // `offsets` stays alive, so the sliced buffer is shared -> Err branch.
+        // The Err branch copies `len` (= 3) elements from the *sliced* typed_data,
+        // so the result contains only the sliced data, shifted.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
+        let sliced = offsets.slice(1, 2);
+        assert_eq!(sliced.as_ref(), &[3, 6, 9]);
+
+        let result = sliced.subtract(3);
+
+        assert_eq!(
+            result.as_ref(),
+            &[0, 3, 6],
+            "shifted result should contain only the sliced data"
+        );
+        assert_eq!(result.len(), 3);
+
+        // Assert that the underlying buffer of the result is not sliced to make sure it does not include the data outside the slice range from the original buffer
+        let underlying_buffer = result.inner().inner();
+        assert_eq!(underlying_buffer.ptr_offset(), 0);
+        assert_eq!(underlying_buffer.len(), 3 * std::mem::size_of::<i32>());
     }
 }
