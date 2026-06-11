@@ -399,7 +399,7 @@ impl Buffer {
         // }
         // ```
         if self.is_sliced() {
-            return Err(self)
+            return Err(self);
         }
         // SAFETY: we validated that the buffer is not sliced
         self.into_mutable_unsliced()
@@ -440,12 +440,12 @@ impl Buffer {
         let length = self.length;
 
         Arc::try_unwrap(self.data)
-          .and_then(|bytes| MutableBuffer::from_bytes(bytes).map_err(Arc::new))
-          .map_err(|bytes| Buffer {
-              data: bytes,
-              ptr,
-              length,
-          })
+            .and_then(|bytes| MutableBuffer::from_bytes(bytes).map_err(Arc::new))
+            .map_err(|bytes| Buffer {
+                data: bytes,
+                ptr,
+                length,
+            })
     }
 
     /// Converts self into a `Vec`, if possible.
@@ -1174,7 +1174,9 @@ mod tests {
             drop(buffer); // Keep only 1 owner
 
             assert!(buffer.is_sliced());
-            sliced.into_mutable().expect_err("should not convert sliced buffer");
+            sliced
+                .into_mutable()
+                .expect_err("should not convert sliced buffer");
         }
     }
 
@@ -1194,7 +1196,9 @@ mod tests {
             let sliced = buffer.slice_with_length(slice_from, slice_length);
             drop(buffer); // Keep only 1 owner
 
-            let mutable = sliced.into_mutable_unsliced().expect("should convert to mutable");
+            let mutable = sliced
+                .into_mutable_unsliced()
+                .expect("should convert to mutable");
             assert_eq!(mutable.len(), original_buffer_len);
             let new_buffer = Buffer::from(mutable);
             assert_eq!(new_buffer.data_ptr(), original_data_ptr);
