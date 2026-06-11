@@ -682,8 +682,12 @@ impl IpcDataGenerator {
     /// Encodes a `RecordBatch` into a flatbuffer IPC message and fills `sink` with the
     /// serialised buffer data.
     ///
-    /// Returns `(ipc_message, body_len, tail_pad)`: the flatbuffer header bytes, the
-    /// total body length including trailing padding, and the trailing alignment padding byte count.
+    /// Returns `(body_len, tail_pad)`: the total body length including trailing padding,
+    /// and the trailing alignment padding byte count.
+    ///
+    /// The message header is located in the provided FlatBufferBuilder's finished
+    /// bytes. A successful Result from this function guarantees the fbb is in
+    /// a finished state to call [`FlatBufferBuilder::finished_data`].
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
@@ -760,8 +764,6 @@ impl IpcDataGenerator {
         let root = message.finish();
         fbb.finish(root, None);
 
-        // The finished metadata lives in `fbb`'s internal buffer; callers read it
-        // via `fbb.finished_data()` to avoid an intermediate copy.
         Ok((body_len, tail_pad))
     }
 
