@@ -162,7 +162,13 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
-        (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
+        (DataType::FixedSizeBinary(num_bytes), 1) => {
+            TryInto::<usize>::try_into(*num_bytes).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "cannot determine bit_width for FixedSizeBinary({num_bytes})"
+                ))
+            })? * u8::BITS as usize
+        }
         (DataType::FixedSizeList(f, num_elems), 1) => {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)

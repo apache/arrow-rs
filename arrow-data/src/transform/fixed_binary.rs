@@ -17,14 +17,10 @@
 
 use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
-use arrow_schema::DataType;
+use crate::data::get_fixed_size_binary_width;
 
 pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
-    let size = match array.data_type() {
-        DataType::FixedSizeBinary(i) => *i as usize,
-        _ => unreachable!(),
-    };
-
+    let size = get_fixed_size_binary_width(array.data_type());
     let values = &array.buffers()[0].as_slice()[array.offset() * size..];
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -35,10 +31,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
 }
 
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
-    let size = match mutable.data_type {
-        DataType::FixedSizeBinary(i) => i as usize,
-        _ => unreachable!(),
-    };
+    let size = get_fixed_size_binary_width(&mutable.data_type);
 
     let values_buffer = &mut mutable.buffer1;
     values_buffer.extend_zeros(len * size);

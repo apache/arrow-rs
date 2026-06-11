@@ -33,7 +33,7 @@ use arrow::array::{
     StructArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::compute::{CastOptions, DecimalCast};
+use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use arrow_schema::{FieldRef, Fields, TimeUnit};
@@ -48,6 +48,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     Array(ArrayVariantToArrowRowBuilder<'a>),
     Struct(StructVariantToArrowRowBuilder<'a>),
+    Encoded(EncodedVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
     // Path extraction wrapper - contains a boxed enum for any of the above
@@ -61,6 +62,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.append_null(),
             Array(b) => b.append_null(),
             Struct(b) => b.append_null(),
+            Encoded(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
         }
@@ -72,6 +74,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.append_value(&value),
             Array(b) => b.append_value(&value),
             Struct(b) => b.append_value(&value),
+            Encoded(b) => b.append_value(value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
         }
@@ -83,6 +86,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.finish(),
             Array(b) => b.finish(),
             Struct(b) => b.finish(),
+            Encoded(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
         }
@@ -109,6 +113,24 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
             let builder =
                 ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity, false)?;
             Ok(Array(builder))
+        }
+        DataType::Dictionary(_, value_type) => {
+            let builder = EncodedVariantToArrowRowBuilder::try_new(
+                data_type,
+                value_type.as_ref(),
+                cast_options,
+                capacity,
+            )?;
+            Ok(Encoded(builder))
+        }
+        DataType::RunEndEncoded(_, value_field) => {
+            let builder = EncodedVariantToArrowRowBuilder::try_new(
+                data_type,
+                value_field.data_type(),
+                cast_options,
+                capacity,
+            )?;
+            Ok(Encoded(builder))
         }
         data_type => {
             let builder =
@@ -328,6 +350,45 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             LargeBinary(b) => b.finish(),
             BinaryView(b) => b.finish(),
         }
+    }
+}
+
+pub(crate) struct EncodedVariantToArrowRowBuilder<'a> {
+    data_type: &'a DataType,
+    cast_options: &'a CastOptions<'a>,
+    values_builder: Box<VariantToArrowRowBuilder<'a>>,
+}
+
+impl<'a> EncodedVariantToArrowRowBuilder<'a> {
+    fn try_new(
+        data_type: &'a DataType,
+        value_type: &'a DataType,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        let values_builder = Box::new(make_typed_variant_to_arrow_row_builder(
+            value_type,
+            cast_options,
+            capacity,
+        )?);
+        Ok(Self {
+            data_type,
+            cast_options,
+            values_builder,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.values_builder.append_null()
+    }
+
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        self.values_builder.append_value(value)
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        let values = self.values_builder.finish()?;
+        cast_with_options(values.as_ref(), self.data_type, self.cast_options)
     }
 }
 
