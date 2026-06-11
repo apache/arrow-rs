@@ -700,67 +700,21 @@ impl IpcDataGenerator {
         // allocated capacity and only clears the in-progress state.
         fbb.reset();
 
-        let batch_compression_type = write_options.batch_compression_type;
+        let (root, body_len, tail_pad) = self.encode_record_batch_data(
+            batch.columns().iter().map(|array| array.to_data()),
+            batch.num_rows() as i64,
+            write_options,
+            compression_context,
+            sink,
+            fbb,
+        )?;
 
-        let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(fbb);
-            c.add_method(crate::BodyCompressionMethod::BUFFER);
-            c.add_codec(batch_compression_type);
-            c.finish()
-        });
-
-        let compression_codec: Option<CompressionCodec> =
-            batch_compression_type.map(TryInto::try_into).transpose()?;
-
-        let alignment = write_options.alignment;
-        let mut variadic_buffer_counts = vec![];
-        let mut meta = IpcMetadataBuilder::default();
-        let mut offset = 0i64;
-
-        for array in batch.columns() {
-            let array_data = array.to_data();
-            offset = write_array_data(
-                &array_data,
-                &mut meta,
-                sink,
-                offset,
-                compression_codec,
-                compression_context,
-                write_options,
-            )?;
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
-        }
-
-        let tail_pad = pad_to_alignment(alignment, offset as usize);
-        let body_len = offset as usize + tail_pad;
-
-        let buffers = fbb.create_vector(&meta.buffers);
-        let nodes = fbb.create_vector(&meta.nodes);
-        let variadic_buffer = if variadic_buffer_counts.is_empty() {
-            None
-        } else {
-            Some(fbb.create_vector(&variadic_buffer_counts))
-        };
-
-        let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
-            batch_builder.add_length(batch.num_rows() as i64);
-            batch_builder.add_nodes(nodes);
-            batch_builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                batch_builder.add_compression(c);
-            }
-            if let Some(v) = variadic_buffer {
-                batch_builder.add_variadicBufferCounts(v);
-            }
-            batch_builder.finish().as_union_value()
-        };
         // create an crate::Message
         let mut message = crate::MessageBuilder::new(fbb);
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(body_len as i64);
-        message.add_header(root);
+        message.add_header(root.as_union_value());
         let root = message.finish();
         fbb.finish(root, None);
 
@@ -809,68 +763,22 @@ impl IpcDataGenerator {
         // allocated capacity and only clears the in-progress state.
         fbb.reset();
 
-        let mut nodes: Vec<crate::FieldNode> = vec![];
-        let mut buffers: Vec<crate::Buffer> = vec![];
-
-        // get the type of compression
-        let batch_compression_type = write_options.batch_compression_type;
-
-        let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(fbb);
-            c.add_method(crate::BodyCompressionMethod::BUFFER);
-            c.add_codec(batch_compression_type);
-            c.finish()
-        });
-
-        let compression_codec: Option<CompressionCodec> = batch_compression_type
-            .map(|batch_compression_type| batch_compression_type.try_into())
-            .transpose()?;
-
-        let alignment = write_options.alignment;
-        let offset = write_array_data(
-            &dict.data,
-            &mut buffers,
-            sink,
-            &mut nodes,
-            0,
-            compression_codec,
-            compression_context,
+        // A dictionary batch is a record batch (the single column of dictionary
+        // values) wrapped in a DictionaryBatch, so we share the record batch body
+        // and table encoding and only differ in the message framing.
+        let (record_batch, body_len, tail_pad) = self.encode_record_batch_data(
+            std::iter::once(dict.data.clone()),
+            dict.data.len() as i64,
             write_options,
+            compression_context,
+            sink,
+            fbb,
         )?;
-
-        let mut variadic_buffer_counts = vec![];
-        append_variadic_buffer_counts(&mut variadic_buffer_counts, &dict.data);
-
-        let tail_pad = pad_to_alignment(alignment, offset as usize);
-        let body_len = offset as usize + tail_pad;
-
-        // write data
-        let buffers = fbb.create_vector(&meta.buffers);
-        let nodes = fbb.create_vector(&meta.nodes);
-        let variadic_buffer = if variadic_buffer_counts.is_empty() {
-            None
-        } else {
-            Some(fbb.create_vector(&variadic_buffer_counts))
-        };
-
-        let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
-            batch_builder.add_length(dict.data.len() as i64);
-            batch_builder.add_nodes(nodes);
-            batch_builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                batch_builder.add_compression(c);
-            }
-            if let Some(v) = variadic_buffer {
-                batch_builder.add_variadicBufferCounts(v);
-            }
-            batch_builder.finish()
-        };
 
         let root = {
             let mut batch_builder = crate::DictionaryBatchBuilder::new(fbb);
             batch_builder.add_id(dict.id);
-            batch_builder.add_data(root);
+            batch_builder.add_data(record_batch);
             batch_builder.add_isDelta(dict.is_delta);
             batch_builder.finish().as_union_value()
         };
@@ -887,6 +795,87 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
 
         Ok((body_len, tail_pad))
+    }
+
+    /// Encode the body buffers of a single record batch into `sink` and build the
+    /// flatbuffer `RecordBatch` table into `fbb`.
+    ///
+    /// This is the shared core of [`Self::record_batch_to_bytes`] and
+    /// [`Self::dictionary_batch_to_sink`]: a dictionary message embeds a record
+    /// batch (its single column of values), so both encode the same `RecordBatch`
+    /// table and only differ in how they wrap the returned offset in a message.
+    ///
+    /// `columns` yields the column data in IPC buffer order and `row_count` is the
+    /// logical length recorded in the `RecordBatch` header. Returns
+    /// `(record_batch, body_len, tail_pad)`: the in-progress flatbuffer offset of the
+    /// `RecordBatch` table, the total body length including trailing padding, and the
+    /// trailing alignment padding byte count. The caller is responsible for wrapping
+    /// `record_batch` in a `Message` and calling [`FlatBufferBuilder::finish`].
+    fn encode_record_batch_data(
+        &self,
+        columns: impl IntoIterator<Item = ArrayData>,
+        row_count: i64,
+        write_options: &IpcWriteOptions,
+        compression_context: &mut CompressionContext,
+        sink: &mut IpcBodySink<'_>,
+        fbb: &mut FlatBufferBuilder<'static>,
+    ) -> Result<(flatbuffers::WIPOffset<crate::RecordBatch<'static>>, usize, usize), ArrowError> {
+        let batch_compression_type = write_options.batch_compression_type;
+
+        let compression = batch_compression_type.map(|batch_compression_type| {
+            let mut c = crate::BodyCompressionBuilder::new(fbb);
+            c.add_method(crate::BodyCompressionMethod::BUFFER);
+            c.add_codec(batch_compression_type);
+            c.finish()
+        });
+
+        let compression_codec: Option<CompressionCodec> =
+            batch_compression_type.map(TryInto::try_into).transpose()?;
+
+        let alignment = write_options.alignment;
+        let mut nodes: Vec<crate::FieldNode> = vec![];
+        let mut buffers: Vec<crate::Buffer> = vec![];
+        let mut variadic_buffer_counts: Vec<i64> = vec![];
+        let mut offset = 0i64;
+
+        for array_data in columns {
+            offset = write_array_data(
+                &array_data,
+                &mut buffers,
+                sink,
+                &mut nodes,
+                offset,
+                compression_codec,
+                compression_context,
+                write_options,
+            )?;
+            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
+        }
+
+        let tail_pad = pad_to_alignment(alignment, offset as usize);
+        let body_len = offset as usize + tail_pad;
+
+        let buffers = fbb.create_vector(&buffers);
+        let nodes = fbb.create_vector(&nodes);
+        let variadic_buffer = if variadic_buffer_counts.is_empty() {
+            None
+        } else {
+            Some(fbb.create_vector(&variadic_buffer_counts))
+        };
+
+        let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
+        batch_builder.add_length(row_count);
+        batch_builder.add_nodes(nodes);
+        batch_builder.add_buffers(buffers);
+        if let Some(c) = compression {
+            batch_builder.add_compression(c);
+        }
+        if let Some(v) = variadic_buffer {
+            batch_builder.add_variadicBufferCounts(v);
+        }
+        let root = batch_builder.finish();
+
+        Ok((root, body_len, tail_pad))
     }
 }
 
