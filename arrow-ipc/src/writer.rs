@@ -281,6 +281,21 @@ struct DictionaryToEncode {
     is_delta: bool,
 }
 
+/// The result of encoding a record batch's body and flatbuffer `RecordBatch` table
+/// via [`IpcDataGenerator::encode_record_batch_data`].
+///
+/// The `RecordBatch` table is left in-progress in the caller's [`FlatBufferBuilder`];
+/// the caller wraps `record_batch` in a `Message` (directly for a record batch
+/// message, or inside a `DictionaryBatch` for a dictionary message).
+struct EncodedRecordBatch {
+    /// In-progress flatbuffer offset of the `RecordBatch` table.
+    record_batch: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
+    /// Total body length written to the sink, including trailing alignment padding.
+    body_len: usize,
+    /// Trailing alignment padding byte count (already included in `body_len`).
+    tail_pad: usize,
+}
+
 impl IpcDataGenerator {
     /// Converts a schema to an IPC message along with `dictionary_tracker`
     /// and returns it encoded inside [EncodedData] as a flatbuffer.
@@ -700,7 +715,11 @@ impl IpcDataGenerator {
         // allocated capacity and only clears the in-progress state.
         fbb.reset();
 
-        let (root, body_len, tail_pad) = self.encode_record_batch_data(
+        let EncodedRecordBatch {
+            record_batch,
+            body_len,
+            tail_pad,
+        } = self.encode_record_batch_data(
             batch.columns().iter().map(|array| array.to_data()),
             batch.num_rows() as i64,
             write_options,
@@ -714,7 +733,7 @@ impl IpcDataGenerator {
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(body_len as i64);
-        message.add_header(root.as_union_value());
+        message.add_header(record_batch.as_union_value());
         let root = message.finish();
         fbb.finish(root, None);
 
@@ -766,7 +785,11 @@ impl IpcDataGenerator {
         // A dictionary batch is a record batch (the single column of dictionary
         // values) wrapped in a DictionaryBatch, so we share the record batch body
         // and table encoding and only differ in the message framing.
-        let (record_batch, body_len, tail_pad) = self.encode_record_batch_data(
+        let EncodedRecordBatch {
+            record_batch,
+            body_len,
+            tail_pad,
+        } = self.encode_record_batch_data(
             std::iter::once(dict.data.clone()),
             dict.data.len() as i64,
             write_options,
@@ -806,11 +829,9 @@ impl IpcDataGenerator {
     /// table and only differ in how they wrap the returned offset in a message.
     ///
     /// `columns` yields the column data in IPC buffer order and `row_count` is the
-    /// logical length recorded in the `RecordBatch` header. Returns
-    /// `(record_batch, body_len, tail_pad)`: the in-progress flatbuffer offset of the
-    /// `RecordBatch` table, the total body length including trailing padding, and the
-    /// trailing alignment padding byte count. The caller is responsible for wrapping
-    /// `record_batch` in a `Message` and calling [`FlatBufferBuilder::finish`].
+    /// logical length recorded in the `RecordBatch` header. The caller is responsible
+    /// for wrapping the returned [`EncodedRecordBatch::record_batch`] in a `Message`
+    /// and calling [`FlatBufferBuilder::finish`].
     fn encode_record_batch_data(
         &self,
         columns: impl IntoIterator<Item = ArrayData>,
@@ -819,7 +840,7 @@ impl IpcDataGenerator {
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
         fbb: &mut FlatBufferBuilder<'static>,
-    ) -> Result<(flatbuffers::WIPOffset<crate::RecordBatch<'static>>, usize, usize), ArrowError> {
+    ) -> Result<EncodedRecordBatch, ArrowError> {
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -873,9 +894,13 @@ impl IpcDataGenerator {
         if let Some(v) = variadic_buffer {
             batch_builder.add_variadicBufferCounts(v);
         }
-        let root = batch_builder.finish();
+        let record_batch = batch_builder.finish();
 
-        Ok((root, body_len, tail_pad))
+        Ok(EncodedRecordBatch {
+            record_batch,
+            body_len,
+            tail_pad,
+        })
     }
 }
 
@@ -1732,9 +1757,9 @@ pub struct EncodedData {
     /// Arrow buffers to be written, should be an empty vec for schema messages
     pub arrow_data: Vec<u8>,
 }
-/// Write a single message directly to `writer`: the continuation prefix, the
-/// flatbuffer metadata (`ipc_message`) with alignment padding, then each body
-/// buffer with its per-buffer padding, then the trailing body padding.
+/// Write a single message directly to `writer`: the message header (continuation
+/// prefix + flatbuffer metadata + alignment padding), then each body buffer with its
+/// per-buffer padding, then the trailing body padding.
 ///
 /// `ipc_message` is the raw flatbuffer header (without continuation prefix), and
 /// `encoded_buffers` are the already-encoded body buffers (zero-copy or
@@ -1747,21 +1772,9 @@ fn write_encoded_message_direct<W: Write>(
     tail_pad: usize,
     write_options: &IpcWriteOptions,
 ) -> Result<usize, ArrowError> {
+    let aligned_size = write_message_header(writer, ipc_message, write_options)?;
+
     let alignment = write_options.alignment;
-    let a = usize::from(alignment - 1);
-    let prefix_size = if write_options.write_legacy_ipc_format {
-        4
-    } else {
-        8
-    };
-    let aligned_size = (ipc_message.len() + prefix_size + a) & !a;
-    write_continuation(
-        &mut *writer,
-        write_options,
-        (aligned_size - prefix_size) as i32,
-    )?;
-    writer.write_all(ipc_message)?;
-    writer.write_all(&PADDING[..aligned_size - ipc_message.len() - prefix_size])?;
     for enc in encoded_buffers {
         writer.write_all(enc.as_slice())?;
         writer.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
@@ -1783,29 +1796,7 @@ pub fn write_message<W: Write>(
         ));
     }
 
-    let a = usize::from(write_options.alignment - 1);
-    let buffer = encoded.ipc_message;
-    let flatbuf_size = buffer.len();
-    let prefix_size = if write_options.write_legacy_ipc_format {
-        4
-    } else {
-        8
-    };
-    let aligned_size = (flatbuf_size + prefix_size + a) & !a;
-    let padding_bytes = aligned_size - flatbuf_size - prefix_size;
-
-    write_continuation(
-        &mut writer,
-        write_options,
-        (aligned_size - prefix_size) as i32,
-    )?;
-
-    // write the flatbuf
-    if flatbuf_size > 0 {
-        writer.write_all(&buffer)?;
-    }
-    // write padding
-    writer.write_all(&PADDING[..padding_bytes])?;
+    let aligned_size = write_message_header(&mut writer, &encoded.ipc_message, write_options)?;
 
     // write arrow data
     let body_len = if arrow_data_len > 0 {
@@ -1815,6 +1806,42 @@ pub fn write_message<W: Write>(
     };
 
     Ok((aligned_size, body_len))
+}
+
+/// Write the encapsulated-message header to `writer`: the continuation marker and
+/// metadata length, the flatbuffer metadata (`ipc_message`), and the alignment
+/// padding that follows it.
+///
+/// Returns the padded header length (continuation prefix + metadata + padding),
+/// which is also the value encoded in the continuation length field.
+fn write_message_header<W: Write>(
+    writer: &mut W,
+    ipc_message: &[u8],
+    write_options: &IpcWriteOptions,
+) -> Result<usize, ArrowError> {
+    let a = usize::from(write_options.alignment - 1);
+    let flatbuf_size = ipc_message.len();
+    let prefix_size = if write_options.write_legacy_ipc_format {
+        4
+    } else {
+        8
+    };
+    let aligned_size = (flatbuf_size + prefix_size + a) & !a;
+
+    write_continuation(
+        &mut *writer,
+        write_options,
+        (aligned_size - prefix_size) as i32,
+    )?;
+
+    // write the flatbuf
+    if flatbuf_size > 0 {
+        writer.write_all(ipc_message)?;
+    }
+    // write padding
+    writer.write_all(&PADDING[..aligned_size - flatbuf_size - prefix_size])?;
+
+    Ok(aligned_size)
 }
 
 fn write_body_buffers<W: Write>(
