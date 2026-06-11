@@ -290,10 +290,10 @@ struct DictionaryToEncode {
 struct EncodedRecordBatch {
     /// In-progress flatbuffer offset of the `RecordBatch` table.
     record_batch: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
-    /// Total body length written to the sink, including trailing alignment padding.
+    /// Total body length written to the sink (the sum of each buffer's encoded
+    /// length and its alignment padding). Each buffer is individually padded to the
+    /// alignment, so the body is already aligned and needs no trailing padding.
     body_len: usize,
-    /// Trailing alignment padding byte count (already included in `body_len`).
-    tail_pad: usize,
 }
 
 impl IpcDataGenerator {
@@ -572,14 +572,13 @@ impl IpcDataGenerator {
         }
         let mut fbb = FlatBufferBuilder::new();
         let mut arrow_data = Vec::new();
-        let (_, tail_pad) = self.record_batch_to_bytes(
+        self.record_batch_to_bytes(
             batch,
             write_options,
             compression_context,
             &mut IpcBodySink::Write(&mut arrow_data),
             &mut fbb,
         )?;
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
         Ok((
             encoded_dictionaries,
             EncodedData {
@@ -636,7 +635,7 @@ impl IpcDataGenerator {
 
         for dict in &dictionaries {
             encoded_buffers.clear();
-            let (body_len, tail_pad) = self.dictionary_batch_to_sink(
+            let body_len = self.dictionary_batch_to_sink(
                 dict,
                 write_options,
                 compression_context,
@@ -647,14 +646,13 @@ impl IpcDataGenerator {
                 &mut *writer,
                 fbb.finished_data(),
                 &encoded_buffers,
-                tail_pad,
                 write_options,
             )?;
             dictionary_block_sizes.push((header_len, body_len));
         }
 
         encoded_buffers.clear();
-        let (body_len, tail_pad) = self.record_batch_to_bytes(
+        let body_len = self.record_batch_to_bytes(
             batch,
             write_options,
             compression_context,
@@ -665,7 +663,6 @@ impl IpcDataGenerator {
             &mut *writer,
             fbb.finished_data(),
             &encoded_buffers,
-            tail_pad,
             write_options,
         )?;
 
@@ -697,8 +694,8 @@ impl IpcDataGenerator {
     /// Encodes a `RecordBatch` into a flatbuffer IPC message and fills `sink` with the
     /// serialised buffer data.
     ///
-    /// Returns `(body_len, tail_pad)`: the total body length including trailing padding,
-    /// and the trailing alignment padding byte count.
+    /// Returns the total body length written to `sink` (including per-buffer alignment
+    /// padding).
     ///
     /// The message header is located in the provided FlatBufferBuilder's finished
     /// bytes. A successful Result from this function guarantees the fbb is in
@@ -710,7 +707,7 @@ impl IpcDataGenerator {
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
         fbb: &mut FlatBufferBuilder<'static>,
-    ) -> Result<(usize, usize), ArrowError> {
+    ) -> Result<usize, ArrowError> {
         // Reuse the builder's internal buffer across messages; `reset` keeps the
         // allocated capacity and only clears the in-progress state.
         fbb.reset();
@@ -718,7 +715,6 @@ impl IpcDataGenerator {
         let EncodedRecordBatch {
             record_batch,
             body_len,
-            tail_pad,
         } = self.encode_record_batch_data(
             batch.columns().iter().map(|array| array.to_data()),
             batch.num_rows() as i64,
@@ -737,7 +733,7 @@ impl IpcDataGenerator {
         let root = message.finish();
         fbb.finish(root, None);
 
-        Ok((body_len, tail_pad))
+        Ok(body_len)
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
@@ -750,14 +746,13 @@ impl IpcDataGenerator {
     ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
         let mut arrow_data: Vec<u8> = vec![];
-        let (_, tail_pad) = self.dictionary_batch_to_sink(
+        self.dictionary_batch_to_sink(
             &dict,
             write_options,
             compression_context,
             &mut IpcBodySink::Write(&mut arrow_data),
             &mut fbb,
         )?;
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
 
         Ok(EncodedData {
             ipc_message: fbb.finished_data().to_vec(),
@@ -768,8 +763,8 @@ impl IpcDataGenerator {
     /// Encodes a dictionary batch's flatbuffer metadata into `fbb` (read back via
     /// `fbb.finished_data()`) and fills `sink` with its body buffers.
     ///
-    /// Returns `(body_len, tail_pad)`: the total body length including trailing
-    /// padding, and the trailing alignment padding byte count.
+    /// Returns the total body length written to `sink` (including per-buffer alignment
+    /// padding).
     fn dictionary_batch_to_sink(
         &self,
         dict: &DictionaryToEncode,
@@ -777,7 +772,7 @@ impl IpcDataGenerator {
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
         fbb: &mut FlatBufferBuilder<'static>,
-    ) -> Result<(usize, usize), ArrowError> {
+    ) -> Result<usize, ArrowError> {
         // Reuse the builder's internal buffer across messages; `reset` keeps the
         // allocated capacity and only clears the in-progress state.
         fbb.reset();
@@ -788,7 +783,6 @@ impl IpcDataGenerator {
         let EncodedRecordBatch {
             record_batch,
             body_len,
-            tail_pad,
         } = self.encode_record_batch_data(
             std::iter::once(dict.data.clone()),
             dict.data.len() as i64,
@@ -817,7 +811,7 @@ impl IpcDataGenerator {
 
         fbb.finish(root, None);
 
-        Ok((body_len, tail_pad))
+        Ok(body_len)
     }
 
     /// Encode the body buffers of a single record batch into `sink` and build the
@@ -853,7 +847,6 @@ impl IpcDataGenerator {
         let compression_codec: Option<CompressionCodec> =
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
-        let alignment = write_options.alignment;
         let mut nodes: Vec<crate::FieldNode> = vec![];
         let mut buffers: Vec<crate::Buffer> = vec![];
         let mut variadic_buffer_counts: Vec<i64> = vec![];
@@ -873,8 +866,9 @@ impl IpcDataGenerator {
             append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
-        let tail_pad = pad_to_alignment(alignment, offset as usize);
-        let body_len = offset as usize + tail_pad;
+        // Each buffer is padded to the alignment as it is written, so `offset` is
+        // already a multiple of the alignment -- the body needs no trailing padding.
+        let body_len = offset as usize;
 
         let buffers = fbb.create_vector(&buffers);
         let nodes = fbb.create_vector(&nodes);
@@ -899,7 +893,6 @@ impl IpcDataGenerator {
         Ok(EncodedRecordBatch {
             record_batch,
             body_len,
-            tail_pad,
         })
     }
 }
@@ -1759,17 +1752,17 @@ pub struct EncodedData {
 }
 /// Write a single message directly to `writer`: the message header (continuation
 /// prefix + flatbuffer metadata + alignment padding), then each body buffer with its
-/// per-buffer padding, then the trailing body padding.
+/// per-buffer alignment padding.
 ///
 /// `ipc_message` is the raw flatbuffer header (without continuation prefix), and
 /// `encoded_buffers` are the already-encoded body buffers (zero-copy or
-/// compressed). Returns the padded header length (continuation + metadata +
-/// padding), needed for IPC footer blocks.
+/// compressed). Each buffer is padded to the alignment, so the body needs no trailing
+/// padding. Returns the padded header length (continuation + metadata + padding),
+/// needed for IPC footer blocks.
 fn write_encoded_message_direct<W: Write>(
     writer: &mut W,
     ipc_message: &[u8],
     encoded_buffers: &[EncodedBuffer],
-    tail_pad: usize,
     write_options: &IpcWriteOptions,
 ) -> Result<usize, ArrowError> {
     let aligned_size = write_message_header(writer, ipc_message, write_options)?;
@@ -1779,7 +1772,6 @@ fn write_encoded_message_direct<W: Write>(
         writer.write_all(enc.as_slice())?;
         writer.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
     }
-    writer.write_all(&PADDING[..tail_pad])?;
     Ok(aligned_size)
 }
 
@@ -1800,7 +1792,7 @@ pub fn write_message<W: Write>(
 
     // write arrow data
     let body_len = if arrow_data_len > 0 {
-        write_body_buffers(&mut writer, &encoded.arrow_data, write_options.alignment)?
+        write_body_buffer(&mut writer, &encoded.arrow_data, write_options.alignment)?
     } else {
         0
     };
@@ -1844,7 +1836,7 @@ fn write_message_header<W: Write>(
     Ok(aligned_size)
 }
 
-fn write_body_buffers<W: Write>(
+fn write_body_buffer<W: Write>(
     mut writer: W,
     data: &[u8],
     alignment: u8,
