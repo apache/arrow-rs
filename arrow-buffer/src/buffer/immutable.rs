@@ -401,7 +401,6 @@ impl Buffer {
         if self.is_sliced() {
             return Err(self);
         }
-        // SAFETY: we validated that the buffer is not sliced
         self.into_mutable_unsliced()
     }
 
