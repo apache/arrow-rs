@@ -354,9 +354,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         let original_buffer = self.into_inner().into_inner();
         let original_length = original_buffer.len();
+        let buffer_offset = original_buffer.ptr_offset();
 
         // Remove this once https://github.com/apache/arrow-rs/issues/10117 is resolved
-        let into_mutable_buffer_result = if original_buffer.ptr_offset() != 0 {
+        let into_mutable_buffer_result = if buffer_offset != 0 {
             Err(original_buffer)
         } else {
             original_buffer.into_mutable()
@@ -373,7 +374,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
                     .iter_mut()
                     .for_each(|offset| *offset = *offset - rhs);
 
-                Buffer::from(mutable)
+                Buffer::from(mutable).slice_with_length(buffer_offset, original_length)
             }
             Err(original_buffer) => {
                 let shifted = original_buffer
@@ -992,6 +993,21 @@ mod tests {
         );
 
         assert_eq!(result.as_ref(), &[2, 5, 8]);
+    }
+
+    #[test]
+    fn for_sliced_but_start_at_0_unshared_buffer_shift_should_reuse_buffer() {
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![1, 3, 6, 9, 12]));
+        let sliced = offsets.slice(0, 2);
+        drop(offsets); // uniquely owned
+        assert_eq!(sliced.as_ref(), &[1, 3, 6]);
+
+        let ptr_before = sliced.as_ptr();
+        let result = sliced.subtract(1);
+
+        assert_eq!(ptr_before, result.as_ptr(), "should be reused");
+
+        assert_eq!(result.as_ref(), &[0, 2, 5]);
     }
 
     #[test]
