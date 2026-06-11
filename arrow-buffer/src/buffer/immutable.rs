@@ -106,9 +106,16 @@ impl Buffer {
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
     ///
     /// self.ptr and self.data can be different after slicing or advancing the buffer.
+    ///
+    /// to check if the buffer is sliced you can call [`Self::is_sliced`]
     pub fn ptr_offset(&self) -> usize {
         // Safety: `ptr` is always in bounds of `data`.
         unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
+    }
+
+    /// Returns whether the buffer is sliced
+    pub fn is_sliced(&self) -> bool {
+        self.ptr != self.data.as_ptr() || self.length != self.data.len()
     }
 
     /// Returns the pointer to the start of the buffer without the offset.
@@ -362,6 +369,10 @@ impl Buffer {
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
     ///
+    /// If the buffer is sliced, the returned [`MutableBuffer`] will be a view of the original buffer.
+    ///
+    /// you can check if the buffer is sliced by
+    ///
     /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
     /// ```
     /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
@@ -382,18 +393,20 @@ impl Buffer {
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
+        let data_ptr = self.data_ptr();
         let length = self.length;
+
         Arc::try_unwrap(self.data)
-            .and_then(|bytes| {
-                // The pointer of underlying buffer should not be offset.
-                assert_eq!(ptr, bytes.ptr().as_ptr());
-                MutableBuffer::from_bytes(bytes).map_err(Arc::new)
-            })
-            .map_err(|bytes| Buffer {
-                data: bytes,
-                ptr,
-                length,
-            })
+          .and_then(|bytes| {
+              // The pointer of underlying buffer should be the same
+              assert_eq!(data_ptr, bytes.ptr());
+              MutableBuffer::from_bytes(bytes).map_err(Arc::new)
+          })
+          .map_err(|bytes| Buffer {
+              data: bytes,
+              ptr,
+              length,
+          })
     }
 
     /// Converts self into a `Vec`, if possible.
@@ -1079,5 +1092,19 @@ mod tests {
 
         drop(capture);
         assert_eq!(buffer2.strong_count(), 1);
+    }
+
+    // test cases
+    // | offset | ptr_length | data_length | result |
+    // | ------ | ---------- | ----------- | ------ |
+    // | 0      | 10         | 10          | false  |
+    // | 0      | 8          | 10          | true   |
+    // | 1      | 8          | 10          | true   |
+    // | 1      | 9          | 10          | true   |
+    // 
+    // 
+    #[test]
+    fn test_is_sliced_should_return_false() {
+
     }
 }
