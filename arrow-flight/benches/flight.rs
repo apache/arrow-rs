@@ -54,7 +54,6 @@ fn bench_encode(c: &mut Criterion) {
     }
 }
 
-
 async fn roundtrip(channel: Channel, batch: RecordBatch) {
     let mut client = FlightClient::new(channel);
     let frames = FlightDataEncoderBuilder::new().build(futures::stream::iter([Ok(batch)]));
@@ -66,7 +65,6 @@ async fn roundtrip(channel: Channel, batch: RecordBatch) {
         .await
         .unwrap();
 }
-
 
 fn bench_roundtrip(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -133,5 +131,10 @@ fn bench_do_put_dictionary(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_encode, bench_roundtrip, bench_do_put_dictionary);
+criterion_group!(
+    benches,
+    bench_encode,
+    bench_roundtrip,
+    bench_do_put_dictionary
+);
 criterion_main!(benches);
