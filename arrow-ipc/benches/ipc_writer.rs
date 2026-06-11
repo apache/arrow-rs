@@ -134,26 +134,22 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-fn dict_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![Field::new(
-        "d0",
-        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-        false,
-    )]))
-}
-
-/// Build `n` record batches with a single `Dictionary(UInt32, Utf8)` column whose
-/// dictionary grows across batches. A single builder is reused with `finish_preserve_values`
+/// Build `n` record batches with a single dictionary column whose dictionary
+/// grows across batches. A single builder is reused with `finish_preserve_values`
 /// so each batch's dictionary has the previous batch's as a prefix which allows
 /// us to emit deltas.
 fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
-    let schema = dict_schema();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d0",
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+        false,
+    )]));
     let mut builder = StringDictionaryBuilder::<UInt32Type>::new();
 
     let mut batches = Vec::with_capacity(n);
     for i in 0..n {
-        // 3/4 of the rows reuse values shared by every batch (deduped to existing keys);
-        // the other 1/4 introduce values unique to this batch (extend the dictionary).
+        // 3/4 of the rows reuse values shared by every batch, the other 1/4
+        // introduce values unique to this batch which extends the dictionary.
         for r in 0..num_rows {
             if r < num_rows / 4 {
                 builder.append_value(format!("batch {i} value {}", r));
@@ -161,6 +157,7 @@ fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
                 builder.append_value(format!("shared {r}"));
             }
         }
+
         // Preserve the values builder so the dictionary accumulates across batches.
         let dict = builder.finish_preserve_values();
         batches.push(RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap());
@@ -171,7 +168,11 @@ fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
 
 /// Build `n` record batches each with a completely distinct dictionary for each batch.
 fn create_unique_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
-    let schema = dict_schema();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d0",
+        DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+        false,
+    )]));
 
     let mut batches = Vec::with_capacity(n);
     for i in 0..n {
