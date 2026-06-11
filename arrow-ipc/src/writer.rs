@@ -842,17 +842,15 @@ impl IpcDataGenerator {
         let compression_codec: Option<CompressionCodec> =
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
-        let mut nodes: Vec<crate::FieldNode> = vec![];
-        let mut buffers: Vec<crate::Buffer> = vec![];
+        let mut meta = IpcMetadataBuilder::default();
         let mut variadic_buffer_counts: Vec<i64> = vec![];
         let mut offset = 0i64;
 
         for array_data in columns {
             offset = write_array_data(
                 &array_data,
-                &mut buffers,
+                &mut meta,
                 sink,
-                &mut nodes,
                 offset,
                 compression_codec,
                 compression_context,
@@ -865,8 +863,8 @@ impl IpcDataGenerator {
         // already a multiple of the alignment -- the body needs no trailing padding.
         let body_len = offset as usize;
 
-        let buffers = fbb.create_vector(&buffers);
-        let nodes = fbb.create_vector(&nodes);
+        let buffers = fbb.create_vector(&meta.buffers);
+        let nodes = fbb.create_vector(&meta.nodes);
         let variadic_buffer = if variadic_buffer_counts.is_empty() {
             None
         } else {
@@ -2048,10 +2046,8 @@ fn write_array_data(
     let num_rows = array_data.len();
     let null_count = array_data.null_count();
     if !matches!(array_data.data_type(), DataType::Null) {
-        meta.nodes.push(crate::FieldNode::new(
-            num_rows as i64,
-            array_data.null_count() as i64,
-        ));
+        meta.nodes
+            .push(crate::FieldNode::new(num_rows as i64, null_count as i64));
     } else {
         // NullArray's null_count equals to len, but ArrayData null_count is always 0.
         meta.nodes
