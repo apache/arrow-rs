@@ -135,7 +135,7 @@ struct IpcWriteMetadata {
     dictionary_block_sizes: Vec<(usize, usize)>,
     /// Flatbuffer header size including continuation prefix and alignment padding.
     padded_header_len: usize,
-    /// Total length of the record-batch body including trailing alignment padding.
+    /// Total length of the record-batch body including alignment padding
     body_len: usize,
 }
 
@@ -628,6 +628,7 @@ impl IpcDataGenerator {
 
         for dict in &dictionaries {
             encoded_buffers.clear();
+
             let body_len = self.dictionary_batch_to_sink(
                 dict,
                 write_options,
@@ -635,7 +636,8 @@ impl IpcDataGenerator {
                 &mut IpcBodySink::Collect(&mut encoded_buffers),
                 fbb,
             )?;
-            let header_len = write_encoded_message_direct(
+
+            let header_len = write_buffered_message(
                 &mut *writer,
                 fbb.finished_data(),
                 &encoded_buffers,
@@ -652,7 +654,7 @@ impl IpcDataGenerator {
             &mut IpcBodySink::Collect(&mut encoded_buffers),
             fbb,
         )?;
-        let padded_header_len = write_encoded_message_direct(
+        let padded_header_len = write_buffered_message(
             &mut *writer,
             fbb.finished_data(),
             &encoded_buffers,
@@ -899,7 +901,7 @@ fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
         }
         DataType::Dictionary(_, _) => {
             // Do nothing
-            // Dictionary types are handled in `encode_dictionaries`.
+            // Dictionary values are handled in special dictionary messages
         }
         _ => {
             for child in array.child_data() {
@@ -1391,7 +1393,7 @@ impl<W: Write> FileWriter<W> {
         }
 
         // write EOS
-        write_continuation(&mut self.writer, &self.write_options, 0)?;
+        write_continuation_and_meta_size(&mut self.writer, &self.write_options, 0)?;
 
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
@@ -1652,7 +1654,7 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        write_continuation(&mut self.writer, &self.write_options, 0)?;
+        write_continuation_and_meta_size(&mut self.writer, &self.write_options, 0)?;
         self.writer.flush()?;
 
         self.finished = true;
@@ -1743,6 +1745,7 @@ pub struct EncodedData {
     /// Arrow buffers to be written, should be an empty vec for schema messages
     pub arrow_data: Vec<u8>,
 }
+
 /// Write a single message directly to `writer`: the message header (continuation
 /// prefix + flatbuffer metadata + alignment padding), then each body buffer with its
 /// per-buffer alignment padding.
@@ -1752,7 +1755,7 @@ pub struct EncodedData {
 /// compressed). Each buffer is padded to the alignment, so the body needs no trailing
 /// padding. Returns the padded header length (continuation + metadata + padding),
 /// needed for IPC footer blocks.
-fn write_encoded_message_direct<W: Write>(
+fn write_buffered_message<W: Write>(
     writer: &mut W,
     ipc_message: &[u8],
     encoded_buffers: &[EncodedBuffer],
@@ -1812,7 +1815,7 @@ fn write_message_header<W: Write>(
     };
     let aligned_size = (flatbuf_size + prefix_size + a) & !a;
 
-    write_continuation(
+    write_continuation_and_meta_size(
         &mut *writer,
         write_options,
         (aligned_size - prefix_size) as i32,
@@ -1822,6 +1825,7 @@ fn write_message_header<W: Write>(
     if flatbuf_size > 0 {
         writer.write_all(ipc_message)?;
     }
+
     // write padding
     writer.write_all(&PADDING[..aligned_size - flatbuf_size - prefix_size])?;
 
@@ -1848,7 +1852,7 @@ fn write_body_buffer<W: Write>(
 
 /// Write a record batch to the writer, writing the message size before the message
 /// if the record batch is being written to a stream
-fn write_continuation<W: Write>(
+fn write_continuation_and_meta_size<W: Write>(
     mut writer: W,
     write_options: &IpcWriteOptions,
     total_len: i32,
