@@ -331,7 +331,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// This will try to reuse the existing allocation as much as possible
     ///
     /// Panics: this will panic if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
-    pub fn subtract(self, rhs: O) -> Self where O: std::ops::Sub<Output = O> + std::cmp::PartialOrd + num_traits::CheckedSub {
+    pub fn subtract(self, rhs: O) -> Self
+    where
+        O: std::ops::Sub<Output = O> + std::cmp::PartialOrd + num_traits::CheckedSub,
+    {
         if rhs == O::usize_as(0) {
             return self;
         }
@@ -339,7 +342,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let len = self.len();
 
         // Offset buffer is guaranteed to be non-empty
-        assert!(self[0] >= rhs, "shifted offsets will become negative which is not allowed");
+        assert!(
+            self[0] >= rhs,
+            "shifted offsets will become negative which is not allowed"
+        );
 
         // If negative, make sure that this will not create an overflow
         if rhs < O::usize_as(0) {
@@ -358,26 +364,23 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         let output_buffer = match into_mutable_buffer_result {
             Ok(mut mutable) => {
-                let mut_sliced = mutable
-                  .typed_data_mut::<O>();
+                let mut_sliced = mutable.typed_data_mut::<O>();
 
                 // Remove this once https://github.com/apache/arrow-rs/pull/10118 is merged
                 let mut_sliced = &mut mut_sliced[0..original_length / O::get_byte_width()];
 
                 mut_sliced
-                  .iter_mut()
-                  .for_each(|offset| *offset = *offset - rhs);
+                    .iter_mut()
+                    .for_each(|offset| *offset = *offset - rhs);
 
                 Buffer::from(mutable)
             }
             Err(original_buffer) => {
                 let shifted = original_buffer
-                  .typed_data::<O>()
-                  .iter()
-                  .map(|item| {
-                    *item - rhs
-                })
-                  .collect::<Vec<O>>();
+                    .typed_data::<O>()
+                    .iter()
+                    .map(|item| *item - rhs)
+                    .collect::<Vec<O>>();
 
                 Buffer::from_vec(shifted)
             }
