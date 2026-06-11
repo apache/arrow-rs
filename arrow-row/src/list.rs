@@ -17,51 +17,144 @@
 
 use crate::{LengthTracker, RowConverter, Rows, SortField, fixed, null_sentinel};
 use arrow_array::{
-    Array, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
-    new_null_array,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray, MapArray,
+    OffsetSizeTrait, StructArray, new_null_array,
 };
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, SortOptions};
+use arrow_schema::{ArrowError, DataType, Fields, SortOptions};
 use std::{ops::Range, sync::Arc};
 
-pub fn compute_lengths<O: OffsetSizeTrait>(
+pub(crate) trait GenericListArrayOrMap: Array {
+    type Offset: OffsetSizeTrait;
+
+    fn offsets(&self) -> &[Self::Offset];
+
+    unsafe fn from_parts_unchecked(
+        data_type: DataType,
+        offsets: Vec<Self::Offset>,
+        children: Vec<ArrayRef>,
+        null_buffer: Option<NullBuffer>,
+    ) -> Self
+    where
+        Self: Sized;
+}
+
+impl<O: OffsetSizeTrait> GenericListArrayOrMap for GenericListArray<O> {
+    type Offset = O;
+
+    fn offsets(&self) -> &[Self::Offset] {
+        self.value_offsets()
+    }
+
+    unsafe fn from_parts_unchecked(
+        data_type: DataType,
+        offsets: Vec<Self::Offset>,
+        children: Vec<ArrayRef>,
+        null_buffer: Option<NullBuffer>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        let field = match data_type {
+            DataType::List(inner_field) | DataType::LargeList(inner_field) => inner_field,
+            _ => unreachable!(),
+        };
+
+        let child = children
+            .into_iter()
+            .next()
+            .expect("List arrays must have exactly one child array");
+
+        // SAFETY: Caller must ensure offsets are valid and correctly correspond to the children and null buffer
+        // the benefit here is to avoid validating that the offsets are monotonically increasing
+        let offset_buffer = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+        GenericListArray::<Self::Offset>::new(field, offset_buffer, child, null_buffer)
+    }
+}
+
+impl GenericListArrayOrMap for MapArray {
+    type Offset = i32;
+
+    fn offsets(&self) -> &[Self::Offset] {
+        self.value_offsets()
+    }
+
+    unsafe fn from_parts_unchecked(
+        data_type: DataType,
+        offsets: Vec<Self::Offset>,
+        children: Vec<ArrayRef>,
+        null_buffer: Option<NullBuffer>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        let DataType::Map(entries_field, ordered) = data_type else {
+            unreachable!("data type must be Map for MapArray");
+        };
+
+        assert_eq!(
+            children.len(),
+            2,
+            "Map arrays must have exactly two child arrays for keys and values"
+        );
+
+        let DataType::Struct(fields) = entries_field.data_type() else {
+            unreachable!("Map entry type must be Struct");
+        };
+
+        let entries = StructArray::new(
+            fields.clone(),
+            children,
+            // Entries StructArray cannot have NullBuffer since nulls are represented at the Map level
+            None,
+        );
+
+        // SAFETY: Caller must ensure offsets are valid and correctly correspond to the children and null buffer
+        // the benefit here is to avoid validating that the offsets are monotonically increasing
+        let offset_buffer = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
+
+        MapArray::new(entries_field, offset_buffer, entries, null_buffer, ordered)
+    }
+}
+
+pub(crate) fn compute_lengths<L: GenericListArrayOrMap>(
     lengths: &mut [usize],
     rows: &Rows,
-    array: &GenericListArray<O>,
+    array: &L,
 ) {
-    let shift = array.value_offsets()[0].as_usize();
+    let shift = array.offsets()[0].as_usize();
 
     lengths
         .iter_mut()
-        .zip(array.value_offsets().windows(2))
+        .zip(array.offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (length, offsets))| {
             let start = offsets[0].as_usize() - shift;
             let end = offsets[1].as_usize() - shift;
             let range = array.is_valid(idx).then_some(start..end);
-            *length += list_element_encoded_len(rows, range);
+            *length += list_like_element_encoded_len(rows, range);
         });
 }
 
-/// Encodes the provided `GenericListArray` to `out` with the provided `SortOptions`
+/// Encodes the provided [`GenericListArrayOrMap`] to `out` with the provided `SortOptions`
 ///
 /// `rows` should contain the encoded child elements
-pub fn encode<O: OffsetSizeTrait>(
+pub(crate) fn encode<L: GenericListArrayOrMap>(
     data: &mut [u8],
     offsets: &mut [usize],
     rows: &Rows,
     opts: SortOptions,
-    array: &GenericListArray<O>,
+    array: &L,
 ) {
-    let shift = array.value_offsets()[0].as_usize();
+    let shift = array.offsets()[0].as_usize();
 
     offsets
         .iter_mut()
         .skip(1)
-        .zip(array.value_offsets().windows(2))
+        .zip(array.offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (offset, offsets))| {
             let start = offsets[0].as_usize() - shift;
@@ -99,19 +192,19 @@ fn encode_one(
 /// # Safety
 ///
 /// `rows` must contain valid data for the provided `converter`
-pub unsafe fn decode<O: OffsetSizeTrait>(
+pub(crate) unsafe fn decode<ListLikeImpl: GenericListArrayOrMap>(
     converter: &RowConverter,
     rows: &mut [&[u8]],
     field: &SortField,
     validate_utf8: bool,
-) -> Result<GenericListArray<O>, ArrowError> {
+) -> Result<ListLikeImpl, ArrowError> {
     let opts = field.options;
 
     let mut values_bytes = 0;
 
     let mut offset = 0;
     let mut offsets = Vec::with_capacity(rows.len() + 1);
-    offsets.push(O::usize_as(0));
+    offsets.push(ListLikeImpl::Offset::usize_as(0));
 
     for row in rows.iter_mut() {
         let mut row_offset = 0;
@@ -120,21 +213,29 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
                 values_bytes += x.len();
             });
             if decoded <= 1 {
-                offsets.push(O::usize_as(offset));
+                offsets.push(ListLikeImpl::Offset::usize_as(offset));
                 break;
             }
             row_offset += decoded;
             offset += 1;
         }
     }
-    O::from_usize(offset).expect("overflow");
+    ListLikeImpl::Offset::from_usize(offset).expect("overflow");
 
     let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| {
         let valid = rows[x][0] != null_sentinel(opts);
         null_count += !valid as usize;
         valid
     });
+
+    let nulls = if null_count > 0 {
+        // SAFETY: null_count was computed correctly when building the nulls buffer above and the
+        // Perf benefit: avoid computing the null count again
+        Some(unsafe { NullBuffer::new_unchecked(nulls, null_count) })
+    } else {
+        None
+    };
 
     let mut values_offsets = Vec::with_capacity(offset);
     let mut values_bytes = Vec::with_capacity(values_bytes);
@@ -167,37 +268,66 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         })
         .collect();
 
-    let child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
-    assert_eq!(child.len(), 1);
-
-    let child_data = child[0].to_data();
+    let children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
 
     // Since RowConverter flattens certain data types (i.e. Dictionary),
     // we need to use updated data type instead of original field
     let corrected_type = match &field.data_type {
-        DataType::List(inner_field) => DataType::List(Arc::new(
-            inner_field
+        DataType::List(inner_field) => {
+            assert_eq!(children.len(), 1);
+            DataType::List(Arc::new(
+                inner_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(children[0].data_type().clone()),
+            ))
+        }
+        DataType::LargeList(inner_field) => {
+            assert_eq!(children.len(), 1);
+            DataType::LargeList(Arc::new(
+                inner_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(children[0].data_type().clone()),
+            ))
+        }
+        DataType::Map(inner_field, ordered) => {
+            let DataType::Struct(entries_field) = inner_field.data_type() else {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Expected Map entry type to be Struct, found: {}",
+                    inner_field.data_type()
+                )));
+            };
+            assert_eq!(
+                children.len(),
+                2,
+                "Map arrays must have exactly two child arrays for keys and values"
+            );
+            let key_field = entries_field[0]
                 .as_ref()
                 .clone()
-                .with_data_type(child_data.data_type().clone()),
-        )),
-        DataType::LargeList(inner_field) => DataType::LargeList(Arc::new(
-            inner_field
+                .with_data_type(children[0].data_type().clone());
+            let value_field = entries_field[1]
                 .as_ref()
                 .clone()
-                .with_data_type(child_data.data_type().clone()),
-        )),
+                .with_data_type(children[1].data_type().clone());
+
+            let entries_fields = Fields::from(vec![key_field, value_field]);
+
+            DataType::Map(
+                Arc::new(
+                    inner_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(DataType::Struct(entries_fields)),
+                ),
+                *ordered,
+            )
+        }
         _ => unreachable!(),
     };
 
-    let builder = ArrayDataBuilder::new(corrected_type)
-        .len(rows.len())
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(Buffer::from_vec(offsets))
-        .add_child_data(child_data);
-
-    Ok(GenericListArray::from(unsafe { builder.build_unchecked() }))
+    Ok(unsafe { ListLikeImpl::from_parts_unchecked(corrected_type, offsets, children, nulls) })
 }
 
 pub fn compute_lengths_fixed_size_list(
@@ -317,13 +447,13 @@ pub unsafe fn decode_fixed_size_list(
     }))
 }
 
-/// Computes the encoded length for a single list element given its child rows.
+/// Computes the encoded length for a single list/map element given its child rows.
 ///
-/// This is used by list types (List, LargeList, ListView, LargeListView) to determine
-/// the encoded length of a list element. For null elements, returns 1 (null sentinel only).
+/// This is used by list types (List, LargeList, ListView, LargeListView) and by Map to determine
+/// the encoded length of a list element/map entry. For null elements, returns 1 (null sentinel only).
 /// For valid elements, returns 1 + the sum of padded lengths for each child row.
 #[inline]
-fn list_element_encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
+fn list_like_element_encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
     match range {
         None => 1,
         Some(range) => {
@@ -358,7 +488,7 @@ pub fn compute_lengths_list_view<O: OffsetSizeTrait>(
             };
             start..start + size
         });
-        *length += list_element_encoded_len(rows, range);
+        *length += list_like_element_encoded_len(rows, range);
     });
 }
 
