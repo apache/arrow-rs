@@ -374,7 +374,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
                     .iter_mut()
                     .for_each(|offset| *offset = *offset - rhs);
 
-                // Needed until https://github.com/apache/arrow-rs/pull/10118 is merged
+                // Remove this slice once https://github.com/apache/arrow-rs/pull/10118 is merged
                 Buffer::from(mutable).slice_with_length(buffer_offset, original_length)
             }
             Err(original_buffer) => {
