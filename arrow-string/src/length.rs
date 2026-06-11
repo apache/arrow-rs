@@ -202,10 +202,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ArrayData;
-    use arrow_schema::{Field, Fields};
-    use std::collections::HashMap;
+    use arrow_schema::Field;
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
@@ -346,72 +346,25 @@ mod tests {
         length_list_helper!(i64, Int64Array, Float32Type, value, result)
     }
 
-    fn convert_vec_to_map<K, V, KeyArray, ValueArray>(
-        input: Vec<Option<HashMap<K, Option<V>>>>,
-    ) -> MapArray
-    where
-        K: Clone,
-        V: Clone,
-        Vec<K>: Into<KeyArray>,
-        Vec<Option<V>>: Into<ValueArray>,
-        KeyArray: Array + 'static,
-        ValueArray: Array + 'static,
-    {
-        let offsets = OffsetBuffer::<i32>::from_lengths(
-            input.iter().map(|v| v.as_ref().map_or(0, |m| m.len())),
-        );
-        let nulls = NullBuffer::from_iter(input.iter().map(|v| v.is_some()));
-        let nulls = Some(nulls).filter(|b| b.null_count() > 0);
-        let keys = input
-            .iter()
-            .flatten()
-            .flat_map(|v| v.keys())
-            .cloned()
-            .collect::<Vec<K>>();
-        let values = input
-            .iter()
-            .flatten()
-            .flat_map(|v| v.values())
-            .cloned()
-            .collect::<Vec<Option<V>>>();
-
-        let keys_array = keys.into();
-        let values_array = values.into();
-
-        let entries = StructArray::new(
-            Fields::from(vec![
-                Field::new("keys", keys_array.data_type().clone(), false),
-                Field::new(
-                    "values",
-                    values_array.data_type().clone(),
-                    values_array.is_nullable(),
-                ),
-            ]),
-            vec![Arc::new(keys_array), Arc::new(values_array)],
-            None,
-        );
-
-        MapArray::new(
-            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-            offsets,
-            entries,
-            nulls,
-            false,
-        )
-    }
-
     #[test]
     fn length_test_map() {
-        let map = convert_vec_to_map::<&str, i32, StringArray, Int32Array>(vec![
-            Some(HashMap::new()),
-            Some(HashMap::from([
-                ("a", Some(1)),
-                ("b", Some(2)),
-                ("cd", Some(4)),
-            ])),
-            Some(HashMap::from([("e", Some(0))])),
-        ]);
-        let lengths = length(&map).unwrap();
+        let mut map_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::default());
+        // {}
+        map_builder.append(true).unwrap();
+
+        // {"a": 1, "b": 2, "cd": 4}
+        map_builder.keys().extend(["a", "b", "cd"].map(Some));
+        map_builder.values().extend([1, 2, 4].map(Some));
+        map_builder.append(true).unwrap();
+
+        // {"e": 0}
+        map_builder.keys().append_value("e");
+        map_builder.values().append_value(0);
+        map_builder.append(true).unwrap();
+
+        let map_array = map_builder.finish();
+
+        let lengths = length(&map_array).unwrap();
         let lengths = lengths.as_primitive::<Int32Type>();
         assert_eq!(lengths, &Int32Array::from(vec![0, 3, 1]));
     }
@@ -503,17 +456,25 @@ mod tests {
 
     #[test]
     fn length_test_null_map() {
-        let map = convert_vec_to_map::<&str, i32, StringArray, Int32Array>(vec![
-            Some(HashMap::new()),
-            None,
-            Some(HashMap::from([
-                ("a", Some(1)),
-                ("b", None),
-                ("cd", Some(4)),
-            ])),
-            Some(HashMap::from([("e", Some(0))])),
-        ]);
-        let lengths = length(&map).unwrap();
+        let mut map_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::default());
+        // {}
+        map_builder.append(true).unwrap();
+
+        // null
+        map_builder.append_nulls(1).unwrap();
+
+        // {"a": 1, "b": 2, "cd": 4}
+        map_builder.keys().extend(["a", "b", "cd"].map(Some));
+        map_builder.values().extend([1, 2, 4].map(Some));
+        map_builder.append(true).unwrap();
+
+        // {"e": 0}
+        map_builder.keys().append_value("e");
+        map_builder.values().append_value(0);
+        map_builder.append(true).unwrap();
+
+        let map_array = map_builder.finish();
+        let lengths = length(&map_array).unwrap();
         let lengths = lengths.as_primitive::<Int32Type>();
         assert_eq!(
             lengths,
