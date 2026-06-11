@@ -19,6 +19,7 @@
 
 use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::ListLikeArray;
 use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -377,8 +378,8 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
-fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
-    interleaved: &Interleave<'_, GenericListArray<O>>,
+fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>(
+    interleaved: &Interleave<'_, L>,
     indices: &[(usize, usize)],
     capacity: usize,
     data_type: &DataType,
@@ -394,11 +395,9 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
     // Build values buffer by copying contiguous slices
     let mut values: Vec<T::Native> = Vec::with_capacity(capacity);
     for &(array, row) in indices {
-        let o = interleaved.arrays[array].value_offsets();
-        let start = o[row].as_usize();
-        let end = o[row + 1].as_usize();
-        if end > start {
-            values.extend_from_slice(&child_arrays[array].values()[start..end]);
+        let range = interleaved.arrays[array].element_range(row);
+        if !range.is_empty() {
+            values.extend_from_slice(&child_arrays[array].values()[range]);
         }
     }
 
@@ -412,10 +411,8 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
         let mut offset_write = 0;
         let mut output_null_count = 0usize;
         for &(array, row) in indices {
-            let o = interleaved.arrays[array].value_offsets();
-            let start = o[row].as_usize();
-            let end = o[row + 1].as_usize();
-            let len = end - start;
+            let range = interleaved.arrays[array].element_range(row);
+            let len = range.len();
             if len > 0 {
                 match child_arrays[array].nulls() {
                     Some(null_buffer) => {
@@ -423,7 +420,7 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
                             output_null_buf.as_slice_mut(),
                             null_buffer.validity(),
                             offset_write,
-                            null_buffer.offset() + start,
+                            null_buffer.offset() + range.start,
                             len,
                         );
                     }
@@ -451,6 +448,26 @@ fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
     Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
 }
 
+/// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
+fn interleave_list_like_child<L: ListLikeArray>(
+    interleaved: &Interleave<'_, L>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+) -> Result<ArrayRef, ArrowError> {
+    let mut child_indices = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let range = interleaved.arrays[array].element_range(row);
+        child_indices.extend(range.map(|i| (array, i)));
+    }
+
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_ref())
+        .collect();
+    interleave(&child_arrays, &child_indices)
+}
+
 fn interleave_list<O: OffsetSizeTrait>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -474,7 +491,7 @@ fn interleave_list<O: OffsetSizeTrait>(
     // Step 2: build child values.
     macro_rules! list_primitive_helper {
         ($t:ty) => {
-            interleave_list_primitive_child::<O, $t>(
+            interleave_list_like_primitive_child::<GenericListArray<O>, $t>(
                 &interleaved,
                 indices,
                 capacity,
@@ -489,22 +506,7 @@ fn interleave_list<O: OffsetSizeTrait>(
         // MutableArrayData's function pointer indirection.
         field.data_type() => (list_primitive_helper),
         _ => {
-            // For complex child types (nested lists, structs, views, dictionaries, etc.),
-            // use recursive interleave to benefit from type-specific optimizations.
-            let mut child_indices = Vec::with_capacity(capacity);
-            for (array, row) in indices {
-                let list = interleaved.arrays[*array];
-                let start = list.value_offsets()[*row].as_usize();
-                let end = list.value_offsets()[*row + 1].as_usize();
-                child_indices.extend((start..end).map(|i| (*array, i)));
-            }
-
-            let child_arrays: Vec<&dyn Array> = interleaved
-                .arrays
-                .iter()
-                .map(|list| list.values().as_ref())
-                .collect();
-            interleave(&child_arrays, &child_indices)?
+            interleave_list_like_child(&interleaved, indices, capacity)?
         }
     };
 
@@ -522,21 +524,25 @@ fn interleave_fixed_size_list(
     size: i32,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, FixedSizeListArray>::new(values, indices);
-    let value_length = size as usize;
+    let capacity = indices.len() * size as usize;
 
-    let mut child_indices = Vec::with_capacity(indices.len() * value_length);
-    for &(array, row) in indices {
-        let offset = row * value_length;
-        child_indices.extend((offset..offset + value_length).map(|i| (array, i)));
+    macro_rules! fsl_primitive_helper {
+        ($t:ty) => {
+            interleave_list_like_primitive_child::<FixedSizeListArray, $t>(
+                &interleaved,
+                indices,
+                capacity,
+                field.data_type(),
+            )
+        };
     }
 
-    let child_arrays: Vec<&dyn Array> = interleaved
-        .arrays
-        .iter()
-        .map(|a| a.values().as_ref())
-        .collect();
-
-    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+    let interleaved_values = downcast_primitive! {
+        field.data_type() => (fsl_primitive_helper),
+        _ => {
+            interleave_list_like_child(&interleaved, indices, capacity)?
+        }
+    };
 
     let array = FixedSizeListArray::new(field.clone(), size, interleaved_values, interleaved.nulls);
     Ok(Arc::new(array))
