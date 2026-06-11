@@ -960,17 +960,23 @@ mod tests {
             assert_eq!(map_array.len(), 4);
 
             let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::default());
+
+            // {}
             builder.append(true).unwrap();
+
+            // null
             builder.append_nulls(1).unwrap();
-            builder.keys().append_value("a");
-            builder.values().append_value(1);
-            builder.keys().append_value("b");
-            builder.values().append_null();
-            builder.keys().append_value("cd");
-            builder.values().append_value(4);
+
+            // {"a": 1, "b": null, "cd": 4}
+            builder.keys().extend(["a", "b", "cd"].map(Some));
+            builder.values().extend([Some(1), None, Some(4)]);
+
             builder.append(true).unwrap();
+
+            // {"e": 0}
             builder.keys().append_value("e");
             builder.values().append_value(0);
+
             builder.append(true).unwrap();
 
             let (field, offsets, entries, null_buffer, _) = builder.finish().into_parts();
