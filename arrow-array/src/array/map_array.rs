@@ -32,7 +32,9 @@ use std::sync::Arc;
 /// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
 /// [`StructArray`] with 2 child fields.
 ///
-/// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
+/// # See also
+/// * [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
+/// * [`Self::from_vec_of_maps`] for ergonomically creating maps for testing
 #[derive(Clone)]
 pub struct MapArray {
     data_type: DataType,
