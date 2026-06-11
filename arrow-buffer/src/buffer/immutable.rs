@@ -413,10 +413,10 @@ impl Buffer {
     /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
     /// let sliced: Buffer = buffer.slice_with_length(1, 2);
-    /// drop(buffer) // <- keep `sliced` the only reference
+    /// drop(buffer); // <- keep `sliced` the only reference
     ///
     /// assert_eq!(sliced.as_slice(), &[2, 3]);
-    /// let back = Buffer::from(sliced.into_mutable_unsliced().unwrap())
+    /// let back = Buffer::from(sliced.into_mutable_unsliced().unwrap());
     /// assert_eq!(back.as_slice(), &[1, 2, 3, 4]);
     /// ```
     ///
@@ -425,14 +425,14 @@ impl Buffer {
     /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
     /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
     /// let sliced: Buffer = buffer.slice_with_length(1, 2);
-    /// drop(buffer) // <- keep `sliced` the only reference
+    /// drop(buffer); // <- keep `sliced` the only reference
     /// assert_eq!(sliced.as_slice(), &[2, 3]);
     ///
     /// let mutable = sliced.into_mutable_unsliced().unwrap(); // <- this will succeed as the buffer is not shared and is not sliced
     /// assert_eq!(mutable.as_slice(), &[1, 2, 3, 4]);
     ///
     /// let buffer_back = Buffer::from(mutable);
-    /// assert_eq!(buffer.as_slice(), &[1, 2, 3, 4]);
+    /// assert_eq!(buffer_back.as_slice(), &[1, 2, 3, 4]);
     /// ```
     pub fn into_mutable_unsliced(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
