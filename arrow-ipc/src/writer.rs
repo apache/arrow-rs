@@ -703,7 +703,7 @@ impl IpcDataGenerator {
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(&mut *fbb);
+            let mut c = crate::BodyCompressionBuilder::new(fbb);
             c.add_method(crate::BodyCompressionMethod::BUFFER);
             c.add_codec(batch_compression_type);
             c.finish()
@@ -743,7 +743,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(&mut *fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
             batch_builder.add_length(batch.num_rows() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -756,7 +756,7 @@ impl IpcDataGenerator {
             batch_builder.finish().as_union_value()
         };
         // create an crate::Message
-        let mut message = crate::MessageBuilder::new(&mut *fbb);
+        let mut message = crate::MessageBuilder::new(fbb);
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(body_len as i64);
@@ -854,7 +854,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(&mut *fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
             batch_builder.add_length(dict.data.len() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -868,7 +868,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::DictionaryBatchBuilder::new(&mut *fbb);
+            let mut batch_builder = crate::DictionaryBatchBuilder::new(fbb);
             batch_builder.add_id(dict.id);
             batch_builder.add_data(root);
             batch_builder.add_isDelta(dict.is_delta);
@@ -876,7 +876,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut message_builder = crate::MessageBuilder::new(&mut *fbb);
+            let mut message_builder = crate::MessageBuilder::new(fbb);
             message_builder.add_version(write_options.metadata_version);
             message_builder.add_header_type(crate::MessageHeader::DictionaryBatch);
             message_builder.add_bodyLength(body_len as i64);
