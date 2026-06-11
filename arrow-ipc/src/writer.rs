@@ -767,6 +767,31 @@ impl IpcDataGenerator {
         Ok((body_len, tail_pad))
     }
 
+    /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
+    /// other for the data
+    fn dictionary_batch_to_bytes(
+        &self,
+        dict: DictionaryToEncode,
+        write_options: &IpcWriteOptions,
+        compression_context: &mut CompressionContext,
+    ) -> Result<EncodedData, ArrowError> {
+        let mut fbb = FlatBufferBuilder::new();
+        let mut arrow_data: Vec<u8> = vec![];
+        let (_, tail_pad) = self.dictionary_batch_to_sink(
+            &dict,
+            write_options,
+            compression_context,
+            &mut IpcBodySink::Write(&mut arrow_data),
+            &mut fbb,
+        )?;
+        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
+
+        Ok(EncodedData {
+            ipc_message: fbb.finished_data().to_vec(),
+            arrow_data,
+        })
+    }
+
     /// Encodes a dictionary batch's flatbuffer metadata into `fbb` (read back via
     /// `fbb.finished_data()`) and fills `sink` with its body buffers.
     ///
@@ -862,31 +887,6 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
 
         Ok((body_len, tail_pad))
-    }
-
-    /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
-    /// other for the data
-    fn dictionary_batch_to_bytes(
-        &self,
-        dict: DictionaryToEncode,
-        write_options: &IpcWriteOptions,
-        compression_context: &mut CompressionContext,
-    ) -> Result<EncodedData, ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
-        let mut arrow_data: Vec<u8> = vec![];
-        let (_, tail_pad) = self.dictionary_batch_to_sink(
-            &dict,
-            write_options,
-            compression_context,
-            &mut IpcBodySink::Write(&mut arrow_data),
-            &mut fbb,
-        )?;
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-
-        Ok(EncodedData {
-            ipc_message: fbb.finished_data().to_vec(),
-            arrow_data,
-        })
     }
 }
 
