@@ -201,7 +201,7 @@ mod snappy_codec {
     use snap::raw::{Decoder, Encoder, decompress_len, max_compress_len};
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
     /// Codec for Snappy compression format.
     pub struct SnappyCodec {
@@ -231,10 +231,23 @@ mod snappy_codec {
                 None => decompress_len(input_buf)?,
             };
             let offset = output_buf.len();
-            output_buf.resize(offset + len, 0);
-            self.decoder
-                .decompress(input_buf, &mut output_buf[offset..])
-                .map_err(|e| e.into())
+            output_buf.reserve(len);
+            // SAFETY: we pass the spare capacity to snappy which will write exactly
+            // `len` bytes on success. The `set_len` below is only reached when
+            // decompression succeeds. `MaybeUninit<u8>` has the same layout as `u8`.
+            let spare = output_buf.spare_capacity_mut();
+            let spare_bytes = unsafe {
+                std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<u8>(), spare.len())
+            };
+            let n = self
+                .decoder
+                .decompress(input_buf, &mut spare_bytes[..len])
+                .map_err(|e| -> ParquetError { e.into() })?;
+            // SAFETY: snappy wrote exactly `n` bytes into the spare capacity
+            unsafe {
+                output_buf.set_len(offset + n);
+            }
+            Ok(n)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
