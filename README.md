@@ -91,13 +91,23 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| March 2026       | [`58.1.0`] | Minor, NO breaking API changes          |
-| April 2026       | [`58.2.0`] | Minor, NO breaking API changes          |
+| May 2026         | [`58.3.0`] | Minor, NO breaking API changes          |
+| May 2026         | [`57.3.1`] | Patch, NO breaking API changes          |
+| May 2026         | [`56.2.1`] | Patch, NO breaking API changes          |
 | May 2026         | [`59.0.0`] | Major, potentially breaking API changes |
+| June 2026        | [`59.1.0`] | Minor, NO breaking API changes          |
+| July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
+| August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
 
 [`58.1.0`]: https://github.com/apache/arrow-rs/issues/9108
 [`58.2.0`]: https://github.com/apache/arrow-rs/issues/9109
+[`58.3.0`]: https://github.com/apache/arrow-rs/issues/9859
+[`57.3.1`]: https://github.com/apache/arrow-rs/issues/9858
+[`56.2.1`]: https://github.com/apache/arrow-rs/issues/9857
 [`59.0.0`]: https://github.com/apache/arrow-rs/issues/9110
+[`59.1.0`]: https://github.com/apache/arrow-rs/issues/9878
+[`59.2.0`]: https://github.com/apache/arrow-rs/issues/9879
+[`60.0.0`]: https://github.com/apache/arrow-rs/issues/9880
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 

@@ -81,7 +81,7 @@ jobs:
           rm website/build/artifact.tar
           cp .asf.yaml ./website/build/.asf.yaml
       - name: Deploy to gh-pages
-        uses: peaceiris/actions-gh-pages@v4.0.0
+        uses: peaceiris/actions-gh-pages@v4.1.0
         if: github.event_name == 'push' && github.ref_name == 'main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

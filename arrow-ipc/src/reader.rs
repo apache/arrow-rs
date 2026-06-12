@@ -560,11 +560,20 @@ impl<'a> RecordBatchDecoder<'a> {
             let mut arrays = vec![];
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
-                // Create array for projected field
-                if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                    let child = self.create_array(field, &mut variadic_counts)?;
-                    arrays.push((proj_idx, child));
-                } else {
+                // A projected field can appear more than once, so collect all matching positions.
+                let mut child = None;
+                for (proj_idx, projected_idx) in projection.iter().enumerate() {
+                    if *projected_idx == idx {
+                        if child.is_none() {
+                            child = Some(self.create_array(field, &mut variadic_counts)?);
+                        }
+
+                        // Reuse the decoded array for duplicate projection entries.
+                        arrays.push((proj_idx, child.as_ref().unwrap().clone()));
+                    }
+                }
+
+                if child.is_none() {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
@@ -696,10 +705,13 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer(); // Indices
             }
             Union(fields, mode) => {
-                self.skip_buffer(); // Nulls
+                if self.version < MetadataVersion::V5 {
+                    self.skip_buffer(); // Null buffer
+                }
+                self.skip_buffer(); // Type ids
 
                 match mode {
-                    UnionMode::Dense => self.skip_buffer(),
+                    UnionMode::Dense => self.skip_buffer(), // Offsets
                     UnionMode::Sparse => {}
                 };
 
@@ -707,8 +719,33 @@ impl<'a> RecordBatchDecoder<'a> {
                     self.skip_field(field, variadic_count)?
                 }
             }
-            Null => {} // No buffer increases
-            _ => {
+            // Null has no buffers to skip
+            Null => {}
+
+            // Fixed-width and boolean types: skip null buffer + values buffer
+            Boolean
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Timestamp(_, _)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 self.skip_buffer();
                 self.skip_buffer();
             }
@@ -726,7 +763,7 @@ impl<'a> RecordBatchDecoder<'a> {
 /// If `require_alignment` is false, this function will automatically allocate a new aligned buffer
 /// and copy over the data if any array data in the input `buf` is not properly aligned.
 /// (Properly aligned array data will remain zero-copy.)
-/// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
+/// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct [`arrow_data::ArrayData`].
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
@@ -1018,7 +1055,7 @@ impl FileDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
@@ -2270,6 +2307,30 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_duplicate_indices() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        // Write the batch to IPC
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Verify duplicate([1, 1]) and reordered([2, 0, 2]) projection indices
+        for projection in [vec![1, 1], vec![2, 0, 2]] {
+            let reader =
+                FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(projection.clone()));
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+
+            let expected_batch = batch.project(&projection).unwrap();
+            assert_eq!(read_batch, expected_batch);
+        }
+    }
+
+    #[test]
     fn test_arrow_single_float_row() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),
@@ -3516,5 +3577,155 @@ mod tests {
         // Verify that the projected column is read correctly
         assert_eq!(read_batch.num_columns(), 1);
         assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when a preceding V4 Union column is skipped.
+    // V4 Union columns include a null buffer and type ids (and offsets for dense unions).
+    #[test]
+    fn test_projection_skip_union_v4() {
+        use crate::MetadataVersion;
+        use crate::reader::FileReader;
+        use crate::writer::{FileWriter, IpcWriteOptions};
+        use arrow_array::{
+            ArrayRef, Int32Array, RecordBatch, builder::UnionBuilder, types::Int32Type,
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Build a dense Union column with simple Int32 values
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("a", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let union = builder.build().unwrap();
+
+        // Second column with known values to verify correctness after projection
+        let values = Int32Array::from(vec![10, 20, 30]);
+
+        // Schema: first column is Union (to be skipped), second is Int32 (to be read)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("union", union.data_type().clone(), false),
+            Field::new("values", DataType::Int32, false),
+        ]));
+
+        // Create a batch containing both columns
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(union) as ArrayRef, Arc::new(values.clone())],
+        )
+        .unwrap();
+
+        // Write IPC using V4 metadata to trigger Union null buffer behavior
+        let mut buf = Vec::new();
+        {
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut buf, &batch.schema(), options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        // Read only the second column (skip the Union column)
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+
+        // Verify that the projected column is read correctly after skipping Union
+        assert_eq!(read_batch.num_columns(), 1);
+        assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when preceding fixed-width and boolean columns are skipped.
+    // Covers all types that use the same two-buffer layout (null + values).
+    // Verifies that skipping these types does not affect subsequent column decoding.
+    #[test]
+    fn test_projection_skip_fixed_width_types() {
+        use std::sync::Arc;
+
+        use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
+        use arrow_buffer::Buffer;
+        use arrow_data::ArrayData;
+        use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+
+        use crate::reader::FileReader;
+        use crate::writer::FileWriter;
+
+        // Create a minimal array for a given fixed-width or boolean type
+        fn make_array_for_type(data_type: DataType) -> ArrayRef {
+            let len = 3;
+
+            if matches!(data_type, DataType::Boolean) {
+                return Arc::new(BooleanArray::from(vec![true, false, true]));
+            }
+
+            let width = data_type.primitive_width().unwrap();
+            let data = ArrayData::builder(data_type)
+                .len(len)
+                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .build()
+                .unwrap();
+
+            make_array(data)
+        }
+
+        // List of types that follow the same two-buffer layout (null + values)
+        let data_types = vec![
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Second),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(38, 2),
+            DataType::Decimal256(76, 2),
+        ];
+
+        // For each type:
+        // - write a batch with [skipped_column, values]
+        // - read only the second column
+        // - verify the result is correct
+        for data_type in data_types {
+            let skipped = make_array_for_type(data_type.clone());
+            let values = Int32Array::from(vec![10, 20, 30]);
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("skipped", data_type, false),
+                Field::new("values", DataType::Int32, false),
+            ]));
+
+            let batch =
+                RecordBatch::try_new(schema, vec![skipped, Arc::new(values.clone())]).unwrap();
+
+            // Serialize the batch into IPC format
+            let mut buf = Vec::new();
+            {
+                let mut writer = FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            }
+
+            // Read back only the second column (skip the first)
+            let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+
+            // Verify that the returned column matches the original values column
+            assert_eq!(read_batch.num_columns(), 1);
+            assert_eq!(read_batch.column(0).as_ref(), &values);
+        }
     }
 }
