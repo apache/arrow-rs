@@ -171,8 +171,13 @@ pub struct BloomFilterHeader {
 /// (8 bits total), and those bits are OR'd in. When checking, we verify
 /// all 8 bits are set.
 #[derive(Debug, Copy, Clone)]
-#[repr(transparent)]
+#[repr(C, align(32))]
 struct Block([u32; 8]);
+
+// The autovectorized 256-bit load/store in `Block::{check,insert}` assumes
+// `Block` is 32 contiguous bytes, 32-byte aligned. Assert it.
+const _: () = assert!(std::mem::size_of::<Block>() == 32);
+const _: () = assert!(std::mem::align_of::<Block>() == 32);
 impl Block {
     const ZERO: Block = Block([0; 8]);
 
@@ -192,6 +197,10 @@ impl Block {
     /// Key property: the mask depends *only* on `x` (a u32) and the fixed
     /// SALT constants — it is independent of the filter size. This is why
     /// folding preserves bit patterns (see Lemma 2 in tests).
+    ///
+    /// `#[inline]` so this folds into [`Block::check`] / [`Block::insert`]
+    /// where the autovectorizer needs it as part of the same loop body.
+    #[inline]
     fn mask(x: u32) -> Self {
         let mut result = [0_u32; 8];
         for i in 0..8 {
@@ -229,52 +238,24 @@ impl Block {
     fn insert(&mut self, hash: u32) {
         let mask = Self::mask(hash);
         for i in 0..8 {
-            self[i] |= mask[i];
+            self.0[i] |= mask.0[i];
         }
     }
 
-    /// Check membership: returns `true` when *every* bit from `mask(hash)` is
-    /// already set in this block (`block[i] & mask[i] != 0` for all 8 words).
+    /// Check membership: `true` iff every bit in `mask(hash)` is set in this
+    /// block (i.e. the value was probably inserted). `false` is definitive.
     ///
-    /// A `true` result means "probably present" (other inserts may have set
-    /// the same bits). A `false` is definitive — the value was never inserted.
+    /// Branchless `acc |= !block & mask; acc == 0` — the "testc" reduction
+    /// shape LLVM autovectorizes. A short-circuiting `.all()` would win a
+    /// few lanes on miss but defeat vectorization.
+    #[inline]
     fn check(&self, hash: u32) -> bool {
         let mask = Self::mask(hash);
+        let mut acc = 0u32;
         for i in 0..8 {
-            if self[i] & mask[i] == 0 {
-                return false;
-            }
+            acc |= !self.0[i] & mask.0[i];
         }
-        true
-    }
-}
-
-impl std::ops::Index<usize> for Block {
-    type Output = u32;
-
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        self.0.index(index)
-    }
-}
-
-impl std::ops::IndexMut<usize> for Block {
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.0.index_mut(index)
-    }
-}
-
-impl std::ops::BitOr for Block {
-    type Output = Self;
-
-    #[inline]
-    fn bitor(self, rhs: Self) -> Self {
-        let mut result = [0u32; 8];
-        for (i, item) in result.iter_mut().enumerate() {
-            *item = self.0[i] | rhs.0[i];
-        }
-        Self(result)
+        acc == 0
     }
 }
 
@@ -406,7 +387,7 @@ impl Sbbf {
             .map(|chunk| {
                 let mut block = Block::ZERO;
                 for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                    block.0[i] = u32::from_le_bytes(word.try_into().unwrap());
                 }
                 block
             })
@@ -784,6 +765,37 @@ mod tests {
             let mut block = Block::ZERO;
             block.insert(i);
             assert!(block.check(i));
+        }
+    }
+
+    /// Autovec'd `Block::check` vs a trivial short-circuit reference across
+    /// 10K random `(block, hash)` pairs. Guards against autovec divergence
+    /// on any target the crate is built for.
+    #[test]
+    fn test_check_matches_reference() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        // Independent impl: short-circuit form, does not autovectorize.
+        fn reference_check(block: &Block, hash: u32) -> bool {
+            let mask = Block::mask(hash);
+            for i in 0..8 {
+                if block.0[i] & mask.0[i] == 0 {
+                    return false;
+                }
+            }
+            true
+        }
+
+        let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+        for _ in 0..10_000 {
+            let block = Block(std::array::from_fn(|_| rng.random()));
+            let hash: u32 = rng.random();
+            assert_eq!(
+                block.check(hash),
+                reference_check(&block, hash),
+                "branchless vs reference check differ for hash {hash:#x}"
+            );
         }
     }
 
