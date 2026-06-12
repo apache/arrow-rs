@@ -682,9 +682,15 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 
     // The compress path scans the entire filter mask a word at a time, so it
     // is only worthwhile when `pext` is available in hardware and the filter
-    // keeps more than one bit per word on average; otherwise visiting each
-    // kept bit individually is faster
-    if bit_util::compress_available() && predicate.count > predicate.filter.len() / 64 {
+    // is neither very sparse nor very dense: it must keep more than one bit
+    // per word on average (otherwise visiting each kept bit individually is
+    // faster) and drop more than one bit per word on average (otherwise
+    // copying whole ranges via the slices strategies is faster)
+    let len = predicate.filter.len();
+    if bit_util::compress_available()
+        && predicate.count > len / 64
+        && predicate.count < len - len / 64
+    {
         return filter_bits_compress(buffer, predicate);
     }
 
@@ -737,10 +743,10 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     let mut current = 0_u64;
     let mut filled = 0_u32;
 
-    let chunks = value_chunks.iter().zip(mask_chunks.iter()).chain([(
-        value_chunks.remainder_bits(),
-        mask_chunks.remainder_bits(),
-    )]);
+    let chunks = value_chunks
+        .iter()
+        .zip(mask_chunks.iter())
+        .chain([(value_chunks.remainder_bits(), mask_chunks.remainder_bits())]);
 
     for (values, mask) in chunks {
         let bits = bit_util::compress(values, mask);
@@ -750,7 +756,11 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
             out.extend_from_slice(&current.to_le_bytes());
             filled = filled + count - 64;
             // The bits of `bits` that did not fit in `current`, if any
-            current = if filled == 0 { 0 } else { bits >> (count - filled) };
+            current = if filled == 0 {
+                0
+            } else {
+                bits >> (count - filled)
+            };
         } else {
             filled += count;
         }
