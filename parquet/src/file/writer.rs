@@ -1080,7 +1080,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
-    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -1234,6 +1234,16 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col5", Type::FLOAT)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col6", Type::DOUBLE)
+                            .build()
+                            .unwrap(),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1252,9 +1262,13 @@ mod tests {
             // INTERVAL
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
             // Float16
-            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
             // String
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+            // FLOAT
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
+            // DOUBLE
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
         ];
         let actual = reader.metadata().file_metadata().column_orders();
 
@@ -2535,5 +2549,66 @@ mod tests {
             rg_out.close().unwrap();
         }
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_int96_column_order() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL INT96 timestamp_col;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+
+        // this file has an INT96 column. rewrite it with min/max statistics sorted per
+        // recent changes to the spec. (see https://github.com/apache/parquet-format/pull/584)
+        let file = get_test_file("alltypes_plain.parquet");
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        let mut rg_out = writer.next_row_group().unwrap();
+        let rg_in = reader.get_row_group(0).unwrap();
+
+        // int96 is column 10
+        let col_in = rg_in.get_column_reader(10).unwrap();
+        let mut typed_in = get_typed_column_reader::<Int96Type>(col_in);
+
+        let mut values = Vec::new();
+        let mut def_levels = Vec::new();
+        typed_in
+            .read_records(10, Some(&mut def_levels), None, &mut values)
+            .unwrap();
+
+        let mut col_out = rg_out.next_column().unwrap().unwrap();
+        col_out
+            .typed::<Int96Type>()
+            .write_batch(&values, Some(&def_levels), None)
+            .unwrap();
+        col_out.close().unwrap();
+        rg_out.close().unwrap();
+
+        let new_metadata = writer.close().unwrap();
+        let column_orders = new_metadata
+            .file_metadata()
+            .column_orders()
+            .expect("column_orders is missing");
+        assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
+
+        let stats = new_metadata.row_group(0).column(0).statistics();
+        let typed_stats = match stats {
+            Some(Statistics::Int96(i96stats)) => i96stats,
+            _ => panic!("expected INT96 statistics"),
+        };
+        assert_eq!(
+            typed_stats.min_opt(),
+            Some(&Int96::from(vec![0, 0, 2454833]))
+        );
+        assert_eq!(
+            typed_stats.max_opt(),
+            Some(&Int96::from(vec![4165425152, 13, 2454923]))
+        );
     }
 }
