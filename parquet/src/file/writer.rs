@@ -1234,6 +1234,16 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col5", Type::FLOAT)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col6", Type::DOUBLE)
+                            .build()
+                            .unwrap(),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1252,9 +1262,13 @@ mod tests {
             // INTERVAL
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
             // Float16
-            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
             // String
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+            // FLOAT
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
+            // DOUBLE
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
         ];
         let actual = reader.metadata().file_metadata().column_orders();
 
