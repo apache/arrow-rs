@@ -556,7 +556,15 @@ impl IpcDataGenerator {
             write_options,
             compression_context,
         )?;
-        let mut arrow_data = Vec::new();
+        // by default, write_options.compression is None, this means no compression will be applied and the encoded buffers will just be references to the original array buffers, so we can calculate the total size of the body data by summing the sizes of the original buffers.
+        // avoiding the intermediate allocations & copys to new buffers.
+        let mut arrow_data = Vec::with_capacity(
+            batch
+                .columns()
+                .iter()
+                .map(|c| c.get_array_memory_size())
+                .sum::<usize>(),
+        );
         let (ipc_message, _, tail_pad) = self.record_batch_to_bytes(
             batch,
             write_options,
