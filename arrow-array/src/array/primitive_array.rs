@@ -2138,28 +2138,54 @@ mod tests {
 
     #[test]
     fn test_timestamp_fmt_debug_out_of_range() {
-        let arr = TimestampSecondArray::from(vec![i64::MAX, i64::MIN]);
+        // Include a true null into dataset to ensure we don't write that as an error
+        let data = Int64Array::new(
+            vec![i64::MAX, i64::MIN, i64::MAX].into(),
+            Some(vec![true, true, false].into()),
+        );
+
+        let arr = data.reinterpret_cast::<TimestampSecondType>();
         assert_eq!(
-            "PrimitiveArray<Timestamp(s)>\n[\n  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(s),\n  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(s),\n]",
+            "PrimitiveArray<Timestamp(s)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(s),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(s),
+  null,
+]",
             format!("{arr:?}")
         );
 
-        let arr = TimestampMillisecondArray::from(vec![i64::MAX, i64::MIN]);
+        let arr = data.reinterpret_cast::<TimestampMillisecondType>();
         assert_eq!(
-            "PrimitiveArray<Timestamp(ms)>\n[\n  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(ms),\n  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(ms),\n]",
+            "PrimitiveArray<Timestamp(ms)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(ms),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(ms),
+  null,
+]",
             format!("{arr:?}")
         );
 
-        let arr = TimestampMicrosecondArray::from(vec![i64::MAX, i64::MIN]);
+        let arr = data.reinterpret_cast::<TimestampMicrosecondType>();
         assert_eq!(
-            "PrimitiveArray<Timestamp(µs)>\n[\n  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(µs),\n  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(µs),\n]",
+            "PrimitiveArray<Timestamp(µs)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(µs),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(µs),
+  null,
+]",
             format!("{arr:?}")
         );
 
         // Nanoseconds always in range
-        let arr = TimestampNanosecondArray::from(vec![i64::MAX, i64::MIN]);
+        let arr = data.reinterpret_cast::<TimestampNanosecondType>();
         assert_eq!(
-            "PrimitiveArray<Timestamp(ns)>\n[\n  2262-04-11T23:47:16.854775807,\n  1677-09-21T00:12:43.145224192,\n]",
+            "PrimitiveArray<Timestamp(ns)>
+[
+  2262-04-11T23:47:16.854775807,
+  1677-09-21T00:12:43.145224192,
+  null,
+]",
             format!("{arr:?}")
         );
     }
