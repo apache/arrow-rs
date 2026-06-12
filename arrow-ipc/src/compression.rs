@@ -361,8 +361,6 @@ fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::compression::DEFAULT_ZSTD_COMPRESSION_LEVEL;
-
     #[test]
     #[cfg(feature = "lz4")]
     fn test_lz4_compression() {
@@ -386,7 +384,7 @@ mod tests {
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
-        let codec = super::CompressionCodec::Zstd(DEFAULT_ZSTD_COMPRESSION_LEVEL);
+        let codec = super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL);
         let mut output_bytes: Vec<u8> = Vec::new();
         codec
             .compress(input_bytes, &mut output_bytes, &mut Default::default())

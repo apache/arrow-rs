@@ -188,7 +188,7 @@ impl IpcWriteOptions {
         }
 
         match (self.batch_compression_type, self.batch_compression_level) {
-            (Some(crate::CompressionType::ZSTD), Some(level)) if level > 22 || level < -999 => {
+            (Some(crate::CompressionType::ZSTD), Some(level)) if !(-999..=22).contains(&level) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "ZSTD compression level must be between -999 and 22, got {level}"
                 )));
