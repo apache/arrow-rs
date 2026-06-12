@@ -55,7 +55,7 @@
 use arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
 };
-use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
+use arrow::compute::kernels::cmp::{eq, gt, lt, lt_eq, neq};
 use arrow::compute::{and, or};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -115,6 +115,14 @@ fn create_float64_array(size: usize) -> ArrayRef {
     Arc::new(Float64Array::from(values)) as ArrayRef
 }
 
+fn append_utf8_view_value(builder: &mut StringViewBuilder, value: &str) {
+    if builder.len() % 1_000 == 0 {
+        builder.append_value(UTF8_VIEW_MISSING_VALUE);
+    } else {
+        builder.append_value(value);
+    }
+}
+
 /// Creates a utf8View array of a given size with random strings.
 ///
 /// This is modeled after the "SearchPhrase" column in the ClickBench benchmark.
@@ -146,11 +154,11 @@ fn create_utf8_view_array(size: usize) -> ArrayRef {
         let choice = rng.random_range(0..100);
         if choice < EMPTY_DENSITY {
             for _ in 0..run_length {
-                builder.append_value("");
+                append_utf8_view_value(&mut builder, "");
             }
         } else {
             for _ in 0..run_length {
-                builder.append_value(random_string(&mut rng));
+                append_utf8_view_value(&mut builder, &random_string(&mut rng));
             }
         }
     }
@@ -165,7 +173,7 @@ fn create_ts_array(size: usize) -> ArrayRef {
 }
 
 /// Creates a RecordBatch with 100K rows and 4 columns: int64, float64, utf8View, and ts.
-fn create_record_batch(size: usize) -> RecordBatch {
+pub(crate) fn create_record_batch(size: usize) -> RecordBatch {
     let fields = vec![
         Field::new("int64", DataType::Int64, false),
         Field::new("float64", DataType::Float64, false),
@@ -327,7 +335,7 @@ impl std::fmt::Display for AsyncStrategy {
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
 #[derive(Clone, Copy, Debug)]
-enum FilterType {
+pub(crate) enum FilterType {
     /// "Point Lookup": selects a single row
     /// ```text
     /// ┌───────────────┐    ┌───────────────┐
@@ -562,7 +570,7 @@ impl std::fmt::Display for FilterType {
 
 impl FilterType {
     /// Applies the specified filter on the given RecordBatch and returns a BooleanArray mask.
-    fn filter_batch(&self, batch: &RecordBatch) -> arrow::error::Result<BooleanArray> {
+    pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> arrow::error::Result<BooleanArray> {
         match self {
             // Point Lookup on int64 column
             FilterType::PointLookup => {
@@ -590,7 +598,7 @@ impl FilterType {
             // Unselective Unclustered on float64 column: NOT (float64 > 99.0)
             FilterType::UnselectiveUnclustered => {
                 let array = batch.column(batch.schema().index_of("float64")?);
-                gt(array, &Float64Array::new_scalar(99.0))
+                lt_eq(array, &Float64Array::new_scalar(99.0))
             }
             // Unselective Clustered on ts column: ts < 9000
             FilterType::UnselectiveClustered => {
@@ -1534,6 +1542,32 @@ fn projection_names(projection: &[usize]) -> Vec<&'static str> {
     projection.iter().map(|idx| COLUMN_NAMES[*idx]).collect()
 }
 
+pub(crate) fn filter_projected_record_batch(
+    batch: &RecordBatch,
+    filter: &BooleanArray,
+    output_column_names: &[&str],
+) -> arrow::error::Result<RecordBatch> {
+    let output_projection = output_column_names
+        .iter()
+        .map(|name| batch.schema().index_of(name))
+        .collect::<arrow::error::Result<Vec<_>>>()?;
+    let output = batch.project(&output_projection)?;
+    arrow_select::filter::filter_record_batch(&output, filter)
+}
+
+pub(crate) fn post_filter_projected_num_rows(
+    batch: &RecordBatch,
+    filter: &BooleanArray,
+    output_column_names: &[&str],
+) -> arrow::error::Result<usize> {
+    if output_column_names.is_empty() {
+        return Ok(filter.true_count());
+    }
+
+    let output = filter_projected_record_batch(batch, filter, output_column_names)?;
+    Ok(output.num_rows())
+}
+
 fn row_filter_for(filter_type: FilterType, pred_mask: ProjectionMask) -> RowFilter {
     let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
     RowFilter::new(vec![Box::new(filter)])
@@ -1705,13 +1739,9 @@ async fn benchmark_async_reader_post_filter(
     while let Some(b) = stream.next().await {
         let batch = b.unwrap();
         let filter = filter_type.filter_batch(&batch).unwrap();
-        let filtered = arrow_select::filter::filter_record_batch(&batch, &filter).unwrap();
-        let output_projection = output_column_names
-            .iter()
-            .map(|name| filtered.schema().index_of(name).unwrap())
-            .collect::<Vec<_>>();
-        let output = filtered.project(&output_projection).unwrap();
-        std::hint::black_box(output.num_rows());
+        let output_rows =
+            post_filter_projected_num_rows(&batch, &filter, &output_column_names).unwrap();
+        std::hint::black_box(output_rows);
     }
 }
 
@@ -1732,13 +1762,9 @@ async fn benchmark_async_reader_post_filter_nested(
     while let Some(b) = stream.next().await {
         let batch = b.unwrap();
         let filter = filter_type.filter_batch(&batch).unwrap();
-        let filtered = arrow_select::filter::filter_record_batch(&batch, &filter).unwrap();
-        let output_projection = output_column_names
-            .iter()
-            .map(|name| filtered.schema().index_of(name).unwrap())
-            .collect::<Vec<_>>();
-        let output = filtered.project(&output_projection).unwrap();
-        std::hint::black_box(output.num_rows());
+        let output_rows =
+            post_filter_projected_num_rows(&batch, &filter, output_column_names).unwrap();
+        std::hint::black_box(output_rows);
     }
 }
 
@@ -1831,13 +1857,9 @@ fn benchmark_sync_reader_post_filter(
     for b in stream {
         let batch = b.unwrap();
         let filter = filter_type.filter_batch(&batch).unwrap();
-        let filtered = arrow_select::filter::filter_record_batch(&batch, &filter).unwrap();
-        let output_projection = output_column_names
-            .iter()
-            .map(|name| filtered.schema().index_of(name).unwrap())
-            .collect::<Vec<_>>();
-        let output = filtered.project(&output_projection).unwrap();
-        std::hint::black_box(output.num_rows());
+        let output_rows =
+            post_filter_projected_num_rows(&batch, &filter, &output_column_names).unwrap();
+        std::hint::black_box(output_rows);
     }
 }
 
