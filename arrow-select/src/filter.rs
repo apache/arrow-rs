@@ -26,6 +26,7 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, NullBuffer, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
@@ -679,6 +680,20 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let offset = buffer.offset();
     assert!(buffer.len() >= predicate.filter.len());
 
+    // The compress path scans the entire filter mask a word at a time, so it
+    // is only worthwhile when `pext` is available in hardware and the filter
+    // is neither very sparse nor very dense: it must keep more than one bit
+    // per word on average (otherwise visiting each kept bit individually is
+    // faster) and drop more than one bit per word on average (otherwise
+    // copying whole ranges via the slices strategies is faster)
+    let len = predicate.filter.len();
+    if bit_util::compress_available()
+        && predicate.count > len / 64
+        && predicate.count < len - len / 64
+    {
+        return filter_bits_compress(buffer, predicate);
+    }
+
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
             let bits =
@@ -714,6 +729,47 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` by extracting the kept
+/// bits of each 64-bit word with [`bit_util::compress`] (`pext`)
+fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    let mask_chunks = predicate.filter.values().bit_chunks();
+    let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
+
+    let mut out = MutableBuffer::new(bit_util::ceil(predicate.count, 8));
+    // Bits extracted from each chunk are packed into `current` until it
+    // contains a complete word, which is then flushed to `out`
+    let mut current = 0_u64;
+    let mut filled = 0_u32;
+
+    let chunks = value_chunks
+        .iter()
+        .zip(mask_chunks.iter())
+        .chain([(value_chunks.remainder_bits(), mask_chunks.remainder_bits())]);
+
+    for (values, mask) in chunks {
+        let bits = bit_util::compress(values, mask);
+        let count = mask.count_ones();
+        current |= bits << filled;
+        if filled + count >= 64 {
+            out.extend_from_slice(&current.to_le_bytes());
+            filled = filled + count - 64;
+            // The bits of `bits` that did not fit in `current`, if any
+            current = if filled == 0 {
+                0
+            } else {
+                bits >> (count - filled)
+            };
+        } else {
+            filled += count;
+        }
+    }
+
+    if filled > 0 {
+        out.extend_from_slice(&current.to_le_bytes()[..bit_util::ceil(filled as usize, 8)]);
+    }
+    out.into()
 }
 
 /// `filter` implementation for boolean buffers

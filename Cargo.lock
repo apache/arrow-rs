@@ -511,6 +511,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
+ "criterion",
  "num-traits",
  "rand 0.9.4",
 ]
