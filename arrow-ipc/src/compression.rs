@@ -23,16 +23,16 @@ use flatbuffers::FlatBufferBuilder;
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
-/// Additional context that may be needed for compression.
-///
-/// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
-/// compression calls to avoid the performance overhead of initialising a new context for every
-/// compression.
+/// - The flatbuffer builder (`fbb`) is reset and reused across calls.
+/// - The zstd compressor (when enabled) is kept alive to avoid re-initialisation overhead.
 #[derive(Default)]
 pub struct IpcWriteContext {
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
     pub(crate) fbb: FlatBufferBuilder<'static>,
+    /// Scratch buffer for the IPC arrow data body. When set by the caller before
+    /// encode(), the existing allocation is reused instead of creating a fresh Vec.
+    pub scratch: Vec<u8>,
 }
 
 impl IpcWriteContext {

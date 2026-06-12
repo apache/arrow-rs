@@ -556,15 +556,7 @@ impl IpcDataGenerator {
             write_options,
             compression_context,
         )?;
-        // by default, write_options.compression is None, this means no compression will be applied and the encoded buffers will just be references to the original array buffers, so we can calculate the total size of the body data by summing the sizes of the original buffers.
-        // avoiding the intermediate allocations & copys to new buffers.
-        let size = batch
-            .columns()
-            .iter()
-            .map(|c| c.get_array_memory_size())
-            .sum::<usize>();
-        println!("Total size of body data: {size}");
-        let mut arrow_data = Vec::with_capacity(size);
+        let mut arrow_data = std::mem::take(&mut compression_context.scratch);
         let (ipc_message, _, tail_pad) = self.record_batch_to_bytes(
             batch,
             write_options,
@@ -572,12 +564,6 @@ impl IpcDataGenerator {
             &mut IpcBodySink::Write(&mut arrow_data),
         )?;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-        println!(
-            "size of record batch buffers:{}\nsize of flatbuffer data :{}\nsize of array_data:{}",
-            size,
-            ipc_message.len(),
-            arrow_data.len()
-        );
         Ok((
             encoded_dictionaries,
             EncodedData {
