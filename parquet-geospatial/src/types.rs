@@ -57,12 +57,10 @@ pub struct Metadata {
     /// The Coordinate Reference System (CRS) of the [`WkbType`], if present.
     ///
     /// This may be a raw string value (e.g., "EPSG:3857") or a JSON object (e.g., PROJJSON).
-    /// Note: Common lon/lat CRS representations (EPSG:4326, OGC:CRS84) are canonicalized
-    /// to `None` during serialization to match Parquet conventions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crs: Option<serde_json::Value>,
     /// The edge interpolation algorithm of the [`WkbType`], if present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "edges", skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<Edges>,
 }
 
@@ -88,8 +86,10 @@ impl Metadata {
         }
     }
 
-    /// Detect if the CRS is a common representation of lon/lat on the standard WGS84 ellipsoid
-    fn crs_is_lon_lat(&self) -> bool {
+    /// Detect if the CRS is a common representation of lon/lat on the standard WGS84 ellipsoid.
+    ///
+    /// Returns `true` for OGC:CRS84, EPSG:4326, and PROJJSON representations thereof.
+    pub fn crs_is_lon_lat(&self) -> bool {
         use serde_json::Value;
 
         let Some(crs) = &self.crs else {
@@ -144,16 +144,7 @@ impl ExtensionType for WkbType {
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        let md = if self.0.crs_is_lon_lat() {
-            &Metadata {
-                crs: None, // lon/lat CRS is canonicalized as omitted (None) for Parquet
-                algorithm: self.0.algorithm,
-            }
-        } else {
-            &self.0
-        };
-
-        serde_json::to_string(md).ok()
+        serde_json::to_string(&self.0).ok()
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> ArrowResult<Self::Metadata> {
@@ -251,7 +242,7 @@ mod tests {
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, r#"{"algorithm":"spherical"}"#);
+        assert_eq!(serialized, r#"{"edges":"spherical"}"#);
 
         let deserialized = WkbType::deserialize_metadata(Some(&serialized))?;
         assert!(deserialized.crs.is_none());
@@ -267,7 +258,7 @@ mod tests {
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, r#"{"crs":"srid:1234","algorithm":"spherical"}"#);
+        assert_eq!(serialized, r#"{"crs":"srid:1234","edges":"spherical"}"#);
 
         let deserialized = WkbType::deserialize_metadata(Some(&serialized))?;
         assert_eq!(
@@ -353,54 +344,43 @@ mod tests {
         Ok(())
     }
 
-    /// Test CRS canonicalization logic for common lon/lat representations
+    /// Test crs_is_lon_lat() detection for common lon/lat representations
     #[test]
-    fn test_crs_canonicalization() -> ArrowResult<()> {
-        // EPSG:4326 as string should be omitted
+    fn test_crs_is_lon_lat() -> ArrowResult<()> {
+        // EPSG:4326 as string should be detected
         let metadata = Metadata::new(Some("EPSG:4326"), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, "{}");
+        assert!(metadata.crs_is_lon_lat());
 
-        // OGC:CRS84 as string should be omitted
+        // OGC:CRS84 as string should be detected
         let metadata = Metadata::new(Some("OGC:CRS84"), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, "{}");
+        assert!(metadata.crs_is_lon_lat());
 
-        // A JSON object that reasonably looks like PROJJSON for EPSG:4326 should be omitted
+        // A JSON object that reasonably looks like PROJJSON for EPSG:4326 should be detected
         // detect "4326" as a string
         let crs_json = r#"{"id":{"authority":"EPSG","code":"4326"}}"#;
         let metadata = Metadata::new(Some(crs_json), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, "{}");
+        assert!(metadata.crs_is_lon_lat());
 
         // detect 4326 as a number
         let crs_json = r#"{"id":{"authority":"EPSG","code":4326}}"#;
         let metadata = Metadata::new(Some(crs_json), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, "{}");
+        assert!(metadata.crs_is_lon_lat());
 
-        // A JSON object that reasonably looks like PROJJSON for OGC:CRS84 should be omitted
+        // A JSON object that reasonably looks like PROJJSON for OGC:CRS84 should be detected
         let crs_json = r#"{"id":{"authority":"OGC","code":"CRS84"}}"#;
         let metadata = Metadata::new(Some(crs_json), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, "{}");
+        assert!(metadata.crs_is_lon_lat());
 
-        // Other input types should be preserved
+        // Other CRS values should NOT be detected as lon/lat
         let metadata = Metadata::new(Some("srid:1234"), None);
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, r#"{"crs":"srid:1234"}"#);
+        assert!(!metadata.crs_is_lon_lat());
 
-        // Canonicalization should work with algorithm field
-        let metadata = Metadata::new(Some("EPSG:4326"), Some(Edges::Spherical));
-        let wkb = WkbType::new(Some(metadata));
-        let serialized = wkb.serialize_metadata().unwrap();
-        assert_eq!(serialized, r#"{"algorithm":"spherical"}"#);
+        let metadata = Metadata::new(Some("EPSG:3857"), None);
+        assert!(!metadata.crs_is_lon_lat());
+
+        // None CRS should NOT be detected as lon/lat
+        let metadata = Metadata::new(None, None);
+        assert!(!metadata.crs_is_lon_lat());
 
         Ok(())
     }
