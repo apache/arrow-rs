@@ -405,7 +405,17 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
 
         let rle = self.rle_decoder.as_mut().unwrap();
         let num_values = cmp::min(buffer.len(), self.num_values);
-        rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
+        // SAFETY: reinterpreting `&mut [T]` as `&mut [MaybeUninit<T>]` is sound
+        // because every initialised `T` is a valid `MaybeUninit<T>`; `get_batch_with_dict`
+        // only writes through the slice, and we do not read through the original
+        // reference after this call.
+        let uninit: &mut [std::mem::MaybeUninit<T::T>] = unsafe {
+            std::slice::from_raw_parts_mut(
+                buffer.as_mut_ptr().cast::<std::mem::MaybeUninit<T::T>>(),
+                buffer.len(),
+            )
+        };
+        rle.get_batch_with_dict(&self.dictionary[..], uninit, num_values)
     }
 
     /// Number of values left in this decoder stream

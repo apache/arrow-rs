@@ -91,6 +91,78 @@ impl DictIndexDecoder {
         Ok(values_read)
     }
 
+    /// Read up to `len` values directly into `output`, gathering through `dict`
+    /// in a single pass. Avoids expanding RLE runs into the index buffer and
+    /// writes through a `MaybeUninit` slice so the caller does not need to
+    /// zero-initialise output capacity.
+    pub fn read_with_dict<T: Clone>(
+        &mut self,
+        len: usize,
+        dict: &[T],
+        output: &mut [std::mem::MaybeUninit<T>],
+    ) -> Result<usize> {
+        use crate::errors::ParquetError;
+        let total_to_read = len.min(self.max_remaining_values);
+        let mut values_read = 0;
+
+        // Drain any leftover indices buffered from a prior `read` call before
+        // switching to the direct-gather path. Uses the same CHUNK=16 +
+        // max-reduction pattern as `RleDecoder::get_batch_with_dict`.
+        let leftover = self.index_buf_len - self.index_offset;
+        if leftover > 0 {
+            let n = leftover.min(total_to_read);
+            let keys = &self.index_buf[self.index_offset..self.index_offset + n];
+            let out = &mut output[..n];
+            let dict_len = dict.len();
+            let dict_len_u32 = dict_len as u32;
+
+            const CHUNK: usize = 16;
+            let mut out_chunks = out.chunks_exact_mut(CHUNK);
+            let mut key_chunks = keys.chunks_exact(CHUNK);
+            for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
+                let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
+                if max_key >= dict_len_u32 {
+                    return Err(ParquetError::General(format!(
+                        "dictionary index out of bounds: the len is {dict_len} but the index is {max_key}"
+                    )));
+                }
+                for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
+                    // SAFETY: bounds checked above.
+                    dst.write(unsafe { dict.get_unchecked(k as usize) }.clone());
+                }
+            }
+            for (dst, &k) in out_chunks
+                .into_remainder()
+                .iter_mut()
+                .zip(key_chunks.remainder().iter())
+            {
+                let idx = k as usize;
+                if idx >= dict_len {
+                    return Err(ParquetError::General(format!(
+                        "dictionary index out of bounds: the len is {dict_len} but the index is {idx}"
+                    )));
+                }
+                // SAFETY: bounds checked above.
+                dst.write(unsafe { dict.get_unchecked(idx) }.clone());
+            }
+
+            self.index_offset += n;
+            values_read += n;
+        }
+
+        if values_read < total_to_read {
+            let got = self.decoder.get_batch_with_dict(
+                dict,
+                &mut output[values_read..total_to_read],
+                total_to_read - values_read,
+            )?;
+            values_read += got;
+        }
+
+        self.max_remaining_values -= values_read;
+        Ok(values_read)
+    }
+
     /// Skip up to `to_skip` values, returning the number of values skipped
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
