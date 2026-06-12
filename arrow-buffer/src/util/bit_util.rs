@@ -19,8 +19,17 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 
-/// Extracts the bits of `value` selected by `mask` and packs them into the
-/// least significant bits of the result (parallel bits extract, `pext`)
+/// Parallel bit extract: for each set bit in `mask`, extract the
+/// corresponding bit from `value` and pack them contiguously into the low
+/// bits of the return value.
+///
+/// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pext` instruction; otherwise it falls back
+/// to a portable scalar loop.
+///
+/// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
+/// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
 #[inline]
 pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
@@ -30,58 +39,27 @@ pub fn compress(value: u64, mask: u64) -> u64 {
         unsafe { std::arch::x86_64::_pext_u64(value, mask) }
     }
 
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
-        if std::arch::is_x86_feature_detected!("bmi2") {
-            // SAFETY: `bmi2` support was detected at runtime
-            unsafe { compress_bmi2(value, mask) }
-        } else {
-            compress_fallback(value, mask)
+        let mut mask = mask;
+        let mut result: u64 = 0;
+        let mut dest_bit: u64 = 1;
+        while mask != 0 {
+            let lowest = mask & mask.wrapping_neg();
+            if value & lowest != 0 {
+                result |= dest_bit;
+            }
+            dest_bit <<= 1;
+            mask ^= lowest;
         }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        compress_fallback(value, mask)
+        result
     }
 }
 
-#[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
-#[target_feature(enable = "bmi2")]
-#[inline]
-unsafe fn compress_bmi2(value: u64, mask: u64) -> u64 {
-    // SAFETY: the caller guarantees the `bmi2` target feature is available
-    unsafe { std::arch::x86_64::_pext_u64(value, mask) }
-}
-
-#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
-#[inline]
-fn compress_fallback(value: u64, mask: u64) -> u64 {
-    let mut mask = mask;
-    let mut result: u64 = 0;
-    let mut dest_bit: u64 = 1;
-    while mask != 0 {
-        let lowest = mask & mask.wrapping_neg();
-        if value & lowest != 0 {
-            result |= dest_bit;
-        }
-        dest_bit <<= 1;
-        mask ^= lowest;
-    }
-    result
-}
-
-/// Returns true if [`compress`] is hardware accelerated (`pext`)
+/// Returns true if [`compress`] lowers to the hardware `pext` instruction
 #[inline]
 pub fn compress_available() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        std::arch::is_x86_feature_detected!("bmi2")
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        false
-    }
+    cfg!(all(target_arch = "x86_64", target_feature = "bmi2"))
 }
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
