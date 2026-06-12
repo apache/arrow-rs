@@ -751,7 +751,7 @@ impl IpcDataGenerator {
                 Some(level) => {
                     CompressionCodec::try_new_with_compression_level(compression_type, level)
                 }
-                None => TryInto::try_into(compression_type),
+                None => compression_type.try_into(),
             })
             .transpose()?;
 
