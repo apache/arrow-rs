@@ -383,6 +383,15 @@ fn cast_list_to_string<'m, 'v>(mut iter: impl Iterator<Item = Variant<'m, 'v>>) 
     ret_str
 }
 
+pub(crate) fn variant_to_binary<'v>(variant: &Variant<'_, 'v>) -> Option<&'v [u8]> {
+    match *variant {
+        Variant::Binary(d) => Some(d),
+        Variant::String(s) => Some(s.as_bytes()),
+        Variant::ShortString(s) => Some(s.as_str().as_bytes()),
+        _ => None,
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{

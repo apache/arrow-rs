@@ -841,20 +841,13 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::Binary(data);
     /// assert_eq!(v1.as_u8_slice(), Some(data.as_slice()));
     ///
-    /// // or string variant
-    /// let data = b"world";
-    /// let v2 = Variant::from("world");
-    /// assert_eq!(v2.as_u8_slice(), Some(data.as_slice()));
-    ///
     /// // but not from other variant types
-    /// let v3 = Variant::from(123i64);
-    /// assert_eq!(v3.as_u8_slice(), None);
+    /// let v2 = Variant::from(123i64);
+    /// assert_eq!(v2.as_u8_slice(), None);
     /// ```
     pub fn as_u8_slice(&'v self) -> Option<&'v [u8]> {
         match self {
             Variant::Binary(d) => Some(d),
-            Variant::String(s) => Some(s.as_bytes()),
-            Variant::ShortString(s) => Some(s.as_ref().as_bytes()),
             _ => None,
         }
     }
