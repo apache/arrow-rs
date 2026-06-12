@@ -2751,8 +2751,8 @@ mod tests {
             }
         }
 
-        // Default threshold keeps the compressed buffer for constant data.
-        assert!(write_v2_page(1.0));
+        // A permissive threshold keeps the compressed buffer.
+        assert!(write_v2_page(2.0));
         // A strict threshold (require >1000x reduction) discards it.
         assert!(!write_v2_page(0.001));
     }

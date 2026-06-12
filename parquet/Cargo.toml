@@ -52,7 +52,7 @@ parquet-variant-compute = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
-snap = { version = "1.0", default-features = false, optional = true }
+snipsnap = { version = "0.0.2", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
@@ -80,7 +80,7 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
-snap = { version = "1.0", default-features = false }
+snipsnap = { version = "0.0.2", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
@@ -100,6 +100,8 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
+# Enable Snappy
+snap = ["dep:snipsnap"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs

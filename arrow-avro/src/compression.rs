@@ -68,7 +68,7 @@ impl CompressionCodec {
                 let crc = &block[block.len() - 4..];
                 let block = &block[..block.len() - 4];
 
-                let mut decoder = snap::raw::Decoder::new();
+                let mut decoder = snipsnap::raw::Decoder::new();
                 let decoded = decoder
                     .decompress_vec(block)
                     .map_err(|e| AvroError::External(Box::new(e)))?;
@@ -144,7 +144,7 @@ impl CompressionCodec {
 
             #[cfg(feature = "snappy")]
             CompressionCodec::Snappy => {
-                let mut encoder = snap::raw::Encoder::new();
+                let mut encoder = snipsnap::raw::Encoder::new();
                 // Allocate and compress in one step for efficiency
                 let mut compressed = encoder
                     .compress_vec(data)
