@@ -19,6 +19,71 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 
+/// Extracts the bits of `value` selected by `mask` and packs them into the
+/// least significant bits of the result (parallel bits extract, `pext`)
+#[inline]
+pub fn compress(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+    {
+        if std::arch::is_x86_feature_detected!("bmi2") {
+            // SAFETY: `bmi2` support was detected at runtime
+            unsafe { compress_bmi2(value, mask) }
+        } else {
+            compress_fallback(value, mask)
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        compress_fallback(value, mask)
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+#[target_feature(enable = "bmi2")]
+#[inline]
+unsafe fn compress_bmi2(value: u64, mask: u64) -> u64 {
+    // SAFETY: the caller guarantees the `bmi2` target feature is available
+    unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+#[inline]
+fn compress_fallback(value: u64, mask: u64) -> u64 {
+    let mut mask = mask;
+    let mut result: u64 = 0;
+    let mut dest_bit: u64 = 1;
+    while mask != 0 {
+        let lowest = mask & mask.wrapping_neg();
+        if value & lowest != 0 {
+            result |= dest_bit;
+        }
+        dest_bit <<= 1;
+        mask ^= lowest;
+    }
+    result
+}
+
+/// Returns true if [`compress`] is hardware accelerated (`pext`)
+#[inline]
+pub fn compress_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("bmi2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
