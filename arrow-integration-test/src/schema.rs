@@ -22,9 +22,14 @@ use std::collections::HashMap;
 
 /// Generate a JSON representation of the `Schema`.
 pub fn schema_to_json(schema: &Schema) -> serde_json::Value {
+    let metadata: serde_json::Map<String, serde_json::Value> = schema
+        .metadata()
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
     serde_json::json!({
         "fields": schema.fields().iter().map(|f| field_to_json(f.as_ref())).collect::<Vec<_>>(),
-        "metadata": serde_json::to_value(schema.metadata()).unwrap()
+        "metadata": metadata
     })
 }
 

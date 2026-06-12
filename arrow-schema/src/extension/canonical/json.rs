@@ -228,11 +228,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
-        let field = Field::new("", DataType::Int8, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "{}".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Int8, false)
+            .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "{}")]);
         field.extension_type::<Json>();
     }
 
@@ -247,14 +244,10 @@ mod tests {
         expected = "Json extension type metadata is either an empty string or a JSON string with an empty object"
     )]
     fn invalid_metadata() {
-        let field = Field::new("", DataType::Utf8, false).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned()),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "1234".to_owned()),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Utf8, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, Json::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "1234"),
+        ]);
         field.extension_type::<Json>();
     }
 
@@ -263,11 +256,8 @@ mod tests {
         expected = "Json extension type metadata is either an empty string or a JSON string with an empty object"
     )]
     fn missing_metadata() {
-        let field = Field::new("", DataType::LargeUtf8, false).with_metadata(
-            [(EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::LargeUtf8, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, Json::NAME)]);
         field.extension_type::<Json>();
     }
 }

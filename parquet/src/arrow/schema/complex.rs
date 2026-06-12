@@ -493,10 +493,9 @@ impl Visitor {
                         .with_nullable(false),
                 );
                 let value_field = Arc::new(convert_field(map_value, &value, arrow_value, true)?);
-                let field_metadata = match arrow_map {
-                    Some(field) => field.metadata().clone(),
-                    _ => HashMap::default(),
-                };
+                let field_metadata = arrow_map
+                    .map(|field| field.metadata().clone())
+                    .unwrap_or_default();
 
                 let map_field = Field::new_struct(
                     map_key_value.name(),

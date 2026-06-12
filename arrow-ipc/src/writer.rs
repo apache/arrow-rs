@@ -1234,7 +1234,7 @@ pub struct FileWriter<W> {
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
     /// User level customized metadata
-    custom_metadata: HashMap<String, String>,
+    custom_metadata: Metadata,
 
     data_gen: IpcDataGenerator,
 
@@ -1298,7 +1298,7 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker,
-            custom_metadata: HashMap::new(),
+            custom_metadata: Default::default(),
             data_gen,
             compression_context: CompressionContext::default(),
         })
