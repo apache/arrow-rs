@@ -200,6 +200,13 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
         }
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        match self {
+            Self::Dict { keys, .. } => keys.reserve_exact(additional),
+            Self::Values { values, .. } => values.reserve_exact(additional),
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,

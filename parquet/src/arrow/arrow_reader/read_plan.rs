@@ -549,13 +549,13 @@ mod tests {
 
         let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
         let levels = vec![0; TOTAL_ROWS];
-        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0);
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
         let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
             "c0",
             ArrowType::Int32,
             false,
         )]));
-        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false);
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
 
         let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
             Ok(BooleanArray::from(vec![true; batch.num_rows()]))

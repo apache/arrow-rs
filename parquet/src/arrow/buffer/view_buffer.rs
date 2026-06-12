@@ -75,6 +75,10 @@ impl ValuesBuffer for ViewBuffer {
         Self::with_capacity(capacity)
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        self.views.reserve_exact(additional);
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
