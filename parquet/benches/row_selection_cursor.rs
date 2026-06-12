@@ -35,9 +35,36 @@ const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[1, 2, 4, 8, 32];
+const DENSE_SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[4, 8, 32];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
 const BENCH_MODES: &[BenchMode] = &[BenchMode::ReadSelector, BenchMode::ReadMask];
+const SHAPE_FOCUS_SCENARIOS: &[ShapeFocusScenario] = &[
+    ShapeFocusScenario {
+        name: "sparse10",
+        select_ratio: 0.1,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "sparse20",
+        select_ratio: 0.2,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "moderate40",
+        select_ratio: 0.4,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "dense80",
+        select_ratio: 0.8,
+        start_with_select: true,
+        selected_run_lengths: DENSE_SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+];
 
 struct DataProfile {
     name: &'static str,
@@ -209,29 +236,6 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 fn bench_shape_focus(c: &mut Criterion) {
-    let scenarios = [
-        ShapeFocusScenario {
-            name: "sparse10",
-            select_ratio: 0.1,
-            start_with_select: false,
-        },
-        ShapeFocusScenario {
-            name: "sparse20",
-            select_ratio: 0.2,
-            start_with_select: false,
-        },
-        ShapeFocusScenario {
-            name: "moderate40",
-            select_ratio: 0.4,
-            start_with_select: false,
-        },
-        ShapeFocusScenario {
-            name: "dense80",
-            select_ratio: 0.8,
-            start_with_select: true,
-        },
-    ];
-
     let profiles = [
         DataProfile {
             name: "int32",
@@ -245,24 +249,20 @@ fn bench_shape_focus(c: &mut Criterion) {
 
     for profile in profiles {
         let parquet_data = build_parquet_data(TOTAL_ROWS, profile.build_batch);
-        for scenario in &scenarios {
-            for &selected_run_len in SHAPE_FOCUS_SELECTED_RUN_LENGTHS {
+        for scenario in shape_focus_scenarios() {
+            for &selected_run_len in scenario.selected_run_lengths {
                 let selectors =
                     generate_shape_focus_selectors(selected_run_len, TOTAL_ROWS, scenario);
-                if selectors.is_empty() {
-                    continue;
-                }
-
-                let stats = SelectorStats::new(&selectors);
-                let selection = RowSelection::from(selectors);
-                let suffix = format!(
-                    "shape-focus-{}-{}-run{:02}-avg{:.1}-sel{:02}",
+                assert!(
+                    !selectors.is_empty(),
+                    "invalid shape focus case {} maxrun {}",
                     scenario.name,
-                    profile.name,
-                    selected_run_len,
-                    stats.average_selector_len,
-                    (stats.select_ratio * 100.0).round() as u32
+                    selected_run_len
                 );
+
+                let suffix =
+                    shape_focus_suffix(scenario, profile.name, selected_run_len, &selectors);
+                let selection = RowSelection::from(selectors);
 
                 let bench_input = BenchInput {
                     parquet_data: parquet_data.clone(),
@@ -431,10 +431,11 @@ struct Scenario {
     distribution: RunDistribution,
 }
 
-struct ShapeFocusScenario {
-    name: &'static str,
+pub(crate) struct ShapeFocusScenario {
+    pub(crate) name: &'static str,
     select_ratio: f64,
     start_with_select: bool,
+    pub(crate) selected_run_lengths: &'static [usize],
 }
 
 #[derive(Clone)]
@@ -497,7 +498,11 @@ fn generate_selectors(
     selection.into()
 }
 
-fn generate_shape_focus_selectors(
+pub(crate) fn shape_focus_scenarios() -> &'static [ShapeFocusScenario] {
+    SHAPE_FOCUS_SCENARIOS
+}
+
+pub(crate) fn generate_shape_focus_selectors(
     selected_run_len: usize,
     total_rows: usize,
     scenario: &ShapeFocusScenario,
@@ -555,6 +560,23 @@ fn generate_shape_focus_selectors(
 
     let selection: RowSelection = selectors.into();
     selection.into()
+}
+
+pub(crate) fn shape_focus_suffix(
+    scenario: &ShapeFocusScenario,
+    profile_name: &str,
+    selected_run_len: usize,
+    selectors: &[RowSelector],
+) -> String {
+    let stats = SelectorStats::new(selectors);
+    format!(
+        "shape-focus-{}-{}-maxrun{:02}-avg{:.1}-sel{:02}",
+        scenario.name,
+        profile_name,
+        selected_run_len,
+        stats.average_selector_len,
+        (stats.select_ratio * 100.0).round() as u32
+    )
 }
 
 fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) -> usize {
