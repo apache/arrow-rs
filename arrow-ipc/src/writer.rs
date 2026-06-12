@@ -66,6 +66,8 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
+    // Compression level
+    batch_compression_level: Option<i32>,
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
 }
@@ -166,6 +168,43 @@ impl IpcWriteOptions {
         }
         Ok(self)
     }
+
+    /// Configures the compression level used when writing compressed IPC batches.
+    ///
+    /// Compression levels require metadata V5 or newer and are currently only
+    /// supported for ZSTD compression.
+    pub fn try_with_compression_level(
+        mut self,
+        batch_compression_level: Option<i32>,
+    ) -> Result<Self, ArrowError> {
+        self.batch_compression_level = batch_compression_level;
+
+        if self.batch_compression_level.is_some()
+            && self.metadata_version < crate::MetadataVersion::V5
+        {
+            return Err(ArrowError::InvalidArgumentError(
+                "Compression only supported in metadata v5 and above".to_string(),
+            ));
+        }
+
+        match (self.batch_compression_type, self.batch_compression_level) {
+            (Some(crate::CompressionType::ZSTD), Some(level)) if level > 22 || level < -999 => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "ZSTD compression level must be between -999 and 22, got {level}"
+                )));
+            }
+            (Some(crate::CompressionType::LZ4_FRAME), Some(_)) => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "LZ4 Frame compression does not support configurable compression levels"
+                        .to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        Ok(self)
+    }
+
     /// Try to create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
         alignment: usize,
@@ -192,6 +231,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
+                batch_compression_level: None,
                 dictionary_handling: DictionaryHandling::default(),
             }),
             crate::MetadataVersion::V5 => {
@@ -205,6 +245,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
+                        batch_compression_level: None,
                         dictionary_handling: DictionaryHandling::default(),
                     })
                 }
@@ -229,6 +270,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
+            batch_compression_level: None,
             dictionary_handling: DictionaryHandling::default(),
         }
     }
@@ -703,8 +745,15 @@ impl IpcDataGenerator {
             c.finish()
         });
 
-        let compression_codec: Option<CompressionCodec> =
-            batch_compression_type.map(TryInto::try_into).transpose()?;
+        let batch_compression_level = write_options.batch_compression_level;
+        let compression_codec: Option<CompressionCodec> = batch_compression_type
+            .map(|compression_type| match batch_compression_level {
+                Some(level) => {
+                    CompressionCodec::try_new_with_compression_level(compression_type, level)
+                }
+                None => TryInto::try_into(compression_type),
+            })
+            .transpose()?;
 
         let alignment = write_options.alignment;
         let mut variadic_buffer_counts = vec![];
@@ -785,8 +834,14 @@ impl IpcDataGenerator {
             c.finish()
         });
 
+        let batch_compression_level = write_options.batch_compression_level;
         let compression_codec: Option<CompressionCodec> = batch_compression_type
-            .map(|batch_compression_type| batch_compression_type.try_into())
+            .map(|batch_compression_type| match batch_compression_level {
+                Some(level) => {
+                    CompressionCodec::try_new_with_compression_level(batch_compression_type, level)
+                }
+                None => batch_compression_type.try_into(),
+            })
             .transpose()?;
 
         let alignment = write_options.alignment;
@@ -2495,6 +2550,8 @@ mod tests {
             let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
                 .try_with_compression(Some(crate::CompressionType::ZSTD))
+                .unwrap()
+                .try_with_compression_level(Some(1))
                 .unwrap();
 
             let mut writer =
