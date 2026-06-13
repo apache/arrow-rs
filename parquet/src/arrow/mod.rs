@@ -210,7 +210,8 @@ use arrow_schema::{FieldRef, Schema};
 pub use self::schema::{
     ArrowSchemaConverter, FieldLevels, add_encoded_arrow_schema_to_metadata, encode_arrow_schema,
     parquet_to_arrow_field_levels, parquet_to_arrow_field_levels_with_virtual,
-    parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, virtual_type::*,
+    parquet_to_arrow_schema, parquet_to_arrow_schema_and_field_levels,
+    parquet_to_arrow_schema_by_columns, virtual_type::*,
 };
 
 /// Schema metadata key used to store serialized Arrow schema
@@ -475,9 +476,11 @@ pub fn parquet_column<'a>(
         return None;
     }
 
-    // This could be made more efficient (#TBD)
-    let parquet_idx = (0..parquet_schema.columns().len())
-        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
+    // For non-nested fields the parquet column ordering matches the arrow
+    // root field ordering, so the first leaf descended from `root_idx` is
+    // exactly the parquet column we want. SchemaDescriptor caches this
+    // mapping for O(1) lookup.
+    let parquet_idx = parquet_schema.root_first_leaf_index(root_idx)?;
     Some((parquet_idx, field))
 }
 
