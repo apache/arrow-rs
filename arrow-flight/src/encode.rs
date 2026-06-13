@@ -273,33 +273,59 @@ const DEFAULT_ARROW_DATA_CAPACITY: usize = GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES;
 
 /// Pool of reusable `Vec<u8>` buffers for the IPC arrow data body.
 #[derive(Clone, Debug)]
-pub struct ArrowDataPool(Arc<Mutex<Vec<Vec<u8>>>>);
+pub struct ArrowDataPool(Arc<Mutex<ArrowDataPoolState>>);
+
+#[derive(Debug)]
+struct ArrowDataPoolState {
+    buffers: Vec<Vec<u8>>,
+    in_use: usize,
+    max_in_use: usize,
+}
 
 impl ArrowDataPool {
     /// Create n buffers with pre-allocated capacity for reuse in encoding IPC messages.
     pub fn new(n: usize) -> Self {
-        Self(Arc::new(Mutex::new(
-            (0..n)
+        Self(Arc::new(Mutex::new(ArrowDataPoolState {
+            buffers: (0..n)
                 .map(|_| Vec::with_capacity(DEFAULT_ARROW_DATA_CAPACITY))
                 .collect(),
-        )))
+            in_use: 0,
+            max_in_use: 0,
+        })))
     }
 
-    fn acquire(&self) -> Vec<u8> {
-        let mut buf = self.0.lock().unwrap().pop().unwrap_or_default();
+    fn acquire(&mut self) -> Vec<u8> {
+        let mut state = self.0.lock().unwrap();
+        let mut buf = match state.buffers.pop() {
+            Some(buf) => buf,
+            None => Vec::with_capacity(DEFAULT_ARROW_DATA_CAPACITY),
+        };
+        state.in_use += 1;
+        state.max_in_use = state.max_in_use.max(state.in_use);
         buf.clear();
         buf
     }
 
-    fn release(&self, mut buf: Vec<u8>) {
+    fn release(&mut self, mut buf: Vec<u8>) {
         buf.clear();
-        self.0.lock().unwrap().push(buf);
+        let mut state = self.0.lock().unwrap();
+        state.in_use -= 1;
+        state.buffers.push(buf);
+    }
+}
+impl Drop for ArrowDataPool {
+    fn drop(&mut self) {
+        let max_in_use = self.0.lock().unwrap().max_in_use;
+        println!(
+            "ArrowDataPool dropped. Max buffers in use at once: {}",
+            max_in_use
+        );
     }
 }
 
 impl Default for ArrowDataPool {
     fn default() -> Self {
-        Self::new(8)
+        Self::new(1)
     }
 }
 
