@@ -504,6 +504,14 @@ impl RowSelection {
         self.selectors.iter()
     }
 
+    /// Returns the number of selectors (select/skip segments) in this selection.
+    ///
+    /// A higher count indicates a more fragmented selection, which can slow
+    /// sequential reads due to many small skip/read transitions.
+    pub fn selector_count(&self) -> usize {
+        self.selectors.len()
+    }
+
     /// Returns the number of selected rows
     pub fn row_count(&self) -> usize {
         self.iter().filter(|s| !s.skip).map(|s| s.row_count).sum()
