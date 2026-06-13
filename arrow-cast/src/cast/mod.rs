@@ -11440,11 +11440,8 @@ mod tests {
         assert!(err.is_err());
 
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
-        let c = b
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
-        assert_eq!(9223372022400000000, c.value(0));
+        let c = b.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(MAX_DAYS_MICROS as i64 * MICROSECONDS_IN_DAY, c.value(0));
         assert!(c.is_null(1));
         assert!(c.is_null(2));
     }
@@ -11452,7 +11449,8 @@ mod tests {
     #[test]
     fn test_cast_date32_to_timestamp_ns_overflow() {
         // 2262-04-11, 2062-04-12
-        let a = Date32Array::from(vec![Some(106751), Some(106752), None]);
+        let upper_limit = 106_751;
+        let a = Date32Array::from(vec![Some(upper_limit), Some(upper_limit + 1), None]);
         let array = Arc::new(a) as ArrayRef;
         let err = cast_with_options(
             &array,
@@ -11465,11 +11463,8 @@ mod tests {
         assert!(err.is_err());
 
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
-        let c = b
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-        assert_eq!(9223286400000000000, c.value(0));
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(upper_limit as i64 * NANOSECONDS_IN_DAY, c.value(0));
         assert!(c.is_null(1));
         assert!(c.is_null(2));
     }
