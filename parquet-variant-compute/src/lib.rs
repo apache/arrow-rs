@@ -52,7 +52,9 @@ mod variant_get;
 mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray, VariantType};
-pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
+pub use variant_array_builder::{
+    ShreddedVariantArrayBuilder, VariantArrayBuilder, VariantValueArrayBuilder,
+};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
 pub use from_json::json_to_variant;
