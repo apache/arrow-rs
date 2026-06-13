@@ -44,6 +44,57 @@ use std::ops;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
+/// Builder for [`SortOptions`]
+///
+/// Please refer to the docs for details
+#[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SortBuilder {
+    _force_construct_with_new: (),
+}
+impl SortBuilder {
+    /// Create a new `SortBuilder` to configure `SortOptions`.
+    pub fn new() -> Self {
+        Self {
+            _force_construct_with_new: (),
+        }
+    }
+    /// Set this sort options to sort in ascending order
+    pub fn asc(self) -> SortBuilderOrd {
+        SortBuilderOrd { descending: false }
+    }
+    /// Set this sort options to sort in descending order
+    pub fn desc(self) -> SortBuilderOrd {
+        SortBuilderOrd { descending: true }
+    }
+}
+
+/// Intermediate builder state after selecting ascending/descending order.
+///
+/// Use `SortBuilder::asc()` or `SortBuilder::desc()` to obtain
+/// this state and then call `nulls_first()` or `nulls_last()` to finish
+/// constructing a `SortOptions`.
+#[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SortBuilderOrd {
+    /// Whether to sort in descending order
+    descending: bool,
+}
+impl SortBuilderOrd {
+    /// Set this sort options to sort nulls first
+    pub fn nulls_first(self) -> SortOptions {
+        SortOptions {
+            descending: self.descending,
+            nulls_first: true,
+        }
+    }
+    /// Set this sort options to sort nulls last
+    pub fn nulls_last(self) -> SortOptions {
+        SortOptions {
+            descending: self.descending,
+            nulls_first: false,
+        }
+    }
+}
+
 /// Options that define the sort order of a given column
 ///
 /// The default sorts equivalently to of `ASC NULLS FIRST` in SQL (i.e.
