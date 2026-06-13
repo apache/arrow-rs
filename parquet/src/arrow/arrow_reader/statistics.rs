@@ -1353,7 +1353,10 @@ where
 /// Note: The Parquet schema and Arrow schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
 /// may have additional columns). The function [`parquet_column`] is used to
-/// match the column in the Parquet schema to the column in the Arrow schema.
+/// match the column in the Parquet schema to the column in the Arrow schema
+/// when using [`Self::try_new`]. For nested fields (e.g., struct fields),
+/// where `parquet_column` does not support schema resolution, use
+/// [`Self::from_column_index`] instead with a pre-resolved leaf column index.
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
     /// the index of the matched column in the Parquet schema
@@ -1454,6 +1457,9 @@ impl<'a> StatisticsConverter<'a> {
     /// arrays will be null. This can happen if the column is in the arrow
     /// schema but not in the parquet schema due to schema evolution.
     ///
+    /// This constructor only supports top-level, non-nested columns. For nested
+    /// fields (e.g., fields within a struct), use [`Self::from_column_index`].
+    ///
     /// See example on [`Self::row_group_mins`] for usage
     ///
     /// # Errors
@@ -1492,6 +1498,45 @@ impl<'a> StatisticsConverter<'a> {
             arrow_field,
             missing_null_counts_as_zero: true,
             physical_type: parquet_index.map(|idx| parquet_schema.column(idx).physical_type()),
+        })
+    }
+
+    /// Create a new `StatisticsConverter` from a Parquet leaf column index directly.
+    ///
+    /// Unlike [`Self::try_new`], this constructor bypasses schema resolution and
+    /// accepts a Parquet column index directly. This is useful for nested fields
+    /// (e.g., struct fields) where the caller has already resolved the mapping
+    /// from the Arrow field to the Parquet leaf column.
+    ///
+    /// # Arguments
+    ///
+    /// * `parquet_column_index` - The index of the leaf column in the Parquet schema
+    /// * `arrow_field` - The Arrow field describing the column's data type
+    /// * `parquet_schema` - The Parquet schema descriptor (used to look up the physical type)
+    ///
+    /// # Errors
+    ///
+    /// * If the `parquet_column_index` is out of bounds
+    pub fn from_column_index(
+        parquet_column_index: usize,
+        arrow_field: &'a Field,
+        parquet_schema: &'a SchemaDescriptor,
+    ) -> Result<Self> {
+        if parquet_column_index >= parquet_schema.columns().len() {
+            return Err(arrow_err!(format!(
+                "Parquet column index {} out of bounds, max {}",
+                parquet_column_index,
+                parquet_schema.columns().len()
+            )));
+        }
+
+        let physical_type = parquet_schema.column(parquet_column_index).physical_type();
+
+        Ok(Self {
+            parquet_column_index: Some(parquet_column_index),
+            arrow_field,
+            missing_null_counts_as_zero: true,
+            physical_type: Some(physical_type),
         })
     }
 
