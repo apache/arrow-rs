@@ -329,18 +329,12 @@ impl FlightDataEncoder {
     }
 
     /// Place the `FlightData` in the queue to send
+    #[inline]
     fn queue_message(&mut self, mut data: FlightData) {
         if let Some(descriptor) = self.descriptor.take() {
             data.flight_descriptor = Some(descriptor);
         }
         self.queue.push_back(data);
-    }
-
-    /// Place the `FlightData` in the queue to send
-    fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
-        for data in datas {
-            self.queue_message(data)
-        }
     }
 
     /// Encodes schema as a [`FlightData`] in self.queue.
@@ -381,8 +375,9 @@ impl FlightDataEncoder {
 
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
             let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
-
-            self.queue_messages(flight_dictionaries);
+            for dict in flight_dictionaries {
+                self.queue_message(dict);
+            }
             self.queue_message(flight_batch);
         }
 
@@ -671,7 +666,7 @@ fn prepare_schema_for_flight(
 fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_flight_data_size: usize,
-) -> Vec<RecordBatch> {
+) -> impl Iterator<Item = RecordBatch> {
     let size = batch
         .columns()
         .iter()
@@ -680,18 +675,20 @@ fn split_batch_for_grpc_response(
 
     let n_batches =
         (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
-    let rows_per_batch = (batch.num_rows() / n_batches).max(1);
-    let mut out = Vec::with_capacity(n_batches + 1);
-
+    let num_rows = batch.num_rows();
+    let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
-    while offset < batch.num_rows() {
-        let length = (rows_per_batch).min(batch.num_rows() - offset);
-        out.push(batch.slice(offset, length));
 
-        offset += length;
-    }
-
-    out
+    std::iter::from_fn(move || {
+        if offset < num_rows {
+            let length = rows_per_batch.min(num_rows - offset);
+            let slice = batch.slice(offset, length);
+            offset += length;
+            Some(slice)
+        } else {
+            None
+        }
+    })
 }
 
 /// The data needed to encode a stream of flight data, holding on to
@@ -724,7 +721,10 @@ impl FlightIpcEncoder {
 
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
-    fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
+    fn encode_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(impl Iterator<Item = FlightData> + use<>, FlightData)> {
         let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
@@ -732,7 +732,7 @@ impl FlightIpcEncoder {
             &mut self.compression_context,
         )?;
 
-        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
         let flight_batch = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
@@ -1828,7 +1828,8 @@ mod tests {
         let c = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 1);
         assert_eq!(batch, split[0]);
 
@@ -1838,7 +1839,8 @@ mod tests {
         let c = UInt8Array::from((0..n_rows).map(|i| (i % 256) as u8).collect::<Vec<_>>());
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 3);
         assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
@@ -1882,7 +1884,8 @@ mod tests {
 
         let input_rows = batch.num_rows();
 
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes).collect();
         let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
         let output_rows: usize = sizes.iter().sum();
 
