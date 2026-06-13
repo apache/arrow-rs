@@ -59,7 +59,7 @@ use uuid::Uuid;
 /// - If unsupported data types are encountered in typed_value columns
 pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // Check if already unshredded (optimization for common case)
-    if array.typed_value_field().is_none() && array.value_field().is_some() {
+    if array.typed_value_column().is_none() && array.value_column().is_some() {
         return Ok(array.clone());
     }
 
@@ -69,7 +69,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.inner())?
         .unwrap_or_else(UnshredVariantRowBuilder::null);
 
-    let metadata = array.metadata_field();
+    let metadata = array.metadata_column();
     let mut value_builder = VariantValueArrayBuilder::new(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
