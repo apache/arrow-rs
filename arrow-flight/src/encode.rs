@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::VecDeque,
-    fmt::Debug,
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::Poll,
-};
+use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
@@ -266,60 +260,6 @@ impl FlightDataEncoderBuilder {
             descriptor,
             dictionary_handling,
         )
-    }
-}
-
-const DEFAULT_ARROW_DATA_CAPACITY: usize = GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES;
-
-/// Pool of reusable `Vec<u8>` buffers for the IPC arrow data body.
-#[derive(Clone, Debug)]
-pub struct ArrowDataPool(Arc<Mutex<Vec<Vec<u8>>>>);
-
-impl ArrowDataPool {
-    /// Create n buffers with pre-allocated capacity for reuse in encoding IPC messages.
-    pub fn new(n: usize) -> Self {
-        Self(Arc::new(Mutex::new(
-            (0..n)
-                .map(|_| Vec::with_capacity(DEFAULT_ARROW_DATA_CAPACITY))
-                .collect(),
-        )))
-    }
-
-    fn acquire(&self) -> Vec<u8> {
-        let mut buf = self.0.lock().unwrap().pop().unwrap_or_default();
-        buf.clear();
-        buf
-    }
-
-    fn release(&self, mut buf: Vec<u8>) {
-        buf.clear();
-        self.0.lock().unwrap().push(buf);
-    }
-}
-
-impl Default for ArrowDataPool {
-    fn default() -> Self {
-        Self::new(8)
-    }
-}
-
-// A thin wrapper that gives `Bytes::from_owner` something to hold onto.
-// `data` — the Vec<u8> written into by encode(). The buffer we keep alive.
-// `pool` — shared handle back to the ArrowDataPool; on drop, the Vec finds its way home.
-pub(crate) struct PooledBuf {
-    data: Vec<u8>,
-    pool: ArrowDataPool,
-}
-
-impl AsRef<[u8]> for PooledBuf {
-    fn as_ref(&self) -> &[u8] {
-        &self.data
-    }
-}
-
-impl Drop for PooledBuf {
-    fn drop(&mut self) {
-        self.pool.release(std::mem::take(&mut self.data));
     }
 }
 
@@ -762,7 +702,6 @@ struct FlightIpcEncoder {
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
     compression_context: IpcWriteContext,
-    pool: ArrowDataPool,
 }
 
 impl FlightIpcEncoder {
@@ -772,7 +711,6 @@ impl FlightIpcEncoder {
             data_gen: IpcDataGenerator::default(),
             dictionary_tracker: DictionaryTracker::new(error_on_replacement),
             compression_context: IpcWriteContext::default(),
-            pool: ArrowDataPool::default(),
         }
     }
 
@@ -787,7 +725,6 @@ impl FlightIpcEncoder {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<(impl Iterator<Item = FlightData> + use<>, FlightData)> {
-        self.compression_context.scratch = self.pool.acquire();
         let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
@@ -796,16 +733,7 @@ impl FlightIpcEncoder {
         )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
-
-        let pooled = PooledBuf {
-            data: encoded_batch.arrow_data,
-            pool: self.pool.clone(),
-        };
-        let flight_batch = crate::FlightData {
-            data_header: encoded_batch.ipc_message.into(),
-            data_body: Bytes::from_owner(pooled),
-            ..Default::default()
-        };
+        let flight_batch = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
     }
