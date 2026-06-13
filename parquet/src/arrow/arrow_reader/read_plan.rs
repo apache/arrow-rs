@@ -26,7 +26,7 @@ use crate::arrow::arrow_reader::{
 };
 use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::BooleanBuffer;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
@@ -248,7 +248,7 @@ impl ReadPlanBuilder {
             match limit {
                 Some(limit) if matched_rows + filter.true_count() >= limit => {
                     let needed = limit - matched_rows;
-                    let truncated = truncate_filter_after_n_trues(filter, needed);
+                    let truncated = filter.take_n_true(needed);
                     filters.push(truncated);
                     break;
                 }
@@ -409,35 +409,6 @@ impl LimitedReadPlanBuilder {
     }
 }
 
-/// Produce a new `BooleanArray` of the same length as `filter` in which only
-/// the first `n` `true` positions from `filter` remain `true`; any `true`
-/// positions beyond the first `n` are replaced with `false`.
-///
-/// `filter` must not contain nulls (callers apply [`prep_null_mask_filter`]
-/// first). If `filter` has at most `n` `true` values, a clone is returned.
-fn truncate_filter_after_n_trues(filter: BooleanArray, n: usize) -> BooleanArray {
-    if filter.true_count() <= n {
-        return filter;
-    }
-    let len = filter.len();
-    if n == 0 {
-        return BooleanArray::new(BooleanBuffer::new_unset(len), None);
-    }
-    // `set_indices` scans 64 bits at a time via `trailing_zeros`, so locating
-    // the `n`-th set bit is cheaper than visiting every bit. Everything up to
-    // and including that position is copied verbatim; the rest is zeroed.
-    let values = filter.values();
-    let last_kept = values
-        .set_indices()
-        .nth(n - 1)
-        .expect("n - 1 < true_count, checked above");
-
-    let mut builder = BooleanBufferBuilder::new(len);
-    builder.append_buffer(&values.slice(0, last_kept + 1));
-    builder.append_n(len - last_kept - 1, false);
-    BooleanArray::new(builder.finish(), None)
-}
-
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
@@ -499,37 +470,6 @@ mod tests {
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
-    }
-
-    #[test]
-    fn truncate_filter_after_n_trues_keeps_first_n_matches() {
-        let f = BooleanArray::from(vec![true, false, true, true, false, true, true]);
-        // true positions: 0, 2, 3, 5, 6
-        let t = truncate_filter_after_n_trues(f.clone(), 3);
-        assert_eq!(t.len(), f.len());
-        assert_eq!(t.true_count(), 3);
-        let out: Vec<bool> = (0..t.len()).map(|i| t.value(i)).collect();
-        assert_eq!(
-            out,
-            vec![true, false, true, true, false, false, false],
-            "first three trues should survive, the rest become false"
-        );
-    }
-
-    #[test]
-    fn truncate_filter_after_n_trues_passes_through_when_already_small_enough() {
-        let f = BooleanArray::from(vec![true, false, true, false]);
-        let t = truncate_filter_after_n_trues(f.clone(), 5);
-        assert_eq!(t.len(), f.len());
-        assert_eq!(t.true_count(), 2);
-    }
-
-    #[test]
-    fn truncate_filter_after_n_trues_zero_returns_all_false() {
-        let f = BooleanArray::from(vec![true, true, true]);
-        let t = truncate_filter_after_n_trues(f, 0);
-        assert_eq!(t.len(), 3);
-        assert_eq!(t.true_count(), 0);
     }
 
     #[test]
