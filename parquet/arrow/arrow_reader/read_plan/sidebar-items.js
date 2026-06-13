@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["truncate_filter_after_n_trues"],"struct":["LimitedReadPlanBuilder","PredicateOptions","ReadPlan","ReadPlanBuilder"]};

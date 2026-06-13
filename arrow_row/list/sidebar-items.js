@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["compute_lengths","compute_lengths_fixed_size_list","compute_lengths_list_view","decode","decode_fixed_size_list","decode_list_view","encode","encode_fixed_size_list","encode_list_view","encode_one","list_element_encoded_len"]};

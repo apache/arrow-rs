@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_HEADER_SIZE_HINT"],"fn":["read_header","read_header_info"],"struct":["ReaderBuilder"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_boolean_array","build_decimal_array","build_primitive_array","build_timestamp_array","build_timestamp_array_impl","infer_schema_from_files","parse","parse_bool"],"mod":["records"],"static":["REGEX_SET"],"struct":["BufReader","Decoder","Format","InferredDataType","NullRegex","ReaderBuilder"],"type":["Bounds","Reader"]};
