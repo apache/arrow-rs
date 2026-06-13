@@ -19,8 +19,9 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{
+    RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy, mask_to_selectors,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
@@ -156,6 +157,10 @@ impl ReadPlanBuilder {
                     Some(selection) => selection,
                     None => return RowSelectionStrategy::Selectors,
                 };
+
+                if selection.as_mask().is_some() {
+                    return RowSelectionStrategy::Mask;
+                }
 
                 // total_rows: total number of rows selected / skipped
                 // effective_count: number of non-empty selectors
@@ -302,24 +307,31 @@ impl ReadPlanBuilder {
             row_selection_policy: _,
         } = self;
 
-        let selection = selection.map(|s| s.trim());
-
         let row_selection_cursor = selection
-            .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
-                match selection_strategy {
-                    RowSelectionStrategy::Mask => {
-                        RowSelectionCursor::new_mask_from_selectors(selectors)
-                    }
-                    RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
-                }
-            })
+            .map(|s| build_cursor(s.trim(), selection_strategy))
             .unwrap_or(RowSelectionCursor::new_all());
 
         ReadPlan {
             batch_size,
             row_selection_cursor,
+        }
+    }
+}
+
+/// Lower a [`RowSelection`] to the cursor form requested by the resolved strategy.
+fn build_cursor(selection: RowSelection, strategy: RowSelectionStrategy) -> RowSelectionCursor {
+    match (strategy, selection.into_inner()) {
+        (RowSelectionStrategy::Mask, RowSelectionInner::Mask(mask)) => {
+            RowSelectionCursor::new_mask_from_buffer(mask)
+        }
+        (RowSelectionStrategy::Mask, RowSelectionInner::Selectors(selectors)) => {
+            RowSelectionCursor::new_mask_from_selectors(selectors)
+        }
+        (RowSelectionStrategy::Selectors, RowSelectionInner::Selectors(selectors)) => {
+            RowSelectionCursor::new_selectors(selectors)
+        }
+        (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
+            RowSelectionCursor::new_selectors(mask_to_selectors(&mask))
         }
     }
 }
