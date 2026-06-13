@@ -46,6 +46,9 @@ jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -62,4 +65,4 @@ jobs:
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 4
