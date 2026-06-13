@@ -26,7 +26,7 @@ use arrow::{
     datatypes::SchemaRef,
     ipc::{
         self, reader,
-        writer::{self, CompressionContext},
+        writer::{self, IpcWriteContext},
     },
     record_batch::RecordBatch,
 };
@@ -95,7 +95,7 @@ async fn upload_data(
 
     let mut original_data_iter = original_data.iter().enumerate();
 
-    let mut compression_context = CompressionContext::default();
+    let mut compression_context = IpcWriteContext::default();
 
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
@@ -159,7 +159,7 @@ async fn send_batch(
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
     dictionary_tracker: &mut writer::DictionaryTracker,
-    compression_context: &mut CompressionContext,
+    compression_context: &mut IpcWriteContext,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
 

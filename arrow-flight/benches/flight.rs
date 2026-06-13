@@ -25,7 +25,7 @@ mod common;
 use common::{TYPES, build_batch, start_server};
 
 const ROWS: [usize; 2] = [8 * 1024, 64 * 1024];
-const COLS: [usize; 2] = [1, 8];
+const COLS: [usize; 4] = [1, 4, 8, 16];
 
 fn bench_encode(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
