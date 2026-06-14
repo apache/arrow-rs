@@ -15,6 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Benchmarks the cost of applying `RowSelection` as selector queues versus
+//! boolean masks.
+//!
+//! The broad sweep varies selector length, selection density, run-length
+//! distribution, data type, projected column count, and `Utf8View` payload size.
+//! The shape-focus suite keeps the data shape narrower and varies the maximum
+//! selected-run length (`maxrun`) so the results can show where
+//! `RowSelectionPolicy::Auto` should prefer `Selectors` or `Mask`.
+
 use std::hint;
 use std::sync::Arc;
 
@@ -35,6 +44,8 @@ const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[1, 2, 4, 8, 32];
+// At 80% selectivity, maxrun1 and maxrun2 cannot be represented without
+// zero-length skip runs, so the dense-focused cases start at maxrun4.
 const DENSE_SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[4, 8, 32];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
@@ -235,6 +246,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_shape_focus(c);
 }
 
+/// Focused selector-shape matrix for `Selectors` versus `Mask`.
+///
+/// It fixes the input profile to `int32` and `utf8view`, then varies
+/// selectivity and the requested maximum selected-run length. The benchmark
+/// suffix reports this as `maxrunNN` because the final selected run may be
+/// shorter than the requested maximum.
 fn bench_shape_focus(c: &mut Criterion) {
     let profiles = [
         DataProfile {
