@@ -159,14 +159,14 @@ fn create_string_dictionary_bench_batch(
         true_density,
     )?)
 }
-// commenting out until implementation of RunEndEncoded is complete. See https://github.com/apache/arrow-rs/pull/9936#discussion_r3242936421
-#[allow(dead_code)]
 fn create_ree_bench_batch(
     value_dt: DataType,
     size: usize,
-    null_density: f32,
+    null_pct: Option<u8>,
     true_density: f32,
 ) -> Result<RecordBatch> {
+    const DEFAULT_NULL_PCT: u8 = 10;
+    let null_density = null_pct.unwrap_or(DEFAULT_NULL_PCT) as f32 / 100.0;
     let fields = vec![Field::new(
         "_1",
         DataType::RunEndEncoded(
@@ -506,11 +506,24 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
 
-    //let batch = create_ree_bench_batch(DataType::Utf8, BATCH_SIZE, 0.25, 0.75).unwrap();
-    //batches.push(("string_ree", batch));
+    let batch = create_ree_bench_batch(DataType::Utf8, BATCH_SIZE, None, 0.75).unwrap();
+    batches.push(("string_ree", batch));
 
-    //let batch = create_ree_bench_batch(DataType::Int32, BATCH_SIZE, 0.25, 0.75).unwrap();
-    //batches.push(("int32_ree", batch));
+    let batch = create_ree_bench_batch(DataType::Int32, BATCH_SIZE, None, 0.75).unwrap();
+    batches.push(("int32_ree", batch));
+
+    let batch = create_ree_bench_batch(DataType::Boolean, BATCH_SIZE, None, 0.75).unwrap();
+    batches.push(("bool_ree", batch));
+
+    let batch =
+        create_ree_bench_batch(DataType::FixedSizeBinary(16), BATCH_SIZE, None, 0.75).unwrap();
+    batches.push(("fixed_size_binary_ree", batch));
+
+    let batch = create_ree_bench_batch(DataType::Utf8, BATCH_SIZE, Some(95), 0.75).unwrap();
+    batches.push(("string_ree_95pct_null", batch));
+
+    let batch = create_ree_bench_batch(DataType::Int32, BATCH_SIZE, Some(95), 0.75).unwrap();
+    batches.push(("int32_ree_95pct_null", batch));
 
     let batch = create_float_bench_batch_with_nans(BATCH_SIZE, 0.5).unwrap();
     batches.push(("float_with_nans", batch));

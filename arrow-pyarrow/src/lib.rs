@@ -139,7 +139,9 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
         ));
     }
 
-    let capsule_name = unsafe { capsule_name.unwrap().as_cstr().to_str()? };
+    let capsule_name = unsafe { capsule_name.unwrap().as_cstr() }
+        .to_str()
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     if capsule_name != name {
         return Err(PyValueError::new_err(format!(
             "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'",
