@@ -181,7 +181,38 @@ impl PartialEq for RowSelection {
         match (&self.inner, &other.inner) {
             (RowSelectionInner::Selectors(a), RowSelectionInner::Selectors(b)) => a == b,
             (RowSelectionInner::Mask(a), RowSelectionInner::Mask(b)) => a == b,
-            _ => self.iter().eq(other.iter()),
+            (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors))
+            | (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask)) => {
+                if selectors
+                    .iter()
+                    .try_fold(0usize, |acc, selector| acc.checked_add(selector.row_count))
+                    != Some(mask.len())
+                {
+                    return false;
+                }
+
+                let mut slices = mask.set_slices().peekable();
+                let mut cursor = 0usize;
+
+                for selector in selectors {
+                    let end = cursor + selector.row_count;
+
+                    if selector.skip {
+                        if slices.peek().is_some_and(|(start, _)| *start < end) {
+                            return false;
+                        }
+                    } else {
+                        match slices.next() {
+                            Some((start, slice_end)) if start == cursor && slice_end == end => {}
+                            _ => return false,
+                        }
+                    }
+
+                    cursor = end;
+                }
+
+                slices.next().is_none()
+            }
         }
     }
 }
