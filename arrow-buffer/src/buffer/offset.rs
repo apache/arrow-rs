@@ -356,7 +356,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let original_length = original_buffer.len();
         let buffer_offset = original_buffer.ptr_offset();
 
-        // Remove this once https://github.com/apache/arrow-rs/issues/10117 is resolved
+        // Remove this once https://github.com/apache/arrow-rs/issues/10117 is resolved.
         let into_mutable_buffer_result = if buffer_offset != 0 {
             Err(original_buffer)
         } else {
