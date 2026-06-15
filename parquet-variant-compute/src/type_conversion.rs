@@ -17,28 +17,32 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
+use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::{
-    CastOptions, DecimalCast, parse_string_to_decimal_native, rescale_decimal,
-    single_float_to_decimal,
+    CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default, num_cast,
+    parse_string_to_decimal_native, rescale_decimal, single_bool_to_numeric,
+    single_decimal_to_float_lossy, single_float_to_decimal,
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
 };
 use arrow::error::{ArrowError, Result};
-use chrono::Timelike;
+use chrono::{NaiveDate, NaiveTime, Timelike};
+use half::f16;
+use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
-    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
 }
 
 /// Extension trait for Arrow timestamp types that can extract their native value from a Variant
 /// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
 /// timestamp type -- the `NTZ` param here.
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
-    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
 }
 
 /// Cast a single `Variant` value with safe/strict semantics.
@@ -64,10 +68,13 @@ pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
-    ($arrow_type:ty, $variant_method:ident $(, $cast_fn:expr)?) => {
+    ($arrow_type:ty, $shred_method:ident, $get_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
-            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                let value = variant.$variant_method();
+            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
+                let value = match shred {
+                    true => variant.$shred_method(),
+                    false => $get_method(variant),
+                };
                 $( let value = value.and_then($cast_fn); )?
                 value
             }
@@ -78,53 +85,166 @@ macro_rules! impl_primitive_from_variant {
 macro_rules! impl_timestamp_from_variant {
     ($timestamp_type:ty, $variant_method:ident, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
         impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
-            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+            #[allow(unused)]
+            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
                 variant.$variant_method().and_then($cast_fn)
             }
         }
     };
 }
 
-impl_primitive_from_variant!(datatypes::Int32Type, as_int32);
-impl_primitive_from_variant!(datatypes::Int16Type, as_int16);
-impl_primitive_from_variant!(datatypes::Int8Type, as_int8);
-impl_primitive_from_variant!(datatypes::Int64Type, as_int64);
-impl_primitive_from_variant!(datatypes::UInt8Type, as_u8);
-impl_primitive_from_variant!(datatypes::UInt16Type, as_u16);
-impl_primitive_from_variant!(datatypes::UInt32Type, as_u32);
-impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
-impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
-impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
-impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
-impl_primitive_from_variant!(datatypes::Date32Type, as_naive_date, |v| {
+enum NumericKind {
+    Integer,
+    Float,
+}
+
+trait DecimalCastTarget: NumCast + Default {
+    const KIND: NumericKind;
+}
+
+macro_rules! impl_decimal_cast_target {
+    ($raw_type: ident, $target_kind:expr) => {
+        impl DecimalCastTarget for $raw_type {
+            const KIND: NumericKind = $target_kind;
+        }
+    };
+}
+
+impl_decimal_cast_target!(i8, NumericKind::Integer);
+impl_decimal_cast_target!(i16, NumericKind::Integer);
+impl_decimal_cast_target!(i32, NumericKind::Integer);
+impl_decimal_cast_target!(i64, NumericKind::Integer);
+impl_decimal_cast_target!(u8, NumericKind::Integer);
+impl_decimal_cast_target!(u16, NumericKind::Integer);
+impl_decimal_cast_target!(u32, NumericKind::Integer);
+impl_decimal_cast_target!(u64, NumericKind::Integer);
+impl_decimal_cast_target!(f16, NumericKind::Float);
+impl_decimal_cast_target!(f32, NumericKind::Float);
+impl_decimal_cast_target!(f64, NumericKind::Float);
+
+/// Converts a boolean or numeric variant(integers, floating-point, and decimals)
+/// to the specified numeric type `T`.
+///
+/// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
+/// the conversion succeeds, `None` if the variant can't be casted to type `T`.
+fn as_num<T>(variant: &Variant) -> Option<T>
+where
+    T: DecimalCastTarget,
+{
+    match *variant {
+        Variant::BooleanFalse => single_bool_to_numeric(false),
+        Variant::BooleanTrue => single_bool_to_numeric(true),
+        Variant::Int8(i) => num_cast(i),
+        Variant::Int16(i) => num_cast(i),
+        Variant::Int32(i) => num_cast(i),
+        Variant::Int64(i) => num_cast(i),
+        Variant::Float(f) => num_cast(f),
+        Variant::Double(d) => num_cast(d),
+        Variant::Decimal4(d) => {
+            cast_decimal_to_num::<Decimal32Type, T, _>(d.integer(), d.scale(), |x| x as f64)
+        }
+        Variant::Decimal8(d) => {
+            cast_decimal_to_num::<Decimal64Type, T, _>(d.integer(), d.scale(), |x| x as f64)
+        }
+        Variant::Decimal16(d) => {
+            cast_decimal_to_num::<Decimal128Type, T, _>(d.integer(), d.scale(), |x| x as f64)
+        }
+        _ => None,
+    }
+}
+
+fn cast_decimal_to_num<D, T, F>(raw: D::Native, scale: u8, as_float: F) -> Option<T>
+where
+    D: DecimalType,
+    D::Native: NumCast + ArrowNativeTypeOp,
+    T: DecimalCastTarget,
+    F: Fn(D::Native) -> f64,
+{
+    let base: D::Native = NumCast::from(10)?;
+
+    let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
+    match T::KIND {
+        NumericKind::Integer => raw
+            .div_checked(div)
+            .ok()
+            .and_then(<T as NumCast>::from::<D::Native>),
+        NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
+            &as_float,
+            raw,
+            <i32 as From<u8>>::from(scale),
+        )),
+    }
+}
+
+fn cast_naive_date(value: &Variant<'_, '_>) -> Option<NaiveDate> {
+    value.as_naive_date()
+}
+
+fn cast_time_utc(value: &Variant<'_, '_>) -> Option<NaiveTime> {
+    value.as_time_utc()
+}
+
+impl_primitive_from_variant!(datatypes::Int32Type, as_int32, as_num);
+impl_primitive_from_variant!(datatypes::Int16Type, as_int16, as_num);
+impl_primitive_from_variant!(datatypes::Int8Type, as_int8, as_num);
+impl_primitive_from_variant!(datatypes::Int64Type, as_int64, as_num);
+impl_primitive_from_variant!(datatypes::UInt8Type, as_u8, as_num);
+impl_primitive_from_variant!(datatypes::UInt16Type, as_u16, as_num);
+impl_primitive_from_variant!(datatypes::UInt32Type, as_u32, as_num);
+impl_primitive_from_variant!(datatypes::UInt64Type, as_u64, as_num);
+impl_primitive_from_variant!(datatypes::Float16Type, as_f16, as_num);
+impl_primitive_from_variant!(datatypes::Float32Type, as_f32, as_num);
+impl_primitive_from_variant!(datatypes::Float64Type, as_f64, as_num);
+impl_primitive_from_variant!(datatypes::Date32Type, as_naive_date, cast_naive_date, |v| {
     Some(datatypes::Date32Type::from_naive_date(v))
 });
-impl_primitive_from_variant!(datatypes::Date64Type, as_naive_date, |v| {
+impl_primitive_from_variant!(datatypes::Date64Type, as_naive_date, cast_naive_date, |v| {
     Some(datatypes::Date64Type::from_naive_date(v))
 });
-impl_primitive_from_variant!(datatypes::Time32SecondType, as_time_utc, |v| {
-    // Return None if there are leftover nanoseconds
-    if v.nanosecond() != 0 {
-        None
-    } else {
-        Some(v.num_seconds_from_midnight() as i32)
+impl_primitive_from_variant!(
+    datatypes::Time32SecondType,
+    as_time_utc,
+    cast_time_utc,
+    |v| {
+        // Return None if there are leftover nanoseconds
+        if v.nanosecond() != 0 {
+            None
+        } else {
+            Some(v.num_seconds_from_midnight() as i32)
+        }
     }
-});
-impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| {
-    // Return None if there are leftover microseconds
-    if v.nanosecond() % 1_000_000 != 0 {
-        None
-    } else {
-        Some((v.num_seconds_from_midnight() * 1_000) as i32 + (v.nanosecond() / 1_000_000) as i32)
+);
+impl_primitive_from_variant!(
+    datatypes::Time32MillisecondType,
+    as_time_utc,
+    cast_time_utc,
+    |v| {
+        // Return None if there are leftover microseconds
+        if v.nanosecond() % 1_000_000 != 0 {
+            None
+        } else {
+            Some(
+                (v.num_seconds_from_midnight() * 1_000) as i32
+                    + (v.nanosecond() / 1_000_000) as i32,
+            )
+        }
     }
-});
-impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
-    Some(v.num_seconds_from_midnight() as i64 * 1_000_000 + v.nanosecond() as i64 / 1_000)
-});
-impl_primitive_from_variant!(datatypes::Time64NanosecondType, as_time_utc, |v| {
-    // convert micro to nano seconds
-    Some(v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64)
-});
+);
+impl_primitive_from_variant!(
+    datatypes::Time64MicrosecondType,
+    as_time_utc,
+    cast_time_utc,
+    |v| { Some(v.num_seconds_from_midnight() as i64 * 1_000_000 + v.nanosecond() as i64 / 1_000) }
+);
+impl_primitive_from_variant!(
+    datatypes::Time64NanosecondType,
+    as_time_utc,
+    cast_time_utc,
+    |v| {
+        // convert micro to nano seconds
+        Some(v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64)
+    }
+);
 impl_timestamp_from_variant!(
     datatypes::TimestampSecondType,
     as_timestamp_ntz_nanos,
@@ -218,6 +338,7 @@ pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
     precision: u8,
     scale: i8,
+    shred: bool,
 ) -> Option<O::Native>
 where
     O: DecimalType,
@@ -225,64 +346,88 @@ where
 {
     let mul = 10_f64.powi(scale as i32);
 
-    match variant {
-        Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
+    match (variant, shred) {
+        (Variant::Int8(i), false) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        Variant::Int16(i) => rescale_decimal::<Decimal32Type, O>(
+        (Variant::Int16(i), false) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        Variant::Int32(i) => rescale_decimal::<Decimal32Type, O>(
+        (Variant::Int32(i), false) => rescale_decimal::<Decimal32Type, O>(
             *i,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        Variant::Int64(i) => rescale_decimal::<Decimal64Type, O>(
+        (Variant::Int64(i), false) => rescale_decimal::<Decimal64Type, O>(
             *i,
             VariantDecimal8::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        Variant::Float(f) => single_float_to_decimal::<O>(f64::from(*f), mul),
-        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
+        (Variant::Float(f), false) => {
+            single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul)
+        }
+        (Variant::Double(f), false) => single_float_to_decimal::<O>(*f, mul),
         // arrow-cast only support cast string to decimal with scale >=0 for now
         // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
-        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
-        Variant::ShortString(v) if scale >= 0 => {
+        (Variant::String(v), false) if scale >= 0 => {
             parse_string_to_decimal_native::<O>(v, scale as _).ok()
         }
-        Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
+        (Variant::ShortString(v), false) if scale >= 0 => {
+            parse_string_to_decimal_native::<O>(v, scale as _).ok()
+        }
+        (Variant::Decimal4(d), _) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
         ),
-        Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
+        (Variant::Decimal8(d), _) => rescale_decimal::<Decimal64Type, O>(
             d.integer(),
             VariantDecimal8::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
         ),
-        Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
+        (Variant::Decimal16(d), _) => rescale_decimal::<Decimal128Type, O>(
             d.integer(),
             VariantDecimal16::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
         ),
+        _ => None,
+    }
+}
+
+pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Option<bool> {
+    if shred {
+        return variant.as_boolean();
+    }
+
+    match variant {
+        Variant::BooleanTrue => Some(true),
+        Variant::BooleanFalse => Some(false),
+        Variant::Int8(i) => Some(cast_num_to_bool(*i)),
+        Variant::Int16(i) => Some(cast_num_to_bool(*i)),
+        Variant::Int32(i) => Some(cast_num_to_bool(*i)),
+        Variant::Int64(i) => Some(cast_num_to_bool(*i)),
+        Variant::Float(f) => Some(cast_num_to_bool(*f)),
+        Variant::Double(d) => Some(cast_num_to_bool(*d)),
+        Variant::ShortString(s) => cast_single_string_to_boolean_default(s.as_str()),
+        Variant::String(s) => cast_single_string_to_boolean_default(s),
         _ => None,
     }
 }
