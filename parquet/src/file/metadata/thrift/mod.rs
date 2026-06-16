@@ -1591,11 +1591,13 @@ impl WriteThrift for RowGroupMetaData {
         if let Some(file_offset) = self.file_offset() {
             last_field_id = file_offset.write_thrift_field(writer, 5, last_field_id)?;
         }
-        // this is optional, but we'll always write it (if it will fit in i16)
+        // this is optional, but we'll always write it
+        last_field_id = self
+            .compressed_size()
+            .write_thrift_field(writer, 6, last_field_id)?;
+
+        // write ordinal if it will fit in an i16
         if writer.write_row_group_ordinal() {
-            last_field_id = self
-                .compressed_size()
-                .write_thrift_field(writer, 6, last_field_id)?;
             if let Some(ordinal) = self.ordinal() {
                 if let Ok(ordinal) = i16::try_from(ordinal) {
                     ordinal.write_thrift_field(writer, 7, last_field_id)?;
