@@ -2267,6 +2267,42 @@ mod tests {
     }
 
     #[test]
+    fn test_32k_rowgroups() {
+        let message_type = "
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .set_max_row_group_row_count(Some(1))
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+
+        // Create 32k + 1 empty rowgroups. No row group ordinals should be written (but we can't
+        // test for that).
+        for _ in 0..0x8001 {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        // Parse the written metadata and check that ordinals were replaced.
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata = reader.metadata();
+
+        for (i, rg) in metadata.row_groups().iter().enumerate() {
+            assert_eq!(i as i32, rg.ordinal().unwrap());
+        }
+    }
+
+    #[test]
     fn test_size_statistics_with_repetition_and_nulls() {
         let message_type = "
             message test_schema {
