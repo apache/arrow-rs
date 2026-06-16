@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmark for evaluating row filters and projections on a Parquet file.
+//! Focused benchmark for Parquet reader materialization policy decisions.
+//!
+#![allow(dead_code)]
 //!
 //! # Background:
 //!
@@ -31,7 +33,8 @@
 //! the clustering of results (which affects the efficiency of the filter mask),
 //! and whether the same column is used for both filtering and projection.
 //!
-//! This benchmark helps measure the performance of these operations.
+//! This benchmark isolates the reader policy choice between full post-filtering
+//! and row-filter pushdown with `Auto`, forced `Selectors`, and forced `Mask`.
 //!
 //! [Efficient Filter Pushdown in Parquet]: https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/
 //!
@@ -42,18 +45,16 @@
 //! - `utf8View`: ClickBench-like string values with sparse sentinel values.
 //! - `ts`: sequential timestamps used for clustered filters.
 //!
-//! The benchmark groups cover a few distinct reader-level questions:
-//! - `arrow_reader_row_filter`: baseline filter/projection combinations.
-//! - `arrow_reader_row_filter_{async_,}strategy_matrix`: full post-filtering
-//!   versus row-filter pushdown with `Auto`, forced `Selectors`, and forced
-//!   `Mask`.
-//! - `arrow_reader_materialization_policy`: focused synthetic shapes for the
-//!   `Auto` materialization policy, split into a separate bench target to keep
-//!   baseline row-filter benchmarks small.
-//! - `arrow_reader_projection_scan_focus`: projection-only scans that do not
-//!   construct a `RowFilter`.
-//! - `arrow_reader_row_filter_async_nested_post_filter_focus`: nested root output
-//!   with a separate predicate column.
+//! The benchmark cases are organized by reader-level axes: selection density
+//! and clustering, predicate/output overlap, deferred output payload, predicate
+//! cost and order, count/filter-only outputs, and small-file behavior.
+//!
+//! Full TPC-DS runs can show query-level movement that does not reproduce in
+//! isolated reader probes. Keep these cases focused on stable reader-level
+//! risks: moderate projected predicates with cheap deferred output can favor
+//! post-filtering, while clustered selections, variable-width deferred output,
+//! complex OR predicates, and sparse scalar prefixes should not be swept into
+//! that shortcut without their own evidence.
 
 use arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
@@ -65,7 +66,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
 use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
+};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
@@ -262,7 +265,6 @@ fn write_nested_parquet_file_with_rows(total_rows: usize, row_group_size: usize)
 
 /// ProjectionCase defines the projection mode for the benchmark:
 /// either projecting all columns or excluding the column that is used for filtering.
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum ProjectionCase {
     AllColumns,
@@ -336,7 +338,6 @@ impl std::fmt::Display for AsyncStrategy {
 
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FilterType {
     /// "Point Lookup": selects a single row
@@ -1265,6 +1266,378 @@ fn benchmark_async_strategy_matrix(c: &mut Criterion) {
     }
 }
 
+/// A focused async-only matrix that isolates the cases most relevant to the
+/// row-filter Auto policy. This is intentionally narrower than
+/// [`benchmark_async_strategy_matrix`]: it keeps the benchmark output focused
+/// on cases where later PRs may teach `Auto` to switch execution modes or
+/// explicitly keep predicate pushdown.
+///
+/// The cases use structure-oriented names. Comments on [`FilterType`] keep the
+/// ClickBench and TPC-DS provenance, but these are synthetic reader shapes, not
+/// end-to-end query benchmarks.
+///
+/// Coverage is organized by reader-level dimensions instead of individual
+/// queries:
+/// - selection shape: point lookup, sparse fragmented, moderate fragmented,
+///   dense fragmented, and clustered ranges.
+/// - output relationship: filter-only, count-only, deferred fixed-width,
+///   deferred variable-width, and projected predicate columns.
+/// - predicate shape: single scalar, scalar conjunctions, scalar plus
+///   variable-width predicates, mixed OR predicates, and dynamic-filter-like
+///   projected predicates.
+/// - policy boundary: strategy rows compare full post-filtering with `Auto`,
+///   forced selectors, and forced masks for every shape.
+///
+/// Individual [`FilterType`] variants include shaded-row diagrams for the
+/// representative selection shapes.
+fn benchmark_async_auto_policy_focus(c: &mut Criterion) {
+    const SMALL_TOTAL_ROWS: usize = 20_000;
+    const SMALL_ROW_GROUP_SIZE: usize = 5_000;
+
+    let parquet_file = Bytes::from(write_parquet_file());
+    let small_parquet_file = Bytes::from(write_parquet_file_with_rows(
+        SMALL_TOTAL_ROWS,
+        SMALL_ROW_GROUP_SIZE,
+    ));
+    let mut cases = Vec::new();
+    push_baseline_selectivity_cases(&mut cases, &parquet_file);
+    push_filter_only_cases(&mut cases, &parquet_file, &small_parquet_file);
+    push_deferred_output_cases(&mut cases, &parquet_file, &small_parquet_file);
+    push_predicate_cost_cases(&mut cases, &parquet_file);
+    push_projected_predicate_cases(&mut cases, &parquet_file);
+
+    let strategies = [
+        AsyncStrategy::FullPostFilter,
+        AsyncStrategy::PushdownAuto,
+        AsyncStrategy::PushdownMask,
+        AsyncStrategy::PushdownSelectors,
+    ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("arrow_reader_row_filter_async_auto_policy_focus");
+
+    for case in cases {
+        benchmark_async_focus_case(&mut group, &rt, case, &strategies);
+    }
+}
+
+fn push_focus_cases(
+    cases: &mut Vec<AsyncFocusCase>,
+    parquet_file: &Bytes,
+    specs: &[(&'static str, FilterType, ProjectionCase)],
+) {
+    cases.extend(
+        specs
+            .iter()
+            .copied()
+            .map(|(case_name, filter_type, projection_case)| {
+                AsyncFocusCase::new(
+                    case_name,
+                    parquet_file.clone(),
+                    filter_type,
+                    projection_case,
+                )
+            }),
+    );
+}
+
+fn push_baseline_selectivity_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "utf8_non_empty",
+                FilterType::Utf8ViewNonEmpty,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "utf8_non_empty",
+                FilterType::Utf8ViewNonEmpty,
+                ProjectionCase::AllColumns,
+            ),
+            (
+                "high_selectivity_float64",
+                FilterType::UnselectiveUnclustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "high_selectivity_ts_clustered",
+                FilterType::UnselectiveClustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "fragmented_int64_10pct",
+                FilterType::ModeratelySelectiveUnclustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "selective_float64_1pct",
+                FilterType::SelectiveUnclustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+        ],
+    );
+}
+
+fn push_filter_only_cases(
+    cases: &mut Vec<AsyncFocusCase>,
+    parquet_file: &Bytes,
+    small_parquet_file: &Bytes,
+) {
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "point_lookup_filter_only",
+                FilterType::PointLookup,
+                ProjectionCase::FilterColumnsOnly,
+            ),
+            (
+                "projected_predicate_8pct_filter_only",
+                FilterType::ProjectedPredicate8Pct,
+                ProjectionCase::FilterColumnsOnly,
+            ),
+            (
+                "sparse_scalar_count_only",
+                FilterType::SparseScalarFixedOutput,
+                ProjectionCase::CountOnly,
+            ),
+            (
+                "quantity_range_filter_columns_only",
+                FilterType::QuantityRangePredicate,
+                ProjectionCase::FilterColumnsOnly,
+            ),
+        ],
+    );
+    push_focus_cases(
+        cases,
+        small_parquet_file,
+        &[(
+            "small_fragmented_scalar_filter_only",
+            FilterType::ModeratelySelectiveUnclustered,
+            ProjectionCase::FilterColumnsOnly,
+        )],
+    );
+}
+
+fn push_deferred_output_cases(
+    cases: &mut Vec<AsyncFocusCase>,
+    parquet_file: &Bytes,
+    small_parquet_file: &Bytes,
+) {
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "scalar_prefix_utf8_output",
+                FilterType::ScalarPrefixUtf8Output,
+                ProjectionCase::Utf8Only,
+            ),
+            (
+                "point_lookup_deferred_fixed_output",
+                FilterType::PointLookup,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "sparse_scalar_fixed_output",
+                FilterType::SparseScalarFixedOutput,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "quantity_range_numeric_output",
+                FilterType::QuantityRangePredicate,
+                ProjectionCase::Float64Only,
+            ),
+        ],
+    );
+    push_focus_cases(
+        cases,
+        small_parquet_file,
+        &[(
+            "small_scalar_prefix_utf8_output",
+            FilterType::ScalarPrefixUtf8Output,
+            ProjectionCase::Utf8Only,
+        )],
+    );
+}
+
+fn push_predicate_cost_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "fixed_then_varwidth_predicates",
+                FilterType::FixedThenVarWidthPredicates,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "varwidth_then_fixed_predicates",
+                FilterType::VarWidthThenFixedPredicates,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "multi_scalar_projected_key",
+                FilterType::MultiScalarProjectedKey,
+                ProjectionCase::Float64AndTs,
+            ),
+            (
+                "complex_or_mixed_predicates",
+                FilterType::ComplexOrMixedPredicates,
+                ProjectionCase::Float64Only,
+            ),
+        ],
+    );
+}
+
+fn push_projected_predicate_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
+    // Projected-predicate shapes. The predicate column is also projected, so
+    // pushdown must not assume the predicate decode is purely overhead.
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "projected_dynamic_filters",
+                FilterType::ProjectedDynamicFilters,
+                ProjectionCase::FixedColumns,
+            ),
+            (
+                "sparse_projected_predicates_fixed_output",
+                FilterType::SparseProjectedPredicatesFixedOutput,
+                ProjectionCase::FixedColumns,
+            ),
+        ],
+    );
+
+    push_projected_predicate_sweep(cases, parquet_file);
+    push_clustered_projected_predicate_cases(cases, parquet_file);
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "sparse_projected_fact_scan",
+                FilterType::SparseProjectedFactScan,
+                ProjectionCase::FixedColumns,
+            ),
+            (
+                "sparse_utf8_projected_predicate",
+                FilterType::Utf8ViewMissing,
+                ProjectionCase::AllColumns,
+            ),
+        ],
+    );
+}
+
+fn push_projected_predicate_sweep(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
+    // The fixed-output sweep anchors the post-filter shortcut across
+    // fragmented selectivity. Variable-width guardrails make the deferred-output
+    // cost boundary explicit without expanding the full Cartesian product.
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "projected_predicate_1pct_fixed_output",
+                FilterType::ProjectedPredicate1Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_5pct_fixed_output",
+                FilterType::ProjectedPredicate5Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_8pct_fixed_output",
+                FilterType::ProjectedPredicate8Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_10pct_fixed_output",
+                FilterType::ProjectedPredicate10Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_20pct_fixed_output",
+                FilterType::ProjectedPredicate20Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_30pct_fixed_output",
+                FilterType::ProjectedPredicate30Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_40pct_fixed_output",
+                FilterType::ProjectedPredicate40Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_50pct_fixed_output",
+                FilterType::ProjectedPredicate50Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_1pct_varwidth_output",
+                FilterType::ProjectedPredicate1Pct,
+                ProjectionCase::Int64AndUtf8,
+            ),
+            (
+                "projected_predicate_8pct_varwidth_output",
+                FilterType::ProjectedPredicate8Pct,
+                ProjectionCase::Int64AndUtf8,
+            ),
+            (
+                "projected_predicate_20pct_varwidth_output",
+                FilterType::ProjectedPredicate20Pct,
+                ProjectionCase::Int64AndUtf8,
+            ),
+            (
+                "projected_predicate_40pct_varwidth_output",
+                FilterType::ProjectedPredicate40Pct,
+                ProjectionCase::Int64AndUtf8,
+            ),
+        ],
+    );
+}
+
+fn push_clustered_projected_predicate_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
+    push_focus_cases(
+        cases,
+        parquet_file,
+        &[
+            (
+                "clustered_ts_8pct_fixed_output",
+                FilterType::ClusteredTs8PctProjectedPredicate,
+                ProjectionCase::Float64AndTs,
+            ),
+            (
+                "clustered_ts_8pct_varwidth_output",
+                FilterType::ClusteredTs8PctProjectedPredicate,
+                ProjectionCase::TsAndUtf8,
+            ),
+            (
+                "clustered_ts_20pct_fixed_output",
+                FilterType::ClusteredTs20PctProjectedPredicate,
+                ProjectionCase::Float64AndTs,
+            ),
+            (
+                "clustered_ts_20pct_varwidth_output",
+                FilterType::ClusteredTs20PctProjectedPredicate,
+                ProjectionCase::TsAndUtf8,
+            ),
+        ],
+    );
+}
+
 /// Isolate projected scans that do not construct a [`RowFilter`].
 ///
 /// This tracks the reader-level shape seen in TPC-DS Q83 return-table scans:
@@ -1320,6 +1693,152 @@ fn benchmark_projection_scan_focus(c: &mut Criterion) {
             benchmark_sync_reader_projected(reader, projection_mask);
         });
     });
+}
+
+struct AsyncFocusCase {
+    case_name: &'static str,
+    parquet_file: Bytes,
+    filter_type: FilterType,
+    projection_case: ProjectionCase,
+}
+
+impl AsyncFocusCase {
+    fn new(
+        case_name: &'static str,
+        parquet_file: Bytes,
+        filter_type: FilterType,
+        projection_case: ProjectionCase,
+    ) -> Self {
+        Self {
+            case_name,
+            parquet_file,
+            filter_type,
+            projection_case,
+        }
+    }
+}
+
+fn benchmark_async_focus_case(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    rt: &tokio::runtime::Runtime,
+    case: AsyncFocusCase,
+    strategies: &[AsyncStrategy],
+) {
+    let AsyncFocusCase {
+        case_name,
+        parquet_file,
+        filter_type,
+        projection_case,
+    } = case;
+
+    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+    let metadata = Arc::clone(reader.metadata());
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let output_projection = output_projection_for(filter_type, &projection_case);
+    let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
+    let output_column_names = projection_names(&output_projection);
+    let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
+    let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
+    let pred_mask = ProjectionMask::roots(
+        schema_descr,
+        filter_type.filter_projection().iter().copied(),
+    );
+    let fixed_pred_mask = ProjectionMask::roots(schema_descr, [0]);
+    let varwidth_pred_mask = ProjectionMask::roots(schema_descr, [2]);
+    let sparse_int64_pred_mask = ProjectionMask::roots(schema_descr, [0]);
+    let sparse_ts_pred_mask = ProjectionMask::roots(schema_descr, [3]);
+    let scalar_float64_pred_mask = ProjectionMask::roots(schema_descr, [1]);
+
+    for strategy in strategies.iter().copied() {
+        let bench_id = BenchmarkId::new(
+            format!("{case_name}/{projection_case}"),
+            strategy.to_string(),
+        );
+        let rt_captured = rt.handle().clone();
+
+        group.bench_function(bench_id, |b| {
+            b.iter(|| {
+                let reader = reader.clone();
+                let pred_mask = pred_mask.clone();
+                let fixed_pred_mask = fixed_pred_mask.clone();
+                let varwidth_pred_mask = varwidth_pred_mask.clone();
+                let sparse_int64_pred_mask = sparse_int64_pred_mask.clone();
+                let sparse_ts_pred_mask = sparse_ts_pred_mask.clone();
+                let scalar_float64_pred_mask = scalar_float64_pred_mask.clone();
+                let projection_mask = projection_mask.clone();
+                let read_projection_mask = read_projection_mask.clone();
+                let output_column_names = output_column_names.clone();
+
+                rt_captured.block_on(async {
+                    match strategy {
+                        AsyncStrategy::FullPostFilter => {
+                            benchmark_async_reader_post_filter(
+                                reader,
+                                read_projection_mask,
+                                output_column_names,
+                                filter_type,
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownAuto => {
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                fixed_pred_mask,
+                                varwidth_pred_mask,
+                                sparse_int64_pred_mask,
+                                sparse_ts_pred_mask,
+                                scalar_float64_pred_mask,
+                            );
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::default(),
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownSelectors => {
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                fixed_pred_mask,
+                                varwidth_pred_mask,
+                                sparse_int64_pred_mask,
+                                sparse_ts_pred_mask,
+                                scalar_float64_pred_mask,
+                            );
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::Selectors,
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownMask => {
+                            let row_filter = row_filter_for_focus_case(
+                                filter_type,
+                                pred_mask,
+                                fixed_pred_mask,
+                                varwidth_pred_mask,
+                                sparse_int64_pred_mask,
+                                sparse_ts_pred_mask,
+                                scalar_float64_pred_mask,
+                            );
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::Mask,
+                            )
+                            .await
+                        }
+                    }
+                })
+            });
+        });
+    }
 }
 
 fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCase) -> Vec<usize> {
@@ -1393,6 +1912,84 @@ pub(crate) fn post_filter_projected_num_rows(
 fn row_filter_for(filter_type: FilterType, pred_mask: ProjectionMask) -> RowFilter {
     let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
     RowFilter::new(vec![Box::new(filter)])
+}
+
+fn row_filter_for_focus_case(
+    filter_type: FilterType,
+    pred_mask: ProjectionMask,
+    fixed_pred_mask: ProjectionMask,
+    varwidth_pred_mask: ProjectionMask,
+    sparse_int64_pred_mask: ProjectionMask,
+    sparse_ts_pred_mask: ProjectionMask,
+    scalar_float64_pred_mask: ProjectionMask,
+) -> RowFilter {
+    match filter_type {
+        FilterType::FixedThenVarWidthPredicates | FilterType::VarWidthThenFixedPredicates => {
+            let int64_filter = ArrowPredicateFn::new(fixed_pred_mask, move |batch: RecordBatch| {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                eq(int64, &Int64Array::new_scalar(9999))
+            });
+            let utf8_filter =
+                ArrowPredicateFn::new(varwidth_pred_mask, move |batch: RecordBatch| {
+                    let utf8 = batch.column(batch.schema().index_of("utf8View")?);
+                    neq(utf8, &StringViewArray::new_scalar(""))
+                });
+
+            match filter_type {
+                FilterType::FixedThenVarWidthPredicates => {
+                    RowFilter::new(vec![Box::new(int64_filter), Box::new(utf8_filter)])
+                }
+                FilterType::VarWidthThenFixedPredicates => {
+                    RowFilter::new(vec![Box::new(utf8_filter), Box::new(int64_filter)])
+                }
+                _ => unreachable!(),
+            }
+        }
+        FilterType::MultiScalarProjectedKey => {
+            let int64_filter =
+                ArrowPredicateFn::new(sparse_int64_pred_mask, move |batch: RecordBatch| {
+                    let int64 = batch.column(batch.schema().index_of("int64")?);
+                    eq(int64, &Int64Array::new_scalar(62))
+                });
+            let float64_filter =
+                ArrowPredicateFn::new(scalar_float64_pred_mask, move |batch: RecordBatch| {
+                    let float64 = batch.column(batch.schema().index_of("float64")?);
+                    gt(float64, &Float64Array::new_scalar(10.0))
+                });
+            let ts_filter =
+                ArrowPredicateFn::new(sparse_ts_pred_mask, move |batch: RecordBatch| {
+                    let ts = batch.column(batch.schema().index_of("ts")?);
+                    lt(ts, &TimestampMillisecondArray::new_scalar(9000))
+                });
+
+            RowFilter::new(vec![
+                Box::new(int64_filter),
+                Box::new(float64_filter),
+                Box::new(ts_filter),
+            ])
+        }
+        FilterType::SparseScalarFixedOutput
+        | FilterType::ProjectedDynamicFilters
+        | FilterType::SparseProjectedPredicatesFixedOutput => {
+            let int64_filter =
+                ArrowPredicateFn::new(sparse_int64_pred_mask, move |batch: RecordBatch| {
+                    let int64 = batch.column(batch.schema().index_of("int64")?);
+                    let scalar = match filter_type {
+                        FilterType::ProjectedDynamicFilters => 12,
+                        _ => 8,
+                    };
+                    lt(int64, &Int64Array::new_scalar(scalar))
+                });
+            let ts_filter =
+                ArrowPredicateFn::new(sparse_ts_pred_mask, move |batch: RecordBatch| {
+                    let ts = batch.column(batch.schema().index_of("ts")?);
+                    lt(ts, &TimestampMillisecondArray::new_scalar(9000))
+                });
+
+            RowFilter::new(vec![Box::new(int64_filter), Box::new(ts_filter)])
+        }
+        _ => row_filter_for(filter_type, pred_mask),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1833,13 +2430,5 @@ fn benchmark_async_nested_post_filter_focus(c: &mut Criterion) {
     }
 }
 
-criterion_group!(
-    benches,
-    benchmark_filters_and_projections,
-    benchmark_sync_strategy_matrix,
-    benchmark_async_strategy_matrix,
-    benchmark_projection_scan_focus,
-    benchmark_filters_with_limit,
-    benchmark_async_nested_post_filter_focus,
-);
+criterion_group!(benches, benchmark_async_auto_policy_focus,);
 criterion_main!(benches);
