@@ -435,23 +435,6 @@ impl VariantArray {
         self.shredding_state.typed_value_column()
     }
 
-    /// Return the [`FieldRef`] of the `metadata` column of the [`StructArray`]
-    pub fn metadata_field(&self) -> &FieldRef {
-        self.inner
-            .field_by_name("metadata")
-            .expect("VariantArray always has a metadata field")
-    }
-
-    /// Return the [`FieldRef`] of the `value` column of the [`StructArray`], if present
-    pub fn value_field(&self) -> Option<&FieldRef> {
-        self.inner.field_by_name("value")
-    }
-
-    /// Return the [`FieldRef`] of the `typed_value` column of the [`StructArray`], if present
-    pub fn typed_value_field(&self) -> Option<&FieldRef> {
-        self.inner.field_by_name("typed_value")
-    }
-
     /// Return a field to represent this VariantArray in a `Schema` with
     /// a particular name
     pub fn field(&self, name: impl Into<String>) -> Field {
@@ -713,16 +696,6 @@ impl ShreddedVariantFieldArray {
     /// Return a reference to the `typed_value` column of the [`StructArray`], if present
     pub fn typed_value_column(&self) -> Option<&ArrayRef> {
         self.shredding_state.typed_value_column()
-    }
-
-    /// Return the [`FieldRef`] of the `value` column of the [`StructArray`], if present
-    pub fn value_field(&self) -> Option<&FieldRef> {
-        self.inner.field_by_name("value")
-    }
-
-    /// Return the [`FieldRef`] of the `typed_value` column of the [`StructArray`], if present
-    pub fn typed_value_field(&self) -> Option<&FieldRef> {
-        self.inner.field_by_name("typed_value")
     }
 
     /// Returns a reference to the underlying [`StructArray`].
@@ -1283,7 +1256,6 @@ mod test {
         LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-    use arrow_schema::extension::Uuid;
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
@@ -1586,42 +1558,6 @@ mod test {
                 typed_value.data_type(),
             );
         }
-    }
-
-    #[test]
-    fn field_apis_return_inner_struct_fields() {
-        let typed_value = make_int32_array();
-        let input = make_variant_struct_with_typed_value(typed_value.clone());
-        let variant_array = VariantArray::try_new(&input).unwrap();
-
-        assert_eq!(variant_array.metadata_field().name(), "metadata");
-        assert!(variant_array.value_field().is_none());
-
-        let typed_value_field = variant_array.typed_value_field().unwrap();
-        assert_eq!(typed_value_field.name(), "typed_value");
-        assert_eq!(typed_value_field.data_type(), typed_value.data_type());
-        assert_eq!(
-            typed_value_field.data_type(),
-            variant_array.typed_value_column().unwrap().data_type(),
-        );
-    }
-
-    #[test]
-    fn field_apis_preserve_extension_type() {
-        // Built directly, not via `from_parts`, which would drop the extension type.
-        let metadata = Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]));
-        let typed_value =
-            Arc::new(FixedSizeBinaryArray::try_from_iter(std::iter::once([0u8; 16])).unwrap());
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, false),
-            Field::new("typed_value", DataType::FixedSizeBinary(16), true)
-                .with_extension_type(Uuid),
-        ]);
-        let struct_array = StructArray::new(fields, vec![metadata, typed_value], None);
-
-        let variant_array = VariantArray::try_new(&struct_array).unwrap();
-        let typed_value_field = variant_array.typed_value_field().unwrap();
-        assert!(typed_value_field.has_valid_extension_type::<Uuid>());
     }
 
     #[test]
