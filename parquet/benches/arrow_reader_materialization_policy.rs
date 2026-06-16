@@ -17,8 +17,6 @@
 
 //! Focused benchmark for Parquet reader materialization policy decisions.
 //!
-#![allow(dead_code)]
-//!
 //! # Background:
 //!
 //! As described in [Efficient Filter Pushdown in Parquet], evaluating
@@ -56,9 +54,7 @@
 //! complex OR predicates, and sparse scalar prefixes should not be swept into
 //! that shortcut without their own evidence.
 
-use arrow::array::{
-    ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
-};
+use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, TimestampMillisecondArray};
 use arrow::compute::kernels::cmp::{eq, gt, lt, lt_eq, neq};
 use arrow::compute::{and, or};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -72,8 +68,7 @@ use criterion::{
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
-    RowSelectionPolicy,
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
@@ -232,37 +227,6 @@ fn write_record_batch_to_parquet(batch: &RecordBatch, row_group_size: usize) -> 
     buffer
 }
 
-fn create_nested_record_batch(size: usize) -> RecordBatch {
-    let tag = Arc::new(StringViewArray::from_iter_values(
-        (0..size).map(|idx| format!("tag_{}", idx % 7)),
-    )) as ArrayRef;
-    let payload = StructArray::from(vec![
-        (
-            Arc::new(Field::new("id", DataType::Int64, false)),
-            Arc::new(Int64Array::from_iter_values(
-                (0..size).map(|idx| idx as i64 + 1_000),
-            )) as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new("label", DataType::Utf8View, false)),
-            Arc::new(StringViewArray::from_iter_values(
-                (0..size).map(|idx| format!("payload_{idx}")),
-            )) as ArrayRef,
-        ),
-    ]);
-    let payload = Arc::new(payload) as ArrayRef;
-    let value = Arc::new(Int64Array::from_iter_values(
-        (0..size).map(|idx| idx as i64 + 10_000),
-    )) as ArrayRef;
-
-    RecordBatch::try_from_iter(vec![("tag", tag), ("payload", payload), ("value", value)]).unwrap()
-}
-
-fn write_nested_parquet_file_with_rows(total_rows: usize, row_group_size: usize) -> Vec<u8> {
-    let batch = create_nested_record_batch(total_rows);
-    write_record_batch_to_parquet(&batch, row_group_size)
-}
-
 /// ProjectionCase defines the projection mode for the benchmark:
 /// either projecting all columns or excluding the column that is used for filtering.
 #[derive(Clone, Copy)]
@@ -294,25 +258,6 @@ impl std::fmt::Display for ProjectionCase {
             ProjectionCase::Int64AndUtf8 => write!(f, "int64_and_utf8"),
             ProjectionCase::TsAndUtf8 => write!(f, "ts_and_utf8"),
             ProjectionCase::Utf8Only => write!(f, "utf8_only"),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum SyncStrategy {
-    FullPostFilter,
-    PushdownAuto,
-    PushdownSelectors,
-    PushdownMask,
-}
-
-impl std::fmt::Display for SyncStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SyncStrategy::FullPostFilter => write!(f, "full_post_filter"),
-            SyncStrategy::PushdownAuto => write!(f, "pushdown_auto"),
-            SyncStrategy::PushdownSelectors => write!(f, "pushdown_selectors"),
-            SyncStrategy::PushdownMask => write!(f, "pushdown_mask"),
         }
     }
 }
@@ -374,22 +319,6 @@ pub(crate) enum FilterType {
     SelectiveUnclustered,
     /// moderately selective (10%) clustered filter
     /// ```text
-    ///  ┌───────────────┐    ┌───────────────┐
-    ///  │               │    │               │
-    ///  │               │    │               │
-    ///  │               │    │     ...       │
-    ///  │               │    │               │
-    ///  │     ...       │    │               │
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  └───────────────┘    └───────────────┘
-    /// ```
-    /// (10 RowSelections of 10,000 rows each)
-    ModeratelySelectiveClustered,
-    /// moderately selective (10%) clustered filter
-    /// ```text
     /// ┌───────────────┐    ┌───────────────┐
     /// │      ...      │    │               │
     /// │               │    │               │
@@ -437,9 +366,6 @@ pub(crate) enum FilterType {
     /// ```
     /// (99 RowSelection of 10,000 rows each)
     UnselectiveClustered,
-    /// [`Self::SelectivelUnclusered`] `AND`
-    /// [`Self::ModeratelySelectiveClustered`]
-    Composite,
     /// `utf8View <> ''` modeling [ClickBench] [Q21-Q27]
     ///
     /// [ClickBench]: https://github.com/ClickHouse/ClickBench
@@ -729,11 +655,9 @@ impl std::fmt::Display for FilterType {
         let s = match self {
             FilterType::PointLookup => "int64 == 9999",
             FilterType::SelectiveUnclustered => "float64 > 99.0",
-            FilterType::ModeratelySelectiveClustered => "ts >= 9000",
             FilterType::ModeratelySelectiveUnclustered => "int64 > 90",
             FilterType::UnselectiveUnclustered => "float64 <= 99.0",
             FilterType::UnselectiveClustered => "ts < 9000",
-            FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
             FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
             FilterType::ScalarPrefixUtf8Output => "int64 == 62 AND ts < 9000",
@@ -797,11 +721,6 @@ impl FilterType {
                 let scalar = Float64Array::new_scalar(99.0);
                 gt(array, &scalar)
             }
-            // Moderately Selective Clustered on ts column: ts >= 9000 (implemented as > 8999)
-            FilterType::ModeratelySelectiveClustered => {
-                let array = batch.column(batch.schema().index_of("ts")?);
-                gt(array, &TimestampMillisecondArray::new_scalar(8999))
-            }
             // Moderately Selective Unclustered on int64 column: int64 > 90
             FilterType::ModeratelySelectiveUnclustered => {
                 let array = batch.column(batch.schema().index_of("int64")?);
@@ -817,12 +736,6 @@ impl FilterType {
             FilterType::UnselectiveClustered => {
                 let array = batch.column(batch.schema().index_of("ts")?);
                 lt(array, &TimestampMillisecondArray::new_scalar(9000))
-            }
-            // Composite filter: logical AND of (float64 > 99.0) and (ts >= 9000)
-            FilterType::Composite => {
-                let mask1 = FilterType::SelectiveUnclustered.filter_batch(batch)?;
-                let mask2 = FilterType::ModeratelySelectiveClustered.filter_batch(batch)?;
-                and(&mask1, &mask2)
             }
             // Utf8ViewNonEmpty: selects rows where the utf8View column is not an empty string.
             FilterType::Utf8ViewNonEmpty => {
@@ -947,11 +860,9 @@ impl FilterType {
         match self {
             FilterType::PointLookup => &[0],
             FilterType::SelectiveUnclustered => &[1],
-            FilterType::ModeratelySelectiveClustered => &[3],
             FilterType::ModeratelySelectiveUnclustered => &[0],
             FilterType::UnselectiveUnclustered => &[1],
             FilterType::UnselectiveClustered => &[3],
-            FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
             FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewMissing => &[2],
             FilterType::ScalarPrefixUtf8Output => &[0, 3],
             FilterType::FixedThenVarWidthPredicates | FilterType::VarWidthThenFixedPredicates => {
@@ -978,297 +889,9 @@ impl FilterType {
     }
 }
 
-/// Benchmark filters and projections by reading the Parquet file.
-/// This benchmark iterates over all individual filter types and two projection cases.
-/// It measures the time to read and filter the Parquet file according to each scenario.
-fn benchmark_filters_and_projections(c: &mut Criterion) {
-    // make the parquet file in memory that can be shared
-    let parquet_file = Bytes::from(write_parquet_file());
-    let filter_types = vec![
-        FilterType::PointLookup,
-        FilterType::SelectiveUnclustered,
-        FilterType::ModeratelySelectiveClustered,
-        FilterType::ModeratelySelectiveUnclustered,
-        FilterType::UnselectiveUnclustered,
-        FilterType::UnselectiveClustered,
-        FilterType::Utf8ViewNonEmpty,
-        FilterType::Composite,
-    ];
-    let projection_cases = vec![
-        ProjectionCase::AllColumns,
-        ProjectionCase::ExcludeFilterColumn,
-    ];
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let mut group = c.benchmark_group("arrow_reader_row_filter");
-
-    for filter_type in filter_types {
-        for proj_case in &projection_cases {
-            let filter_col = filter_type.filter_projection().to_vec();
-            let output_projection = output_projection_for(filter_type, proj_case);
-
-            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-            let metadata = Arc::clone(reader.metadata());
-
-            let schema_descr = metadata.file_metadata().schema_descr();
-            let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
-            let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
-
-            let benchmark_name = format!("{filter_type}/{proj_case}",);
-
-            // run the benchmark for the async reader
-            let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
-            let rt_captured = rt.handle().clone();
-            group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    let reader = reader.clone();
-                    let pred_mask = pred_mask.clone();
-                    let projection_mask = projection_mask.clone();
-                    // row filters are not clone, so must make it each iter
-                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                        Ok(filter_type.filter_batch(&batch).unwrap())
-                    });
-                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
-
-                    rt_captured.block_on(async {
-                        benchmark_async_reader(reader, projection_mask, row_filter).await;
-                    })
-                });
-            });
-
-            // run the benchmark for the sync reader
-            let bench_id = BenchmarkId::new(benchmark_name, "sync");
-            group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    let reader = reader.clone();
-                    let pred_mask = pred_mask.clone();
-                    let projection_mask = projection_mask.clone();
-                    // row filters are not clone, so must make it each iter
-                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                        Ok(filter_type.filter_batch(&batch).unwrap())
-                    });
-                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
-
-                    benchmark_sync_reader(reader, projection_mask, row_filter)
-                });
-            });
-        }
-    }
-}
-
-/// Compare full scan plus post-filtering against row-level pushdown strategies.
-///
-/// This group is intentionally sync-only and smaller than
-/// [`benchmark_filters_and_projections`]. It tracks the cases most likely to
-/// inform a future default `Auto` policy: selective random filters, clustered
-/// filters, ClickBench-like string filters, and the forced selector strategy
-/// that originally motivated apache/arrow-rs#8565.
-fn benchmark_sync_strategy_matrix(c: &mut Criterion) {
-    let parquet_file = Bytes::from(write_parquet_file());
-    let filter_types = [
-        FilterType::SelectiveUnclustered,
-        FilterType::ModeratelySelectiveClustered,
-        FilterType::ModeratelySelectiveUnclustered,
-        FilterType::Utf8ViewNonEmpty,
-    ];
-    let strategies = [
-        SyncStrategy::FullPostFilter,
-        SyncStrategy::PushdownAuto,
-        SyncStrategy::PushdownSelectors,
-        SyncStrategy::PushdownMask,
-    ];
-
-    let mut group = c.benchmark_group("arrow_reader_row_filter_strategy_matrix");
-
-    for filter_type in filter_types {
-        for projection_case in [
-            ProjectionCase::AllColumns,
-            ProjectionCase::ExcludeFilterColumn,
-        ] {
-            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-            let metadata = Arc::clone(reader.metadata());
-            let schema_descr = metadata.file_metadata().schema_descr();
-            let output_projection = output_projection_for(filter_type, &projection_case);
-            let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
-            let output_column_names = projection_names(&output_projection);
-            let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
-            let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
-            let pred_mask = ProjectionMask::roots(
-                schema_descr,
-                filter_type.filter_projection().iter().copied(),
-            );
-
-            for strategy in strategies {
-                let bench_id = BenchmarkId::new(
-                    format!("{filter_type}/{projection_case}"),
-                    strategy.to_string(),
-                );
-
-                group.bench_function(bench_id, |b| {
-                    b.iter(|| {
-                        let reader = reader.clone();
-                        let pred_mask = pred_mask.clone();
-                        let projection_mask = projection_mask.clone();
-                        let read_projection_mask = read_projection_mask.clone();
-                        let output_column_names = output_column_names.clone();
-
-                        match strategy {
-                            SyncStrategy::FullPostFilter => benchmark_sync_reader_post_filter(
-                                reader,
-                                read_projection_mask,
-                                output_column_names,
-                                filter_type,
-                            ),
-                            SyncStrategy::PushdownAuto => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_sync_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::default(),
-                                )
-                            }
-                            SyncStrategy::PushdownSelectors => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_sync_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::Selectors,
-                                )
-                            }
-                            SyncStrategy::PushdownMask => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_sync_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::Mask,
-                                )
-                            }
-                        }
-                    });
-                });
-            }
-        }
-    }
-}
-
-/// Compare async full scan plus post-filtering against async row-level pushdown
-/// strategies. This is the matrix that exercises the current reader `Auto`
-/// policy through the async stream backed by the push decoder row-group pipeline.
-fn benchmark_async_strategy_matrix(c: &mut Criterion) {
-    let parquet_file = Bytes::from(write_parquet_file());
-    let filter_types = [
-        FilterType::SelectiveUnclustered,
-        FilterType::ModeratelySelectiveClustered,
-        FilterType::ModeratelySelectiveUnclustered,
-        FilterType::Utf8ViewNonEmpty,
-    ];
-    let strategies = [
-        AsyncStrategy::FullPostFilter,
-        AsyncStrategy::PushdownAuto,
-        AsyncStrategy::PushdownSelectors,
-        AsyncStrategy::PushdownMask,
-    ];
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let mut group = c.benchmark_group("arrow_reader_row_filter_async_strategy_matrix");
-
-    for filter_type in filter_types {
-        for projection_case in [
-            ProjectionCase::AllColumns,
-            ProjectionCase::ExcludeFilterColumn,
-        ] {
-            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-            let metadata = Arc::clone(reader.metadata());
-            let schema_descr = metadata.file_metadata().schema_descr();
-            let output_projection = output_projection_for(filter_type, &projection_case);
-            let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
-            let output_column_names = projection_names(&output_projection);
-            let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
-            let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
-            let pred_mask = ProjectionMask::roots(
-                schema_descr,
-                filter_type.filter_projection().iter().copied(),
-            );
-
-            for strategy in strategies {
-                let bench_id = BenchmarkId::new(
-                    format!("{filter_type}/{projection_case}"),
-                    strategy.to_string(),
-                );
-                let rt_captured = rt.handle().clone();
-
-                group.bench_function(bench_id, |b| {
-                    b.iter(|| {
-                        let reader = reader.clone();
-                        let pred_mask = pred_mask.clone();
-                        let projection_mask = projection_mask.clone();
-                        let read_projection_mask = read_projection_mask.clone();
-                        let output_column_names = output_column_names.clone();
-
-                        rt_captured.block_on(async {
-                            match strategy {
-                                AsyncStrategy::FullPostFilter => {
-                                    benchmark_async_reader_post_filter(
-                                        reader,
-                                        read_projection_mask,
-                                        output_column_names,
-                                        filter_type,
-                                    )
-                                    .await
-                                }
-                                AsyncStrategy::PushdownAuto => {
-                                    let row_filter = row_filter_for(filter_type, pred_mask);
-                                    benchmark_async_reader_with_policy(
-                                        reader,
-                                        projection_mask,
-                                        row_filter,
-                                        RowSelectionPolicy::default(),
-                                    )
-                                    .await
-                                }
-                                AsyncStrategy::PushdownSelectors => {
-                                    let row_filter = row_filter_for(filter_type, pred_mask);
-                                    benchmark_async_reader_with_policy(
-                                        reader,
-                                        projection_mask,
-                                        row_filter,
-                                        RowSelectionPolicy::Selectors,
-                                    )
-                                    .await
-                                }
-                                AsyncStrategy::PushdownMask => {
-                                    let row_filter = row_filter_for(filter_type, pred_mask);
-                                    benchmark_async_reader_with_policy(
-                                        reader,
-                                        projection_mask,
-                                        row_filter,
-                                        RowSelectionPolicy::Mask,
-                                    )
-                                    .await
-                                }
-                            }
-                        })
-                    });
-                });
-            }
-        }
-    }
-}
-
 /// A focused async-only matrix that isolates the cases most relevant to the
 /// row-filter Auto policy. This is intentionally narrower than
-/// [`benchmark_async_strategy_matrix`]: it keeps the benchmark output focused
+/// the smaller row-filter strategy matrix: it keeps the benchmark output focused
 /// on cases where later PRs may teach `Auto` to switch execution modes or
 /// explicitly keep predicate pushdown.
 ///
@@ -1638,63 +1261,6 @@ fn push_clustered_projected_predicate_cases(cases: &mut Vec<AsyncFocusCase>, par
     );
 }
 
-/// Isolate projected scans that do not construct a [`RowFilter`].
-///
-/// This tracks the reader-level shape seen in TPC-DS Q83 return-table scans:
-/// a narrow primitive projection where row-level pushdown metrics are zero.
-/// It deliberately lives outside the adaptive-materialization matrix because there is no
-/// filter strategy to choose.
-///
-/// ```text
-/// no RowFilter             projected primitive columns
-/// ┌───────────────┐    ┌───────────────┐
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │      ...      │    │      ...      │
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-/// └───────────────┘    └───────────────┘
-/// ```
-fn benchmark_projection_scan_focus(c: &mut Criterion) {
-    let parquet_file = Bytes::from(write_parquet_file());
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let mut group = c.benchmark_group("arrow_reader_projection_scan_focus");
-
-    let case_name = "primitive_projection_only";
-    let projection = vec![0, 1, 3];
-    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-    let metadata = Arc::clone(reader.metadata());
-    let schema_descr = metadata.file_metadata().schema_descr();
-    let projection_mask = ProjectionMask::roots(schema_descr, projection);
-
-    let bench_id = BenchmarkId::new(case_name, "async");
-    let rt_captured = rt.handle().clone();
-    group.bench_function(bench_id, |b| {
-        b.iter(|| {
-            let reader = reader.clone();
-            let projection_mask = projection_mask.clone();
-            rt_captured.block_on(benchmark_async_reader_projected(reader, projection_mask));
-        });
-    });
-
-    let bench_id = BenchmarkId::new(case_name, "sync");
-    group.bench_function(bench_id, |b| {
-        b.iter(|| {
-            let reader = reader.clone();
-            let projection_mask = projection_mask.clone();
-            benchmark_sync_reader_projected(reader, projection_mask);
-        });
-    });
-}
-
 struct AsyncFocusCase {
     case_name: &'static str,
     parquet_file: Bytes,
@@ -1992,58 +1558,6 @@ fn row_filter_for_focus_case(
     }
 }
 
-#[derive(Clone, Copy)]
-enum NestedFilterType {
-    AlwaysTrueTag,
-    TagNotZero,
-}
-
-impl std::fmt::Display for NestedFilterType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AlwaysTrueTag => write!(f, "always_true_tag"),
-            Self::TagNotZero => write!(f, "tag_not_zero"),
-        }
-    }
-}
-
-impl NestedFilterType {
-    fn filter_batch(self, batch: &RecordBatch) -> arrow::error::Result<BooleanArray> {
-        match self {
-            Self::AlwaysTrueTag => Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-            Self::TagNotZero => {
-                let tag = batch.column(batch.schema().index_of("tag")?);
-                let scalar = StringViewArray::new_scalar("tag_0");
-                neq(tag, &scalar)
-            }
-        }
-    }
-}
-
-fn nested_row_filter_for(filter_type: NestedFilterType, pred_mask: ProjectionMask) -> RowFilter {
-    let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
-    RowFilter::new(vec![Box::new(filter)])
-}
-
-/// Use async API
-async fn benchmark_async_reader(
-    reader: InMemoryReader,
-    projection_mask: ProjectionMask,
-    row_filter: RowFilter,
-) {
-    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
-        .await
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .with_row_filter(row_filter)
-        .build()
-        .unwrap();
-    while let Some(b) = stream.next().await {
-        b.unwrap(); // consume the batches, no buffering
-    }
-}
-
 async fn benchmark_async_reader_with_policy(
     reader: InMemoryReader,
     projection_mask: ProjectionMask,
@@ -2087,138 +1601,6 @@ async fn benchmark_async_reader_post_filter(
     }
 }
 
-async fn benchmark_async_reader_post_filter_nested(
-    reader: InMemoryReader,
-    read_projection: ProjectionMask,
-    output_column_names: &[&str],
-    filter_type: NestedFilterType,
-) {
-    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
-        .await
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(read_projection)
-        .build()
-        .unwrap();
-
-    while let Some(b) = stream.next().await {
-        let batch = b.unwrap();
-        let filter = filter_type.filter_batch(&batch).unwrap();
-        let output_rows =
-            post_filter_projected_num_rows(&batch, &filter, output_column_names).unwrap();
-        std::hint::black_box(output_rows);
-    }
-}
-
-async fn benchmark_async_reader_projected(reader: InMemoryReader, projection_mask: ProjectionMask) {
-    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
-        .await
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .build()
-        .unwrap();
-    while let Some(b) = stream.next().await {
-        let batch = b.unwrap();
-        std::hint::black_box(batch.num_rows());
-    }
-}
-
-/// Like [`benchmark_async_reader`] but also threads `with_limit(limit)` into
-/// the stream builder. Used by the `LIMIT` benchmark below.
-async fn benchmark_async_reader_with_limit(
-    reader: InMemoryReader,
-    projection_mask: ProjectionMask,
-    row_filter: RowFilter,
-    limit: usize,
-) {
-    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
-        .await
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .with_row_filter(row_filter)
-        .with_limit(limit)
-        .build()
-        .unwrap();
-    while let Some(b) = stream.next().await {
-        b.unwrap(); // consume the batches, no buffering
-    }
-}
-
-/// Use sync API
-fn benchmark_sync_reader(
-    reader: InMemoryReader,
-    projection_mask: ProjectionMask,
-    row_filter: RowFilter,
-) {
-    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .with_row_filter(row_filter)
-        .build()
-        .unwrap();
-    for b in stream {
-        b.unwrap(); // consume the batches, no buffering
-    }
-}
-
-fn benchmark_sync_reader_with_policy(
-    reader: InMemoryReader,
-    projection_mask: ProjectionMask,
-    row_filter: RowFilter,
-    row_selection_policy: RowSelectionPolicy,
-) {
-    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .with_row_filter(row_filter)
-        .with_row_selection_policy(row_selection_policy)
-        .build()
-        .unwrap();
-    for b in stream {
-        b.unwrap(); // consume the batches, no buffering
-    }
-}
-
-fn benchmark_sync_reader_post_filter(
-    reader: InMemoryReader,
-    read_projection: ProjectionMask,
-    output_column_names: Vec<&'static str>,
-    filter_type: FilterType,
-) {
-    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(read_projection)
-        .build()
-        .unwrap();
-
-    for b in stream {
-        let batch = b.unwrap();
-        let filter = filter_type.filter_batch(&batch).unwrap();
-        let output_rows =
-            post_filter_projected_num_rows(&batch, &filter, &output_column_names).unwrap();
-        std::hint::black_box(output_rows);
-    }
-}
-
-fn benchmark_sync_reader_projected(reader: InMemoryReader, projection_mask: ProjectionMask) {
-    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
-        .unwrap()
-        .with_batch_size(8192)
-        .with_projection(projection_mask)
-        .build()
-        .unwrap();
-
-    for b in stream {
-        let batch = b.unwrap();
-        std::hint::black_box(batch.num_rows());
-    }
-}
-
 /// Adapter to read asynchronously from in memory bytes and always loads the
 /// metadata with page indexes.
 #[derive(Debug, Clone)]
@@ -2244,10 +1626,6 @@ impl InMemoryReader {
     fn metadata(&self) -> &Arc<ParquetMetaData> {
         &self.metadata
     }
-
-    fn into_inner(self) -> Bytes {
-        self.inner
-    }
 }
 
 impl AsyncFileReader for InMemoryReader {
@@ -2262,171 +1640,6 @@ impl AsyncFileReader for InMemoryReader {
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata = Arc::clone(&self.metadata);
         async move { Ok(metadata) }.boxed()
-    }
-}
-
-/// Benchmark filters with `LIMIT` short-circuit (`with_limit(N)`)
-///
-/// `PointLookup` is excluded because the filter has only 1 match in the
-/// whole file; `LIMIT 10` is not binding.
-fn benchmark_filters_with_limit(c: &mut Criterion) {
-    const LIMIT: usize = 10;
-
-    let parquet_file = Bytes::from(write_parquet_file());
-    let filter_types = vec![
-        FilterType::SelectiveUnclustered,
-        FilterType::ModeratelySelectiveClustered,
-        FilterType::ModeratelySelectiveUnclustered,
-        FilterType::UnselectiveUnclustered,
-        FilterType::UnselectiveClustered,
-        FilterType::Utf8ViewNonEmpty,
-        FilterType::Composite,
-    ];
-    let projection_cases = vec![
-        ProjectionCase::AllColumns,
-        ProjectionCase::ExcludeFilterColumn,
-    ];
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let mut group = c.benchmark_group("arrow_reader_row_filter_limit");
-
-    for filter_type in filter_types {
-        for proj_case in &projection_cases {
-            let filter_col = filter_type.filter_projection().to_vec();
-            let output_projection = output_projection_for(filter_type, proj_case);
-
-            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-            let metadata = Arc::clone(reader.metadata());
-            let schema_descr = metadata.file_metadata().schema_descr();
-            let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
-            let pred_mask = ProjectionMask::roots(schema_descr, filter_col);
-
-            let benchmark_name = format!("{filter_type}/{proj_case}/limit{LIMIT}");
-
-            // async variant
-            let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
-            let rt_handle = rt.handle().clone();
-            let pred_mask_async = pred_mask.clone();
-            let projection_mask_async = projection_mask.clone();
-            let reader_async = reader.clone();
-            group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    let reader = reader_async.clone();
-                    let pred_mask = pred_mask_async.clone();
-                    let projection_mask = projection_mask_async.clone();
-                    // RowFilter and ArrowPredicateFn are not Clone — fresh each iter.
-                    let predicate = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                        Ok(filter_type.filter_batch(&batch).unwrap())
-                    });
-                    let row_filter = RowFilter::new(vec![Box::new(predicate)]);
-                    rt_handle.block_on(benchmark_async_reader_with_limit(
-                        reader,
-                        projection_mask,
-                        row_filter,
-                        LIMIT,
-                    ));
-                });
-            });
-        }
-    }
-}
-
-/// Focused nested-output case for comparing manual post-filtering against
-/// row-filter pushdown policies.
-///
-/// The predicate column is an unprojected variable-width scalar column, and the
-/// output is a whole nested `Struct` root. This isolates the reader case enabled
-/// by root-aware post-filter projection without requiring recursive nested-child
-/// projection.
-fn benchmark_async_nested_post_filter_focus(c: &mut Criterion) {
-    let parquet_file = Bytes::from(write_nested_parquet_file_with_rows(
-        TOTAL_ROWS,
-        ROW_GROUP_SIZE,
-    ));
-    let strategies = [
-        AsyncStrategy::FullPostFilter,
-        AsyncStrategy::PushdownAuto,
-        AsyncStrategy::PushdownMask,
-        AsyncStrategy::PushdownSelectors,
-    ];
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let mut group = c.benchmark_group("arrow_reader_row_filter_async_nested_post_filter_focus");
-    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-    let metadata = Arc::clone(reader.metadata());
-    let schema_descr = metadata.file_metadata().schema_descr();
-    let output_projection = ProjectionMask::columns(schema_descr, ["payload"]);
-    let read_projection = ProjectionMask::columns(schema_descr, ["tag", "payload"]);
-    let pred_mask = ProjectionMask::columns(schema_descr, ["tag"]);
-    let filter_cases = [
-        NestedFilterType::AlwaysTrueTag,
-        NestedFilterType::TagNotZero,
-    ];
-
-    for filter_case in filter_cases {
-        for strategy in strategies {
-            let bench_id = BenchmarkId::new(
-                format!("whole_struct_output/{filter_case}"),
-                strategy.to_string(),
-            );
-            let rt_captured = rt.handle().clone();
-            group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    let reader = reader.clone();
-                    let pred_mask = pred_mask.clone();
-                    let output_projection = output_projection.clone();
-                    let read_projection = read_projection.clone();
-                    rt_captured.block_on(async {
-                        match strategy {
-                            AsyncStrategy::FullPostFilter => {
-                                benchmark_async_reader_post_filter_nested(
-                                    reader,
-                                    read_projection,
-                                    &["payload"],
-                                    filter_case,
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownAuto => {
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    output_projection,
-                                    nested_row_filter_for(filter_case, pred_mask),
-                                    RowSelectionPolicy::default(),
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownSelectors => {
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    output_projection,
-                                    nested_row_filter_for(filter_case, pred_mask),
-                                    RowSelectionPolicy::Selectors,
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownMask => {
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    output_projection,
-                                    nested_row_filter_for(filter_case, pred_mask),
-                                    RowSelectionPolicy::Mask,
-                                )
-                                .await
-                            }
-                        }
-                    })
-                });
-            });
-        }
     }
 }
 

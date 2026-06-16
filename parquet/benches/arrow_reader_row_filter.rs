@@ -58,8 +58,8 @@
 use arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray, TimestampMillisecondArray,
 };
+use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, lt_eq, neq};
-use arrow::compute::{and, or};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
@@ -262,20 +262,10 @@ fn write_nested_parquet_file_with_rows(total_rows: usize, row_group_size: usize)
 
 /// ProjectionCase defines the projection mode for the benchmark:
 /// either projecting all columns or excluding the column that is used for filtering.
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
-    FilterColumnsOnly,
-    CountOnly,
-    FixedColumns,
-    Float64AndTs,
-    Float64Only,
-    Int64AndFloat64,
-    Int64AndUtf8,
-    TsAndUtf8,
-    Utf8Only,
 }
 
 impl std::fmt::Display for ProjectionCase {
@@ -283,15 +273,6 @@ impl std::fmt::Display for ProjectionCase {
         match self {
             ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
-            ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
-            ProjectionCase::CountOnly => write!(f, "count_only"),
-            ProjectionCase::FixedColumns => write!(f, "fixed_columns"),
-            ProjectionCase::Float64AndTs => write!(f, "float64_and_ts"),
-            ProjectionCase::Float64Only => write!(f, "float64_only"),
-            ProjectionCase::Int64AndFloat64 => write!(f, "int64_and_float64"),
-            ProjectionCase::Int64AndUtf8 => write!(f, "int64_and_utf8"),
-            ProjectionCase::TsAndUtf8 => write!(f, "ts_and_utf8"),
-            ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
     }
 }
@@ -336,391 +317,16 @@ impl std::fmt::Display for AsyncStrategy {
 
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FilterType {
-    /// "Point Lookup": selects a single row
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │     ...       │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (1 RowSelection of 1 row)
     PointLookup,
-    /// selective (1%) unclustered filter
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │      ...      │    │               │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │               │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │               │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (1000 RowSelection of 10 rows each)
     SelectiveUnclustered,
-    /// moderately selective (10%) clustered filter
-    /// ```text
-    ///  ┌───────────────┐    ┌───────────────┐
-    ///  │               │    │               │
-    ///  │               │    │               │
-    ///  │               │    │     ...       │
-    ///  │               │    │               │
-    ///  │     ...       │    │               │
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    ///  └───────────────┘    └───────────────┘
-    /// ```
-    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveClustered,
-    /// moderately selective (10%) clustered filter
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │      ...      │    │               │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │      ...      │    │               │
-    /// │               │    │               │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveUnclustered,
-    /// unselective (99%) unclustered filter
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (99,000 RowSelections of 10 rows each)
     UnselectiveUnclustered,
-    /// unselective (90%) clustered filter
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │               │    │     ...       │
-    /// │               │    │               │
-    /// │     ...       │    │               │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (99 RowSelection of 10,000 rows each)
     UnselectiveClustered,
-    /// [`Self::SelectivelUnclusered`] `AND`
-    /// [`Self::ModeratelySelectiveClustered`]
     Composite,
-    /// `utf8View <> ''` modeling [ClickBench] [Q21-Q27]
-    ///
-    /// [ClickBench]: https://github.com/ClickHouse/ClickBench
-    /// [Q21-Q27]: https://github.com/apache/datafusion/blob/b7177234e65cbbb2dcc04c252f6acd80bb026362/benchmarks/queries/clickbench/queries.sql#L22-L28
     Utf8ViewNonEmpty,
-
-    // Deferred-output shapes. Predicate columns are separate from the output,
-    // so rejected rows can skip output-column decoding.
-    /// Scalar-prefix shape derived from DataFusion ClickBench Q37:
-    ///
-    /// ```sql
-    /// WHERE CounterID = 62
-    ///   AND EventDate BETWEEN ...
-    ///   AND DontCountHits = 0
-    ///   AND IsRefresh = 0
-    ///   AND Title <> ''
-    /// ```
-    ///
-    /// DataFusion `Auto` does not push down the `Title <> ''` string predicate,
-    /// but it can push down the scalar prefix to defer decoding `Title`.
-    /// Fragmented ~0.9% selection: approx 4,500 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    ScalarPrefixUtf8Output,
-    /// Sparse fragmented scalar predicates (~7%, approx 36,000 selected rows
-    /// in 500K) with a cheap fixed-width output projection, derived from a
-    /// ClickBench Q41-like shape.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    SparseScalarFixedOutput,
-    /// Scalar range predicate derived from TPC-DS Q9 `ss_quantity BETWEEN ...`
-    /// subqueries. The selected rows are random and moderately selective, and
-    /// benchmark projections cover both count-only and numeric aggregate cases.
-    /// Fragmented ~20% selection: approx 100,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    QuantityRangePredicate,
-
-    // Multi-predicate shapes. These focus predicate ordering and predicate
-    // evaluation cost independently of projection cost.
-    /// Predicate-order shape derived from DataFusion ClickBench extended Q6:
-    /// an early cheap fixed-width predicate can prune almost all rows before a
-    /// later unprojected variable-width predicate is decoded.
-    /// Point-lookup prefix: at most 1 row reaches the variable-width predicate.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │      ...      │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    FixedThenVarWidthPredicates,
-    /// Same scalar + variable-width predicate columns as
-    /// [`Self::FixedThenVarWidthPredicates`], but with the variable-width
-    /// predicate evaluated first. This anchors the static post-filter gate
-    /// against predicate-order drift.
-    /// At most 1 row survives the final point lookup.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │      ...      │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    VarWidthThenFixedPredicates,
-    /// Multiple cheap scalar predicates, very small output, and projected
-    /// predicate columns used later by grouping. Derived from ClickBench Q40.
-    /// Fragmented ~0.8% selection: approx 4,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    MultiScalarProjectedKey,
-    /// Complex OR predicate over dictionary/string-like and scalar columns
-    /// where predicate evaluation dominates reader time. Derived from TPC-DS
-    /// Q41.
-    /// Mixed string/scalar OR branches select approx 1% of rows.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │      ...      │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │               │
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    ComplexOrMixedPredicates,
-
-    // Projected-predicate shapes. At least one predicate column is also needed
-    // in the final projection.
-    /// Multiple fixed-width dynamic filters where predicate columns are also
-    /// projected. Derived from TPC-DS Q20 catalog_sales.
-    /// Fragmented ~11% selection: approx 54,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    ProjectedDynamicFilters,
-    /// Shape of TPC-DS Q21 after dynamic-filter pruning: sparse fragmented
-    /// fixed-width predicates where the final projection still includes the
-    /// predicate columns. This protects against choosing selectors for columns
-    /// that were already decoded/cached by predicate evaluation.
-    /// Fragmented ~7% selection: approx 36,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    SparseProjectedPredicatesFixedOutput,
-    /// Projected-predicate shape derived from TPC-DS Q2 fact scans: the
-    /// dynamic filter applies to the date key, the same date key is projected,
-    /// and an additional fixed-width sales value can still be deferred by
-    /// predicate pushdown.
-    /// Selectivity ranges from 1% to 50%: approx 5K to 250K selected rows in
-    /// 500K.
-    /// The 1% variants also cover a TPC-DS Q41-like item scan where predicate
-    /// and output overlap, selection is highly fragmented, and the deferred
-    /// output payload is small enough that post-filtering can be faster than
-    /// row-filter pushdown.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    ProjectedPredicate1Pct,
-    ProjectedPredicate5Pct,
-    ProjectedPredicate8Pct,
-    ProjectedPredicate10Pct,
-    ProjectedPredicate20Pct,
-    ProjectedPredicate30Pct,
-    ProjectedPredicate40Pct,
-    ProjectedPredicate50Pct,
-    /// Exact shape for the projected-predicate moderate-selectivity gate:
-    /// a clustered 20% timestamp predicate where the predicate column is
-    /// projected and the deferred output is variable-width.
-    /// Clustered 8% or 20% selection: 40,000 or 100,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    ClusteredTs8PctProjectedPredicate,
-    ClusteredTs20PctProjectedPredicate,
-    /// Sparse variable-width predicate shaped like TPC-DS Q83 dynamic
-    /// `i_item_id` filters, where the predicate column is also projected.
-    /// Sparse 0.1% selection: 500 sentinel rows in 500K, one every 1,000 rows.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    Utf8ViewMissing,
-    /// Very sparse projected fixed-width scan shaped like TPC-DS fact-table
-    /// filters where the predicate column is also needed in the output projection.
-    /// Sparse 0.1% selection: 500 rows in 500K, one timestamp match every
-    /// 1,000 rows.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    SparseProjectedFactScan,
 }
 
 impl std::fmt::Display for FilterType {
@@ -734,47 +340,6 @@ impl std::fmt::Display for FilterType {
             FilterType::UnselectiveClustered => "ts < 9000",
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
-            FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
-            FilterType::ScalarPrefixUtf8Output => "int64 == 62 AND ts < 9000",
-            FilterType::FixedThenVarWidthPredicates => "int64 == 9999 AND utf8View <> ''",
-            FilterType::VarWidthThenFixedPredicates => "utf8View <> '' AND int64 == 9999",
-            FilterType::SparseScalarFixedOutput => "int64 < 8 AND ts < 9000",
-            FilterType::MultiScalarProjectedKey => "int64 == 62 AND float64 > 10.0 AND ts < 9000",
-            FilterType::ComplexOrMixedPredicates => {
-                "(utf8View <> '' AND int64 < 8) OR (ts < 100 AND float64 > 95.0)"
-            }
-            FilterType::ProjectedDynamicFilters => {
-                "int64 < 12 AND ts < 9000 projected dynamic filters"
-            }
-            FilterType::SparseProjectedPredicatesFixedOutput => {
-                "int64 < 8 AND ts < 9000 projected predicates"
-            }
-            FilterType::ProjectedPredicate1Pct => "int64 < 1 projected predicate",
-            FilterType::ProjectedPredicate10Pct => {
-                "int64 < 10 projected predicate with fixed output"
-            }
-            FilterType::ProjectedPredicate5Pct => "int64 < 5 projected predicate with fixed output",
-            FilterType::ProjectedPredicate8Pct => "int64 < 8 projected predicate with fixed output",
-            FilterType::ProjectedPredicate20Pct => {
-                "int64 < 20 projected predicate with fixed output"
-            }
-            FilterType::ProjectedPredicate30Pct => {
-                "int64 < 30 projected predicate with fixed output"
-            }
-            FilterType::ProjectedPredicate40Pct => {
-                "int64 < 40 projected predicate with fixed output"
-            }
-            FilterType::ProjectedPredicate50Pct => {
-                "int64 < 50 projected predicate with fixed output"
-            }
-            FilterType::QuantityRangePredicate => "int64 > 0 AND int64 < 21",
-            FilterType::ClusteredTs20PctProjectedPredicate => {
-                "ts < 2000 projected predicate with utf8 output"
-            }
-            FilterType::ClusteredTs8PctProjectedPredicate => {
-                "ts < 800 projected predicate with utf8 output"
-            }
-            FilterType::SparseProjectedFactScan => "ts % 1000 == 0",
         };
         write!(f, "{s}")
     }
@@ -829,115 +394,6 @@ impl FilterType {
                 let scalar = StringViewArray::new_scalar("");
                 neq(array, &scalar)
             }
-            FilterType::Utf8ViewMissing => {
-                let array = batch.column(batch.schema().index_of("utf8View")?);
-                let scalar = StringViewArray::new_scalar(UTF8_VIEW_MISSING_VALUE);
-                eq(array, &scalar)
-            }
-            // ScalarPrefixUtf8Output: a cheap fragmented scalar predicate
-            // evaluated before decoding a variable-width output column.
-            FilterType::ScalarPrefixUtf8Output => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
-                let date_like_range = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
-                and(&counter_match, &date_like_range)
-            }
-            FilterType::FixedThenVarWidthPredicates | FilterType::VarWidthThenFixedPredicates => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let utf8 = batch.column(batch.schema().index_of("utf8View")?);
-                let cheap_prefix = eq(int64, &Int64Array::new_scalar(9999))?;
-                let string_suffix = neq(utf8, &StringViewArray::new_scalar(""))?;
-                and(&cheap_prefix, &string_suffix)
-            }
-            FilterType::SparseScalarFixedOutput
-            | FilterType::SparseProjectedPredicatesFixedOutput => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let counter_like = lt(int64, &Int64Array::new_scalar(8))?;
-                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
-                and(&counter_like, &date_like)
-            }
-            FilterType::MultiScalarProjectedKey => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let float64 = batch.column(batch.schema().index_of("float64")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
-                let width_match = gt(float64, &Float64Array::new_scalar(10.0))?;
-                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
-                and(&and(&counter_match, &width_match)?, &date_like)
-            }
-            FilterType::ComplexOrMixedPredicates => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let float64 = batch.column(batch.schema().index_of("float64")?);
-                let utf8 = batch.column(batch.schema().index_of("utf8View")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let string_branch = and(
-                    &neq(utf8, &StringViewArray::new_scalar(""))?,
-                    &lt(int64, &Int64Array::new_scalar(8))?,
-                )?;
-                let scalar_branch = and(
-                    &lt(ts, &TimestampMillisecondArray::new_scalar(100))?,
-                    &gt(float64, &Float64Array::new_scalar(95.0))?,
-                )?;
-                or(&string_branch, &scalar_branch)
-            }
-            FilterType::ProjectedDynamicFilters => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let item_like = lt(int64, &Int64Array::new_scalar(12))?;
-                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
-                and(&item_like, &date_like)
-            }
-            FilterType::ProjectedPredicate1Pct
-            | FilterType::ProjectedPredicate5Pct
-            | FilterType::ProjectedPredicate8Pct
-            | FilterType::ProjectedPredicate10Pct
-            | FilterType::ProjectedPredicate20Pct
-            | FilterType::ProjectedPredicate30Pct
-            | FilterType::ProjectedPredicate40Pct
-            | FilterType::ProjectedPredicate50Pct => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let threshold = match self {
-                    FilterType::ProjectedPredicate1Pct => 1,
-                    FilterType::ProjectedPredicate5Pct => 5,
-                    FilterType::ProjectedPredicate8Pct => 8,
-                    FilterType::ProjectedPredicate10Pct => 10,
-                    FilterType::ProjectedPredicate20Pct => 20,
-                    FilterType::ProjectedPredicate30Pct => 30,
-                    FilterType::ProjectedPredicate40Pct => 40,
-                    FilterType::ProjectedPredicate50Pct => 50,
-                    _ => unreachable!(),
-                };
-                lt(int64, &Int64Array::new_scalar(threshold))
-            }
-            FilterType::QuantityRangePredicate => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let lower = gt(int64, &Int64Array::new_scalar(0))?;
-                let upper = lt(int64, &Int64Array::new_scalar(21))?;
-                and(&lower, &upper)
-            }
-            FilterType::ClusteredTs8PctProjectedPredicate => {
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                lt(ts, &TimestampMillisecondArray::new_scalar(800))
-            }
-            FilterType::ClusteredTs20PctProjectedPredicate => {
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                lt(ts, &TimestampMillisecondArray::new_scalar(2000))
-            }
-            FilterType::SparseProjectedFactScan => {
-                let ts = batch
-                    .column(batch.schema().index_of("ts")?)
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .unwrap();
-                Ok(BooleanArray::from(
-                    ts.values()
-                        .iter()
-                        .map(|value| value % 1000 == 0)
-                        .collect::<Vec<_>>(),
-                ))
-            }
         }
     }
 
@@ -951,28 +407,7 @@ impl FilterType {
             FilterType::UnselectiveUnclustered => &[1],
             FilterType::UnselectiveClustered => &[3],
             FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
-            FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewMissing => &[2],
-            FilterType::ScalarPrefixUtf8Output => &[0, 3],
-            FilterType::FixedThenVarWidthPredicates | FilterType::VarWidthThenFixedPredicates => {
-                &[0, 2]
-            }
-            FilterType::MultiScalarProjectedKey => &[0, 1, 3],
-            FilterType::SparseScalarFixedOutput
-            | FilterType::ProjectedDynamicFilters
-            | FilterType::SparseProjectedPredicatesFixedOutput => &[0, 3],
-            FilterType::ComplexOrMixedPredicates => &[0, 1, 2, 3],
-            FilterType::ProjectedPredicate1Pct
-            | FilterType::ProjectedPredicate5Pct
-            | FilterType::ProjectedPredicate8Pct
-            | FilterType::ProjectedPredicate10Pct
-            | FilterType::ProjectedPredicate20Pct
-            | FilterType::ProjectedPredicate30Pct
-            | FilterType::ProjectedPredicate40Pct
-            | FilterType::ProjectedPredicate50Pct => &[0],
-            FilterType::QuantityRangePredicate => &[0],
-            FilterType::ClusteredTs8PctProjectedPredicate
-            | FilterType::ClusteredTs20PctProjectedPredicate => &[3],
-            FilterType::SparseProjectedFactScan => &[3],
+            FilterType::Utf8ViewNonEmpty => &[2],
         }
     }
 }
@@ -1334,15 +769,6 @@ fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCa
                     || !filter_columns.contains(idx)
             })
             .collect(),
-        ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
-        ProjectionCase::CountOnly => vec![],
-        ProjectionCase::FixedColumns => vec![0, 1, 3],
-        ProjectionCase::Float64AndTs => vec![1, 3],
-        ProjectionCase::Float64Only => vec![1],
-        ProjectionCase::Int64AndFloat64 => vec![0, 1],
-        ProjectionCase::Int64AndUtf8 => vec![0, 2],
-        ProjectionCase::TsAndUtf8 => vec![2, 3],
-        ProjectionCase::Utf8Only => vec![2],
     }
 }
 
