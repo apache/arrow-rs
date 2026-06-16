@@ -1189,19 +1189,9 @@ mod tests {
 
         let variant_array = shred_variant(&input, &DataType::FixedSizeBinary(16)).unwrap();
 
-        // // inspect the typed_value Field and make sure it contains the canonical Uuid extension type
-        // let typed_value_field = variant_array
-        //     .inner()
-        //     .fields()
-        //     .into_iter()
-        //     .find(|f| f.name() == "typed_value")
-        //     .unwrap();
+        let typed_value_field = variant_array.inner().field_by_name("typed_value").unwrap();
 
-        // assert!(
-        //     typed_value_field
-        //         .try_extension_type::<extension::Uuid>()
-        //         .is_ok()
-        // );
+        assert!(typed_value_field.has_valid_extension_type::<arrow_schema::extension::Uuid>());
 
         // probe the downcasted typed_value array to make sure uuids are shredded correctly
         let uuids = variant_array
@@ -1225,6 +1215,32 @@ mod tests {
 
         let got_uuid_2: &[u8] = uuids.value(3);
         assert_eq!(got_uuid_2, mock_uuid_2.as_bytes());
+    }
+
+    #[test]
+    fn test_uuid_nested_shredding() {
+        let mock_uuid = Uuid::new_v4();
+        let input = build_variant_array(vec![VariantRow::Object(vec![(
+            "id",
+            VariantValue::from(mock_uuid),
+        )])]);
+        let target = ShreddedSchemaBuilder::default()
+            .with_path("id", DataType::FixedSizeBinary(16))
+            .unwrap()
+            .build();
+
+        let result = shred_variant(&input, &target).unwrap();
+
+        let typed_value = result.typed_value_field().unwrap();
+        let typed_struct = typed_value.as_any().downcast_ref::<StructArray>().unwrap();
+        let id =
+            ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("id").unwrap()).unwrap();
+
+        // The extension type lives on the field, not the array, so assert it on the inner struct.
+        let leaf = id.inner().field_by_name("typed_value").unwrap();
+
+        assert_eq!(leaf.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(leaf.has_valid_extension_type::<arrow_schema::extension::Uuid>());
     }
 
     #[test]
