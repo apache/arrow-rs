@@ -1231,7 +1231,7 @@ mod tests {
 
         let result = shred_variant(&input, &target).unwrap();
 
-        let typed_value = result.typed_value_field().unwrap();
+        let typed_value = result.typed_value_column().unwrap();
         let typed_struct = typed_value.as_any().downcast_ref::<StructArray>().unwrap();
         let id =
             ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("id").unwrap()).unwrap();

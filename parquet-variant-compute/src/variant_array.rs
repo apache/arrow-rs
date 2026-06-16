@@ -1421,7 +1421,7 @@ mod test {
 
         // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
         let variant_array = VariantArray::try_new(&input).unwrap();
-        let object = variant_array.typed_value_field().unwrap().as_struct();
+        let object = variant_array.typed_value_column().unwrap().as_struct();
         let id = object.column_by_name("id").unwrap().as_struct();
         let uuid_leaf = id.field_by_name("typed_value").unwrap();
         assert!(uuid_leaf.has_valid_extension_type::<UuidExtension>());
