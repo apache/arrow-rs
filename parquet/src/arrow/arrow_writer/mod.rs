@@ -706,16 +706,17 @@ struct ArrowColumnChunkData {
     length: usize,
     store: Box<dyn PageStore>,
     keys: Vec<PageKey>,
-    /// Handle to the dictionary page's blob in the store.
+    /// Handles to the dictionary page's blobs (header then data) in the store.
     ///
     /// A dictionary page is produced at most once and bounded by
     /// `dict_page_size_limit`, but it must be written *first* in the chunk even
     /// though the data pages reach the writer before it (see
-    /// [`PageWriter::defers_dictionary_ordering`]). It is `put` into the store
-    /// like any other page — which keeps the store uniform and lets an oversized
-    /// dictionary page spill — and its handle is held apart so it can be emitted
-    /// ahead of the data pages at splice. `None` for non-dictionary columns.
-    dictionary_key: Option<PageKey>,
+    /// [`PageWriter::defers_dictionary_ordering`]). Its header and data are `put`
+    /// into the store like any other page — which keeps the store uniform, and
+    /// lets an oversized dictionary page spill — and their handles are held apart
+    /// so they can be emitted ahead of the data pages at splice.
+    /// Empty for non-dictionary columns.
+    dictionary_keys: Vec<PageKey>,
     /// Serialized length of the dictionary page (0 if there is none), recorded
     /// so the data pages can be shifted past it when offsets are rewritten to a
     /// dictionary-first layout at splice.
@@ -728,7 +729,7 @@ impl ArrowColumnChunkData {
             length: 0,
             store,
             keys: Vec::new(),
-            dictionary_key: None,
+            dictionary_keys: Vec::new(),
             dictionary_len: 0,
         }
     }
@@ -741,11 +742,13 @@ impl ArrowColumnChunkData {
         Ok(())
     }
 
-    /// Store a dictionary-page blob in the page store, recording its handle
-    /// (emitted first at splice) and serialized length.
+    /// Store a dictionary-page blob (header or data) in the page store,
+    /// recording its handle (emitted first at splice) and accumulating its
+    /// serialized length.
     fn push_dictionary(&mut self, value: Bytes) -> Result<()> {
         self.dictionary_len += value.len();
-        self.dictionary_key = Some(self.store.put(value)?);
+        let key = self.store.put(value)?;
+        self.dictionary_keys.push(key);
         Ok(())
     }
 
@@ -777,14 +780,13 @@ impl StreamingColumnChunkReader {
     fn new(data: ArrowColumnChunkData) -> Self {
         // The dictionary page must be emitted first, ahead of the data pages,
         // even though it was the last page produced.
-        let keys = match data.dictionary_key {
-            Some(dict_key) => {
-                let mut keys = Vec::with_capacity(data.keys.len() + 1);
-                keys.push(dict_key);
-                keys.extend(data.keys);
-                keys
-            }
-            None => data.keys,
+        let keys = if data.dictionary_keys.is_empty() {
+            data.keys
+        } else {
+            let mut keys = Vec::with_capacity(data.dictionary_keys.len() + data.keys.len());
+            keys.extend(data.dictionary_keys);
+            keys.extend(data.keys);
+            keys
         };
         Self {
             store: data.store,
@@ -894,14 +896,10 @@ impl PageWriter for ArrowPageWriter {
 
         buf.length += compressed_size;
         if spec.page_type == PageType::DICTIONARY_PAGE {
-            // Stored in the page store, but its handle is recorded separately so it is
-            // emitted first at splice — see `ArrowColumnChunkData::dictionary_key`.
-            // Header and data are joined into one blob so the dictionary page is a
-            // single store entry.
-            let mut blob = Vec::with_capacity(compressed_size);
-            blob.extend_from_slice(&header);
-            blob.extend_from_slice(&data);
-            buf.push_dictionary(Bytes::from(blob))?;
+            // Recorded apart from the data pages so it is emitted first at
+            // splice — see `ArrowColumnChunkData::dictionary_keys`.
+            buf.push_dictionary(header)?;
+            buf.push_dictionary(data)?;
         } else {
             buf.push(header)?;
             buf.push(data)?;
