@@ -431,7 +431,7 @@ impl<'a> Parser<'a> {
         if scale > 0 && scale as u8 > precision {
             return Err(make_error(
                 self.val,
-                &format!("{type_name} scale '{scale}' cannot be less than precision '{precision}'"),
+                &format!("{type_name} scale '{scale}' must be less than precision '{precision}'"),
             ));
         }
         Ok(())
@@ -1557,19 +1557,19 @@ mod test {
             // Decimals can't have scale exceeding precision
             (
                 "Decimal32(5, 6)",
-                "Error Decimal32 scale '6' cannot be less than precision '5'",
+                "Error Decimal32 scale '6' must be less than precision '5'",
             ),
             (
                 "Decimal64(5, 6)",
-                "Error Decimal64 scale '6' cannot be less than precision '5'",
+                "Error Decimal64 scale '6' must be less than precision '5'",
             ),
             (
                 "Decimal128(5, 6)",
-                "Error Decimal128 scale '6' cannot be less than precision '5'",
+                "Error Decimal128 scale '6' must be less than precision '5'",
             ),
             (
                 "Decimal256(5, 6)",
-                "Error Decimal256 scale '6' cannot be less than precision '5'",
+                "Error Decimal256 scale '6' must be less than precision '5'",
             ),
             // Decimals have a max supported precision
             (
