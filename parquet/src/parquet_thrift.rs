@@ -754,6 +754,7 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
     write_path_in_schema: bool,
+    write_rg_ordinal: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
@@ -762,6 +763,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         Self {
             writer,
             write_path_in_schema: true,
+            write_rg_ordinal: true,
         }
     }
 
@@ -776,6 +778,16 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Indicate whether or not to emit `path_in_schema`.
     pub(crate) fn write_path_in_schema(&self) -> bool {
         self.write_path_in_schema
+    }
+
+    /// Control the writing of the `ordinal` element of the `RowGroup` struct.
+    pub(crate) fn set_write_row_group_ordinal(&mut self, val: bool) {
+        self.write_rg_ordinal = val;
+    }
+
+    /// Indicate whether or not to emit `ordinal`.
+    pub(crate) fn write_row_group_ordinal(&self) -> bool {
+        self.write_rg_ordinal
     }
 
     /// Write a single byte to the output stream.

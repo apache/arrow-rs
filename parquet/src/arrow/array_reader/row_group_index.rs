@@ -90,7 +90,7 @@ impl RowGroupIndexReader {
         // general path: many row groups
         // builds a mapping from ordinal to row group index
         // this is O(n) where n is the total number of row groups in the file
-        let ordinal_to_index: HashMap<i16, i64> =
+        let ordinal_to_index: HashMap<i32, i64> =
             HashMap::from_iter(parquet_metadata.row_groups().iter().enumerate().filter_map(
                 |(row_group_index, rg)| {
                     rg.ordinal()
@@ -215,7 +215,7 @@ mod tests {
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
-    fn create_test_parquet_metadata(row_groups: Vec<(i16, i64)>) -> ParquetMetaData {
+    fn create_test_parquet_metadata(row_groups: Vec<(i32, i64)>) -> ParquetMetaData {
         let schema_descr = create_test_schema();
 
         let mut row_group_metas = vec![];
