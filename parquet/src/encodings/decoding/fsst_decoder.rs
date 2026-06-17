@@ -20,10 +20,10 @@ use std::marker::PhantomData;
 use bytes::Bytes;
 
 use crate::basic::{Encoding, Type};
-use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::decoding::Decoder;
-use crate::encodings::fsst::{FSST_LENGTH_PREFIX_BYTES, SymbolTable};
+use crate::data_type::{DataType, Int32Type};
+use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
+use crate::encodings::fsst::{FSST_LENGTH_ENCODING_DELTA, SymbolTable, read_uleb128};
 use crate::errors::{ParquetError, Result};
 
 /// Decoder for the [`FSST`](Encoding::FSST) encoding.
@@ -31,14 +31,16 @@ use crate::errors::{ParquetError, Result};
 /// See [`FsstEncoder`](crate::encodings::encoding::fsst_encoder::FsstEncoder)
 /// for the page layout. Only [`Type::BYTE_ARRAY`] is supported.
 pub struct FsstDecoder<T: DataType> {
-    /// Symbol table parsed from the page header.
+    /// Symbol table parsed from the page.
     table: SymbolTable,
-    /// Compressed payload following the symbol-table header.
+    /// Concatenated compressed payload (section 4).
     data: Bytes,
-    /// Offset into `data` pointing at the next value's length prefix.
+    /// Per-value compressed lengths (section 2), decoded up front.
+    lengths: Vec<i32>,
+    /// Index of the next value to produce.
+    cursor: usize,
+    /// Byte offset into `data` of the value at `cursor`.
     offset: usize,
-    /// Number of values still to be produced.
-    num_values: usize,
     _phantom: PhantomData<T>,
 }
 
@@ -54,23 +56,11 @@ impl<T: DataType> FsstDecoder<T> {
         Self {
             table: SymbolTable::default(),
             data: Bytes::new(),
+            lengths: Vec::new(),
+            cursor: 0,
             offset: 0,
-            num_values: 0,
             _phantom: PhantomData,
         }
-    }
-
-    /// Reads the little-endian `u32` length prefix at the current offset and
-    /// advances past it, returning the length of the next compressed value.
-    fn read_len(&mut self) -> Result<usize> {
-        let end = self.offset + FSST_LENGTH_PREFIX_BYTES;
-        let bytes = self
-            .data
-            .get(self.offset..end)
-            .ok_or_else(|| general_err!("FSST: truncated length prefix"))?;
-        let len = u32::from_le_bytes(bytes.try_into().unwrap()) as usize;
-        self.offset = end;
-        Ok(len)
     }
 }
 
@@ -79,19 +69,51 @@ impl<T: DataType> Decoder<T> for FsstDecoder<T> {
         if T::get_physical_type() != Type::BYTE_ARRAY {
             return Err(general_err!("FsstDecoder only supports ByteArrayType"));
         }
-        let (table, consumed) = SymbolTable::deserialize(&data)?;
+
+        // Section 1: header.
+        let mut pos = 0;
+        let length_encoding = read_uleb128(&data, &mut pos)?;
+        if length_encoding != FSST_LENGTH_ENCODING_DELTA as u64 {
+            return Err(general_err!(
+                "FSST: unsupported length-array encoding {length_encoding}"
+            ));
+        }
+        let length_size = read_uleb128(&data, &mut pos)? as usize;
+        let symbol_size = read_uleb128(&data, &mut pos)? as usize;
+
+        let length_end = pos + length_size;
+        let symbol_end = length_end + symbol_size;
+        let symbol_bytes = data
+            .get(length_end..symbol_end)
+            .ok_or_else(|| general_err!("FSST: truncated symbol table"))?;
+
+        // Section 2: length array, Delta-Binary-Packed.
+        let mut lengths = vec![0i32; num_values];
+        if num_values > 0 {
+            let length_bytes = data
+                .slice(pos..length_end);
+            let mut length_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+            length_decoder.set_data(length_bytes, num_values)?;
+            length_decoder.get(&mut lengths)?;
+        }
+
+        // Section 3: symbol table.
+        let (table, _) = SymbolTable::deserialize(symbol_bytes)?;
+
+        // Section 4: compressed payload.
         self.table = table;
-        self.data = data.slice(consumed..);
+        self.data = data.slice(symbol_end..);
+        self.lengths = lengths;
+        self.cursor = 0;
         self.offset = 0;
-        self.num_values = num_values;
         Ok(())
     }
 
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
-        let to_read = buffer.len().min(self.num_values);
+        let to_read = buffer.len().min(self.lengths.len() - self.cursor);
         let mut decompressed = Vec::new();
         for item in buffer.iter_mut().take(to_read) {
-            let len = self.read_len()?;
+            let len = self.lengths[self.cursor] as usize;
             let end = self.offset + len;
             let compressed = self
                 .data
@@ -99,15 +121,15 @@ impl<T: DataType> Decoder<T> for FsstDecoder<T> {
                 .ok_or_else(|| general_err!("FSST: truncated compressed value"))?;
             decompressed.clear();
             self.table.decompress(compressed, &mut decompressed)?;
-            self.offset = end;
             item.set_from_bytes(Bytes::copy_from_slice(&decompressed));
+            self.offset = end;
+            self.cursor += 1;
         }
-        self.num_values -= to_read;
         Ok(to_read)
     }
 
     fn values_left(&self) -> usize {
-        self.num_values
+        self.lengths.len() - self.cursor
     }
 
     #[cold]
@@ -116,18 +138,19 @@ impl<T: DataType> Decoder<T> for FsstDecoder<T> {
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let to_skip = num_values.min(self.num_values);
+        let to_skip = num_values.min(self.lengths.len() - self.cursor);
         for _ in 0..to_skip {
-            let len = self.read_len()?;
-            self.offset += len;
+            self.offset += self.lengths[self.cursor] as usize;
+            self.cursor += 1;
         }
-        self.num_values -= to_skip;
         Ok(to_skip)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+
     use crate::basic::Encoding;
     use crate::data_type::{ByteArray, ByteArrayType};
     use crate::encodings::decoding::Decoder;
@@ -159,6 +182,33 @@ mod tests {
         assert_eq!(read, values.len());
         assert_eq!(out, values);
         assert_eq!(decoder.values_left(), 0);
+    }
+
+    #[test]
+    fn roundtrip_many_values_exercises_length_array() {
+        let values: Vec<ByteArray> = (0..1000)
+            .map(|i| ByteArray::from(format!("https://example.com/item/{i}").as_str()))
+            .collect();
+
+        let mut encoder = FsstEncoder::<ByteArrayType>::new();
+        encoder.put(&values).unwrap();
+        let buffer = encoder.flush_buffer().unwrap();
+
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        decoder.set_data(buffer, values.len()).unwrap();
+
+        let mut out = vec![ByteArray::default(); values.len()];
+        assert_eq!(decoder.get(&mut out).unwrap(), values.len());
+        assert_eq!(out, values);
+    }
+
+    #[test]
+    fn rejects_unknown_length_encoding() {
+        // A header whose first ULEB128 (length-array encoding id) is not the
+        // expected Delta-Binary-Packed id must be rejected.
+        let bogus = Bytes::from_static(&[99, 0, 0]);
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(bogus, 0).is_err());
     }
 
     #[test]

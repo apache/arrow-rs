@@ -21,9 +21,9 @@ use bytes::Bytes;
 
 use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{ByteArray, DataType};
-use crate::encodings::encoding::Encoder;
-use crate::encodings::fsst::{FSST_LENGTH_PREFIX_BYTES, SymbolTable};
+use crate::data_type::{ByteArray, DataType, Int32Type};
+use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
+use crate::encodings::fsst::{FSST_LENGTH_ENCODING_DELTA, SymbolTable, write_uleb128};
 use crate::errors::{ParquetError, Result};
 
 /// Encoder for the [`FSST`](Encoding::FSST) encoding.
@@ -31,10 +31,12 @@ use crate::errors::{ParquetError, Result};
 /// Values are buffered until [`flush_buffer`](Encoder::flush_buffer), at which
 /// point a [`SymbolTable`] is trained over them and each value is compressed.
 ///
-/// The flushed page layout is:
-/// 1. the serialized [`SymbolTable`] header, followed by
-/// 2. for each value: a little-endian `u32` compressed length, then the
-///    compressed bytes.
+/// The flushed page has four contiguous sections:
+/// 1. a header of three ULEB128 values — the length-array encoding id, the
+///    length-array byte size, and the symbol-table byte size;
+/// 2. the per-value compressed lengths, Delta-Binary-Packed;
+/// 3. the serialized [`SymbolTable`]; and
+/// 4. the concatenated compressed values (boundaries come from the lengths).
 ///
 /// Only [`Type::BYTE_ARRAY`] is supported.
 pub struct FsstEncoder<T: DataType> {
@@ -111,21 +113,36 @@ impl<T: DataType> Encoder<T> for FsstEncoder<T> {
 
         let table = SymbolTable::train(self.values.iter().map(|v| v.data()));
 
-        // Pre-size to the known header layout plus a per-value length prefix; the
-        // compressed payload usually fits within the buffered raw size.
-        let capacity = table.serialized_size()
-            + self.values.len() * FSST_LENGTH_PREFIX_BYTES
-            + self.buffered_bytes;
-        let mut out = Vec::with_capacity(capacity);
-        table.serialize(&mut out);
-
+        // Compress each value, concatenating the payload and collecting the
+        // per-value compressed lengths for the length array.
+        let mut payload = Vec::with_capacity(self.buffered_bytes);
+        let mut lengths: Vec<i32> = Vec::with_capacity(self.values.len());
         let mut compressed = Vec::new();
         for value in &self.values {
             compressed.clear();
             table.compress(value.data(), &mut compressed);
-            out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-            out.extend_from_slice(&compressed);
+            lengths.push(compressed.len() as i32);
+            payload.extend_from_slice(&compressed);
         }
+
+        // Section 2: length array, Delta-Binary-Packed.
+        let mut length_encoder = DeltaBitPackEncoder::<Int32Type>::new();
+        length_encoder.put(&lengths)?;
+        let length_bytes = length_encoder.flush_buffer()?;
+
+        // Section 3: symbol table.
+        let mut symbol_bytes = Vec::with_capacity(table.serialized_size());
+        table.serialize(&mut symbol_bytes);
+
+        // Section 1 (header) + sections 2-4, contiguous.
+        let mut out =
+            Vec::with_capacity(8 + length_bytes.len() + symbol_bytes.len() + payload.len());
+        write_uleb128(&mut out, FSST_LENGTH_ENCODING_DELTA as u64);
+        write_uleb128(&mut out, length_bytes.len() as u64);
+        write_uleb128(&mut out, symbol_bytes.len() as u64);
+        out.extend_from_slice(&length_bytes);
+        out.extend_from_slice(&symbol_bytes);
+        out.extend_from_slice(&payload);
 
         self.values.clear();
         self.buffered_bytes = 0;
