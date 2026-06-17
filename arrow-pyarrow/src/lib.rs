@@ -321,18 +321,20 @@ impl ToPyArrow for ArrayData {
 
 impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        let list = value.cast::<PyList>()?;
-        list.iter().map(|x| T::from_pyarrow_bound(&x)).collect()
+        let mut v = Vec::with_capacity(value.len().unwrap_or(0));
+        for item in value.try_iter()? {
+            v.push(T::from_pyarrow_bound(&item?)?);
+        }
+        Ok(v)
     }
 }
 
 impl<T: ToPyArrow> ToPyArrow for Vec<T> {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let values = self
-            .iter()
+        self.iter()
             .map(|v| v.to_pyarrow(py))
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(PyList::new(py, values)?.into_any())
+            .collect::<PyResult<Vec<_>>>()?
+            .into_pyobject(py)
     }
 }
 
