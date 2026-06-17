@@ -133,8 +133,7 @@ impl FromPyArrow for DataType {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = call_capsule_method(value, "__arrow_c_schema__")?;
+        if let Some(capsule) = call_capsule_method_if_exists(value, "__arrow_c_schema__")? {
             let schema_ptr = extract_capsule::<FFI_ArrowSchema>(&capsule, "__arrow_c_schema__")?;
             return unsafe { DataType::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
@@ -159,8 +158,7 @@ impl FromPyArrow for Field {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = call_capsule_method(value, "__arrow_c_schema__")?;
+        if let Some(capsule) = call_capsule_method_if_exists(value, "__arrow_c_schema__")? {
             let schema_ptr = extract_capsule::<FFI_ArrowSchema>(&capsule, "__arrow_c_schema__")?;
             return unsafe { Field::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
@@ -185,8 +183,7 @@ impl FromPyArrow for Schema {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = call_capsule_method(value, "__arrow_c_schema__")?;
+        if let Some(capsule) = call_capsule_method_if_exists(value, "__arrow_c_schema__")? {
             let schema_ptr = extract_capsule::<FFI_ArrowSchema>(&capsule, "__arrow_c_schema__")?;
             return unsafe { Schema::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
@@ -211,9 +208,9 @@ impl FromPyArrow for ArrayData {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_array__")? {
-            let (schema_capsule, array_capsule) =
-                call_capsule_pair_method(value, "__arrow_c_array__")?;
+        if let Some((schema_capsule, array_capsule)) =
+            call_capsule_pair_method_if_exists(value, "__arrow_c_array__")?
+        {
             let schema_ptr = extract_capsule(&schema_capsule, "__arrow_c_array__")?;
             let array_ptr = extract_capsule(&array_capsule, "__arrow_c_array__")?;
             let array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
@@ -278,9 +275,9 @@ impl FromPyArrow for RecordBatch {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 
-        if value.hasattr("__arrow_c_array__")? {
-            let (schema_capsule, array_capsule) =
-                call_capsule_pair_method(value, "__arrow_c_array__")?;
+        if let Some((schema_capsule, array_capsule)) =
+            call_capsule_pair_method_if_exists(value, "__arrow_c_array__")?
+        {
             let schema_ptr = extract_capsule(&schema_capsule, "__arrow_c_array__")?;
             let array_ptr = extract_capsule(&array_capsule, "__arrow_c_array__")?;
             let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
@@ -347,8 +344,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_stream__")? {
-            let capsule = call_capsule_method(value, "__arrow_c_stream__")?;
+        if let Some(capsule) = call_capsule_method_if_exists(value, "__arrow_c_stream__")? {
             let stream_ptr = extract_capsule(&capsule, "__arrow_c_stream__")?;
             let stream = unsafe { FFI_ArrowArrayStream::from_raw(stream_ptr.as_ptr()) };
 
@@ -549,33 +545,38 @@ impl<T> From<T> for PyArrowType<T> {
     }
 }
 
-fn call_capsule_method<'py>(
+fn call_capsule_method_if_exists<'py>(
     object: &Bound<'py, PyAny>,
     method_name: &'static str,
-) -> PyResult<Bound<'py, PyCapsule>> {
-    object
-        .call_method0(method_name)?
-        .extract()
-        .map_err(|e: CastError| {
+) -> PyResult<Option<Bound<'py, PyCapsule>>> {
+    let Some(method) = object.getattr_opt(method_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(method.call0()?.extract().map_err(
+        |e: CastError| {
             wrapping_type_error(
                 object.py(),
                 e.into(),
                 format!("Expected {method_name} to return a capsule."),
             )
-        })
+        },
+    )?))
 }
 
-fn call_capsule_pair_method<'py>(
+fn call_capsule_pair_method_if_exists<'py>(
     object: &Bound<'py, PyAny>,
     method_name: &'static str,
-) -> PyResult<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)> {
-    object.call_method0(method_name)?.extract().map_err(|e| {
+) -> PyResult<Option<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)>> {
+    let Some(method) = object.getattr_opt(method_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(method.call0()?.extract().map_err(|e| {
         wrapping_type_error(
             object.py(),
             e,
             format!("Expected {method_name} to return a pair of capsules."),
         )
-    })
+    })?))
 }
 
 trait PyCapsuleType {
