@@ -23,7 +23,7 @@ use crate::basic::{Encoding, Type};
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
 use crate::encodings::decoding::Decoder;
-use crate::encodings::fsst::SymbolTable;
+use crate::encodings::fsst::{FSST_LENGTH_PREFIX_BYTES, SymbolTable};
 use crate::errors::{ParquetError, Result};
 
 /// Decoder for the [`FSST`](Encoding::FSST) encoding.
@@ -63,7 +63,7 @@ impl<T: DataType> FsstDecoder<T> {
     /// Reads the little-endian `u32` length prefix at the current offset and
     /// advances past it, returning the length of the next compressed value.
     fn read_len(&mut self) -> Result<usize> {
-        let end = self.offset + 4;
+        let end = self.offset + FSST_LENGTH_PREFIX_BYTES;
         let bytes = self
             .data
             .get(self.offset..end)

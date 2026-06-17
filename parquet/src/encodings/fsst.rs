@@ -50,6 +50,10 @@ pub(crate) const FSST_MAX_SYMBOLS: usize = 255;
 /// Maximum length, in bytes, of a single symbol.
 pub(crate) const FSST_MAX_SYMBOL_LEN: usize = 8;
 
+/// Width, in bytes, of the little-endian length prefix written before each
+/// compressed value in a flushed page.
+pub(crate) const FSST_LENGTH_PREFIX_BYTES: usize = std::mem::size_of::<u32>();
+
 /// Number of passes used to grow the symbol table during training.
 const TRAINING_GENERATIONS: usize = 5;
 
@@ -252,10 +256,16 @@ impl SymbolTable {
         Ok(())
     }
 
+    /// Number of bytes [`serialize`](Self::serialize) will append, so callers
+    /// can pre-size their output buffer to the exact header layout.
+    pub(crate) fn serialized_size(&self) -> usize {
+        1 + self.symbols.iter().map(|s| 1 + s.len()).sum::<usize>()
+    }
+
     /// Serialize the table as a header that precedes the compressed data.
     ///
     /// Layout: `num_symbols: u8`, then for each symbol `len: u8` followed by
-    /// `len` bytes.
+    /// `len` bytes. See [`serialized_size`](Self::serialized_size).
     pub(crate) fn serialize(&self, out: &mut Vec<u8>) {
         debug_assert!(self.symbols.len() <= FSST_MAX_SYMBOLS);
         out.push(self.symbols.len() as u8);
@@ -352,6 +362,14 @@ mod tests {
         let mut decompressed = Vec::new();
         restored.decompress(&compressed, &mut decompressed).unwrap();
         assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn serialized_size_matches_serialized_len() {
+        let table = SymbolTable::train([b"the quick brown fox".as_slice()]);
+        let mut buf = Vec::new();
+        table.serialize(&mut buf);
+        assert_eq!(buf.len(), table.serialized_size());
     }
 
     #[test]

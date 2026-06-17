@@ -23,7 +23,7 @@ use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{ByteArray, DataType};
 use crate::encodings::encoding::Encoder;
-use crate::encodings::fsst::SymbolTable;
+use crate::encodings::fsst::{FSST_LENGTH_PREFIX_BYTES, SymbolTable};
 use crate::errors::{ParquetError, Result};
 
 /// Encoder for the [`FSST`](Encoding::FSST) encoding.
@@ -100,10 +100,23 @@ impl<T: DataType> Encoder<T> for FsstEncoder<T> {
         if T::get_physical_type() != Type::BYTE_ARRAY {
             return Err(general_err!("FsstEncoder only supports ByteArrayType"));
         }
+        // Parquet counts values per page with an i32, so the encoder cannot
+        // produce more than that in a single flush.
+        if self.values.len() > i32::MAX as usize {
+            return Err(general_err!(
+                "FSST can encode at most i32::MAX values, got {}",
+                self.values.len()
+            ));
+        }
 
         let table = SymbolTable::train(self.values.iter().map(|v| v.data()));
 
-        let mut out = Vec::with_capacity(self.buffered_bytes + self.values.len() * 4 + 8);
+        // Pre-size to the known header layout plus a per-value length prefix; the
+        // compressed payload usually fits within the buffered raw size.
+        let capacity = table.serialized_size()
+            + self.values.len() * FSST_LENGTH_PREFIX_BYTES
+            + self.buffered_bytes;
+        let mut out = Vec::with_capacity(capacity);
         table.serialize(&mut out);
 
         let mut compressed = Vec::new();
