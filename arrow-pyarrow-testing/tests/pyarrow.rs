@@ -41,6 +41,7 @@ use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
 };
+use arrow_schema::Schema;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::exceptions::PyTypeError;
 use pyo3::types::{PyAnyMethods, PyModule};
@@ -120,6 +121,34 @@ value = NotATuple()
         assert_eq!(
             err.to_string(),
             "TypeError: Expected __arrow_c_array__ to return a tuple of (schema, array) capsules."
+        );
+    });
+}
+
+#[test]
+fn test_from_pyarrow_non_capsule() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+class NotACapsule:
+    def __arrow_c_schema__(self):
+        return 1
+
+value = NotACapsule()
+"#,
+        )
+            .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = Schema::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyTypeError>(py));
+        assert_eq!(
+            err.to_string(),
+            "TypeError: Expected __arrow_c_schema__ to return a capsule."
         );
     });
 }
