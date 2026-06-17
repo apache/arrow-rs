@@ -724,20 +724,20 @@ def test_reject_other_classes():
     # Arbitrary type that is not a PyArrow type
     not_pyarrow = ["hello"]
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Array, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Array, got list"):
         rust.round_trip_array(not_pyarrow)
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Schema, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Schema, got list"):
         rust.round_trip_schema(not_pyarrow)
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Field, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Field, got list"):
         rust.round_trip_field(not_pyarrow)
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.DataType, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.DataType, got list"):
         rust.round_trip_type(not_pyarrow)
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatch, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatch, got list"):
         rust.round_trip_record_batch(not_pyarrow)
 
-    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatchReader, got builtins.list"):
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatchReader, got list"):
         rust.round_trip_record_batch_reader(not_pyarrow)
