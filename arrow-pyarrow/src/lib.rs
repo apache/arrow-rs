@@ -220,9 +220,7 @@ impl FromPyArrow for ArrayData {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if let Some((schema_capsule, array_capsule)) =
-            call_arrow_c_array_method_if_exists(value)?
-        {
+        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
             let schema_ptr =
                 extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
             let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
@@ -288,9 +286,7 @@ impl FromPyArrow for RecordBatch {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 
-        if let Some((schema_capsule, array_capsule)) =
-            call_arrow_c_array_method_if_exists(value)?
-        {
+        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
             let schema_ptr =
                 extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
             let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
