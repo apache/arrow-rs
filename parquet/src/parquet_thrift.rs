@@ -781,6 +781,11 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     }
 
     /// Control the writing of the `ordinal` element of the `RowGroup` struct.
+    ///
+    /// The Thrift `ordinal` field on the `RowGroup` struct is `i16`, but the
+    /// Thrift compact protocol allows for up to 2^31 elements in a list. If
+    /// more than 2^15 row groups are to be written, this can be set to `false`
+    /// to prevent writing the ordinal for some row groups but not others.
     pub(crate) fn set_write_row_group_ordinal(&mut self, val: bool) {
         self.write_rg_ordinal = val;
     }

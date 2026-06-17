@@ -236,7 +236,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.assert_previous_writer_closed()?;
         let ordinal = self.row_group_index;
 
-        // Thrift cannot encode lists with more than 2B elements
+        // Thrift cannot encode lists with more than i32::MAX elements
         let ordinal: i32 = ordinal.try_into().map_err(|_| {
             ParquetError::General(format!(
                 "Parquet does not support more than {} row groups per file (currently: {})",
