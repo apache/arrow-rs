@@ -221,7 +221,7 @@ impl FromPyArrow for ArrayData {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if let Some((schema_capsule, array_capsule)) =
-            call_capsule_pair_method_if_exists(value, "__arrow_c_array__")?
+            call_arrow_c_array_method_if_exists(value)?
         {
             let schema_ptr =
                 extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
@@ -289,7 +289,7 @@ impl FromPyArrow for RecordBatch {
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 
         if let Some((schema_capsule, array_capsule)) =
-            call_capsule_pair_method_if_exists(value, "__arrow_c_array__")?
+            call_arrow_c_array_method_if_exists(value)?
         {
             let schema_ptr =
                 extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
@@ -578,18 +578,17 @@ fn call_capsule_method_if_exists<'py>(
     )?))
 }
 
-fn call_capsule_pair_method_if_exists<'py>(
+fn call_arrow_c_array_method_if_exists<'py>(
     object: &Bound<'py, PyAny>,
-    method_name: &'static str,
 ) -> PyResult<Option<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)>> {
-    let Some(method) = object.getattr_opt(method_name)? else {
+    let Some(method) = object.getattr_opt("__arrow_c_array__")? else {
         return Ok(None);
     };
     Ok(Some(method.call0()?.extract().map_err(|e| {
         wrapping_type_error(
             object.py(),
             e,
-            format!("Expected {method_name} to return a pair of capsules."),
+            "Expected __arrow_c_array__ to return a tuple of (schema, array) capsules.".into(),
         )
     })?))
 }
