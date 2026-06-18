@@ -93,6 +93,62 @@ impl RowGroupFrontier {
         self.budget = budget;
     }
 
+    /// Peek at the next row-group index `next_readable_row_group` would
+    /// hand out, without mutating any state. Returns `None` if every
+    /// remaining row group would be skipped under the current
+    /// selection/budget, or if the queue is empty.
+    ///
+    /// Mirrors the structure of `next_readable_row_group` but only walks
+    /// borrowed state — used by [`super::ParquetPushDecoder::peek_next_row_group`]
+    /// to let adaptive callers (e.g. dynamic row-group pruners or per-RG
+    /// `RowFilter` toggles) keep their per-RG state in lock-step with
+    /// the reader the decoder is about to emit.
+    fn peek_next_row_group(&self) -> Option<usize> {
+        // Short-circuit: budget exhausted or selection drained ⇒ same
+        // outcome as `next_readable_row_group`'s early return.
+        if self.budget.is_exhausted()
+            || self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.row_count() == 0)
+        {
+            return None;
+        }
+
+        // We may have to walk past row groups whose split selection is
+        // empty. Cloning the selection lets us run the same `split_off`
+        // logic without disturbing the real one.
+        let mut selection = self.selection.clone();
+        let mut budget = self.budget;
+        for &row_group_idx in &self.row_groups {
+            let row_count = self.row_group_num_rows(row_group_idx).ok()?;
+            let selected_rows = match selection.as_mut() {
+                Some(remaining) => {
+                    let rg_segment = remaining.split_off(row_count);
+                    rg_segment.row_count()
+                }
+                None => row_count,
+            };
+            if selected_rows == 0 {
+                // Same skip path as `next_readable_row_group`: row
+                // selection drained for this RG, move on.
+                continue;
+            }
+            if self.has_predicates {
+                // Predicates → always read, regardless of budget.
+                return Some(row_group_idx);
+            }
+            let rows_after_budget = budget.rows_after(selected_rows);
+            if rows_after_budget != 0 {
+                return Some(row_group_idx);
+            }
+            // Budget-skip: advance the simulated budget and keep
+            // walking; the next iteration sees the post-advance budget.
+            budget = budget.advance(selected_rows, rows_after_budget);
+        }
+        None
+    }
+
     fn clear_remaining(&mut self) {
         self.selection = None;
         self.row_groups.clear();
@@ -297,6 +353,22 @@ impl RemainingRowGroups {
     /// being decoded).
     pub fn row_groups_remaining(&self) -> usize {
         self.frontier.row_groups.len()
+    }
+
+    /// Peek at the file-level row-group index that the next call to
+    /// [`Self::try_next_reader`] will produce a reader for, after
+    /// simulating the same skip logic [`Self::try_next_reader`] applies
+    /// internally (row-selection emptiness + offset/limit budget). Does
+    /// not mutate state.
+    ///
+    /// Returns `None` when the active row group is still being decoded,
+    /// when no row groups remain, or when every remaining row group
+    /// would be skipped under the current selection/budget.
+    pub fn peek_next_row_group(&self) -> Option<usize> {
+        if self.row_group_reader_builder.has_active_row_group() {
+            return None;
+        }
+        self.frontier.peek_next_row_group()
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
