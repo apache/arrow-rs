@@ -1082,6 +1082,96 @@ mod tests {
     }
 
     #[test]
+    fn test_try_finish_empty_builder_errors() {
+        let builder = VariantBuilder::new();
+        let err = builder.try_finish().unwrap_err();
+        assert!(err.to_string().contains("empty"), "unexpected error: {err}");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn test_finish_empty_builder_panics() {
+        let builder = VariantBuilder::new();
+        let _ = builder.finish();
+    }
+
+    #[test]
+    fn test_try_append_value_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_append_value(2i32).unwrap_err();
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_append_value_bytes_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_append_value_bytes(2i32).unwrap_err();
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_new_list_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_new_list().expect_err("expected error");
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_new_object_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_new_object().expect_err("expected error");
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_append_value_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        builder.append_value(2i32);
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_append_value_bytes_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        builder.append_value_bytes(2i32);
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_new_list_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let _ = builder.new_list();
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_new_object_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let _ = builder.new_object();
+    }
+
+    #[test]
     fn test_nested_object_with_lists() {
         /*
         {
