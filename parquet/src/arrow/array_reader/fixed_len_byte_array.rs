@@ -310,10 +310,16 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         let byte_length = self.byte_length.unwrap_or_default();
 
-        assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
+        if self.buffer.len() != (read_offset + values_read) * byte_length {
+            return Err(general_err!(
+                "found inconsistent buffer length while padding nulls: expected {} bytes, got {}",
+                (read_offset + values_read) * byte_length,
+                self.buffer.len()
+            ));
+        }
         self.buffer
             .resize((read_offset + levels_read) * byte_length, 0);
 
@@ -339,6 +345,7 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             };
             move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         }
+        Ok(())
     }
 }
 
