@@ -139,7 +139,9 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
         ));
     }
 
-    let capsule_name = unsafe { capsule_name.unwrap().as_cstr().to_str()? };
+    let capsule_name = unsafe { capsule_name.unwrap().as_cstr() }
+        .to_str()
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     if capsule_name != name {
         return Err(PyValueError::new_err(format!(
             "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'",
@@ -353,7 +355,7 @@ impl FromPyArrow for RecordBatch {
                 .pointer_checked(Some(ARROW_ARRAY_CAPSULE_NAME))?
                 .cast::<FFI_ArrowArray>();
             let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
-            let mut array_data =
+            let array_data =
                 unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
@@ -361,11 +363,6 @@ impl FromPyArrow for RecordBatch {
                 ));
             }
             let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
-            // Ensure data is aligned (by potentially copying the buffers).
-            // This is needed because some python code (for example the
-            // python flight client) produces unaligned buffers
-            // See https://github.com/apache/arrow/issues/43552 for details
-            array_data.align_buffers();
             let array = StructArray::from(array_data);
             // StructArray does not embed metadata from schema. We need to override
             // the output schema with the schema from the capsule.

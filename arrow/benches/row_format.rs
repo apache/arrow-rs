@@ -25,10 +25,11 @@ use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
     create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
-    create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed,
-    create_string_dict_array, create_string_view_array_with_len,
-    create_string_view_array_with_max_len,
+    create_primitive_run_array, create_string_array_with_len,
+    create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array,
+    create_string_view_array_with_len, create_string_view_array_with_max_len,
 };
+
 use arrow::util::data_gen::create_random_array;
 use arrow_array::Array;
 use arrow_array::types::{Int8Type, Int32Type};
@@ -282,6 +283,20 @@ fn row_bench(c: &mut Criterion) {
         "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)",
         cols,
     );
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 1024,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(1024 physical)", cols);
+
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 512,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(512 physical)", cols);
+
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 256,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(256 physical)", cols);
 
     // List
 

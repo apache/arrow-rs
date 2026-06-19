@@ -345,12 +345,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let column_indexes = std::mem::take(&mut self.column_indexes);
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
+        let write_path_in_schema = self.props.write_path_in_schema();
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
+            write_path_in_schema,
         );
 
         #[cfg(feature = "encryption")]
@@ -682,6 +684,30 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     pub fn append_column<R: ChunkReader>(
         &mut self,
         reader: &R,
+        close: ColumnCloseResult,
+    ) -> Result<()> {
+        // Position a reader at the start of the buffered chunk, then splice the
+        // bytes through the shared streaming path.
+        let metadata = &close.metadata;
+        let src_offset = metadata
+            .dictionary_page_offset()
+            .unwrap_or_else(|| metadata.data_page_offset());
+        let read = reader.get_read(src_offset as _)?;
+        self.append_column_from_read(read, close)
+    }
+
+    /// Splice an already-encoded column chunk into the row group, reading its
+    /// bytes sequentially from `read`.
+    ///
+    /// `read` must be positioned at the start of the chunk (the dictionary page
+    /// if present, otherwise the first data page — i.e. `src_offset` below) and
+    /// yield exactly the chunk's compressed bytes. Unlike [`Self::append_column`]
+    /// this consumes an owned [`Read`], which lets the caller stream the bytes
+    /// back from a [`PageStore`](crate::column::page_store::PageStore) one page
+    /// at a time without materializing the whole chunk in memory.
+    pub(crate) fn append_column_from_read<R: Read>(
+        &mut self,
+        read: R,
         mut close: ColumnCloseResult,
     ) -> Result<()> {
         self.assert_previous_writer_closed()?;
@@ -705,7 +731,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let src_length = metadata.compressed_size();
 
         let write_offset = self.buf.bytes_written();
-        let mut read = reader.get_read(src_offset as _)?.take(src_length as _);
+        let mut read = read.take(src_length as _);
         let write_length = std::io::copy(&mut read, &mut self.buf)?;
 
         if src_length as u64 != write_length {
@@ -716,7 +742,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
-            .set_compression(metadata.compression())
+            .set_compression_codec(metadata.compression_codec())
             .set_encodings_mask(*metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
@@ -1278,10 +1304,7 @@ mod tests {
     #[test]
     fn test_file_writer_v2_with_metadata() {
         let file = tempfile::tempfile().unwrap();
-        let field_logical_type = Some(LogicalType::Integer {
-            bit_width: 8,
-            is_signed: false,
-        });
+        let field_logical_type = Some(LogicalType::integer(8, false));
         let field = Arc::new(
             types::Type::primitive_type_builder("col1", Type::INT32)
                 .with_logical_type(field_logical_type.clone())
@@ -1595,7 +1618,7 @@ mod tests {
 
             let desc = ColumnDescriptor::new(Arc::new(t), 0, 0, ColumnPath::new(vec![]));
             let meta = ColumnChunkMetaData::builder(Arc::new(desc))
-                .set_compression(codec)
+                .set_compression_codec(codec.into())
                 .set_total_compressed_size(reader.len() as i64)
                 .set_num_values(total_num_values)
                 .build()

@@ -127,7 +127,11 @@ pub struct VariantObject<'m, 'v> {
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+#[cfg(target_pointer_width = "64")]
 const _: () = crate::utils::expect_size_of::<VariantObject>(64);
+
+#[cfg(target_pointer_width = "32")]
+const _: () = crate::utils::expect_size_of::<VariantObject>(44);
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {

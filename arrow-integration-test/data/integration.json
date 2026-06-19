@@ -319,6 +319,89 @@
             "children": []
           }
         ]
+      },
+      {
+        "name": "utf8views",
+        "type": {
+          "name": "utf8view"
+        },
+        "nullable": true,
+        "children": []
+      },
+      {
+        "name": "binaryviews",
+        "type": {
+          "name": "binaryview"
+        },
+        "nullable": true,
+        "children": []
+      },
+      {
+        "name": "listviews",
+        "type": {
+          "name": "listview"
+        },
+        "nullable": true,
+        "children": [
+          {
+            "name": "item",
+            "type": {
+              "name": "int",
+              "isSigned": true,
+              "bitWidth": 32
+            },
+            "nullable": true,
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "largelistviews",
+        "type": {
+          "name": "largelistview"
+        },
+        "nullable": true,
+        "children": [
+          {
+            "name": "item",
+            "type": {
+              "name": "int",
+              "isSigned": true,
+              "bitWidth": 32
+            },
+            "nullable": true,
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "runendencoded",
+        "type": {
+          "name": "runendencoded"
+        },
+        "nullable": true,
+        "children": [
+          {
+            "name": "run_ends",
+            "type": {
+              "name": "int",
+              "isSigned": true,
+              "bitWidth": 16
+            },
+            "nullable": false,
+            "children": []
+          },
+          {
+            "name": "values",
+            "type": {
+              "name": "int",
+              "isSigned": true,
+              "bitWidth": 32
+            },
+            "nullable": true,
+            "children": []
+          }
+        ]
       }
     ]
   },
@@ -798,6 +881,162 @@
                 "",
                 "",
                 "aaaaaa"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "utf8views",
+          "count": 3,
+          "VALIDITY": [
+            1,
+            0,
+            1
+          ],
+          "VIEWS": [
+            {
+              "SIZE": 5,
+              "INLINED": "hello"
+            },
+            {
+              "SIZE": 0,
+              "INLINED": ""
+            },
+            {
+              "SIZE": 19,
+              "PREFIX_HEX": "74686973",
+              "BUFFER_INDEX": 0,
+              "OFFSET": 0
+            }
+          ],
+          "VARIADIC_DATA_BUFFERS": ["74686973206973206E6F7420696E6C696E6564"]
+        },
+        {
+          "name": "binaryviews",
+          "count": 3,
+          "VALIDITY": [
+            1,
+            1,
+            0
+          ],
+          "VIEWS": [
+            {
+              "SIZE": 2,
+              "INLINED": "F34D"
+            },
+            {
+              "SIZE": 16,
+              "PREFIX_HEX": "00010203",
+              "BUFFER_INDEX": 0,
+              "OFFSET": 0
+            },
+            {
+              "SIZE": 0,
+              "INLINED": ""
+            }
+          ],
+          "VARIADIC_DATA_BUFFERS": ["000102030405060708090A0B0C0D0E0F"]
+        },
+        {
+          "name": "listviews",
+          "count": 3,
+          "VALIDITY": [
+            1,
+            0,
+            1
+          ],
+          "OFFSET": [
+            0,
+            2,
+            2
+          ],
+          "SIZE": [
+            2,
+            0,
+            3
+          ],
+          "children": [
+            {
+              "name": "item",
+              "count": 5,
+              "VALIDITY": [
+                1,
+                1,
+                1,
+                0,
+                1
+              ],
+              "DATA": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ]
+            }
+          ]
+        },
+        {
+          "name": "largelistviews",
+          "count": 3,
+          "VALIDITY": [
+            1,
+            1,
+            0
+          ],
+          "OFFSET": [
+            "0",
+            "2",
+            "3"
+          ],
+          "SIZE": [
+            "2",
+            "1",
+            "0"
+          ],
+          "children": [
+            {
+              "name": "item",
+              "count": 3,
+              "VALIDITY": [
+                1,
+                0,
+                1
+              ],
+              "DATA": [
+                10,
+                20,
+                30
+              ]
+            }
+          ]
+        },
+        {
+          "name": "runendencoded",
+          "count": 3,
+          "children": [
+            {
+              "name": "run_ends",
+              "count": 2,
+              "VALIDITY": [
+                1,
+                1
+              ],
+              "DATA": [
+                2,
+                3
+              ]
+            },
+            {
+              "name": "values",
+              "count": 2,
+              "VALIDITY": [
+                1,
+                0
+              ],
+              "DATA": [
+                100,
+                200
               ]
             }
           ]

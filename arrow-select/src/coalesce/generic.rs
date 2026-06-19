@@ -17,6 +17,7 @@
 
 use super::InProgressArray;
 use crate::concat::concat;
+use crate::filter::FilterPredicate;
 use arrow_array::ArrayRef;
 use arrow_schema::ArrowError;
 
@@ -56,6 +57,16 @@ impl InProgressArray for GenericInProgressArray {
             )
         })?;
         let array = source.slice(offset, len);
+        self.buffered_arrays.push(array);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter_from(
+        &mut self,
+        source: ArrayRef,
+        filter: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        let array = filter.filter(source.as_ref())?;
         self.buffered_arrays.push(array);
         Ok(())
     }

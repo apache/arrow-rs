@@ -29,10 +29,10 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
     bit_util,
 };
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, transform::MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
-use num_traits::{One, Zero};
+use num_traits::Zero;
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -495,6 +495,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
+    let mut values: Vec<u8> = Vec::new();
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::default());
 
@@ -502,92 +503,116 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let mut capacity = 0;
     let nulls = take_nulls(array.nulls(), indices);
 
-    let (offsets, values) = if array.null_count() == 0 && indices.null_count() == 0 {
-        offsets.reserve(indices.len());
-        for index in indices.values() {
-            let index = index.as_usize();
-            capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            offsets.push(
-                T::Offset::from_usize(capacity)
-                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
-            );
-        }
-        let mut values = Vec::with_capacity(capacity);
+    // Branch on output nulls — `None` means every output slot is valid.
+    match nulls.as_ref().filter(|n| n.null_count() > 0) {
+        // Fast path: no nulls in output, every index is valid.
+        None => {
+            for index in indices.values() {
+                let index = index.as_usize();
+                let start = input_offsets[index].as_usize();
+                let end = input_offsets[index + 1].as_usize();
+                capacity += end - start;
+                offsets.push(
+                    T::Offset::from_usize(capacity)
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+                );
+            }
 
-        for index in indices.values() {
-            values.extend_from_slice(array.value(index.as_usize()).as_ref());
-        }
-        (offsets, values)
-    } else if indices.null_count() == 0 {
-        offsets.reserve(indices.len());
-        for index in indices.values() {
-            let index = index.as_usize();
-            if array.is_valid(index) {
-                capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            }
-            offsets.push(
-                T::Offset::from_usize(capacity)
-                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
-            );
-        }
-        let mut values = Vec::with_capacity(capacity);
+            values.reserve(capacity);
 
-        for index in indices.values() {
-            let index = index.as_usize();
-            if array.is_valid(index) {
-                values.extend_from_slice(array.value(index).as_ref());
-            }
-        }
-        (offsets, values)
-    } else if array.null_count() == 0 {
-        offsets.reserve(indices.len());
-        for (i, index) in indices.values().iter().enumerate() {
-            let index = index.as_usize();
-            if indices.is_valid(i) {
-                capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            }
-            offsets.push(
-                T::Offset::from_usize(capacity)
-                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
-            );
-        }
-        let mut values = Vec::with_capacity(capacity);
+            let dst = values.spare_capacity_mut();
+            debug_assert!(dst.len() >= capacity);
+            let mut offset = 0;
 
-        for (i, index) in indices.values().iter().enumerate() {
-            if indices.is_valid(i) {
-                values.extend_from_slice(array.value(index.as_usize()).as_ref());
+            for index in indices.values() {
+                // SAFETY: in-bounds proven by the first loop's bounds-checked offset access.
+                // dst asserted above to include the required capacity.
+                unsafe {
+                    let data: &[u8] = array.value_unchecked(index.as_usize()).as_ref();
+                    std::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
+                        data.len(),
+                    );
+                    offset += data.len();
+                }
             }
-        }
-        (offsets, values)
-    } else {
-        let nulls = nulls.as_ref().unwrap();
-        offsets.reserve(indices.len());
-        for (i, index) in indices.values().iter().enumerate() {
-            let index = index.as_usize();
-            if nulls.is_valid(i) {
-                capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            }
-            offsets.push(
-                T::Offset::from_usize(capacity)
-                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
-            );
-        }
-        let mut values = Vec::with_capacity(capacity);
 
-        for (i, index) in indices.values().iter().enumerate() {
-            // check index is valid before using index. The value in
-            // NULL index slots may not be within bounds of array
-            let index = index.as_usize();
-            if nulls.is_valid(i) {
-                values.extend_from_slice(array.value(index).as_ref());
+            // SAFETY: wrote exactly `capacity` bytes above; reserved on line above.
+            unsafe {
+                values.set_len(capacity);
             }
         }
-        (offsets, values)
+        // Nullable path: only process valid (non-null) output positions.
+        Some(output_nulls) => {
+            let mut source_ranges = Vec::with_capacity(indices.len() - output_nulls.null_count());
+            let mut last_filled = 0;
+
+            // Pre-fill offsets; we overwrite valid positions below.
+            offsets.resize(indices.len() + 1, T::Offset::default());
+
+            // Pass 1: find all valid ranges that need to be copied.
+            for i in output_nulls.valid_indices() {
+                let current_offset = T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+                // Fill offsets for skipped null slots so they get zero-length ranges.
+                if last_filled < i {
+                    offsets[last_filled + 1..=i].fill(current_offset);
+                }
+
+                // SAFETY: `i` comes from a validity bitmap over `indices`, so it is in-bounds.
+                let index = unsafe { indices.value_unchecked(i) }.as_usize();
+                let start = input_offsets[index].as_usize();
+                let end = input_offsets[index + 1].as_usize();
+                capacity += end - start;
+                offsets[i + 1] = T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+
+                source_ranges.push((start, end));
+                last_filled = i + 1;
+            }
+
+            // Fill trailing null offsets after the last valid position.
+            let final_offset = T::Offset::from_usize(capacity)
+                .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+            offsets[last_filled + 1..].fill(final_offset);
+            // Pass 2: copy byte data for all collected ranges.
+            values.reserve(capacity);
+            debug_assert_eq!(
+                source_ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
+                capacity,
+                "capacity must equal total bytes across all ranges"
+            );
+
+            let src = array.value_data();
+            let src = src.as_ptr();
+            let dst = values.spare_capacity_mut();
+            debug_assert!(dst.len() >= capacity);
+
+            let mut offset = 0;
+
+            for (start, end) in source_ranges.into_iter() {
+                let value_len = end - start;
+                // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
+                // `dst` asserted above to include the required capacity.
+                // The regions don't overlap (src is input, dst is a fresh allocation).
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        src.add(start),
+                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
+                        value_len,
+                    );
+                    offset += value_len;
+                }
+            }
+            // SAFETY: caller guarantees `capacity` == total bytes across all ranges,
+            // so the loop above wrote exactly `capacity` bytes.
+            unsafe { values.set_len(capacity) };
+        }
     };
 
-    T::Offset::from_usize(values.len())
-        .ok_or_else(|| ArrowError::OffsetOverflowError(values.len()))?;
-
+    // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
+    // and `nulls` (if present) has length == `indices.len()`.
     let array = unsafe {
         let offsets = OffsetBuffer::new_unchecked(offsets.into());
         GenericByteArray::<T>::new_unchecked(offsets, values.into(), nulls)
@@ -611,9 +636,8 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
 
 /// `take` implementation for list arrays
 ///
-/// Calculates the index and indexed offset for the inner array,
-/// applying `take` on the inner array, then reconstructing a list array
-/// with the indexed offsets
+/// Copies the selected list entries' child slices into a new child array
+/// via `MutableArrayData`, then reconstructs a list array with new offsets
 fn take_list<IndexType, OffsetType>(
     values: &GenericListArray<OffsetType::Native>,
     indices: &PrimitiveArray<IndexType>,
@@ -624,23 +648,79 @@ where
     OffsetType::Native: OffsetSizeTrait,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
-    // TODO: Some optimizations can be done here such as if it is
-    // taking the whole list or a contiguous sublist
-    let (list_indices, offsets, null_buf) =
-        take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
+    let list_offsets = values.value_offsets();
+    let child_data = values.values().to_data();
+    let nulls = take_nulls(values.nulls(), indices);
 
-    let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices)?;
-    let value_offsets = Buffer::from_vec(offsets);
-    // create a new list with taken data and computed null information
+    let mut new_offsets = Vec::with_capacity(indices.len() + 1);
+    new_offsets.push(OffsetType::Native::zero());
+
+    let use_nulls = child_data.null_count() > 0;
+
+    let capacity = child_data
+        .len()
+        .checked_div(values.len())
+        .map(|v| v * indices.len())
+        .unwrap_or_default();
+
+    let mut array_data = MutableArrayData::new(vec![&child_data], use_nulls, capacity);
+
+    match nulls.as_ref().filter(|n| n.null_count() > 0) {
+        None => {
+            for index in indices.values() {
+                let ix = index.as_usize();
+                let start = list_offsets[ix].as_usize();
+                let end = list_offsets[ix + 1].as_usize();
+                array_data.extend(0, start, end);
+                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
+            }
+        }
+        Some(output_nulls) => {
+            assert_eq!(output_nulls.len(), indices.len());
+
+            let mut last_filled = 0;
+            for i in output_nulls.valid_indices() {
+                let current = OffsetType::Native::from_usize(array_data.len()).unwrap();
+                // Filling offsets for the null values between the two valid indices
+                if last_filled < i {
+                    new_offsets.extend(std::iter::repeat_n(current, i - last_filled));
+                }
+
+                // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
+                let ix = unsafe { indices.value_unchecked(i) }.as_usize();
+                let start = list_offsets[ix].as_usize();
+                let end = list_offsets[ix + 1].as_usize();
+                array_data.extend(0, start, end);
+                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
+                last_filled = i + 1;
+            }
+
+            // Filling offsets for null values at the end
+            let final_offset = OffsetType::Native::from_usize(array_data.len()).unwrap();
+            new_offsets.extend(std::iter::repeat_n(
+                final_offset,
+                indices.len() - last_filled,
+            ));
+        }
+    };
+
+    assert_eq!(
+        new_offsets.len(),
+        indices.len() + 1,
+        "New offsets was filled under/over the expected capacity"
+    );
+
+    let child_data = array_data.freeze();
+    let value_offsets = Buffer::from_vec(new_offsets);
+
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(Some(null_buf.into()))
+        .nulls(nulls)
         .offset(0)
-        .add_child_data(taken.into_data())
+        .add_child_data(child_data)
         .add_buffer(value_offsets);
 
     let list_data = unsafe { list_data.build_unchecked() };
-
     Ok(GenericListArray::<OffsetType::Native>::from(list_data))
 }
 
@@ -923,78 +1003,6 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
         builder.build_unchecked()
     };
     Ok(array_data.into())
-}
-
-/// Takes/filters a list array's inner data using the offsets of the list array.
-///
-/// Where a list array has indices `[0,2,5,10]`, taking indices of `[2,0]` returns
-/// an array of the indices `[5..10, 0..2]` and offsets `[0,5,7]` (5 elements and 2
-/// elements)
-#[allow(clippy::type_complexity)]
-fn take_value_indices_from_list<IndexType, OffsetType>(
-    list: &GenericListArray<OffsetType::Native>,
-    indices: &PrimitiveArray<IndexType>,
-) -> Result<
-    (
-        PrimitiveArray<OffsetType>,
-        Vec<OffsetType::Native>,
-        MutableBuffer,
-    ),
-    ArrowError,
->
-where
-    IndexType: ArrowPrimitiveType,
-    OffsetType: ArrowPrimitiveType,
-    OffsetType::Native: OffsetSizeTrait + std::ops::Add + Zero + One,
-    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
-{
-    // TODO: benchmark this function, there might be a faster unsafe alternative
-    let offsets: &[OffsetType::Native] = list.value_offsets();
-
-    let mut new_offsets = Vec::with_capacity(indices.len());
-    let mut values = Vec::new();
-    let mut current_offset = OffsetType::Native::zero();
-    // add first offset
-    new_offsets.push(OffsetType::Native::zero());
-
-    // Initialize null buffer
-    let num_bytes = bit_util::ceil(indices.len(), 8);
-    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-    let null_slice = null_buf.as_slice_mut();
-
-    // compute the value indices, and set offsets accordingly
-    for i in 0..indices.len() {
-        if indices.is_valid(i) {
-            let ix = indices
-                .value(i)
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            let start = offsets[ix];
-            let end = offsets[ix + 1];
-            current_offset += end - start;
-            new_offsets.push(current_offset);
-
-            let mut curr = start;
-
-            // if start == end, this slot is empty
-            while curr < end {
-                values.push(curr);
-                curr += One::one();
-            }
-            if !list.is_valid(ix) {
-                bit_util::unset_bit(null_slice, i);
-            }
-        } else {
-            bit_util::unset_bit(null_slice, i);
-            new_offsets.push(current_offset);
-        }
-    }
-
-    Ok((
-        PrimitiveArray::<OffsetType>::from(values),
-        new_offsets,
-        null_buf,
-    ))
 }
 
 /// Takes/filters a fixed size list array's inner data using the offsets of the list array.
@@ -1743,6 +1751,41 @@ mod tests {
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
         let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
+    }
+
+    /// Take from a *sliced* byte array, i.e. one whose value offsets do not
+    /// start at zero. This exercises copying byte data out of an array with a
+    /// non-zero base offset for both the no-null fast path and the nullable
+    /// path (null indices and selected null values).
+    #[test]
+    fn test_take_bytes_sliced_values() {
+        let values = StringArray::from(vec![
+            Some("aaa"),
+            Some("bbb"),
+            None,
+            Some("ccccc"),
+            Some("dd"),
+            None,
+            Some("eeee"),
+        ]);
+        // Slice so the underlying value offsets no longer start at 0:
+        // sliced == [None, "ccccc", "dd", None, "eeee"]
+        let sliced = values.slice(2, 5);
+
+        // Fast path: every output slot is valid (no null indices, no null
+        // values selected).
+        let indices = Int32Array::from(vec![1, 2, 4, 1]);
+        let result = take(&sliced, &indices, None).unwrap();
+        let expected =
+            StringArray::from(vec![Some("ccccc"), Some("dd"), Some("eeee"), Some("ccccc")]);
+        assert_eq!(result.as_string::<i32>(), &expected);
+
+        // Nullable path: a null index (position 1) and selected null values
+        // (sliced indices 0 and 3 are null).
+        let indices = Int32Array::from(vec![Some(1), None, Some(0), Some(4), Some(3)]);
+        let result = take(&sliced, &indices, None).unwrap();
+        let expected = StringArray::from(vec![Some("ccccc"), None, None, Some("eeee"), None]);
+        assert_eq!(result.as_string::<i32>(), &expected);
     }
 
     fn _test_byte_view<T>()
@@ -2497,37 +2540,76 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_take_value_index_from_list() {
-        let list = build_generic_list::<i32, Int32Type>(vec![
+    fn test_take_sliced_list_generic<S: OffsetSizeTrait + 'static>() {
+        let list = build_generic_list::<S, Int32Type>(vec![
             Some(vec![0, 1]),
             Some(vec![2, 3, 4]),
-            Some(vec![5, 6, 7, 8, 9]),
+            None,
+            Some(vec![]),
+            Some(vec![5, 6]),
+            Some(vec![7]),
         ]);
-        let indices = UInt32Array::from(vec![2, 0]);
+        let sliced = list.slice(1, 4);
+        let indices = UInt32Array::from(vec![Some(3), Some(0), None, Some(2), Some(1)]);
 
-        let (indexed, offsets, null_buf) = take_value_indices_from_list(&list, &indices).unwrap();
+        let taken = take(&sliced, &indices, None).unwrap();
+        let taken = taken.as_list::<S>();
 
-        assert_eq!(indexed, Int32Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
-        assert_eq!(offsets, vec![0, 5, 7]);
-        assert_eq!(null_buf.as_slice(), &[0b11111111]);
+        let expected = build_generic_list::<S, Int32Type>(vec![
+            Some(vec![5, 6]),
+            Some(vec![2, 3, 4]),
+            None,
+            Some(vec![]),
+            None,
+        ]);
+
+        assert_eq!(taken, &expected);
+    }
+
+    fn test_take_sliced_list_with_value_nulls_generic<S: OffsetSizeTrait + 'static>() {
+        let list = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(10)]),
+            Some(vec![None, Some(1)]),
+            None,
+            Some(vec![Some(2), None]),
+            Some(vec![]),
+            Some(vec![Some(3)]),
+        ]);
+        let sliced = list.slice(1, 4);
+        let indices = UInt32Array::from(vec![Some(2), Some(0), None, Some(3), Some(1)]);
+
+        let taken = take(&sliced, &indices, None).unwrap();
+        let taken = taken.as_list::<S>();
+
+        let expected = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(2), None]),
+            Some(vec![None, Some(1)]),
+            None,
+            Some(vec![]),
+            None,
+        ]);
+
+        assert_eq!(taken, &expected);
     }
 
     #[test]
-    fn test_take_value_index_from_large_list() {
-        let list = build_generic_list::<i64, Int32Type>(vec![
-            Some(vec![0, 1]),
-            Some(vec![2, 3, 4]),
-            Some(vec![5, 6, 7, 8, 9]),
-        ]);
-        let indices = UInt32Array::from(vec![2, 0]);
+    fn test_take_sliced_list() {
+        test_take_sliced_list_generic::<i32>();
+    }
 
-        let (indexed, offsets, null_buf) =
-            take_value_indices_from_list::<_, Int64Type>(&list, &indices).unwrap();
+    #[test]
+    fn test_take_sliced_large_list() {
+        test_take_sliced_list_generic::<i64>();
+    }
 
-        assert_eq!(indexed, Int64Array::from(vec![5, 6, 7, 8, 9, 0, 1]));
-        assert_eq!(offsets, vec![0, 5, 7]);
-        assert_eq!(null_buf.as_slice(), &[0b11111111]);
+    #[test]
+    fn test_take_sliced_list_with_value_nulls() {
+        test_take_sliced_list_with_value_nulls_generic::<i32>();
+    }
+
+    #[test]
+    fn test_take_sliced_large_list_with_value_nulls() {
+        test_take_sliced_list_with_value_nulls_generic::<i64>();
     }
 
     #[test]
@@ -2786,11 +2868,38 @@ mod tests {
         assert_eq!(array.len(), 3);
     }
 
+    /// Fixture for the offset-overflow tests: a single large value plus the
+    /// number of times it must be selected so the cumulative offset exceeds
+    /// `i32::MAX`. Using a large value keeps the index count (and the test
+    /// runtime) small.
+    fn offset_overflow_fixture() -> (StringArray, usize) {
+        let value_len = 1_000_000;
+        let values = StringArray::from(vec![Some("a".repeat(value_len))]);
+        let n = i32::MAX as usize / value_len + 1;
+        (values, n)
+    }
+
     #[test]
     fn test_take_bytes_offset_overflow() {
-        let indices = Int32Array::from(vec![0; (i32::MAX >> 4) as usize]);
-        let text = ('a'..='z').collect::<String>();
-        let values = StringArray::from(vec![Some(text.clone())]);
+        let (values, n) = offset_overflow_fixture();
+        let indices = Int32Array::from(vec![0; n]);
+        assert!(matches!(
+            take(&values, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    /// The offset-overflow error must also be produced on the nullable code
+    /// path (when the output contains nulls), not only on the no-null fast path.
+    #[test]
+    fn test_take_bytes_offset_overflow_nullable() {
+        let (values, n) = offset_overflow_fixture();
+        // A null index forces the output to contain nulls, exercising the
+        // nullable code path.
+        let validity =
+            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
+        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
+
         assert!(matches!(
             take(&values, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))

@@ -17,10 +17,9 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrayRef, MapArray, StructArray};
-use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 
 use crate::reader::tape::{Tape, TapeElement};
@@ -90,23 +89,21 @@ impl ArrayDecoder for MapArrayDecoder {
         let mut key_pos = Vec::with_capacity(pos.len());
         let mut value_pos = Vec::with_capacity(pos.len());
 
-        let mut nulls = self
-            .is_nullable
-            .then(|| BooleanBufferBuilder::new(pos.len()));
+        let mut nulls = self.is_nullable.then(|| NullBufferBuilder::new(pos.len()));
 
         for p in pos.iter().copied() {
             let end_idx = match (tape.get(p), nulls.as_mut()) {
                 (TapeElement::StartObject(end_idx), None) => end_idx,
                 (TapeElement::StartObject(end_idx), Some(nulls)) => {
-                    nulls.append(true);
+                    nulls.append_non_null();
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
-                    nulls.append(false);
+                    nulls.append_null();
                     p + 1
                 }
                 (_, Some(nulls)) if self.ignore_type_conflicts => {
-                    nulls.append(false);
+                    nulls.append_null();
                     p + 1
                 }
                 _ => return Err(tape.error(p, "{")),
@@ -143,7 +140,7 @@ impl ArrayDecoder for MapArrayDecoder {
             )
         };
 
-        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        let nulls = nulls.as_mut().and_then(|x| x.finish());
         // SAFETY: offsets are built monotonically starting from 0
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets.finish())) };
 
