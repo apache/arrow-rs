@@ -19,7 +19,7 @@ use crate::DecodeResult;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::FOOTER_SIZE;
+use crate::file::PARX_FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
 use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
 use crate::file::page_index::index_reader::acc_range;
@@ -367,11 +367,12 @@ impl ParquetMetaDataPushDecoder {
     /// decoded metadata or an error if not enough data is available.
     pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>> {
         let file_len = self.buffers.file_len();
-        let footer_len = FOOTER_SIZE as u64;
+        // We always request PARX_FOOTER_SIZE bytes so we can detect PARX magic without
+        // a second round-trip. For PAR1/PARE files the extra bytes are unused.
+        let footer_len = PARX_FOOTER_SIZE as u64;
         loop {
             match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
                 DecodeState::ReadingFooter => {
-                    // need to have the last 8 bytes of the file to decode the metadata
                     let footer_start = file_len.saturating_sub(footer_len);
                     let footer_range = footer_start..file_len;
 
@@ -387,8 +388,9 @@ impl ParquetMetaDataPushDecoder {
                 }
 
                 DecodeState::ReadingMetadata(footer_tail) => {
+                    let footer_fixed_size: u64 = footer_tail.fixed_footer_size() as u64;
                     let metadata_len: u64 = footer_tail.metadata_length() as u64;
-                    let metadata_start = file_len - footer_len - metadata_len;
+                    let metadata_start = file_len - footer_fixed_size - metadata_len;
                     let metadata_end = metadata_start + metadata_len;
                     let metadata_range = metadata_start..metadata_end;
 
@@ -397,8 +399,14 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(needs_range(metadata_range));
                     }
 
+                    let metadata_bytes = self.get_bytes(&metadata_range)?;
+
+                    if let Some(parx_info) = footer_tail.parx_info() {
+                        parx_info.validate_crc(&metadata_bytes)?;
+                    }
+
                     let metadata = self.metadata_parser.decode_metadata(
-                        &self.get_bytes(&metadata_range)?,
+                        &metadata_bytes,
                         footer_tail.is_encrypted_footer(),
                     )?;
                     // Note: ReadingPageIndex first checks if page indexes are needed

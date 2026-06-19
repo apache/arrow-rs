@@ -19,6 +19,7 @@ use crate::file::metadata::thrift::FileMeta;
 use crate::file::metadata::{
     ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
 };
+use crate::file::{PARQUET_MAGIC_PARX, PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::{
     basic::ColumnOrder,
@@ -32,6 +33,7 @@ use crate::{
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
     file::metadata::thrift::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
+    file::PARX_FEATURE_FLAG_ENCRYPTED_FOOTER,
 };
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 
@@ -49,6 +51,27 @@ use crate::{
 use std::io::Write;
 use std::sync::Arc;
 
+fn write_parx_footer(
+    buf: &mut impl Write,
+    metadata_bytes: &[u8],
+    flags: u32,
+) -> Result<()> {
+    let len_bytes = (metadata_bytes.len() as u32).to_le_bytes();
+    let flag_bytes = flags.to_le_bytes();
+
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(metadata_bytes);
+    hasher.update(&len_bytes);
+    hasher.update(&flag_bytes);
+    let crc = hasher.finalize();
+
+    buf.write_all(&len_bytes)?;
+    buf.write_all(&flag_bytes)?;
+    buf.write_all(&crc.to_le_bytes())?;
+    buf.write_all(&PARQUET_MAGIC_PARX)?;
+    Ok(())
+}
+
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
 /// See [`ParquetMetaDataWriter`] for background and example.
@@ -63,6 +86,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     object_writer: MetadataObjectWriter,
     writer_version: i32,
     write_path_in_schema: bool,
+    use_parx: bool,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -265,15 +289,23 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // Write file metadata
         let start_pos = self.buf.bytes_written();
-        self.object_writer
-            .write_file_metadata(&file_meta, &mut self.buf)?;
-        let end_pos = self.buf.bytes_written();
 
-        // Write footer
-        let metadata_len = (end_pos - start_pos) as u32;
-
-        self.buf.write_all(&metadata_len.to_le_bytes())?;
-        self.buf.write_all(self.object_writer.get_file_magic())?;
+        if self.use_parx {
+            let mut temp_buf = TrackedWrite::new(Vec::<u8>::new());
+            self.object_writer
+                .write_file_metadata(&file_meta, &mut temp_buf)?;
+            let metadata_bytes = temp_buf.into_inner()?;
+            self.buf.write_all(&metadata_bytes)?;
+            let flags = self.object_writer.get_parx_feature_flags(self.write_path_in_schema);
+            write_parx_footer(&mut self.buf, &metadata_bytes, flags)?;
+        } else {
+            self.object_writer
+                .write_file_metadata(&file_meta, &mut self.buf)?;
+            let end_pos = self.buf.bytes_written();
+            let metadata_len = (end_pos - start_pos) as u32;
+            self.buf.write_all(&metadata_len.to_le_bytes())?;
+            self.buf.write_all(self.object_writer.get_file_magic())?;
+        }
 
         // If row group metadata was encrypted, we replace the encrypted row groups with
         // unencrypted metadata before it is returned to users. This allows the metadata
@@ -308,7 +340,13 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             object_writer: Default::default(),
             writer_version,
             write_path_in_schema,
+            use_parx: false,
         }
+    }
+
+    pub fn with_parx(mut self, use_parx: bool) -> Self {
+        self.use_parx = use_parx;
+        self
     }
 
     pub fn with_column_indexes(
@@ -607,6 +645,14 @@ impl MetadataObjectWriter {
     pub fn get_file_magic(&self) -> &[u8; 4] {
         get_file_magic()
     }
+
+    fn get_parx_feature_flags(&self, write_path_in_schema: bool) -> u32 {
+        if !write_path_in_schema {
+            PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED
+        } else {
+            0
+        }
+    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
@@ -727,6 +773,17 @@ impl MetadataObjectWriter {
                 .as_ref()
                 .map(|encryptor| encryptor.properties()),
         )
+    }
+
+    fn get_parx_feature_flags(&self, write_path_in_schema: bool) -> u32 {
+        let mut flags = 0u32;
+        if matches!(&self.file_encryptor, Some(e) if e.properties().encrypt_footer()) {
+            flags |= PARX_FEATURE_FLAG_ENCRYPTED_FOOTER;
+        }
+        if !write_path_in_schema {
+            flags |= PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED;
+        }
+        flags
     }
 
     fn write_thrift_object_with_encryption(

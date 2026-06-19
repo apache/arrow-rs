@@ -310,7 +310,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Writes magic bytes at the beginning of the file.
     #[cfg(not(feature = "encryption"))]
-    fn start_file(_properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+    fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        if properties.use_parx_format() {
+            buf.write_all(&crate::file::PARQUET_MAGIC_PARX)?;
+            return Ok(());
+        }
         buf.write_all(get_file_magic())?;
         Ok(())
     }
@@ -318,8 +322,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Writes magic bytes at the beginning of the file.
     #[cfg(feature = "encryption")]
     fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        if properties.use_parx_format() {
+            buf.write_all(&crate::file::PARQUET_MAGIC_PARX)?;
+            return Ok(());
+        }
         let magic = get_file_magic(properties.file_encryption_properties.as_ref());
-
         buf.write_all(magic)?;
         Ok(())
     }
@@ -346,12 +353,16 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
         let write_path_in_schema = self.props.write_path_in_schema();
+        let writer_version_num = {
+            let v = self.props.writer_version().as_num();
+            if !write_path_in_schema && v < 3 { 3 } else { v }
+        };
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
-            self.props.writer_version().as_num(),
+            writer_version_num,
             write_path_in_schema,
         );
 
@@ -359,6 +370,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         {
             encoder = encoder.with_file_encryptor(self.file_encryptor.clone());
         }
+
+        encoder = encoder.with_parx(self.props.use_parx_format());
 
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
@@ -1090,12 +1103,20 @@ mod tests {
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::Statistics,
     };
+    use crate::file::{PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED, PARX_FOOTER_SIZE};
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::test_common::file_util::get_test_file;
     use crate::util::test_common::rand_gen::RandGen;
+    #[cfg(feature = "encryption")]
+    use crate::{
+        encryption::decrypt::FileDecryptionProperties,
+        encryption::encrypt::FileEncryptionProperties,
+        file::metadata::ParquetMetaDataReader,
+        file::PARX_FEATURE_FLAG_ENCRYPTED_FOOTER,
+    };
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
@@ -2535,5 +2556,239 @@ mod tests {
             rg_out.close().unwrap();
         }
         writer.close().unwrap();
+    }
+
+    fn make_test_schema() -> Arc<types::Type> {
+        Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(
+                    types::Type::primitive_type_builder("col1", Type::INT32)
+                        .with_repetition(Repetition::REQUIRED)
+                        .build()
+                        .unwrap(),
+                )])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn write_parx_file(schema: Arc<types::Type>, props: WriterProperties) -> Vec<u8> {
+        let buf = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(buf, schema, Arc::new(props)).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut col_writer = row_group.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2, 3], None, None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group.close().unwrap();
+        writer.into_inner().unwrap()
+    }
+
+    #[test]
+    fn test_parx_unencrypted_roundtrip() {
+
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .with_parx_format(true)
+            .build();
+        let data = write_parx_file(schema, props);
+
+        assert_eq!(&data[..4], b"PARX", "Expected PARX magic at start");
+        assert_eq!(
+            &data[data.len() - 4..],
+            b"PARX",
+            "Expected PARX magic at end"
+        );
+
+        let reader = SerializedFileReader::new(Bytes::from(data)).unwrap();
+        let meta = reader.metadata();
+        assert_eq!(meta.num_row_groups(), 1);
+        assert_eq!(meta.row_group(0).num_rows(), 3);
+
+        let row_group_reader = reader.get_row_group(0).unwrap();
+        let col_reader = row_group_reader.get_column_reader(0).unwrap();
+        let mut typed = get_typed_column_reader::<Int32Type>(col_reader);
+        let mut values = Vec::new();
+        let (num_records, _, _) = typed.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(num_records, 3);
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_parx_unknown_feature_flag_rejected() {
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .with_parx_format(true)
+            .build();
+        let mut data = write_parx_file(schema, props);
+
+        // Set bit 31 (the maximum bit) as an unknown feature flag.
+        // Using the highest bit makes this test resilient to new low-order flags being added.
+        // flags are at: [len - PARX_FOOTER_SIZE + 4 .. + 8] (little-endian u32)
+        let flags_offset = data.len() - PARX_FOOTER_SIZE + 4;
+        data[flags_offset + 3] |= 0x80; // sets bit 31 = 0x80000000
+
+        let err = SerializedFileReader::new(Bytes::from(data)).err().unwrap();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown feature flags"),
+            "Expected unknown feature flag error, got: {msg}"
+        );
+        assert!(
+            msg.contains("0x80000000"),
+            "Expected flags listed in error message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parx_crc_corruption_detected() {
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .with_parx_format(true)
+            .build();
+        let data = write_parx_file(schema, props);
+        let n = data.len();
+        let metadata_end = n - PARX_FOOTER_SIZE;
+        // Derive metadata_start from the length stored in the footer (bytes 0..4 of the tail).
+        let metadata_len =
+            u32::from_le_bytes(data[metadata_end..metadata_end + 4].try_into().unwrap()) as usize;
+        let metadata_start = metadata_end - metadata_len;
+
+        // Layout of bytes covered by the CRC:
+        //   [metadata_start .. metadata_end]      — thrift metadata
+        //   [metadata_end   .. metadata_end + 8]  — crc_suffix: len(4)+flags(4)
+        //   [metadata_end+8 .. metadata_end + 12] — stored CRC (mutating it changes expected_crc)
+        // The end PARX magic [metadata_end+12..n] is not covered by the CRC.
+        for offset in metadata_start..(metadata_end + 12) {
+            let in_len_range = offset >= metadata_end && offset < metadata_end + 4;
+            let in_flags_range = offset >= metadata_end + 4 && offset < metadata_end + 8;
+            let is_flags_byte_0 = offset == metadata_end + 4;
+            // For flags byte 0: flip bit 0 (a known flag) — keeps flags within known values
+            // while still corrupting the CRC input, so the CRC error fires.
+            // For other flag bytes: any non-zero flip sets unknown flag bits, so the
+            // unknown-flags check fires before CRC (flags are checked first because future
+            // flags may influence CRC computation).
+            let mask: u8 = if is_flags_byte_0 { 0x01 } else { 0xFF };
+
+            let mut corrupted = data.clone();
+            corrupted[offset] ^= mask;
+            let err = SerializedFileReader::new(Bytes::from(corrupted))
+                .err()
+                .unwrap_or_else(|| panic!("Expected error at offset {offset}, got Ok"));
+
+            // Length bytes govern how many bytes are read as metadata; a corrupted length
+            // may exceed the file size and cause an EOF before CRC is checked.
+            // Flag bytes 1-3 trigger the unknown-flags check before CRC.
+            // All other bytes in the CRC range must produce a specific CRC32 error.
+            let expect_crc = !in_len_range && (!in_flags_range || is_flags_byte_0);
+            if expect_crc {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("CRC32"),
+                    "Expected CRC32 error at offset {offset}, got: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_parx_enabled_by_writer_version_3() {
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_3_0)
+            .build();
+        assert!(props.use_parx_format());
+        let data = write_parx_file(schema, props);
+        assert_eq!(&data[..4], b"PARX");
+        assert_eq!(&data[data.len() - 4..], b"PARX");
+    }
+
+    #[test]
+    fn test_parx_path_in_schema_omitted_flag() {
+        // write_path_in_schema=false should auto-enable PARX and set PATH_IN_SCHEMA_OMITTED
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .set_write_path_in_schema(false)
+            .build();
+        assert!(props.use_parx_format());
+        assert!(!props.write_path_in_schema());
+        let data = write_parx_file(schema, props);
+
+        assert_eq!(&data[..4], b"PARX", "Expected PARX magic at start");
+        let flags_offset = data.len() - PARX_FOOTER_SIZE + 4;
+        let flags =
+            u32::from_le_bytes(data[flags_offset..flags_offset + 4].try_into().unwrap());
+        assert_ne!(
+            flags & PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED,
+            0,
+            "Expected PATH_IN_SCHEMA_OMITTED flag to be set, got flags={flags:#010x}"
+        );
+
+        // Read back and verify data is accessible
+        let reader = SerializedFileReader::new(Bytes::from(data)).unwrap();
+        assert_eq!(reader.metadata().num_row_groups(), 1);
+    }
+
+    #[test]
+    fn test_parx_disabled_on_v3_with_explicit_write_path() {
+        // v3 sets parx=true and write_path_in_schema=false by default,
+        // but both can be overridden explicitly to produce a PAR1 file.
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_3_0)
+            .with_parx_format(false)
+            .set_write_path_in_schema(true)
+            .build();
+        assert!(!props.use_parx_format());
+        assert!(props.write_path_in_schema());
+        let data = write_parx_file(schema, props);
+
+        assert_eq!(&data[..4], b"PAR1", "Expected PAR1 magic, not PARX");
+        assert_eq!(&data[data.len() - 4..], b"PAR1");
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_parx_encrypted_footer_roundtrip() {
+        let footer_key = b"0123456789012345".to_vec();
+        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+            .build()
+            .unwrap();
+        let schema = make_test_schema();
+        let props = WriterProperties::builder()
+            .with_parx_format(true)
+            .with_file_encryption_properties(encryption_properties)
+            .build();
+        let data = write_parx_file(schema, props);
+
+        assert_eq!(&data[..4], b"PARX", "Expected PARX magic at start");
+        assert_eq!(
+            &data[data.len() - 4..],
+            b"PARX",
+            "Expected PARX magic at end"
+        );
+
+        // Verify the encrypted footer feature flag is set
+        let flags_offset = data.len() - PARX_FOOTER_SIZE + 4;
+        let flags =
+            u32::from_le_bytes(data[flags_offset..flags_offset + 4].try_into().unwrap());
+        assert_ne!(
+            flags & PARX_FEATURE_FLAG_ENCRYPTED_FOOTER,
+            0,
+            "Expected encrypted footer flag to be set, got flags={flags:#010x}"
+        );
+
+        // Decrypt and parse metadata, verify row group count and row count
+        let decryption_properties = FileDecryptionProperties::builder(footer_key)
+            .build()
+            .unwrap();
+        let meta = ParquetMetaDataReader::new()
+            .with_decryption_properties(Some(decryption_properties))
+            .parse_and_finish(&Bytes::from(data))
+            .unwrap();
+        assert_eq!(meta.num_row_groups(), 1);
+        assert_eq!(meta.row_group(0).num_rows(), 3);
     }
 }

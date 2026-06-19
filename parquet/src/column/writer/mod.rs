@@ -875,7 +875,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn create_level_encoder(max_level: i16, props: &WriterProperties) -> LevelEncoder {
         match props.writer_version() {
             WriterVersion::PARQUET_1_0 => LevelEncoder::v1_streaming(max_level),
-            WriterVersion::PARQUET_2_0 => LevelEncoder::v2_streaming(max_level),
+            WriterVersion::PARQUET_2_0 | WriterVersion::PARQUET_3_0 => {
+                LevelEncoder::v2_streaming(max_level)
+            }
         }
     }
 
@@ -1368,7 +1370,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 CompressedPage::new(data_page, uncompressed_size)
             }
-            WriterVersion::PARQUET_2_0 => {
+            WriterVersion::PARQUET_2_0 | WriterVersion::PARQUET_3_0 => {
                 let mut rep_levels_byte_len = 0;
                 let mut def_levels_byte_len = 0;
                 let mut buffer = vec![];
