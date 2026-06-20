@@ -36,10 +36,29 @@ fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
     }
 }
 
+pub(crate) mod private {
+    /// Sealed trait to prevent external implementations of [`FromBytes`].
+    ///
+    /// This is required for soundness: `BitReader::get_batch` internally casts
+    /// `*mut T` pointers to `*mut u16`/`u32`/`u64` and must be able to assume
+    /// natural alignment for the primitive type matching `size_of::<T>()`.
+    pub trait Sealed {}
+}
+
 /// # Safety
-/// All bit patterns 00000xxxx, where there are `BIT_CAPACITY` `x`s,
-/// must be valid, unless BIT_CAPACITY is 0.
-pub unsafe trait FromBytes: Sized {
+///
+/// Implementors must satisfy the following requirements:
+///
+/// 1. All bit patterns `00000xxxx`, where there are `BIT_CAPACITY` `x`s,
+///    must be valid, unless `BIT_CAPACITY` is 0.
+/// 2. `align_of::<Self>()` must be at least `align_of::<Primitive>()` where
+///    `Primitive` is the unsigned integer of the same size as `Self`
+///    (i.e. `u8` for size 1, `u16` for size 2, `u32` for size 4, `u64` for size 8).
+///    This ensures that `BitReader::get_batch` can safely cast `*mut Self` to
+///    `*mut u16`/`u32`/`u64` in its fast path.
+///
+/// This trait is sealed and cannot be implemented outside of the `parquet` crate.
+pub unsafe trait FromBytes: Sized + private::Sealed {
     const BIT_CAPACITY: usize;
     type Buffer: AsMut<[u8]> + Default;
     fn try_from_le_slice(b: &[u8]) -> Result<Self>;
@@ -60,6 +79,7 @@ pub trait FromBitpacked: FromBytes {
 macro_rules! from_le_bytes {
     ($($ty: ty),*) => {
         $(
+        impl private::Sealed for $ty {}
         // SAFETY: this macro is used for types for which all bit patterns are valid.
         unsafe impl FromBytes for $ty {
             const BIT_CAPACITY: usize = std::mem::size_of::<$ty>() * 8;
@@ -82,6 +102,9 @@ macro_rules! from_le_bytes {
 }
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
+
+impl private::Sealed for f32 {}
+impl private::Sealed for f64 {}
 
 // SAFETY: all bit patterns are valid for f32 and f64.
 unsafe impl FromBytes for f32 {
@@ -121,6 +144,8 @@ impl FromBitpacked for f64 {
     }
 }
 
+impl private::Sealed for bool {}
+
 // SAFETY: the 0000000x bit pattern is always valid for `bool`.
 unsafe impl FromBytes for bool {
     const BIT_CAPACITY: usize = 1;
@@ -140,6 +165,8 @@ impl FromBitpacked for bool {
         v != 0
     }
 }
+
+impl private::Sealed for Int96 {}
 
 // SAFETY: BIT_CAPACITY is 0.
 unsafe impl FromBytes for Int96 {
@@ -168,6 +195,8 @@ unsafe impl FromBytes for Int96 {
     }
 }
 
+impl private::Sealed for ByteArray {}
+
 // SAFETY: BIT_CAPACITY is 0.
 unsafe impl FromBytes for ByteArray {
     const BIT_CAPACITY: usize = 0;
@@ -180,6 +209,8 @@ unsafe impl FromBytes for ByteArray {
         bs.into()
     }
 }
+
+impl private::Sealed for FixedLenByteArray {}
 
 // SAFETY: BIT_CAPACITY is 0.
 unsafe impl FromBytes for FixedLenByteArray {
