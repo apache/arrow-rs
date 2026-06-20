@@ -158,10 +158,6 @@ impl ReadPlanBuilder {
                     None => return RowSelectionStrategy::Selectors,
                 };
 
-                if selection.as_mask().is_some() {
-                    return RowSelectionStrategy::Mask;
-                }
-
                 // total_rows: total number of rows selected / skipped
                 // effective_count: number of non-empty selectors
                 let (total_rows, effective_count) =
@@ -276,14 +272,23 @@ impl ReadPlanBuilder {
             }
         }
 
-        // If the predicate selected all rows and there is no prior selection,
-        // skip creating a RowSelection entirely — this avoids the allocation
-        // and keeps selection as None which enables coalesced page fetches.
+        // If the predicate selected all rows, applying it is a no-op. With no
+        // prior selection this keeps selection as None, enabling coalesced page
+        // fetches; with a prior selection it avoids rebuilding the same
+        // selection.
         let all_selected = filters.iter().all(|f| f.true_count() == f.len());
-        if all_selected && self.selection.is_none() {
+        if all_selected {
             return Ok(self);
         }
-        let raw = RowSelection::from_filters(&filters);
+        let raw = if self
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.as_mask().is_some())
+        {
+            RowSelection::from_boolean_buffer(filters_to_boolean_buffer(&filters))
+        } else {
+            RowSelection::from_filters(&filters)
+        };
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),
@@ -450,6 +455,16 @@ fn truncate_filter_after_n_trues(filter: BooleanArray, n: usize) -> BooleanArray
     BooleanArray::new(builder.finish(), None)
 }
 
+fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
+    let total_rows = filters.iter().map(|f| f.len()).sum();
+    let mut builder = BooleanBufferBuilder::new(total_rows);
+    for filter in filters {
+        assert_eq!(filter.null_count(), 0);
+        builder.append_buffer(filter.values());
+    }
+    builder.finish()
+}
+
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
@@ -594,5 +609,49 @@ mod tests {
             total, TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
+    }
+
+    #[test]
+    fn with_predicate_options_preserves_mask_selection() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        let data: Vec<i32> = (0..6).collect();
+        let levels = vec![0; data.len()];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false);
+
+        let prior = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, true, true, false, true,
+        ]));
+        let mut filters = vec![BooleanArray::from(vec![true, false, true, false])];
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), move |batch| {
+            assert_eq!(batch.num_rows(), 4);
+            Ok(filters.remove(0))
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_selection(Some(prior))
+            .with_predicate_options(PredicateOptions::new(
+                Box::new(struct_reader),
+                &mut predicate,
+            ))
+            .unwrap();
+
+        let selection = builder.selection().unwrap();
+        assert!(selection.as_mask().is_some());
+
+        let expected = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, false, true, false, false,
+        ]));
+        assert_eq!(selection, &expected);
     }
 }

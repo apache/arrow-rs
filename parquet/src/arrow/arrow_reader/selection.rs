@@ -361,6 +361,10 @@ fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
 
 /// Applies `other` to the selected rows of `mask`, preserving the original row domain.
 fn and_then_mask(mask: &BooleanBuffer, other: &RowSelection) -> BooleanBuffer {
+    if let Some(other_mask) = other.as_mask() {
+        return and_then_masks(mask, other_mask);
+    }
+
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut other_iter = other.iter();
     let mut current = other_iter.next();
@@ -390,6 +394,47 @@ fn and_then_mask(mask: &BooleanBuffer, other: &RowSelection) -> BooleanBuffer {
 
     if current.is_some_and(|s| s.row_count != 0) || other_iter.any(|s| s.row_count != 0) {
         panic!("selection exceeds the number of selected rows");
+    }
+
+    builder.finish()
+}
+
+fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    let selected_count = mask.count_set_bits();
+    match other.len().cmp(&selected_count) {
+        Ordering::Less => panic!("selection contains less than the number of selected rows"),
+        Ordering::Greater => panic!("selection exceeds the number of selected rows"),
+        Ordering::Equal => {}
+    }
+
+    let other_true_count = other.count_set_bits();
+    if other_true_count == 0 {
+        return BooleanBuffer::new_unset(mask.len());
+    }
+    if other_true_count == selected_count {
+        return mask.clone();
+    }
+
+    let mut builder = BooleanBufferBuilder::new(mask.len());
+    let mut outer_set_indices = mask.set_indices();
+    let mut next_selected_ordinal = 0usize;
+    let mut cursor = 0usize;
+
+    for selected_ordinal in other.set_indices() {
+        let skip = selected_ordinal - next_selected_ordinal;
+        let set_idx = outer_set_indices
+            .nth(skip)
+            .expect("validated other length matches selected row count");
+        if set_idx > cursor {
+            builder.append_n(set_idx - cursor, false);
+        }
+        builder.append(true);
+        cursor = set_idx + 1;
+        next_selected_ordinal = selected_ordinal + 1;
+    }
+
+    if cursor < mask.len() {
+        builder.append_n(mask.len() - cursor, false);
     }
 
     builder.finish()
@@ -2283,10 +2328,14 @@ mod tests {
 
             let inner_len: usize = bits.iter().map(|b| *b as usize).sum();
             let inner_bits: Vec<_> = (0..inner_len).map(|_| rand.random_bool(0.7)).collect();
-            let inner = RowSelection::from_filters(&[BooleanArray::from(inner_bits)]);
+            let inner = RowSelection::from_filters(&[BooleanArray::from(inner_bits.clone())]);
+            let inner_mask = RowSelection::from_boolean_buffer(BooleanBuffer::from(inner_bits));
             let and_then_mask = from_mask.and_then(&inner);
+            let and_then_both_masks = from_mask.and_then(&inner_mask);
             assert!(and_then_mask.as_mask().is_some());
+            assert!(and_then_both_masks.as_mask().is_some());
             assert_eq!(and_then_mask, from_filters.and_then(&inner));
+            assert_eq!(and_then_both_masks, and_then_mask);
         }
     }
 
@@ -2311,6 +2360,32 @@ mod tests {
         assert_eq!(
             actual_bits,
             vec![false, true, false, false, true, false, false]
+        );
+    }
+
+    #[test]
+    fn test_mask_and_then_mask_preserves_backing() {
+        let outer_bits = vec![false, true, true, false, true, false, true, true];
+        let inner_bits = vec![false, true, false, true, false];
+        let outer_mask = RowSelection::from_boolean_buffer(BooleanBuffer::from(outer_bits.clone()));
+        let inner_mask = RowSelection::from_boolean_buffer(BooleanBuffer::from(inner_bits));
+
+        let result = outer_mask.and_then(&inner_mask);
+        assert!(result.as_mask().is_some());
+
+        let outer_selectors = RowSelection::from_filters(&[BooleanArray::from(outer_bits)]);
+        let inner_selectors = RowSelection::from_filters(&[BooleanArray::from(vec![
+            false, true, false, true, false,
+        ])]);
+        assert_eq!(result, outer_selectors.and_then(&inner_selectors));
+
+        let result_mask = result.as_mask().unwrap();
+        let actual_bits: Vec<_> = (0..result_mask.len())
+            .map(|i| result_mask.value(i))
+            .collect();
+        assert_eq!(
+            actual_bits,
+            vec![false, false, true, false, false, false, true, false]
         );
     }
 
