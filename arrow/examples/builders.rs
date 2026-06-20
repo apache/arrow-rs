@@ -68,15 +68,13 @@ fn main() {
     // is a slice of an underlying buffer.
 
     // Array data: ["hello", null, "parquet"]
-    let values: [u8; 12] = [
-        b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-    ];
+    let values = b"helloparquet";
     let offsets: [i32; 4] = [0, 5, 5, 12];
 
     let array_data = ArrayData::builder(DataType::Utf8)
         .len(3)
         .add_buffer(Buffer::from(offsets.to_byte_slice()))
-        .add_buffer(Buffer::from(&values))
+        .add_buffer(Buffer::from(values))
         .null_bit_buffer(Some(Buffer::from([0b00000101])))
         .build()
         .unwrap();
