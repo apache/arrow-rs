@@ -169,18 +169,12 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
 /// A type-erased function that compares two array for pointer equality
 type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
-/// A weak heuristic of whether to merge dictionary values that aims to only
-/// perform the expensive merge computation when it is likely to yield at least
-/// some return over the naive approach used by MutableArrayData
-///
-/// `len` is the total length of the merged output
-///
 /// Returns `(should_merge, has_overflow)` where:
-/// - `should_merge`: whether dictionary values should be merged
+/// - `should_merge`: whether dictionary values should be merged (`true` when dictionaries
+///   have different backing arrays, to avoid duplicate values)
 /// - `has_overflow`: whether the combined dictionary values would overflow the key type
 pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
-    len: usize,
 ) -> (bool, bool) {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
@@ -202,22 +196,18 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     };
 
     let mut single_dictionary = true;
-    let mut total_values = first_values.len();
     for dict in dictionaries.iter().skip(1) {
-        let values = dict.values().as_ref();
-        total_values += values.len();
         if single_dictionary {
+            let values = dict.values().as_ref();
             single_dictionary = ptr_eq(first_values, values)
         }
     }
 
-    let overflow = K::Native::from_usize(total_values).is_none();
-    let values_exceed_length = total_values >= len;
+    let overflow =
+        K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum::<usize>())
+            .is_none();
 
-    (
-        !single_dictionary && (overflow || values_exceed_length),
-        overflow,
-    )
+    (!single_dictionary, overflow)
 }
 
 /// Given an array of dictionaries and an optional key mask compute a values array

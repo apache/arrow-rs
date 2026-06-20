@@ -252,8 +252,7 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
-    let (should_merge, has_overflow) =
-        should_merge_dictionary_values::<K>(&dictionaries, indices.len());
+    let (should_merge, has_overflow) = should_merge_dictionary_values::<K>(&dictionaries);
     if !should_merge {
         return if has_overflow {
             interleave_fallback(arrays, indices)
@@ -913,11 +912,11 @@ mod tests {
         let a = DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "a", "b"]);
         let b = DictionaryArray::<Int32Type>::from_iter(["a", "c", "a", "c", "a"]);
 
-        // Should not recompute dictionary
+        // Should merge dictionaries (deduplicate values)
         let values =
             interleave(&[&a, &b], &[(0, 2), (0, 2), (0, 2), (1, 0), (1, 1), (0, 1)]).unwrap();
         let v = values.as_dictionary::<Int32Type>();
-        assert_eq!(v.values().len(), 5);
+        assert_eq!(v.values().len(), 3);
 
         let vc = v.downcast_dict::<StringArray>().unwrap();
         let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();

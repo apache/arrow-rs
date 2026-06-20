@@ -107,7 +107,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .inspect(|d| output_len += d.len())
         .collect();
 
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len).0 {
+    if !should_merge_dictionary_values::<K>(&dictionaries).0 {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
@@ -1304,11 +1304,8 @@ mod tests {
         let actual = collect_string_dictionary(dictionary);
         assert_eq!(actual, expected);
 
-        // Should have concatenated inputs together
-        assert_eq!(
-            dictionary.values().len(),
-            input_1.values().len() + input_2.values().len(),
-        )
+        // Should have merged inputs together (deduplicated)
+        assert_eq!(dictionary.values().len(), 6)
     }
 
     #[test]
@@ -1481,6 +1478,42 @@ mod tests {
         assert!(!array.values().to_data().ptr_eq(&com.values().to_data()));
         assert!(!copy.values().to_data().ptr_eq(&com.values().to_data()));
         assert!(!new.values().to_data().ptr_eq(&com.values().to_data()));
+    }
+
+    #[test]
+    fn concat_dictionary_batches_deduplicates_values() {
+        // Reproducer for https://github.com/apache/arrow-rs/issues/10160
+        // Concatenating batches with overlapping dictionary values must
+        // deduplicate the dictionary entries, not naively concatenate them.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "symbol",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let batch_0 = {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 2, 0]),
+                Arc::new(StringArray::from(vec!["alpha", "beta", "gamma"])),
+            )
+            .unwrap();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap()
+        };
+
+        let batch_1 = {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![2, 1, 0, 2]),
+                Arc::new(StringArray::from(vec!["gamma", "alpha", "beta"])),
+            )
+            .unwrap();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap()
+        };
+
+        let merged = concat_batches(&schema, &[batch_0, batch_1]).unwrap();
+        let column = merged.column(0).as_dictionary::<Int32Type>();
+
+        // All 3 unique dictionary values should be preserved (no duplicates)
+        assert_eq!(column.values().len(), 3);
     }
 
     #[test]
