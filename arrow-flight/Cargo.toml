@@ -75,6 +75,8 @@ cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-root
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
+# Enable the IPC compression codecs so tests can exercise compressed Flight encoding
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 assert_cmd = "2.0.8"
 criterion = { workspace = true, default-features = false, features = ["async_tokio"] }
 http = "1.1.0"

@@ -67,8 +67,8 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
     };
     let shredding_state = ShreddingState::try_from(struct_array)?;
 
-    let value_array = shredding_state.value_field();
-    let typed_array = shredding_state.typed_value_field();
+    let value_array = shredding_state.value_column();
+    let typed_array = shredding_state.typed_value_column();
 
     // If list elements have neither typed nor fallback value, this path step is missing.
     if value_array.is_none() && typed_array.is_none() {
@@ -117,12 +117,12 @@ pub(crate) fn follow_shredded_path_element(
 ) -> Result<ShreddedPathStep> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
-    let missing_path_step = || match shredding_state.value_field() {
+    let missing_path_step = || match shredding_state.value_column() {
         Some(_) => ShreddedPathStep::NotShredded,
         None => ShreddedPathStep::Missing,
     };
 
-    let Some(typed_value) = shredding_state.typed_value_field() else {
+    let Some(typed_value) = shredding_state.typed_value_column() else {
         return Ok(missing_path_step());
     };
 
@@ -197,7 +197,7 @@ fn shredded_get_path(
         |value: Option<ArrayRef>,
          typed_value: Option<ArrayRef>,
          accumulated_nulls: Option<NullBuffer>| {
-            let metadata = input.metadata_field().clone();
+            let metadata = input.metadata_column().clone();
             VariantArray::from_parts(metadata, value, typed_value, accumulated_nulls)
         };
 
@@ -206,7 +206,7 @@ fn shredded_get_path(
         |target: VariantArray, path: VariantPath<'_>, as_field: Option<&Field>| {
             let as_type = as_field.map(|f| f.data_type());
             let mut builder = make_variant_to_arrow_row_builder(
-                target.metadata_field(),
+                target.metadata_column(),
                 path,
                 as_type,
                 cast_options,
@@ -240,7 +240,7 @@ fn shredded_get_path(
         match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
-                if let Some(typed_value) = shredding_state.typed_value_field() {
+                if let Some(typed_value) = shredding_state.typed_value_column() {
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
@@ -258,7 +258,7 @@ fn shredded_get_path(
             }
             ShreddedPathStep::NotShredded => {
                 let target = make_target_variant(
-                    shredding_state.value_field().cloned(),
+                    shredding_state.value_column().cloned(),
                     None,
                     accumulated_nulls,
                 );
@@ -269,8 +269,8 @@ fn shredded_get_path(
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
     let target = make_target_variant(
-        shredding_state.value_field().cloned(),
-        shredding_state.typed_value_field().cloned(),
+        shredding_state.value_column().cloned(),
+        shredding_state.typed_value_column().cloned(),
         accumulated_nulls,
     );
 
@@ -294,7 +294,7 @@ fn shredded_get_path(
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
     if let DataType::Struct(fields) = as_field.data_type() {
-        if target.typed_value_field().is_none() {
+        if target.typed_value_column().is_none() {
             return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
 
@@ -328,11 +328,11 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
     if matches!(as_field.data_type(), DataType::Struct(_)) {
         return None;
     }
-    let typed_value = variant_array.typed_value_field()?;
+    let typed_value = variant_array.typed_value_column()?;
 
     if typed_value.data_type() == as_field.data_type()
         && variant_array
-            .value_field()
+            .value_column()
             .is_none_or(|v| v.null_count() == v.len())
     {
         // Here we need to gate against the case where the `typed_value` is null but data is in the `value` column.
@@ -4356,7 +4356,7 @@ mod test {
         let variant_array = perfectly_shredded_int32_variant_array();
 
         let variant_array_ref = VariantArray::try_new(&variant_array).unwrap();
-        let typed_value_arc = variant_array_ref.typed_value_field().unwrap().clone();
+        let typed_value_arc = variant_array_ref.typed_value_column().unwrap().clone();
 
         let field = Field::new("result", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
