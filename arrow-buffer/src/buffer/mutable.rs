@@ -841,11 +841,12 @@ impl MutableBuffer {
     ///
     /// This claims the memory used by this buffer in the pool, allowing for
     /// accurate accounting of memory usage. Any prior reservation will be
-    /// released so this works well when the buffer is being shared among
-    /// multiple arrays.
+    /// dropped before creating a new one to avoid transient double-counting.
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        let mut guard = self.reservation.lock().unwrap();
+        guard.take();
+        *guard = Some(pool.reserve(self.capacity()));
     }
 }
 
