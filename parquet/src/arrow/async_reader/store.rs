@@ -148,7 +148,8 @@ impl ParquetObjectReader {
         O: Send + 'static,
         E: Into<ParquetError> + Send + 'static,
     {
-        match &self.runtime {
+        let handle = self.runtime.clone().or_else(|| Handle::try_current().ok());
+        match handle {
             Some(handle) => {
                 let path = self.path.clone();
                 let store = Arc::clone(&self.store);
