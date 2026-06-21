@@ -369,11 +369,11 @@ impl FromPyArrow for RecordBatch {
             let schema =
                 unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
             let (_fields, columns, nulls) = array.into_parts();
-            assert_eq!(
-                nulls.map(|n| n.null_count()).unwrap_or_default(),
-                0,
-                "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
-            );
+            if nulls.map(|n| n.null_count()).unwrap_or_default() != 0 {
+                return Err(PyValueError::new_err(
+                    "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation",
+                ));
+            }
             return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
         }
 

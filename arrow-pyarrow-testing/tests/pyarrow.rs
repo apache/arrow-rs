@@ -42,9 +42,9 @@ use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
 };
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
-use pyo3::exceptions::PyTypeError;
-use pyo3::types::{PyAnyMethods, PyModule};
 use pyo3::Python;
+use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::types::{PyAnyMethods, PyModule};
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -121,6 +121,35 @@ value = NotATuple()
         assert_eq!(
             err.to_string(),
             "TypeError: Expected __arrow_c_array__ to return a tuple of (schema, array) capsules."
+        );
+    });
+}
+
+#[test]
+fn test_from_pyarrow_nullable_struct_array() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+import pyarrow as pa
+
+value = pa.array(
+    [{"a": 1}, None],
+    type=pa.struct([pa.field("a", pa.int32())]),
+)
+"#,
+        )
+        .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = RecordBatch::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+        assert_eq!(
+            err.to_string(),
+            "ValueError: Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
         );
     });
 }
