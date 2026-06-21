@@ -63,7 +63,9 @@ pub trait FromBitpacked {
     /// Converts multiple bitpacked values from `input` to `output`.
     /// The `output` slice needs to have space for at least `BATCH_SIZE` elements,
     /// otherwise this method will panic.
-    fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) where Self: Sized;
+    fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize)
+    where
+        Self: Sized;
 }
 
 macro_rules! from_le_bytes {
@@ -130,7 +132,6 @@ macro_rules! from_bitpacked_delegate {
     }
 }
 
-
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
 from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32, u64 => unpack64);
 from_bitpacked_delegate!(i8 => u8 , i16 => u16, i32 => u32, i64 => u64);
@@ -143,13 +144,14 @@ impl FromBitpacked for bool {
         v != 0
     }
 
-    fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize)
-    {
+    fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
         assert!(num_bits == 1);
         // Safety:
         //   we asserted that we will only decode with a bitwidth of 1,
         //   so the u8 can only be 0 or 1, which are the valid representations of a bool.
-        let output: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len()) };
+        let output: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len())
+        };
         u8::unpack_batch(input, output, num_bits);
     }
 }
@@ -1227,10 +1229,7 @@ mod tests {
             .collect();
 
         // Generic values used to check against actual values read from `get_batch`.
-        let expected_values: Vec<T> = values
-            .iter()
-            .map(|v| T::from_u64(*v))
-            .collect();
+        let expected_values: Vec<T> = values.iter().map(|v| T::from_u64(*v)).collect();
 
         (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 
