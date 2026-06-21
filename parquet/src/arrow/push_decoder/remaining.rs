@@ -103,7 +103,7 @@ impl RowGroupFrontier {
     /// to let adaptive callers (e.g. dynamic row-group pruners or per-RG
     /// `RowFilter` toggles) keep their per-RG state in lock-step with
     /// the reader the decoder is about to emit.
-    fn peek_next_row_group(&self) -> Option<usize> {
+    fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         // Short-circuit: budget exhausted or selection drained ⇒ same
         // outcome as `next_readable_row_group`'s early return.
         if self.budget.is_exhausted()
@@ -112,7 +112,7 @@ impl RowGroupFrontier {
                 .as_ref()
                 .is_some_and(|selection| selection.row_count() == 0)
         {
-            return None;
+            return Ok(None);
         }
 
         // We may have to walk past row groups whose split selection is
@@ -121,7 +121,7 @@ impl RowGroupFrontier {
         let mut selection = self.selection.clone();
         let mut budget = self.budget;
         for &row_group_idx in &self.row_groups {
-            let row_count = self.row_group_num_rows(row_group_idx).ok()?;
+            let row_count = self.row_group_num_rows(row_group_idx)?;
             let selected_rows = match selection.as_mut() {
                 Some(remaining) => {
                     let rg_segment = remaining.split_off(row_count);
@@ -135,18 +135,19 @@ impl RowGroupFrontier {
                 continue;
             }
             if self.has_predicates {
-                // Predicates → always read, regardless of budget.
-                return Some(row_group_idx);
+                // Predicates disable budget-based RG skipping for this RG;
+                // budget still gates row emission inside the row group.
+                return Ok(Some(row_group_idx));
             }
             let rows_after_budget = budget.rows_after(selected_rows);
             if rows_after_budget != 0 {
-                return Some(row_group_idx);
+                return Ok(Some(row_group_idx));
             }
             // Budget-skip: advance the simulated budget and keep
             // walking; the next iteration sees the post-advance budget.
             budget = budget.advance(selected_rows, rows_after_budget);
         }
-        None
+        Ok(None)
     }
 
     fn clear_remaining(&mut self) {
@@ -364,9 +365,9 @@ impl RemainingRowGroups {
     /// Returns `None` when the active row group is still being decoded,
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
-    pub fn peek_next_row_group(&self) -> Option<usize> {
+    pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
-            return None;
+            return Ok(None);
         }
         self.frontier.peek_next_row_group()
     }
