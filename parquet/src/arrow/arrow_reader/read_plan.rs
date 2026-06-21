@@ -158,26 +158,7 @@ impl ReadPlanBuilder {
                     None => return RowSelectionStrategy::Selectors,
                 };
 
-                // total_rows: total number of rows selected / skipped
-                // effective_count: number of non-empty selectors
-                let (total_rows, effective_count) =
-                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
-                        if s.row_count > 0 {
-                            (rows + s.row_count, count + 1)
-                        } else {
-                            (rows, count)
-                        }
-                    });
-
-                if effective_count == 0 {
-                    return RowSelectionStrategy::Mask;
-                }
-
-                if total_rows < effective_count.saturating_mul(threshold) {
-                    RowSelectionStrategy::Mask
-                } else {
-                    RowSelectionStrategy::Selectors
-                }
+                selection.auto_selection_strategy(threshold)
             }
         }
     }
@@ -522,6 +503,30 @@ mod tests {
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
         let builder = builder_with_selection(selection)
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_handles_dense_mask_backing() {
+        let bits: Vec<_> = (0..16).map(|i| i % 2 == 0).collect();
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 4 });
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_handles_sparse_mask_backing() {
+        let bits: Vec<_> = (0..128).map(|i| i < 64).collect();
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 });
         assert_eq!(
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors

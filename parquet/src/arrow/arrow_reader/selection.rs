@@ -500,6 +500,55 @@ impl RowSelection {
         self.inner
     }
 
+    /// Choose the automatic materialisation strategy without converting between
+    /// selector and mask backing.
+    pub(crate) fn auto_selection_strategy(&self, threshold: usize) -> RowSelectionStrategy {
+        let (total_rows, effective_count) = match &self.inner {
+            RowSelectionInner::Selectors(selectors) => {
+                selectors.iter().fold((0usize, 0usize), |(rows, count), s| {
+                    if s.row_count > 0 {
+                        (rows + s.row_count, count + 1)
+                    } else {
+                        (rows, count)
+                    }
+                })
+            }
+            RowSelectionInner::Mask(mask) => {
+                let total_rows = mask.len();
+                if total_rows == 0 {
+                    (0, 0)
+                } else {
+                    let mut run_count = 0;
+                    let mut last_end = 0;
+                    for (start, end) in mask.set_slices() {
+                        if start > last_end {
+                            run_count += 1;
+                        }
+                        if end > start {
+                            run_count += 1;
+                        }
+                        last_end = end;
+                    }
+                    if last_end < total_rows {
+                        run_count += 1;
+                    }
+
+                    (total_rows, run_count)
+                }
+            }
+        };
+
+        if effective_count == 0 {
+            return RowSelectionStrategy::Mask;
+        }
+
+        if total_rows < effective_count.saturating_mul(threshold) {
+            RowSelectionStrategy::Mask
+        } else {
+            RowSelectionStrategy::Selectors
+        }
+    }
+
     #[cfg(test)]
     fn selectors(&self) -> Vec<RowSelector> {
         self.iter().collect()
