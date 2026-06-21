@@ -95,6 +95,8 @@ pub fn interleave(
         return Ok(new_empty_array(data_type));
     }
 
+    validate_interleave_indices(values, indices)?;
+
     downcast_primitive! {
         data_type => (primitive_helper, values, indices, data_type),
         DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
@@ -120,6 +122,29 @@ pub fn interleave(
         DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
+}
+
+fn validate_interleave_indices(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<(), ArrowError> {
+    for (index, &(array_idx, row_idx)) in indices.iter().enumerate() {
+        let array = values.get(array_idx).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "interleave index {index} references array {array_idx}, but only {} arrays were provided",
+                values.len()
+            ))
+        })?;
+
+        if row_idx >= array.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "interleave index {index} references row {row_idx} of array {array_idx}, but the array has length {}",
+                array.len()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Common functionality for interleaving arrays
@@ -890,6 +915,32 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_out_of_bounds_array_index() {
+        let a = Int32Array::from_iter_values([1, 2, 3, 4]);
+
+        let err = interleave(&[&a], &[(1, 0)]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(message)
+                if message.contains("references array 1")
+        ));
+    }
+
+    #[test]
+    fn test_interleave_out_of_bounds_row_index() {
+        let a = Int32Array::from_iter_values([1, 2, 3, 4]);
+
+        let err = interleave(&[&a], &[(0, 4)]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(message)
+                if message.contains("references row 4")
+        ));
+    }
+
+    #[test]
     fn test_strings() {
         let a = StringArray::from_iter_values(["a", "b", "c"]);
         let b = StringArray::from_iter_values(["hello", "world", "foo"]);
@@ -1534,6 +1585,26 @@ mod tests {
                 Some("world_long_string_not_inlined".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_views_out_of_bounds_row_index() {
+        let values = StringArray::from_iter_values([
+            "hello",
+            "world_long_string_not_inlined",
+            "foo",
+            "bar",
+            "baz",
+        ]);
+        let view = StringViewArray::from(&values);
+
+        let err = interleave(&[&view], &[(0, 5)]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(message)
+                if message.contains("references row 5")
+        ));
     }
 
     #[test]
