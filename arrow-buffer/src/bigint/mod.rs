@@ -1131,10 +1131,10 @@ impl SaturatingSub for i256 {
 impl SaturatingMul for i256 {
     fn saturating_mul(&self, v: &Self) -> Self {
         self.checked_mul(v).unwrap_or_else(|| {
-            if v.is_negative() {
-                i256::MIN
-            } else {
+            if v.is_negative() == self.is_negative() {
                 i256::MAX
+            } else {
+                i256::MIN
             }
         })
     }
@@ -1780,6 +1780,11 @@ mod tests {
         assert_eq!(i256::MIN.saturating_add(&i256::MINUS_ONE), i256::MIN);
         assert_eq!(i256::MAX.saturating_sub(&i256::MINUS_ONE), i256::MAX);
         assert_eq!(i256::MAX.saturating_mul(&i256::MAX), i256::MAX);
+        assert_eq!(i256::MAX.saturating_mul(&i256::MIN), i256::MIN);
+        assert_eq!(i256::MIN.saturating_mul(&i256::MAX), i256::MIN);
+        assert_eq!(i256::MIN.saturating_mul(&i256::MIN), i256::MAX);
+        assert_eq!(i256::MIN.saturating_mul(&i256::ONE), i256::MIN);
+        assert_eq!(i256::MIN.saturating_mul(&i256::MINUS_ONE), i256::MAX);
         assert_eq!(
             i256::from(20).saturating_add(&i256::from(5)),
             i256::from(25)
