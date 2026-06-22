@@ -1514,6 +1514,11 @@ impl<'a> StatisticsConverter<'a> {
     /// * `arrow_field` - The Arrow field describing the column's data type
     /// * `parquet_schema` - The Parquet schema descriptor (used to look up the physical type)
     ///
+    /// The caller must ensure that `arrow_field` describes the same leaf column as
+    /// `parquet_column_index`. This mapping is not validated by the converter; if
+    /// the Arrow type does not match the Parquet column statistics, extraction
+    /// returns null statistics values rather than an error.
+    ///
     /// # Errors
     ///
     /// * If the `parquet_column_index` is out of bounds
@@ -1524,7 +1529,7 @@ impl<'a> StatisticsConverter<'a> {
     ) -> Result<Self> {
         if parquet_column_index >= parquet_schema.columns().len() {
             return Err(arrow_err!(format!(
-                "Parquet column index {} out of bounds, max {}",
+                "Parquet column index {} out of bounds, column count {}",
                 parquet_column_index,
                 parquet_schema.columns().len()
             )));
