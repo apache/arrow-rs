@@ -1223,11 +1223,30 @@ mod tests {
         const SIZE: &[usize] = &[1, 31, 32, 33, 128, 129];
         for s in SIZE {
             for i in 0..=64 {
+                // `get_batch` is generic over all of these types, so exercise the
+                // signed integer types and `bool` alongside the unsigned types rather
+                // than relying on the unsigned coverage alone.
                 match i {
-                    0..=8 => test_get_batch_helper::<u8>(*s, i),
-                    9..=16 => test_get_batch_helper::<u16>(*s, i),
-                    17..=32 => test_get_batch_helper::<u32>(*s, i),
-                    _ => test_get_batch_helper::<u64>(*s, i),
+                    0..=8 => {
+                        test_get_batch_helper::<u8>(*s, i);
+                        test_get_batch_helper::<i8>(*s, i);
+                    }
+                    9..=16 => {
+                        test_get_batch_helper::<u16>(*s, i);
+                        test_get_batch_helper::<i16>(*s, i);
+                    }
+                    17..=32 => {
+                        test_get_batch_helper::<u32>(*s, i);
+                        test_get_batch_helper::<i32>(*s, i);
+                    }
+                    _ => {
+                        test_get_batch_helper::<u64>(*s, i);
+                        test_get_batch_helper::<i64>(*s, i);
+                    }
+                }
+                // `bool` only supports a bit width of 1.
+                if i == 1 {
+                    test_get_batch_helper::<bool>(*s, i);
                 }
             }
         }
