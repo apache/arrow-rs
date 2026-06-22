@@ -33,6 +33,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
     "ARROW-GH-45185.parquet",
+    "ARROW-GH-47662.parquet",
     "README.md",
 ];
 
@@ -132,6 +133,15 @@ fn test_arrow_rs_gh_45185_dict_levels() {
     );
 }
 
+#[test]
+fn test_arrow_gh_47662() {
+    let err = read_file("ARROW-GH-47662.parquet").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: insufficient values read from column - expected: 100, got: 91"
+    );
+}
+
 /// Reads the file and tries to return the total row count
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
@@ -188,9 +198,8 @@ fn skip_unknown_types() {
 
 #[cfg(feature = "async")]
 #[tokio::test]
-#[allow(deprecated)]
 async fn bad_metadata_err() {
-    use parquet::file::metadata::ParquetMetaDataReader;
+    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
@@ -199,13 +208,13 @@ async fn bad_metadata_err() {
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();
     loader.try_load(&mut reader, metadata_length).await.unwrap();
-    loader = loader.with_page_indexes(false);
+    loader = loader.with_page_index_policy(PageIndexPolicy::Skip);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_offset_indexes(true);
+    loader = loader.with_offset_index_policy(PageIndexPolicy::Required);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_column_indexes(true);
+    loader = loader.with_column_index_policy(PageIndexPolicy::Required);
     let err = loader.load_page_index(&mut reader).await.unwrap_err();
 
     assert_eq!(

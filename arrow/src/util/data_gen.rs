@@ -159,7 +159,12 @@ pub fn create_random_array(
         )),
         Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
-        FixedSizeBinary(len) => Arc::new(create_fsb_array(size, null_density, *len as usize)),
+        FixedSizeBinary(len) => {
+            let len = TryInto::<usize>::try_into(*len).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!("cannot use FixedSizeBinary({len})"))
+            })?;
+            Arc::new(create_fsb_array(size, null_density, len))
+        }
         BinaryView => Arc::new(
             create_string_view_array_with_len(size, null_density, 4, false).to_binary_view(),
         ),

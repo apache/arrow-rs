@@ -81,13 +81,13 @@ impl Iterator for SlicesIterator<'_> {
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
-struct IndexIterator<'a> {
+pub(crate) struct IndexIterator<'a> {
     remaining: usize,
     iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
+    pub(crate) fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let iter = filter.values().set_indices();
         Self { remaining, iter }
@@ -135,11 +135,6 @@ impl Iterator for IndexIterator<'_> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
     }
-}
-
-/// Counts the number of set bits in `filter`
-fn filter_count(filter: &BooleanArray) -> usize {
-    filter.values().count_set_bits()
 }
 
 /// Convert all null values in `BooleanArray` to `false`
@@ -259,12 +254,15 @@ pub struct FilterBuilder {
 impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
+        Self::new_with_count(filter, filter.true_count())
+    }
+
+    pub(crate) fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
         let filter = match filter.null_count() {
             0 => filter.clone(),
             _ => prep_null_mask_filter(filter),
         };
 
-        let count = filter_count(&filter);
         let strategy = IterationStrategy::default_strategy(filter.len(), count);
 
         Self {
@@ -366,6 +364,66 @@ impl IterationStrategy {
     }
 }
 
+/// Borrowed description of which rows a [`FilterPredicate`] selects.
+pub(crate) enum FilterSelection<'a> {
+    None,
+    All { len: usize },
+    Slices(FilterSlices<'a>),
+    Indices(FilterIndices<'a>),
+}
+
+pub(crate) type FilterSlices<'a> =
+    FilterIterator<std::iter::Copied<std::slice::Iter<'a, (usize, usize)>>, SlicesIterator<'a>>;
+
+pub(crate) type FilterIndices<'a> =
+    FilterIterator<std::iter::Copied<std::slice::Iter<'a, usize>>, IndexIterator<'a>>;
+
+/// Holds either materialized rows or a lazy iterator.
+///
+/// This does not implement [`Iterator`] on purpose. Callers use
+/// [`Self::for_each`] or [`Self::try_for_each`] so the enum is matched once
+/// before the loop, not once per row in `next`.
+pub(crate) enum FilterIterator<M, I> {
+    Materialized(M),
+    Lazy(I),
+}
+
+impl<M, I> FilterIterator<M, I>
+where
+    M: Iterator,
+    I: Iterator<Item = M::Item>,
+{
+    pub(crate) fn for_each<F>(self, f: F)
+    where
+        F: FnMut(M::Item),
+    {
+        match self {
+            Self::Materialized(iter) => iter.for_each(f),
+            Self::Lazy(iter) => iter.for_each(f),
+        }
+    }
+
+    pub(crate) fn try_for_each<F, E>(self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(M::Item) -> Result<(), E>,
+    {
+        match self {
+            Self::Materialized(iter) => {
+                for item in iter {
+                    f(item)?;
+                }
+            }
+            Self::Lazy(iter) => {
+                for item in iter {
+                    f(item)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// A filtering predicate that can be applied to an [`Array`]
 #[derive(Debug)]
 pub struct FilterPredicate {
@@ -410,6 +468,25 @@ impl FilterPredicate {
         self.count
     }
 
+    pub(crate) fn selection(&self) -> FilterSelection<'_> {
+        match &self.strategy {
+            IterationStrategy::None => FilterSelection::None,
+            IterationStrategy::All => FilterSelection::All { len: self.count },
+            IterationStrategy::Slices(slices) => {
+                FilterSelection::Slices(FilterIterator::Materialized(slices.iter().copied()))
+            }
+            IterationStrategy::SlicesIterator => {
+                FilterSelection::Slices(FilterIterator::Lazy(SlicesIterator::new(&self.filter)))
+            }
+            IterationStrategy::Indices(indices) => {
+                FilterSelection::Indices(FilterIterator::Materialized(indices.iter().copied()))
+            }
+            IterationStrategy::IndexIterator => FilterSelection::Indices(FilterIterator::Lazy(
+                IndexIterator::new(&self.filter, self.count),
+            )),
+        }
+    }
+
     /// Filters the given `nulls` buffer using this predicate.
     ///
     /// Returns `None` when there is nothing to track in the output, either
@@ -417,12 +494,24 @@ impl FilterPredicate {
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
-        let (null_count, nulls) = filter_null_mask(nulls, self)?;
-        let buffer = BooleanBuffer::new(nulls, 0, self.count);
+        let nulls = nulls?;
+        if nulls.null_count() == 0 {
+            return None;
+        }
 
+        let nulls = filter_bits(nulls.inner(), self);
+        // The filtered `nulls` has a length of `self.count` bits and therefore
+        // the null count is this minus the number of valid bits
+        let null_count = self.count - nulls.count_set_bits_offset(0, self.count);
+
+        if null_count == 0 {
+            return None;
+        }
+
+        let buffer = BooleanBuffer::new(nulls, 0, self.count);
         debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
-        // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
-        // matches the number of unset bits as required by `new_unchecked`.
+        // SAFETY: `null_count` was derived from `buffer` above, so it matches
+        // the number of unset bits as required by `new_unchecked`.
         Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
     }
 }
@@ -575,7 +664,7 @@ where
 /// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
 /// in the filtered output, and `null_buffer` is the filtered null buffer
 ///
-fn filter_null_mask(
+pub(crate) fn filter_null_mask(
     nulls: Option<&NullBuffer>,
     predicate: &FilterPredicate,
 ) -> Option<(usize, Buffer)> {
@@ -649,7 +738,10 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 }
 
 #[inline(never)]
-fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
+pub(crate) fn filter_native<T: ArrowNativeType>(
+    values: &[T],
+    predicate: &FilterPredicate,
+) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
     match &predicate.strategy {
@@ -940,13 +1032,7 @@ fn filter_struct(
         .map(|column| filter_array(column, predicate))
         .collect::<Result<_, _>>()?;
 
-    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
-
-        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
-    } else {
-        None
-    };
+    let nulls = predicate.filter_nulls(array.nulls());
 
     Ok(unsafe {
         StructArray::new_unchecked_with_length(
@@ -1273,7 +1359,7 @@ mod tests {
         let v2 = [3_u8, 4];
         let v3 = [5_u8, 6];
         let v = vec![&v1, &v2, &v3];
-        let a = FixedSizeBinaryArray::from(v);
+        let a = FixedSizeBinaryArray::try_from(v).unwrap();
         let b = BooleanArray::from(vec![true, false, true]);
         let c = filter(&a, &b).unwrap();
         let d = c
@@ -1571,7 +1657,7 @@ mod tests {
     fn test_slice_iterator_bits() {
         let filter_values = (0..64).map(|i| i == 1).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
-        let filter_count = filter_count(&filter);
+        let filter_count = filter.true_count();
 
         let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
@@ -1584,7 +1670,7 @@ mod tests {
     fn test_slice_iterator_bits1() {
         let filter_values = (0..64).map(|i| i != 1).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
-        let filter_count = filter_count(&filter);
+        let filter_count = filter.true_count();
 
         let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
@@ -1597,13 +1683,50 @@ mod tests {
     fn test_slice_iterator_chunk_and_bits() {
         let filter_values = (0..130).map(|i| i % 62 != 0).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
-        let filter_count = filter_count(&filter);
+        let filter_count = filter.true_count();
 
         let iter = SlicesIterator::new(&filter);
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(1, 62), (63, 124), (125, 130)]);
         assert_eq!(filter_count, 61 + 61 + 5);
+    }
+
+    #[test]
+    fn test_filter_selection_iterators() {
+        let slices = [(0, 2), (4, 5)];
+        let mut ranges = Vec::new();
+        let selection: FilterSlices<'_> = FilterIterator::Materialized(slices.iter().copied());
+        selection.for_each(|range| ranges.push(range));
+        assert_eq!(ranges, slices);
+
+        let filter = BooleanArray::from(vec![true, true, false, false, true]);
+        let mut ranges = Vec::new();
+        let selection: FilterSlices<'_> = FilterIterator::Lazy(SlicesIterator::new(&filter));
+        selection
+            .try_for_each(|range| {
+                ranges.push(range);
+                Ok::<(), ArrowError>(())
+            })
+            .unwrap();
+        assert_eq!(ranges, vec![(0, 2), (4, 5)]);
+
+        let indices = [1, 3, 5];
+        let mut selected = Vec::new();
+        let selection: FilterIndices<'_> = FilterIterator::Materialized(indices.iter().copied());
+        selection.for_each(|idx| selected.push(idx));
+        assert_eq!(selected, indices);
+
+        let filter = BooleanArray::from(vec![false, true, false, true]);
+        let mut selected = Vec::new();
+        let selection: FilterIndices<'_> = FilterIterator::Lazy(IndexIterator::new(&filter, 2));
+        selection
+            .try_for_each(|idx| {
+                selected.push(idx);
+                Ok::<(), ArrowError>(())
+            })
+            .unwrap();
+        assert_eq!(selected, vec![1, 3]);
     }
 
     #[test]
@@ -1690,7 +1813,7 @@ mod tests {
             .flat_map(|(start, end)| start..end)
             .collect();
 
-        let count = filter_count(&filter);
+        let count = filter.true_count();
         let index_bits: Vec<_> = IndexIterator::new(&filter, count).collect();
 
         let expected_bits: Vec<_> = bools

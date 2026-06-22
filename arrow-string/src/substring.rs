@@ -429,6 +429,21 @@ mod tests {
         };
     }
 
+    /// A helper macro to test the substring functions for array types only implementing TryFrom.
+    macro_rules! do_test_tryfrom {
+        ($cases:expr, $array_ty:ty, $substring_fn:ident) => {
+            $cases
+                .into_iter()
+                .for_each(|(array, start, length, expected)| {
+                    let array = <$array_ty>::try_from(array).unwrap();
+                    let result = $substring_fn(&array, start, length).unwrap();
+                    let result = result.as_any().downcast_ref::<$array_ty>().unwrap();
+                    let expected = <$array_ty>::try_from(expected).unwrap();
+                    assert_eq!(&expected, result);
+                })
+        };
+    }
+
     fn with_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec![
             Some("hello".as_bytes()),
@@ -591,7 +606,7 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        do_test!(
+        do_test_tryfrom!(
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring
@@ -630,7 +645,7 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        do_test!(
+        do_test_tryfrom!(
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring
