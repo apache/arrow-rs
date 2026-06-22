@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
+use crate::errors::Result;
 
 /// A buffer that supports padding with nulls
 pub trait ValuesBuffer {
@@ -39,13 +40,15 @@ pub trait ValuesBuffer {
     /// - `levels_read` - the number of levels read
     /// - `valid_mask` - a packed mask of valid levels
     ///
+    /// Returns an error if the inputs are inconsistent, for example because the
+    /// decoded data was corrupt. This must not panic on such input.
     fn pad_nulls(
         &mut self,
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    );
+    ) -> Result<()>;
 }
 
 impl<T: Copy + Default> ValuesBuffer for Vec<T> {
@@ -59,7 +62,7 @@ impl<T: Copy + Default> ValuesBuffer for Vec<T> {
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         self.resize(read_offset + levels_read, T::default());
 
         let values_range = read_offset..read_offset + values_read;
@@ -70,5 +73,6 @@ impl<T: Copy + Default> ValuesBuffer for Vec<T> {
             }
             self[level_pos] = self[value_pos];
         }
+        Ok(())
     }
 }
