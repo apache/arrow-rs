@@ -114,14 +114,21 @@ macro_rules! from_bitpacked_delegate {
                 const BIT_CAPACITY: usize = <$delegate as FromBitpacked>::BIT_CAPACITY;
                 const BATCH_SIZE: usize = <$delegate as FromBitpacked>::BATCH_SIZE;
 
+                #[inline]
                 fn from_u64(v: u64) -> Self {
                     v as _
                 }
 
+                #[inline]
                 fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
+                    // Guard against misusages of this macro, due to the const block this will fail
+                    // already at compile-time if the types are not compatible.
                     const {
-                        assert!(std::mem::size_of::<$ty>() == std::mem::size_of::<$delegate>());
-                        assert!(std::mem::align_of::<$ty>() == std::mem::align_of::<$delegate>());
+                        assert!(
+                            std::mem::size_of::<$ty>() == std::mem::size_of::<$delegate>()
+                            && std::mem::align_of::<$ty>() == std::mem::align_of::<$delegate>(),
+                            "types need to have the same size and alignment"
+                        );
                     }
                     // Safety: ty and delegate have the same size and alignment, and this macro is only used for types that have transmutable bit patterns.
                     let output: &mut [$delegate] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<$delegate>(), output.len()) };
@@ -134,16 +141,18 @@ macro_rules! from_bitpacked_delegate {
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
 from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32, u64 => unpack64);
-from_bitpacked_delegate!(i8 => u8 , i16 => u16, i32 => u32, i64 => u64);
+from_bitpacked_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
 
 impl FromBitpacked for bool {
     const BIT_CAPACITY: usize = 1;
     const BATCH_SIZE: usize = <u8 as FromBitpacked>::BATCH_SIZE;
 
+    #[inline]
     fn from_u64(v: u64) -> Self {
         v != 0
     }
 
+    #[inline]
     fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
         assert!(num_bits == 1);
         // Safety:
