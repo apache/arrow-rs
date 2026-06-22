@@ -249,14 +249,7 @@ where
             )));
         }
 
-        let mut null_buffer = NullBuffer::union(left.nulls(), right.nulls());
-        if let Some(n) = &null_buffer {
-            if n.null_count() == 0 {
-                null_buffer = None
-            }
-        }
-
-        match null_buffer {
+        match NullBuffer::union(left.nulls(), right.nulls()) {
             None => {
                 let data_size = left
                     .lengths()
