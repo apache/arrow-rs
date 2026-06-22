@@ -259,7 +259,7 @@ where
                     .map(|len| len as usize)
                     .sum();
 
-                if data_size > u32::MAX as usize {
+                if data_size > i32::MAX as usize {
                     return Err(ArrowError::ArithmeticOverflow(
                         "byte array offset overflow".to_string(),
                     ));
