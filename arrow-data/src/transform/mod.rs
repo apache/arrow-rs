@@ -23,7 +23,7 @@
 use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, IntervalMonthDayNano, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num_integer::Integer;
@@ -257,7 +257,9 @@ fn build_extend(array: &ArrayData) -> Extend<'_> {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::build_extend::<IntervalMonthDayNano>(array)
+        }
         DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
         DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
@@ -304,7 +306,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::extend_nulls::<IntervalMonthDayNano>
+        }
         DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
         DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
