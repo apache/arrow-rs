@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, OffsetBufferBuilder};
+use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -331,6 +331,21 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// This will try to reuse the existing allocation as much as possible
     ///
     /// Panics: this will panic if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths(vec![4, 1, 5, 6]);
+    /// assert_eq!(offsets.as_ref(), &[0, 4, 5, 10, 16]);
+    ///
+    /// let sliced_offsets = offsets.slice(1, 2);
+    /// assert_eq!(sliced_offsets.as_ref(), &[4, 5, 10]);
+    ///
+    /// let shifted_offsets = sliced_offsets.subtract(4);
+    /// assert_eq!(shifted_offsets.as_ref(), &[0, 1, 6]);
+    /// ```
+    ///
     pub fn subtract(self, rhs: O) -> Self
     where
         O: std::ops::Sub<Output = O> + std::cmp::PartialOrd + num_traits::CheckedSub,
@@ -352,51 +367,27 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
             self[len - 1].checked_sub(&rhs).expect("must not overflow");
         }
 
-        let original_buffer = self.into_inner().into_inner();
-        let original_length = original_buffer.len();
-        let buffer_offset = original_buffer.ptr_offset();
-
-        // Remove this once https://github.com/apache/arrow-rs/issues/10117 is resolved.
-        let into_mutable_buffer_result = if buffer_offset != 0 {
-            Err(original_buffer)
-        } else {
-            original_buffer.into_mutable()
-        };
-
-        let output_buffer = match into_mutable_buffer_result {
-            Ok(mut mutable) => {
-                let mut_sliced = mutable.typed_data_mut::<O>();
-
-                // Remove this once https://github.com/apache/arrow-rs/pull/10118 is merged
-                let mut_sliced = &mut mut_sliced[0..original_length / O::get_byte_width()];
-
-                mut_sliced
-                    .iter_mut()
-                    .for_each(|offset| *offset = *offset - rhs);
-
-                // Remove this slice once https://github.com/apache/arrow-rs/pull/10118 is merged
-                Buffer::from(mutable).slice_with_length(buffer_offset, original_length)
+        // try and reuse buffer
+        let shifted_offsets: Vec<O> = match self.into_inner().into_inner().into_vec() {
+            // If we can reuse the buffer, update in place
+            Ok(mut v) => {
+                for offset in v.iter_mut() {
+                    *offset = *offset - rhs;
+                }
+                v
             }
-            Err(original_buffer) => {
-                let shifted = original_buffer
-                    .typed_data::<O>()
-                    .iter()
-                    .map(|item| *item - rhs)
-                    .collect::<Vec<O>>();
-
-                Buffer::from_vec(shifted)
+            // otherwise, buffer is shared so we need a copy
+            Err(buffer) => {
+                let offsets = ScalarBuffer::<O>::from(buffer);
+                offsets.iter().map(|offset| *offset - rhs).collect()
             }
         };
-
-        let output_buffer = ScalarBuffer::<O>::from(output_buffer);
-
-        // This is safe as we keep the following properties:
-        // 1. buffer is non-empty - the output buffer is derived from a valid offset buffer
-        // 2. values are greater than or equal to zero - we validated before that the first offset is greater than or equal to the shift
-        //    and the first buffer value is coming from a valid offset buffer,
-        //    and the input values are monotonically increasing since they are coming from a valid offset buffer so checking the first offset is enough
-        // 3. monotonically increasing values - we subtract from all offset the same value, thus keeping the same property as the input buffer which is a valid offset buffer
-        unsafe { OffsetBuffer::new_unchecked(output_buffer) }
+        let shifted_buffer = ScalarBuffer::from(shifted_offsets);
+        // Safety: offsets are valid as they are coming from a valid
+        // offset buffer and we checked overflow above, and we
+        // subtracted the same value from all offsets, thus keeping the
+        // same properties as the input buffer
+        unsafe { Self::new_unchecked(shifted_buffer) }
     }
 }
 
