@@ -2628,7 +2628,7 @@ mod test {
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
         ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
-        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        Int32Array, Int64Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
         new_empty_array,
     };
     use arrow_schema::{DataType, SchemaRef, TimeUnit};
@@ -2897,6 +2897,52 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn struct_leaf_statistics_from_column_index() {
+        let leaf_field = Arc::new(Field::new("leaf", DataType::Int32, true));
+        let leaf_array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(1),
+            None,
+            Some(9),
+            Some(4),
+            Some(6),
+        ]));
+        let struct_array = StructArray::from(vec![(leaf_field.clone(), leaf_array)]);
+        let struct_array: ArrayRef = Arc::new(struct_array);
+        let input_batch = RecordBatch::try_from_iter([("c1", struct_array)]).unwrap();
+
+        let schema = input_batch.schema();
+        let metadata = parquet_metadata(schema.clone(), input_batch);
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let row_groups = metadata.row_groups();
+
+        let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
+            unreachable!("c1 must be a struct field")
+        };
+        let arrow_field = fields[0].as_ref();
+
+        assert_eq!(parquet_column(parquet_schema, &schema, "c1"), None);
+
+        let converter =
+            StatisticsConverter::from_column_index(0, arrow_field, parquet_schema).unwrap();
+
+        assert_eq!(converter.parquet_column_index(), Some(0));
+        assert_eq!(converter.arrow_field(), arrow_field);
+
+        let mins = converter.row_group_mins(row_groups.iter()).unwrap();
+        assert_eq!(&mins, &i32_array([Some(1), Some(4)]));
+
+        let maxes = converter.row_group_maxes(row_groups.iter()).unwrap();
+        assert_eq!(&maxes, &i32_array([Some(3), Some(9)]));
+
+        let null_counts = converter.row_group_null_counts(row_groups.iter()).unwrap();
+        assert_eq!(null_counts, UInt64Array::from(vec![1, 0]));
+
+        let row_counts = converter.row_group_row_counts(row_groups.iter()).unwrap();
+        assert_eq!(row_counts, Some(UInt64Array::from(vec![3, 3])));
     }
 
     /// Write the specified batches out as parquet and return the metadata
