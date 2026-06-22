@@ -55,7 +55,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -77,7 +77,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -132,7 +132,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -155,7 +155,7 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -188,7 +188,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
