@@ -249,59 +249,54 @@ where
             )));
         }
 
-        match NullBuffer::union(left.nulls(), right.nulls()) {
+        let null_buffer = NullBuffer::union(left.nulls(), right.nulls());
+
+        // Compute the required data buffer size, excluding any elements that are null
+        // or are small enough to be stored inline.
+        let data_size = match &null_buffer {
+            None => left
+                .lengths()
+                .zip(right.lengths())
+                .map(|(l, r)| l + r)
+                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
+                .map(|len| len as usize)
+                .sum(),
+            Some(nb) => left
+                .lengths()
+                .zip(right.lengths())
+                .zip(nb.iter())
+                .filter(|((_, _), not_null)| *not_null)
+                .map(|((l, r), _)| l + r)
+                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
+                .map(|len| len as usize)
+                .sum(),
+        };
+
+        if data_size > i32::MAX as usize {
+            return Err(ArrowError::ArithmeticOverflow(
+                "byte array offset overflow".to_string(),
+            ));
+        }
+        let mut builder = Self::with_capacity(len, data_size);
+
+        match &null_buffer {
             None => {
-                let data_size = left
-                    .lengths()
-                    .zip(right.lengths())
-                    .map(|(l, r)| l + r)
-                    .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                    .map(|len| len as usize)
-                    .sum();
-
-                if data_size > i32::MAX as usize {
-                    return Err(ArrowError::ArithmeticOverflow(
-                        "byte array offset overflow".to_string(),
-                    ));
-                }
-
-                let mut builder = Self::with_capacity(len, data_size);
                 for (l, r) in left.bytes_iter().zip(right.bytes_iter()) {
                     builder.append_concat_view(l, r);
                 }
-                builder.finish(None)
             }
-            Some(nulls) => {
-                let data_size = left
-                    .lengths()
-                    .zip(right.lengths())
-                    .zip(nulls.iter())
-                    .filter(|((_, _), not_null)| *not_null)
-                    .map(|((l, r), _)| l + r)
-                    .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                    .map(|len| len as usize)
-                    .sum();
-
-                if data_size > i32::MAX as usize {
-                    return Err(ArrowError::ArithmeticOverflow(
-                        "byte array offset overflow".to_string(),
-                    ));
-                }
-
-                let mut builder = Self::with_capacity(len, data_size);
-                for ((l, r), not_null) in
-                    left.bytes_iter().zip(right.bytes_iter()).zip(nulls.iter())
-                {
+            Some(nb) => {
+                for ((l, r), not_null) in left.bytes_iter().zip(right.bytes_iter()).zip(nb.iter()) {
                     if not_null {
                         builder.append_concat_view(l, r);
                     } else {
                         builder.append_empty_view();
                     }
                 }
-
-                builder.finish(Some(nulls))
             }
-        }
+        };
+
+        builder.finish(null_buffer)
     }
 
     fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
