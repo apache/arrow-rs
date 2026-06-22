@@ -502,6 +502,13 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 
 /// Top level builder for [`Variant`] values
 ///
+/// `VariantBuilder` builds a single, self-contained [`Variant`] value -- useful
+/// for one-off values and unit tests. To build an array (column) of variants,
+/// one per input row, use [`VariantArrayBuilder`] from the
+/// `parquet-variant-compute` crate rather than a `VariantBuilder` per row.
+///
+/// [`VariantArrayBuilder`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArrayBuilder.html
+///
 /// # Example: create a Primitive Int8
 /// ```
 /// # use parquet_variant::{Variant, VariantBuilder};
