@@ -106,7 +106,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -117,7 +117,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "arrow"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "anyhow",
  "arrow-arith",
@@ -348,6 +348,7 @@ dependencies = [
  "base64",
  "bytes",
  "clap",
+ "criterion",
  "futures",
  "http",
  "http-body",
@@ -370,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-test"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -383,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-testing"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -402,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -421,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arbitrary",
  "arrow-array",
@@ -452,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -465,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-pyarrow"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -475,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -490,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -503,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -516,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1063,6 +1064,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tinytemplate",
+ "tokio",
  "walkdir",
 ]
 
@@ -1248,7 +1250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2132,7 +2134,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2312,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2362,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-geospatial"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-schema",
  "geo-traits",
@@ -2374,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2391,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-compute"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2408,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-json"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "arrow-schema",
  "base64",
@@ -2420,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "parquet",
  "proc-macro2",
@@ -2430,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive_test"
-version = "58.3.0"
+version = "59.0.0"
 dependencies = [
  "chrono",
  "parquet",
@@ -2655,9 +2657,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12"
+checksum = "cd274650b21d4bfc26a0a47587962c1edb425f69287324355cd040c3ea66071c"
 dependencies = [
  "libc",
  "once_cell",
@@ -2668,18 +2670,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e368e7ddfdeb98c9bca7f8383be1648fd84ab466bf2bc015e94008db6d35611e"
+checksum = "c5e2a7d2f0d013342f295c048ad19237add5154a55b1c5a254c0ec93d4109078"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e"
+checksum = "ca85c467da1bbc8d866eea5deff9cf29ea5f7785054a17da36e65bda9c05845b"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -2958,7 +2960,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3222,7 +3224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3331,10 +3333,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3344,7 +3346,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4018,7 +4020,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

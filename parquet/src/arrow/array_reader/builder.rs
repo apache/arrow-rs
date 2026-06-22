@@ -101,6 +101,28 @@ pub struct ArrayReaderBuilder<'a> {
     batch_size: usize,
 }
 
+/// Arguments threaded through the recursive `build_*_reader` calls.
+///
+/// Bundling the per-field arguments into a single struct keeps the recursive
+/// builder signatures small and provides one documented place to add new
+/// per-reader options in the future.
+#[derive(Clone, Copy)]
+struct ReaderArgs<'a> {
+    /// The parquet field the output array corresponds to.
+    field: &'a ParquetField,
+    /// Which leaf columns are being read.
+    mask: &'a ProjectionMask,
+}
+
+impl<'a> ReaderArgs<'a> {
+    /// Returns a copy of these arguments pointing at `field`.
+    ///
+    /// Used when recursing from a field into one of its children.
+    fn with_field(self, field: &'a ParquetField) -> Self {
+        Self { field, ..self }
+    }
+}
+
 impl<'a> ArrayReaderBuilder<'a> {
     /// Create a new `ArrayReaderBuilder`
     pub fn new(row_groups: &'a dyn RowGroups, metrics: &'a ArrowReaderMetrics) -> Self {
@@ -140,7 +162,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         mask: &ProjectionMask,
     ) -> Result<Box<dyn ArrayReader>> {
         let reader = field
-            .and_then(|field| self.build_reader(field, mask).transpose())
+            .and_then(|field| self.build_reader(ReaderArgs { field, mask }).transpose())
             .transpose()?
             .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
 
@@ -152,14 +174,10 @@ impl<'a> ArrayReaderBuilder<'a> {
         self.row_groups.num_rows()
     }
 
-    fn build_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
-        match field.field_type {
+    fn build_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
+        match args.field.field_type {
             ParquetFieldType::Primitive { col_idx, .. } => {
-                let Some(reader) = self.build_primitive_reader(field, mask)? else {
+                let Some(reader) = self.build_primitive_reader(args)? else {
                     return Ok(None);
                 };
                 let Some(cache_options) = self.cache_options.as_ref() else {
@@ -188,14 +206,14 @@ impl<'a> ArrayReaderBuilder<'a> {
                     }
                 }
             }
-            ParquetFieldType::Group { .. } => match &field.arrow_type {
-                DataType::Map(_, _) => self.build_map_reader(field, mask),
-                DataType::Struct(_) => self.build_struct_reader(field, mask),
+            ParquetFieldType::Group { .. } => match &args.field.arrow_type {
+                DataType::Map(_, _) => self.build_map_reader(args),
+                DataType::Struct(_) => self.build_struct_reader(args),
                 DataType::List(_)
                 | DataType::LargeList(_)
                 | DataType::ListView(_)
-                | DataType::LargeListView(_) => self.build_list_reader(field, mask),
-                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
+                | DataType::LargeListView(_) => self.build_list_reader(args),
+                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(args),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
@@ -226,16 +244,13 @@ impl<'a> ArrayReaderBuilder<'a> {
     }
 
     /// Build array reader for map type.
-    fn build_map_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+    fn build_map_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
+        let field = args.field;
         let children = field.children().unwrap();
         assert_eq!(children.len(), 2);
 
-        let key_reader = self.build_reader(&children[0], mask)?;
-        let value_reader = self.build_reader(&children[1], mask)?;
+        let key_reader = self.build_reader(args.with_field(&children[0]))?;
+        let value_reader = self.build_reader(args.with_field(&children[1]))?;
 
         match (key_reader, value_reader) {
             (Some(key_reader), Some(value_reader)) => {
@@ -277,15 +292,12 @@ impl<'a> ArrayReaderBuilder<'a> {
     }
 
     /// Build array reader for list type.
-    fn build_list_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+    fn build_list_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
+        let field = args.field;
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(args.with_field(&children[0]))? {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
@@ -349,13 +361,13 @@ impl<'a> ArrayReaderBuilder<'a> {
     /// Build array reader for fixed-size list type.
     fn build_fixed_size_list_reader(
         &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
+        args: ReaderArgs<'_>,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
+        let field = args.field;
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(args.with_field(&children[0]))? {
             Some(item_reader) => {
                 let item_type = item_reader.get_data_type().clone();
                 let reader = match &field.arrow_type {
@@ -384,11 +396,8 @@ impl<'a> ArrayReaderBuilder<'a> {
     }
 
     /// Creates primitive array reader for each primitive type.
-    fn build_primitive_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+    fn build_primitive_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
+        let field = args.field;
         let (col_idx, primitive_type) = match &field.field_type {
             ParquetFieldType::Primitive {
                 col_idx,
@@ -400,7 +409,7 @@ impl<'a> ArrayReaderBuilder<'a> {
             _ => unreachable!(),
         };
 
-        if !mask.leaf_included(col_idx) {
+        if !args.mask.leaf_included(col_idx) {
             return Ok(None);
         }
 
@@ -508,11 +517,8 @@ impl<'a> ArrayReaderBuilder<'a> {
         Ok(Some(reader))
     }
 
-    fn build_struct_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+    fn build_struct_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
+        let field = args.field;
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
             _ => unreachable!(),
@@ -524,7 +530,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         let mut builder = SchemaBuilder::with_capacity(children.len());
 
         for (arrow, parquet) in arrow_fields.iter().zip(children) {
-            if let Some(reader) = self.build_reader(parquet, mask)? {
+            if let Some(reader) = self.build_reader(args.with_field(parquet))? {
                 // Need to retrieve underlying data type to handle projection
                 let child_type = reader.get_data_type().clone();
                 builder.push(arrow.as_ref().clone().with_data_type(child_type));

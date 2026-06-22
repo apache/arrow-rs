@@ -433,7 +433,9 @@ mod tests {
 
         let mut valid = vec![false, false, true, true, false, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(0, 3, valid.len(), valid_buffer.as_slice());
+        output
+            .pad_nulls(0, 3, valid.len(), valid_buffer.as_slice())
+            .unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -441,7 +443,7 @@ mod tests {
 
         valid.extend_from_slice(&[false, false, true, true, false, true, true, false]);
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(6, 4, 8, valid_buffer.as_slice());
+        output.pad_nulls(6, 4, 8, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -512,7 +514,7 @@ mod tests {
 
         let valid = [true, true, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(0, 5, 5, valid_buffer.as_slice());
+        output.pad_nulls(0, 5, 5, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -656,7 +658,7 @@ mod tests {
             decoder.set_data(encoding, page, 8, None).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 0);
 
-            output.pad_nulls(0, 0, 8, &[0]);
+            output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
                 .into_array(Some(Buffer::from(&[0])), &data_type)
                 .unwrap();
@@ -671,7 +673,7 @@ mod tests {
             decoder.set_data(encoding, page, 8, None).unwrap();
             assert_eq!(decoder.skip_values(1024).unwrap(), 0);
 
-            output.pad_nulls(0, 0, 8, &[0]);
+            output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
                 .into_array(Some(Buffer::from(&[0])), &data_type)
                 .unwrap();
