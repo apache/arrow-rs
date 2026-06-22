@@ -662,7 +662,7 @@ def test_table_empty():
     """
     schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     table = pa.Table.from_batches([], schema=schema)
-    new_table = rust.build_table([], schema=schema)
+    new_table = rust.build_table((), schema=schema)
 
     assert table == new_table
     assert table.schema == new_table.schema
