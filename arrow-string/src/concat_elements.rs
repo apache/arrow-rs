@@ -289,7 +289,7 @@ where
                     .map(|len| len as usize)
                     .sum();
 
-                if data_size > u32::MAX as usize {
+                if data_size > i32::MAX as usize {
                     return Err(ArrowError::ArithmeticOverflow(
                         "byte array offset overflow".to_string(),
                     ));
@@ -326,11 +326,11 @@ where
         if total_len > MAX_INLINE_VIEW_LEN as usize {
             let offset = self.data.len();
 
-            // SAFETY: we've checked that the total data size is within u32::MAX
-            // so offset cannot exceed it.
+            // SAFETY: we've checked that the total data size is within i32::MAX
+            // in `concat_elements_view_array`, so offset cannot exceed it.
             // Not using `u32::try_from` on each insertion makes a ~5% difference
             // in benchmarking
-            debug_assert!(offset <= u32::MAX as usize);
+            debug_assert!(offset <= i32::MAX as usize);
             let view_offset: u32 = offset as u32;
 
             self.data.extend_from_slice(left);
