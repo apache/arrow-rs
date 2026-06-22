@@ -116,13 +116,10 @@ impl<T: ToPyArrow> IntoPyArrow for T {
 
 fn validate_class(expected: &Bound<PyType>, value: &Bound<PyAny>) -> PyResult<()> {
     if !value.is_instance(expected)? {
-        let expected_module = expected.getattr("__module__")?;
-        let expected_name = expected.getattr("__name__")?;
-        let found_class = value.get_type();
-        let found_module = found_class.getattr("__module__")?;
-        let found_name = found_class.getattr("__name__")?;
         return Err(PyTypeError::new_err(format!(
-            "Expected instance of {expected_module}.{expected_name}, got {found_module}.{found_name}",
+            "Expected instance of {}, got {}",
+            expected.fully_qualified_name()?,
+            value.get_type().fully_qualified_name()?
         )));
     }
     Ok(())
