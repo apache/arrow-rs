@@ -538,7 +538,7 @@ impl ParquetPushDecoder {
         self.state.row_groups_remaining()
     }
 
-    /// Returns the file-level row-group index that the next call to
+    /// Returns the row-group index that the next call to
     /// [`Self::try_next_reader`] will yield a reader for, after applying
     /// any internal skipping (row selection emptiness, exhausted budget,
     /// finished state). Returns `Ok(None)` when:
