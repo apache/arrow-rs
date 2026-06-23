@@ -557,7 +557,7 @@ impl<'a> RecordBatchDecoder<'a> {
 
         let schema = Arc::clone(&self.schema);
         if let Some(projection) = self.projection {
-            let mut arrays = vec![];
+            let mut arrays = Vec::with_capacity(projection.len());
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
                 // A projected field can appear more than once, so collect all matching positions.
@@ -597,7 +597,7 @@ impl<'a> RecordBatchDecoder<'a> {
                 RecordBatch::try_new_with_options(schema, columns, &options)
             }
         } else {
-            let mut children = vec![];
+            let mut children = Vec::with_capacity(schema.fields().len());
             // keep track of index as lists require more than one node
             for field in schema.fields() {
                 let child = self.create_array(field, &mut variadic_counts)?;
@@ -771,11 +771,18 @@ pub fn read_record_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
+    skip_validation: bool,
 ) -> Result<RecordBatch, ArrowError> {
-    RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
-        .with_projection(projection)
-        .with_require_alignment(false)
-        .read_record_batch()
+    let mut decoder =
+        RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+            .with_projection(projection)
+            .with_require_alignment(false);
+    if skip_validation {
+        let mut flag = UnsafeFlag::new();
+        unsafe { flag.set(true) };
+        decoder = decoder.with_skip_validation(flag);
+    }
+    decoder.read_record_batch()
 }
 
 /// Read the dictionary from the buffer and provided metadata,

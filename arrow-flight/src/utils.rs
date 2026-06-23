@@ -45,7 +45,7 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in flight_data[1..].iter() {
-        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id, false)?;
         batches.push(batch);
     }
     Ok(batches)
@@ -56,6 +56,7 @@ pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    skip_validation: bool,
 ) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
     let message = arrow_ipc::root_as_message(&data.data_header[..])
@@ -70,12 +71,13 @@ pub fn flight_data_to_arrow_batch(
         })
         .map(|batch| {
             reader::read_record_batch(
-                &Buffer::from(data.data_body.as_ref()),
+                &Buffer::from(data.data_body.clone()),
                 batch,
                 schema,
                 dictionaries_by_id,
                 None,
                 &message.version(),
+                skip_validation,
             )
         })?
 }

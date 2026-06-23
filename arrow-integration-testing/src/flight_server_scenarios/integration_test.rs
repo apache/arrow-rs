@@ -335,6 +335,7 @@ async fn record_batch_from_message(
         dictionaries_by_id,
         None,
         &message.version(),
+        false,
     );
 
     arrow_batch_result

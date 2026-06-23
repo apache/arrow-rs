@@ -228,6 +228,8 @@ pub struct FlightDataDecoder {
     state: Option<FlightStreamState>,
     /// Seen the end of the inner stream?
     done: bool,
+    /// Skip validation of decoded arrays (UTF-8, offset bounds, null counts).
+    skip_validation: bool,
 }
 
 impl Debug for FlightDataDecoder {
@@ -236,6 +238,7 @@ impl Debug for FlightDataDecoder {
             .field("response", &"<stream>")
             .field("state", &self.state)
             .field("done", &self.done)
+            .field("skip_validation", &self.skip_validation)
             .finish()
     }
 }
@@ -250,7 +253,15 @@ impl FlightDataDecoder {
             state: None,
             response: response.boxed(),
             done: false,
+            skip_validation: false,
         }
+    }
+
+    /// Only set for trusted senders, invalid data may cause undefined behavior.
+    /// Can improve performance by skipping validation
+    pub fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation = skip_validation;
+        self
     }
 
     /// Returns the current schema for this stream
@@ -323,6 +334,7 @@ impl FlightDataDecoder {
                     &data,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
+                    self.skip_validation,
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
