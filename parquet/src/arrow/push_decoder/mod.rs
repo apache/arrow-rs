@@ -547,10 +547,6 @@ impl ParquetPushDecoder {
     ///   call [`Self::is_at_row_group_boundary`] first), or
     /// - every remaining row group would be skipped.
     ///
-    /// Returns `Err` when reading row-group metadata fails (e.g.
-    /// `usize` overflow on 32-bit targets), matching the error surface
-    /// of `try_next_reader` so peek and read paths report errors
-    /// consistently.
     ///
     /// This method not mutate decoder state. It is
     /// useful for callers that maintain per-row-group state in
