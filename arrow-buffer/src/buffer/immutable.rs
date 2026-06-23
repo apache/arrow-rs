@@ -106,16 +106,9 @@ impl Buffer {
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
     ///
     /// self.ptr and self.data can be different after slicing or advancing the buffer.
-    ///
-    /// to check if the buffer whether sliced, you can call [`Self::is_sliced`]
     pub fn ptr_offset(&self) -> usize {
         // Safety: `ptr` is always in bounds of `data`.
         unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
-    }
-
-    /// Returns whether the buffer is sliced (does not point to entire original data)
-    pub fn is_sliced(&self) -> bool {
-        self.length != self.data.len()
     }
 
     /// Returns the pointer to the start of the buffer without the offset.
@@ -366,10 +359,8 @@ impl Buffer {
     }
 
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared or sliced.
-    /// Returns `Err` if this is shared or the buffer is sliced (you can check if sliced by calling [`Self::is_sliced`]) or its allocation is from an external source or
+    /// Returns `Err` if this is shared or the [`Self::ptr_offset`] is greater than 0 or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
-    ///
-    /// If you want to still get MutableBuffer regardless of sliced you can use [`Self::into_mutable_unsliced`]
     ///
     /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
     /// ```
@@ -390,61 +381,32 @@ impl Buffer {
     ///
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
-        // Disallow converting sliced buffer into mutable to avoid pitfall of doing a roundtrip from sliced owned buffer will result in a different length:
-        // ```
-        // fn example(owned_sliced_buffer: Buffer) -> Buffer {
-        //  let og_len = owned_sliced_buffer.len();
-        //  let roundtrip = Buffer::from(owned_sliced_buffer.into_mutable().unwrap());
-        //  assert_eq!(og_len, roundtrip.len()); // <-- this will have different length for sliced buffer, causing confusion
-        // }
-        // ```
-        if self.is_sliced() {
-            return Err(self);
-        }
-        self.into_mutable_unsliced()
-    }
-
-    /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
-    /// This is the same as [`Self::into_mutable`] but allow sliced buffer and will the entire unsliced data as [`MutableBuffer`]
-    ///
-    /// when the buffer is sliced, the returned [`MutableBuffer`] will contain the **entire** unsliced data, so calling `Buffer::from` on the resulting [`MutableBuffer`] from this function
-    /// will be the unsliced buffer
-    /// ```
-    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
-    /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
-    /// let sliced: Buffer = buffer.slice_with_length(1, 2);
-    /// drop(buffer); // <- keep `sliced` the only reference
-    ///
-    /// assert_eq!(sliced.as_slice(), &[2, 3]);
-    /// let back = Buffer::from(sliced.into_mutable_unsliced().unwrap());
-    /// assert_eq!(back.as_slice(), &[1, 2, 3, 4]);
-    /// ```
-    ///
-    /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
-    /// ```
-    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
-    /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
-    /// let sliced: Buffer = buffer.slice_with_length(1, 2);
-    /// drop(buffer); // <- keep `sliced` the only reference
-    /// assert_eq!(sliced.as_slice(), &[2, 3]);
-    ///
-    /// let mutable = sliced.into_mutable_unsliced().unwrap(); // <- this will succeed as the buffer is not shared and is not sliced
-    /// assert_eq!(mutable.as_slice(), &[1, 2, 3, 4]);
-    ///
-    /// let buffer_back = Buffer::from(mutable);
-    /// assert_eq!(buffer_back.as_slice(), &[1, 2, 3, 4]);
-    /// ```
-    pub fn into_mutable_unsliced(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;
 
-        Arc::try_unwrap(self.data)
-            .and_then(|bytes| MutableBuffer::from_bytes(bytes).map_err(Arc::new))
-            .map_err(|bytes| Buffer {
-                data: bytes,
-                ptr,
-                length,
-            })
+        // Disallow converting when the offset is not 0 because we can't start a mutable from offset
+        let res = if self.ptr_offset() > 0 {
+            Err(self.data)
+        } else {
+            Arc::try_unwrap(self.data)
+        };
+
+        res.and_then(|bytes| {
+            // The pointer of underlying buffer should not be offset.
+            assert_eq!(ptr, bytes.ptr().as_ptr());
+            MutableBuffer::from_bytes(bytes).map_err(Arc::new)
+        })
+        .map_err(|bytes| Buffer {
+            data: bytes,
+            ptr,
+            length,
+        })
+        .map(|mut mutable| {
+            // We need to update the length since in case we are converting sliced buffer we need to return MutableBuffer with the same length
+            // SAFETY: this is safe as the length is coming from valid Buffer (this) and it is guaranteed to be less than the underlying data buffer
+            unsafe { mutable.set_len(length) };
+            mutable
+        })
     }
 
     /// Converts self into a `Vec`, if possible.
@@ -1133,35 +1095,9 @@ mod tests {
     }
 
     #[test]
-    fn test_is_sliced() {
-        let buffer = Buffer::from(&[1, 2, 3, 4]);
-        assert!(!buffer.is_sliced());
-        assert!(!buffer.clone().is_sliced());
-        {
-            let mut advanced = buffer.clone();
-            advanced.advance(0);
-            assert!(!advanced.is_sliced());
-        }
-        {
-            let mut advanced = buffer.clone();
-            advanced.advance(1);
-            assert!(advanced.is_sliced());
-        }
-
-        assert!(!buffer.slice(0).is_sliced());
-        assert!(buffer.slice(1).is_sliced());
-
-        assert!(buffer.slice_with_length(1, 3).is_sliced());
-        assert!(!buffer.slice_with_length(0, 4).is_sliced());
-        assert!(buffer.slice_with_length(0, 3).is_sliced());
-        assert!(buffer.slice_with_length(0, 0).is_sliced());
-    }
-
-    #[test]
-    fn into_mutable_should_return_error_for_sliced_owned_buffer() {
+    fn into_mutable_should_return_error_for_sliced_owned_buffer_when_ptr_offset_is_not_0() {
         let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
         for (slice_from, slice_length) in [
-            (0, 0),
             (original_buffer_data.len(), 0),
             (2, 4),
             (2, original_buffer_data.len() - 2),
@@ -1169,40 +1105,34 @@ mod tests {
             let buffer = Buffer::from(original_buffer_data);
             let sliced = buffer.slice_with_length(slice_from, slice_length);
             drop(buffer); // Keep only 1 owner
+            assert_ne!(sliced.ptr_offset(), 0);
 
-            assert!(sliced.is_sliced());
             sliced
                 .into_mutable()
-                .expect_err("should not convert sliced buffer");
+                .expect_err("should not convert sliced buffer when ptr_offset is not 0");
         }
     }
 
     #[test]
-    fn into_mutable_unsliced_should_return_the_entire_data_regardless_of_slicing() {
+    fn into_mutable_should_allow_converting_sliced_owned_buffer_when_not_sliced_from_start() {
         let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
-        for (slice_from, slice_length) in [
-            (0, 0),
-            (0, original_buffer_data.len()),
-            (original_buffer_data.len(), 0),
-            (2, 4),
-            (2, original_buffer_data.len() - 2),
-        ] {
+        for slice_length in [0, original_buffer_data.len() - 2] {
             let buffer = Buffer::from(original_buffer_data);
-            let original_buffer_len = buffer.len();
-            let original_data_ptr = buffer.data_ptr();
-            let sliced = buffer.slice_with_length(slice_from, slice_length);
+            let sliced = buffer.slice_with_length(0, slice_length);
             drop(buffer); // Keep only 1 owner
+            assert_eq!(sliced.ptr_offset(), 0);
+
+            let original_ptr = sliced.data_ptr();
 
             let mutable = sliced
-                .into_mutable_unsliced()
-                .expect("should convert to mutable");
-            assert_eq!(mutable.len(), original_buffer_len);
-            let new_buffer = Buffer::from(mutable);
-            assert_eq!(new_buffer.data_ptr(), original_data_ptr);
-            assert_eq!(new_buffer.len(), original_buffer_len);
-            assert!(!new_buffer.is_sliced());
+                        .into_mutable()
+                        .unwrap_or_else(|_| panic!("should allow converting to mutable when not sliced from end when slice_length is {slice_length}"));
 
-            assert_eq!(new_buffer.as_slice(), &original_buffer_data);
+            let buffer_back: Buffer = mutable.into();
+            assert_eq!(buffer_back.data_ptr(), original_ptr);
+
+            let expected = Buffer::from(original_buffer_data).slice_with_length(0, slice_length);
+            assert_eq!(buffer_back.as_slice(), expected.as_slice());
         }
     }
 }
