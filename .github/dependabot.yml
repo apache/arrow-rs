@@ -18,6 +18,17 @@ updates:
         applies-to: version-updates
         patterns:
           - "tonic*"
+      all-other-cargo-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "prost*"
+          - "tonic*"
+          - "object_store"
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
