@@ -41,9 +41,9 @@ use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
 };
-use arrow_schema::Schema;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
-use pyo3::exceptions::PyTypeError;
+use arrow_schema::Schema;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyAnyMethods, PyModule};
 use pyo3::{IntoPyObject, Python};
 use std::ffi::CString;
@@ -83,7 +83,7 @@ fn test_to_pyarrow_pair() {
         let tuple = (record_batch.clone(), record_batch).into_pyobject(py)?;
         Vec::<RecordBatch>::from_pyarrow_bound(&tuple)
     })
-        .unwrap();
+    .unwrap();
     assert_eq!(input, res[0]);
     assert_eq!(input, res[1]);
 }
@@ -156,7 +156,7 @@ class NotACapsule:
 value = NotACapsule()
 "#,
         )
-            .unwrap();
+        .unwrap();
 
         let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
         let value = module.getattr("value").unwrap();
@@ -166,6 +166,35 @@ value = NotACapsule()
         assert_eq!(
             err.to_string(),
             "TypeError: Expected __arrow_c_schema__ to return a capsule."
+        );
+    });
+}
+
+#[test]
+fn test_from_pyarrow_nullable_struct_array() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+import pyarrow as pa
+
+value = pa.array(
+    [{"a": 1}, None],
+    type=pa.struct([pa.field("a", pa.int32())]),
+)
+"#,
+        )
+        .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = RecordBatch::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+        assert_eq!(
+            err.to_string(),
+            "ValueError: Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
         );
     });
 }
