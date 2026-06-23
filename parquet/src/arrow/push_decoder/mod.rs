@@ -541,21 +541,23 @@ impl ParquetPushDecoder {
     /// Returns the row-group index that the next call to
     /// [`Self::try_next_reader`] will yield a reader for, after applying
     /// any internal skipping (row selection emptiness, exhausted budget,
-    /// finished state). 
+    /// finished state).
+    ///
+    /// Safe to call at any time. When called mid-row-group (i.e. while a
+    /// previously-emitted [`ParquetRecordBatchReader`] is still being
+    /// drained), the returned index refers to the row group that
+    /// [`Self::try_next_reader`] will produce *after* the current one.
     ///
     /// Returns `Ok(None)` when:
-    /// - the decoder has no more row groups to read,
-    /// - the decoder is currently inside a row group (consumers should
-    ///   call [`Self::is_at_row_group_boundary`] first), or
+    /// - the decoder has no more row groups to read, or
     /// - every remaining row group would be skipped.
     ///
-    ///
-    /// This method not mutate decoder state. It is
-    /// useful for callers that maintain per-row-group state in
-    /// lock-step with the decoder (e.g. dynamic row-group pruners)
-    /// to determine which row group the next reader corresponds
-    /// to as  [`Self::try_next_reader`] may silently advance past
-    /// row groups based on filtering and other criteria
+    /// This method does not mutate decoder state. It is useful for
+    /// callers that maintain per-row-group state in lock-step with the
+    /// decoder (e.g. dynamic row-group pruners) to determine which row
+    /// group the next reader corresponds to, since
+    /// [`Self::try_next_reader`] may silently advance past row groups
+    /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
     }
@@ -862,15 +864,22 @@ impl ParquetDecoderState {
         }
     }
 
+    /// See [`ParquetPushDecoder::peek_next_row_group`] for the public API
+    /// contract. This inner method delegates to the underlying
+    /// [`RemainingRowGroups`] for both `ReadingRowGroup` and
+    /// `DecodingRowGroup`: mid-row-group the answer is the row group
+    /// `try_next_reader` will produce *after* the active one finishes,
+    /// which is exactly what `RemainingRowGroups::peek_next_row_group`
+    /// computes from the queued frontier.
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         match self {
             ParquetDecoderState::ReadingRowGroup {
                 remaining_row_groups,
             } => remaining_row_groups.peek_next_row_group(),
-            // We only expose a meaningful answer at row-group boundaries.
-            // Mid-row-group there is no "next" — the active reader is
-            // tied to the current row group.
-            ParquetDecoderState::DecodingRowGroup { .. } => Ok(None),
+            ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.peek_next_row_group(),
             ParquetDecoderState::Finished => Ok(None),
         }
     }
@@ -1896,6 +1905,86 @@ mod test {
             .unwrap();
 
         assert_eq!(decoder.peek_next_row_group().unwrap(), None);
+    }
+
+    /// `peek_next_row_group` is safe to call while a row group's reader
+    /// is still being drained via `try_decode`. In `DecodingRowGroup`
+    /// state it must report the row group `try_next_reader` will yield
+    /// a reader for *after* the active one — never `None` just because
+    /// the decoder is mid-row-group.
+    #[test]
+    fn test_peek_next_row_group_during_decoding_row_group() {
+        // Two row groups (200 rows each), small batch size so the
+        // decoder stays in `DecodingRowGroup` across multiple
+        // `try_decode` calls within RG 0.
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_batch_size(100)
+            .build()
+            .unwrap();
+        decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+
+        // First batch of RG 0 — after this, the decoder is in
+        // `DecodingRowGroup` state with the reader retained internally
+        // and one more 100-row batch still owed for RG 0. Peek must
+        // therefore look past the active RG to RG 1.
+        let _batch0 = expect_data(decoder.try_decode());
+        assert!(!decoder.is_at_row_group_boundary());
+        assert_eq!(decoder.peek_next_row_group().unwrap(), Some(1));
+
+        // Drain the rest of RG 0; peek still reports RG 1.
+        let _batch1 = expect_data(decoder.try_decode());
+        assert_eq!(decoder.peek_next_row_group().unwrap(), Some(1));
+
+        // Move into RG 1 — peek now sees no further row groups.
+        let _batch2 = expect_data(decoder.try_decode());
+        assert!(!decoder.is_at_row_group_boundary());
+        assert_eq!(decoder.peek_next_row_group().unwrap(), None);
+
+        let _batch3 = expect_data(decoder.try_decode());
+        expect_finished(decoder.try_decode());
+    }
+
+    /// Peeking is a read-only operation: calling it repeatedly between
+    /// `try_next_reader` calls must never change which row group the
+    /// reader path actually produces. Drives the decoder all the way
+    /// through and asserts each peek/read pair agrees.
+    #[test]
+    fn test_peek_next_row_group_does_not_mutate_state() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Two row groups expected — drive both, asserting peek/read agree.
+        for expected_rg in [0usize, 1usize] {
+            assert!(decoder.is_at_row_group_boundary());
+
+            // Multiple peeks before reading must all agree, and must not
+            // disturb the upcoming read.
+            let first_peek = decoder.peek_next_row_group().unwrap();
+            let second_peek = decoder.peek_next_row_group().unwrap();
+            let third_peek = decoder.peek_next_row_group().unwrap();
+            assert_eq!(first_peek, Some(expected_rg));
+            assert_eq!(first_peek, second_peek);
+            assert_eq!(second_peek, third_peek);
+
+            // Now read for real and confirm the decoder hands back exactly
+            // what peek promised.
+            let ranges = expect_needs_data(decoder.try_next_reader());
+            push_ranges_to_decoder(&mut decoder, ranges);
+            let reader = expect_data(decoder.try_next_reader());
+            for batch in reader {
+                let _ = batch.unwrap();
+            }
+        }
+
+        // Decoder is drained. Peek must agree with `try_next_reader`'s
+        // terminal state.
+        assert_eq!(decoder.peek_next_row_group().unwrap(), None);
+        expect_finished(decoder.try_next_reader());
     }
 
     /// `into_builder` between row groups recovers a builder for the

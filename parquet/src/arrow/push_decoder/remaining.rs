@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::DecodeResult;
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
+use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection, RowSelector};
 use crate::arrow::push_decoder::reader_builder::{
     RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
@@ -28,13 +28,95 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Plan for the next queued row group after row-selection slicing.
+/// Whether the frontier walker should hand out a row group or carry on
+/// scanning. Shared by [`RowGroupFrontier::next_readable_row_group`] and
+/// [`RowGroupFrontier::peek_next_row_group`] so a single decision rule
+/// drives both paths; this prevents the two walkers from drifting out of
+/// sync.
 #[derive(Debug)]
-enum QueuedRowGroupDecision {
-    /// Hand this row group to the builder.
-    Read(NextRowGroup),
-    /// Skip this row group, and keep scanning with the updated budget.
-    Skip { remaining_budget: RowBudget },
+enum RowGroupAction {
+    /// Hand this row group to the builder (read it).
+    Read,
+    /// Skip this row group entirely. Carry `budget_after` forward to the
+    /// next iteration.
+    Skip { budget_after: RowBudget },
+}
+
+/// Per-row-group decision shared by the read and peek paths.
+///
+/// Given the `selected_rows` already established from the row selection,
+/// decide whether the row group must be read (predicates present, or the
+/// budget admits at least one row) or skipped entirely (budget exhausted
+/// for this row group). The single source of truth for this rule.
+fn classify_row_group(
+    has_predicates: bool,
+    budget: RowBudget,
+    selected_rows: usize,
+) -> RowGroupAction {
+    if has_predicates {
+        // Predicates disable budget-based RG skipping for this RG; budget
+        // still gates row emission inside the row group.
+        return RowGroupAction::Read;
+    }
+    let rows_after_budget = budget.rows_after(selected_rows);
+    if rows_after_budget != 0 {
+        return RowGroupAction::Read;
+    }
+    RowGroupAction::Skip {
+        budget_after: budget.advance(selected_rows, rows_after_budget),
+    }
+}
+
+/// Borrowed cursor over a [`RowSelection`] that counts selected rows in
+/// each row group's slice without mutating the selection.
+///
+/// Used by [`RowGroupFrontier::peek_next_row_group`] to walk per-row-group
+/// selection slices without cloning the underlying selectors.
+struct PeekSelectionCursor<'a> {
+    iter: Box<dyn Iterator<Item = &'a RowSelector> + 'a>,
+    /// The selector currently being consumed (only partly used).
+    current: Option<&'a RowSelector>,
+    /// Rows already consumed from `current`.
+    consumed_in_current: usize,
+}
+
+impl<'a> PeekSelectionCursor<'a> {
+    fn new(selection: &'a RowSelection) -> Self {
+        Self {
+            iter: Box::new(selection.iter()),
+            current: None,
+            consumed_in_current: 0,
+        }
+    }
+
+    /// Consume the next `row_count` rows from the cursor and return the
+    /// number of those rows that are selected (i.e. `!selector.skip`).
+    /// Advances the cursor past the consumed range.
+    fn take(&mut self, row_count: usize) -> usize {
+        let mut selected = 0usize;
+        let mut remaining = row_count;
+        while remaining > 0 {
+            if self.current.is_none() {
+                self.current = self.iter.next();
+                self.consumed_in_current = 0;
+                if self.current.is_none() {
+                    break;
+                }
+            }
+            let selector = self.current.expect("current selector present");
+            let available = selector.row_count.saturating_sub(self.consumed_in_current);
+            let consume = available.min(remaining);
+            if !selector.skip {
+                selected += consume;
+            }
+            remaining -= consume;
+            self.consumed_in_current += consume;
+            if self.consumed_in_current >= selector.row_count {
+                self.current = None;
+            }
+        }
+        selected
+    }
 }
 
 /// Work item handed from [`RowGroupFrontier`] to [`RowGroupReaderBuilder`].
@@ -93,59 +175,50 @@ impl RowGroupFrontier {
         self.budget = budget;
     }
 
+    /// True iff the frontier has nothing more to hand out (budget
+    /// exhausted or selection drained). Centralized so peek and read
+    /// agree on the early-exit condition.
+    fn is_frontier_drained(&self) -> bool {
+        self.budget.is_exhausted()
+            || self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.row_count() == 0)
+    }
+
     /// Peek at the next row-group index `next_readable_row_group` would
     /// hand out, without mutating any state. Returns `None` if every
     /// remaining row group would be skipped under the current
     /// selection/budget, or if the queue is empty.
     ///
-    /// Mirrors the structure of `next_readable_row_group` but only walks
-    /// borrowed state — used by [`super::ParquetPushDecoder::peek_next_row_group`]
-    /// to let adaptive callers (e.g. dynamic row-group pruners or per-RG
-    /// `RowFilter` toggles) keep their per-RG state in lock-step with
-    /// the reader the decoder is about to emit.
+    /// Walks borrowed state via [`PeekSelectionCursor`] (no
+    /// `RowSelection` clone) and routes its per-RG decision through
+    /// [`classify_row_group`], the same helper used by
+    /// [`Self::next_readable_row_group`]. The two paths therefore
+    /// cannot diverge on a Read/Skip rule for the same input.
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
-        // Short-circuit: budget exhausted or selection drained ⇒ same
-        // outcome as `next_readable_row_group`'s early return.
-        if self.budget.is_exhausted()
-            || self
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.row_count() == 0)
-        {
+        if self.is_frontier_drained() {
             return Ok(None);
         }
 
-        // We may have to walk past row groups whose split selection is
-        // empty. Cloning the selection lets us run the same `split_off`
-        // logic without disturbing the real one.
-        let mut selection = self.selection.clone();
+        let mut cursor = self.selection.as_ref().map(PeekSelectionCursor::new);
         let mut budget = self.budget;
         for &row_group_idx in &self.row_groups {
             let row_count = self.row_group_num_rows(row_group_idx)?;
-            let selected_rows = match selection.as_mut() {
-                Some(remaining) => {
-                    let rg_segment = remaining.split_off(row_count);
-                    rg_segment.row_count()
-                }
+            let selected_rows = match cursor.as_mut() {
+                Some(cursor) => cursor.take(row_count),
                 None => row_count,
             };
             if selected_rows == 0 {
-                // Same skip path as `next_readable_row_group`: row
-                // selection drained for this RG, move on.
+                // Same selection-skip path as `next_readable_row_group`.
                 continue;
             }
-            if self.has_predicates {
-                // Predicates disable budget-based RG skipping for this RG;
-                // budget still gates row emission inside the row group.
-                return Ok(Some(row_group_idx));
+            match classify_row_group(self.has_predicates, budget, selected_rows) {
+                RowGroupAction::Read => return Ok(Some(row_group_idx)),
+                RowGroupAction::Skip { budget_after } => {
+                    budget = budget_after;
+                }
             }
-            let rows_after_budget = budget.rows_after(selected_rows);
-            if rows_after_budget != 0 {
-                return Ok(Some(row_group_idx));
-            }
-            // Budget-skip: advance the simulated budget and keep
-            // walking; the next iteration sees the post-advance budget.
-            budget = budget.advance(selected_rows, rows_after_budget);
         }
         Ok(None)
     }
@@ -155,42 +228,17 @@ impl RowGroupFrontier {
         self.row_groups.clear();
     }
 
-    /// Plan whether a selected row group should be read or skipped.
-    ///
-    /// Selection-only skips are handled before this method is called. This
-    /// method applies the remaining offset/limit budget and predicate
-    /// conservatism.
-    fn plan_selected_row_group(
-        &self,
-        next_row_group: NextRowGroup,
-        selected_rows: usize,
-    ) -> QueuedRowGroupDecision {
-        if self.has_predicates {
-            return QueuedRowGroupDecision::Read(next_row_group);
-        }
-
-        let rows_after_budget = self.budget.rows_after(selected_rows);
-        if rows_after_budget != 0 {
-            return QueuedRowGroupDecision::Read(next_row_group);
-        }
-
-        QueuedRowGroupDecision::Skip {
-            remaining_budget: self.budget.advance(selected_rows, rows_after_budget),
-        }
-    }
-
     /// Advance queued row groups until one should be handed to the builder.
+    ///
+    /// Per-row-group Read/Skip decisions go through [`classify_row_group`]
+    /// (also used by [`Self::peek_next_row_group`]) so the two walkers
+    /// stay in lock-step.
     fn next_readable_row_group(&mut self) -> Result<Option<NextRowGroup>, ParquetError> {
         loop {
             let Some(&row_group_idx) = self.row_groups.front() else {
                 return Ok(None);
             };
-            if self.budget.is_exhausted()
-                || self
-                    .selection
-                    .as_ref()
-                    .is_some_and(|selection| selection.row_count() == 0)
-            {
+            if self.is_frontier_drained() {
                 self.clear_remaining();
                 return Ok(None);
             }
@@ -215,21 +263,20 @@ impl RowGroupFrontier {
                 None => (None, row_count),
             };
 
-            let next_row_group = NextRowGroup {
-                row_group_idx,
-                row_count,
-                selection,
-                budget: self.budget,
-            };
-
-            match self.plan_selected_row_group(next_row_group, selected_rows) {
-                QueuedRowGroupDecision::Read(next_row_group) => {
+            match classify_row_group(self.has_predicates, self.budget, selected_rows) {
+                RowGroupAction::Read => {
+                    let next_row_group = NextRowGroup {
+                        row_group_idx,
+                        row_count,
+                        selection,
+                        budget: self.budget,
+                    };
                     self.row_groups.pop_front();
                     return Ok(Some(next_row_group));
                 }
-                QueuedRowGroupDecision::Skip { remaining_budget } => {
+                RowGroupAction::Skip { budget_after } => {
                     self.row_groups.pop_front();
-                    self.budget = remaining_budget;
+                    self.budget = budget_after;
                 }
             }
         }
