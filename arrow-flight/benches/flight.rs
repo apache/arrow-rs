@@ -133,7 +133,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 
 /// Decode a multi-batch stream covering both plain and dictionary types.
 /// Uses [`DictionaryHandling::Resend`] to exercise the replacement-dictionary path.
-fn bench_decode_stream(c: &mut Criterion) {
+fn bench_decode_dictionary_stream(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut g = c.benchmark_group("decode_stream");
 
@@ -226,7 +226,7 @@ criterion_group!(
     benches,
     bench_encode,
     bench_decode,
-    bench_decode_stream,
+    bench_decode_dictionary_stream,
     bench_roundtrip,
     bench_do_put_dictionary
 );
