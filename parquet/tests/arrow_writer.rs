@@ -26,13 +26,15 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
-use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_writer::{
-    ArrowWriterOptions, PageKey, PageStore, PageStoreArgs, PageStoreFactory,
+    ArrowColumnChunk, ArrowRowGroupWriterFactory, ArrowWriterOptions, PageKey, PageStore,
+    PageStoreArgs, PageStoreFactory, compute_leaves,
 };
+use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic::Encoding;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+use parquet::file::writer::SerializedFileWriter;
 
 #[test]
 #[should_panic(
@@ -381,5 +383,182 @@ fn page_store_bounds_write_memory() {
         dict_spill * 2 < dict_in_memory,
         "expected dict-column spilling peak ({dict_spill}) to be far below the in-memory \
          baseline ({dict_in_memory}) — dictionary data pages should spill, not accumulate"
+    );
+}
+
+/// Number of dictionary-encoded columns written into a single row group. Each
+/// produces its own dictionary page, and all of those pages are held at once
+/// between every column's `close()` and the row-group splice. Large enough that
+/// K × dict_page dominates the single dictionary page a spilling store keeps.
+const DICT_NUM_COLUMNS: usize = 16;
+/// Distinct values per dictionary column. Moderate cardinality: small enough to
+/// stay dictionary-encoded, large enough (with `DICT_VALUE_LEN`) that each
+/// dictionary page is ~0.75 MiB.
+const DICT_DISTINCT: usize = 2048;
+/// Width of each distinct dictionary value, in bytes (→ dictionary page
+/// ≈ `DICT_DISTINCT × (DICT_VALUE_LEN + 4)` ≈ 0.75 MiB).
+const DICT_VALUE_LEN: usize = 384;
+/// Rows per dictionary column (each distinct value repeated twice).
+const DICT_ROWS: usize = DICT_DISTINCT * 2;
+/// Approximate retained size of one dictionary page (PLAIN: 4-byte length + value).
+const DICT_PAGE_BYTES: usize = DICT_DISTINCT * (DICT_VALUE_LEN + 4);
+
+/// The `DICT_DISTINCT` distinct dictionary values, concatenated. Built once and
+/// shared by every column. Constructed outside the measured closure so its bytes
+/// sit in the baseline and are not charged to the per-run peak.
+fn dict_value_pool() -> Vec<u8> {
+    let mut pool = vec![0u8; DICT_DISTINCT * DICT_VALUE_LEN];
+    for d in 0..DICT_DISTINCT {
+        let slice = &mut pool[d * DICT_VALUE_LEN..(d + 1) * DICT_VALUE_LEN];
+        // A deterministic, incompressible blob per distinct value.
+        let mut state = (d as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        for byte in slice.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = (state >> 24) as u8;
+        }
+    }
+    pool
+}
+
+/// One binary column of `DICT_ROWS` rows drawn from `pool`, each distinct value
+/// repeated twice.
+fn dict_column(pool: &[u8]) -> ArrayRef {
+    let mut data = vec![0u8; DICT_VALUE_LEN * DICT_ROWS];
+    let mut offsets: Vec<i32> = Vec::with_capacity(DICT_ROWS + 1);
+    offsets.push(0);
+    for r in 0..DICT_ROWS {
+        let distinct = r % DICT_DISTINCT;
+        data[r * DICT_VALUE_LEN..(r + 1) * DICT_VALUE_LEN]
+            .copy_from_slice(&pool[distinct * DICT_VALUE_LEN..(distinct + 1) * DICT_VALUE_LEN]);
+        offsets.push(((r + 1) * DICT_VALUE_LEN) as i32);
+    }
+    Arc::new(
+        BinaryArray::try_new(
+            arrow::buffer::OffsetBuffer::new(offsets.into()),
+            arrow::buffer::Buffer::from_vec(data),
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+/// Encode `DICT_NUM_COLUMNS` dictionary columns into a single row group, then
+/// splice them in. Columns are encoded and closed one at a time (via the
+/// column-writer API), so only the current column's encoder dictionary is
+/// resident while it encodes; the pages that accumulate are the completed
+/// dictionary pages held in each closed `ArrowColumnChunk` until the splice.
+///
+/// With the default in-memory store every closed chunk keeps its ~0.75 MiB
+/// dictionary page on the heap, so all `DICT_NUM_COLUMNS` accumulate before the
+/// splice (peak ≈ K × dict_page). With a spilling store each dictionary page is
+/// pushed off the heap as its column closes, so at most one is ever resident.
+///
+/// `page_store_factory` selects the backend (`None` → the default in-memory
+/// store). Output goes to [`io::sink`] so produced file bytes never live on the
+/// heap and the measured peak reflects only the writer's page buffering.
+fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, pool: &[u8]) {
+    let fields: Vec<Field> = (0..DICT_NUM_COLUMNS)
+        .map(|i| Field::new(format!("k{i}"), DataType::Binary, false))
+        .collect();
+    let schema = Arc::new(Schema::new(fields));
+
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            // Raise the dictionary-page limit above one dictionary page so every
+            // column stays dictionary-encoded instead of falling back to PLAIN.
+            .set_dictionary_page_size_limit(8 * 1024 * 1024)
+            .build(),
+    );
+
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(&schema)
+        .unwrap();
+    let mut file =
+        SerializedFileWriter::new(std::io::sink(), parquet_schema.root_schema_ptr(), props)
+            .unwrap();
+
+    let mut factory = ArrowRowGroupWriterFactory::new(&file, schema.clone());
+    if let Some(f) = page_store_factory {
+        factory = factory.with_page_store_factory(f);
+    }
+    let col_writers = factory.create_column_writers(0).unwrap();
+
+    // Encode + close each column before starting the next: its input array and
+    // encoder are dropped at the end of the iteration, leaving only the closed
+    // chunk (which holds the completed dictionary page) to accumulate.
+    let mut chunks: Vec<ArrowColumnChunk> = Vec::with_capacity(DICT_NUM_COLUMNS);
+    for (i, mut writer) in col_writers.into_iter().enumerate() {
+        let arr = dict_column(pool);
+        for leaf in compute_leaves(schema.field(i), &arr).unwrap() {
+            writer.write(&leaf).unwrap();
+        }
+        drop(arr);
+        chunks.push(writer.close().unwrap());
+    }
+
+    // Splice the held chunks into the row group, one page at a time.
+    let mut row_group_writer = file.next_row_group().unwrap();
+    for chunk in chunks {
+        chunk.append_to_row_group(&mut row_group_writer).unwrap();
+    }
+    row_group_writer.close().unwrap();
+    file.close().unwrap();
+}
+
+/// Writes `DICT_NUM_COLUMNS` moderate-cardinality dictionary columns — each
+/// producing a ~0.75 MiB dictionary page — into a single row group via the
+/// column-at-a-time API. Columns are encoded and closed one at a time, so the
+/// pages that accumulate are the completed dictionary pages held in each closed
+/// `ArrowColumnChunk` between every column's `close()` and the row-group splice.
+///
+/// With the default in-memory store all K dictionary pages stay resident at once
+/// (peak ≈ K × dict_page). With a spilling store each dictionary page is pushed
+/// off the heap as its column closes, so at most one is ever resident, keeping
+/// the spilling peak far below the in-memory K × dict_page baseline.
+#[test]
+fn page_store_spills_dictionary_pages() {
+    // Build the distinct-value pool up front so its bytes sit in the baseline
+    // and are not charged to either per-run peak below.
+    let dict_pool = dict_value_pool();
+    let dict_in_memory = peak_heap_bytes(|| write_dict_columns(None, &dict_pool));
+    let dict_spill = peak_heap_bytes(|| {
+        write_dict_columns(Some(Arc::new(TempFilePageStoreFactory)), &dict_pool)
+    });
+    let all_dict_pages = DICT_NUM_COLUMNS * DICT_PAGE_BYTES;
+    eprintln!(
+        "dict columns ({} cols × ~{:.2} MiB dictionary page = ~{:.1} MiB held at once) peak heap \
+         — in-memory: {:.2} MiB, temp-file spill: {:.2} MiB",
+        DICT_NUM_COLUMNS,
+        DICT_PAGE_BYTES as f64 / (1024.0 * 1024.0),
+        all_dict_pages as f64 / (1024.0 * 1024.0),
+        dict_in_memory as f64 / (1024.0 * 1024.0),
+        dict_spill as f64 / (1024.0 * 1024.0),
+    );
+
+    // The in-memory store must hold most of the K simultaneously-resident
+    // dictionary pages — confirming the scenario really does accumulate them.
+    assert!(
+        dict_in_memory >= all_dict_pages / 2,
+        "expected in-memory dict peak >= {} bytes (≈ K × dict_page), got {dict_in_memory}",
+        all_dict_pages / 2
+    );
+
+    // The spilling store keeps at most one dictionary page in flight, so its
+    // peak stays a small multiple of a single dictionary page — far below the
+    // in-memory K × dict_page.
+    assert!(
+        dict_spill * 2 < dict_in_memory,
+        "expected dict-column spilling peak ({dict_spill}) to be far below the in-memory \
+         baseline ({dict_in_memory}) — the K held dictionary pages should spill, not stay resident"
+    );
+    let spill_ceiling = DICT_PAGE_BYTES * 5;
+    assert!(
+        dict_spill < spill_ceiling,
+        "expected dict-column spilling peak ({dict_spill}) below {spill_ceiling} bytes \
+         (a few dictionary pages), not the ~K × dict_page of the in-memory baseline"
     );
 }
