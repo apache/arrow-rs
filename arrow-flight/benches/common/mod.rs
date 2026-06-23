@@ -38,12 +38,10 @@ use tonic::{
 
 pub type Builder = fn(usize) -> ArrayRef;
 
-pub const TYPES: &[(&str, Builder)] = &[
-    ("fixed", fixed),
-    ("nested", nested),
-    ("variable", variable),
-    ("dict", dict),
-];
+pub const TYPES: &[(&str, Builder)] =
+    &[("fixed", fixed), ("nested", nested), ("variable", variable)];
+
+pub const DICT_TYPES: &[(&str, Builder)] = &[("dict", dict)];
 
 fn fixed(n: usize) -> ArrayRef {
     Arc::new(Int64Array::from_iter_values(0..n as i64))
