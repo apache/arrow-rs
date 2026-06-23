@@ -541,7 +541,9 @@ impl ParquetPushDecoder {
     /// Returns the row-group index that the next call to
     /// [`Self::try_next_reader`] will yield a reader for, after applying
     /// any internal skipping (row selection emptiness, exhausted budget,
-    /// finished state). Returns `Ok(None)` when:
+    /// finished state). 
+    ///
+    /// Returns `Ok(None)` when:
     /// - the decoder has no more row groups to read,
     /// - the decoder is currently inside a row group (consumers should
     ///   call [`Self::is_at_row_group_boundary`] first), or
