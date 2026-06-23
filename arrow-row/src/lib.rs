@@ -1052,7 +1052,7 @@ impl RowConverter {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Codecs {codecs:?} did not consume all bytes for row {i}, remaining bytes: {row:?}",
-                        codecs = &self.codecs
+                        codecs = self.codecs
                     )));
                 }
             }

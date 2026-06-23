@@ -431,6 +431,7 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ObjectFieldBuilder<'_, '_, '
 mod tests {
     use crate::{
         ParentState, ValueBuilder, Variant, VariantBuilder, VariantMetadata,
+        WritableMetadataBuilder,
         builder::{metadata::ReadOnlyMetadataBuilder, object::ObjectBuilder},
         decoder::VariantBasicType,
     };
@@ -501,11 +502,12 @@ mod tests {
     #[test]
     fn test_read_only_metadata_builder() {
         // First create some metadata with a few field names
-        let mut default_builder = VariantBuilder::new();
-        default_builder.add_field_name("name");
-        default_builder.add_field_name("age");
-        default_builder.add_field_name("active");
-        let (metadata_bytes, _) = default_builder.finish();
+        let mut default_builder = WritableMetadataBuilder::default();
+        default_builder.upsert_field_name("name");
+        default_builder.upsert_field_name("age");
+        default_builder.upsert_field_name("active");
+        default_builder.finish();
+        let metadata_bytes = default_builder.into_inner();
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
@@ -899,7 +901,8 @@ mod tests {
         inner_list.finish();
         outer_list.finish();
 
-        // Valid object should succeed
+        // Valid object should succeed (fresh builder — one top-level value per VariantBuilder)
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
         let mut list = builder.new_list();
         let mut valid_obj = list.new_object();
         valid_obj.insert("m", 1);

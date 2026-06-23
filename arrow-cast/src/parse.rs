@@ -1313,7 +1313,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} centuries as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1329,7 +1329,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} decades as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1344,7 +1344,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} years as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1354,7 +1354,7 @@ impl Interval {
                 let months = amount.integer.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} months in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 
@@ -1376,7 +1376,7 @@ impl Interval {
                 let days = amount.integer.mul_checked(7)?.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} weeks as days in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 

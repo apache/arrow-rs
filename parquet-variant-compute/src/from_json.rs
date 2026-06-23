@@ -84,8 +84,8 @@ mod test {
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = json_to_variant(&array_ref).unwrap();
 
-        let metadata_array = variant_array.metadata_field();
-        let value_array = variant_array.value_field().expect("value field");
+        let metadata_array = variant_array.metadata_column();
+        let value_array = variant_array.value_column().expect("value column");
 
         // Compare row 0
         assert!(!variant_array.is_null(0));
@@ -133,8 +133,8 @@ mod test {
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = json_to_variant(&array_ref).unwrap();
 
-        let metadata_array = variant_array.metadata_field();
-        let value_array = variant_array.value_field().expect("value field");
+        let metadata_array = variant_array.metadata_column();
+        let value_array = variant_array.value_column().expect("value column");
 
         // Compare row 0
         assert!(!variant_array.is_null(0));
@@ -182,8 +182,8 @@ mod test {
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = json_to_variant(&array_ref).unwrap();
 
-        let metadata_array = variant_array.metadata_field();
-        let value_array = variant_array.value_field().expect("value field");
+        let metadata_array = variant_array.metadata_column();
+        let value_array = variant_array.value_column().expect("value column");
 
         // Compare row 0
         assert!(!variant_array.is_null(0));
