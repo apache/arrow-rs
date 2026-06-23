@@ -552,13 +552,12 @@ impl ParquetPushDecoder {
     /// of `try_next_reader` so peek and read paths report errors
     /// consistently.
     ///
-    /// This is a read-only peek: it does not mutate decoder state. It is
-    /// useful for adaptive callers that maintain per-row-group state in
-    /// lock-step with the decoder (e.g. dynamic row-group pruners or
-    /// per-RG `RowFilter` toggles): without this peek the caller has no
-    /// way to know which row group the next reader actually corresponds
-    /// to, because [`Self::try_next_reader`] may silently advance past
-    /// row groups whose row selection is empty.
+    /// This method not mutate decoder state. It is
+    /// useful for callers that maintain per-row-group state in
+    /// lock-step with the decoder (e.g. dynamic row-group pruners)
+    /// to determine which row group the next reader corresponds
+    /// to as  [`Self::try_next_reader`] may silently advance past
+    /// row groups based on filtering and other criteria
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
     }
