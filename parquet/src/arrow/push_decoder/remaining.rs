@@ -28,15 +28,29 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
+/// Signal returned by visitors passed to [`RowGroupFrontier::walk_peekable`].
+/// `Stop` short-circuits the walk after the current Read; `Continue`
+/// keeps going.
+enum PeekStep {
+    Continue,
+    Stop,
+}
+
 /// Whether the frontier walker should hand out a row group or carry on
 /// scanning. Shared by [`RowGroupFrontier::next_readable_row_group`] and
-/// [`RowGroupFrontier::peek_next_row_group`] so a single decision rule
-/// drives both paths; this prevents the two walkers from drifting out of
-/// sync.
+/// [`RowGroupFrontier::peek_remaining_row_groups`] so a single decision
+/// rule drives both paths; this prevents the two walkers from drifting
+/// out of sync.
+///
+/// Both variants carry the budget that would be in effect *after* this
+/// row group. The read path ignores `Read`'s `budget_after` because the
+/// real budget update happens later via `update_budget_after_row_group`
+/// from inside `try_build`; the peek path uses both to simulate a
+/// continuous walk through the queued frontier.
 #[derive(Debug)]
 enum RowGroupAction {
     /// Hand this row group to the builder (read it).
-    Read,
+    Read { budget_after: RowBudget },
     /// Skip this row group entirely. Carry `budget_after` forward to the
     /// next iteration.
     Skip { budget_after: RowBudget },
@@ -53,17 +67,19 @@ fn classify_row_group(
     budget: RowBudget,
     selected_rows: usize,
 ) -> RowGroupAction {
-    if has_predicates {
-        // Predicates disable budget-based RG skipping for this RG; budget
-        // still gates row emission inside the row group.
-        return RowGroupAction::Read;
-    }
     let rows_after_budget = budget.rows_after(selected_rows);
-    if rows_after_budget != 0 {
-        return RowGroupAction::Read;
-    }
-    RowGroupAction::Skip {
-        budget_after: budget.advance(selected_rows, rows_after_budget),
+    let budget_after = budget.advance(selected_rows, rows_after_budget);
+    if has_predicates || rows_after_budget != 0 {
+        // Predicates disable budget-based RG skipping; budget still
+        // gates row emission inside the row group via `apply_to_plan`,
+        // which advances by `(selected_rows, rows_after_budget)` — the
+        // exact formula used here.
+        RowGroupAction::Read { budget_after }
+    } else {
+        // Skip: this RG is entirely outside the budget. `budget_after`
+        // here is `budget.advance(selected_rows, 0)`, which consumes
+        // `selected_rows` of offset without touching `limit`.
+        RowGroupAction::Skip { budget_after }
     }
 }
 
@@ -186,24 +202,65 @@ impl RowGroupFrontier {
                 .is_some_and(|selection| selection.row_count() == 0)
     }
 
-    /// Peek at the next row-group index `next_readable_row_group` would
-    /// hand out, without mutating any state. Returns `None` if every
-    /// remaining row group would be skipped under the current
-    /// selection/budget, or if the queue is empty.
+    /// Peek at every row-group index `next_readable_row_group` would
+    /// hand out in turn — without mutating any state. Returns the
+    /// indices in the order `try_next_reader` will yield them.
+    /// Returns an empty `Vec` when every remaining row group would be
+    /// skipped under the current selection/budget, or when the queue
+    /// is empty.
     ///
     /// Walks borrowed state via [`PeekSelectionCursor`] (no
-    /// `RowSelection` clone) and routes its per-RG decision through
+    /// `RowSelection` clone) and routes each per-RG decision through
     /// [`classify_row_group`], the same helper used by
-    /// [`Self::next_readable_row_group`]. The two paths therefore
-    /// cannot diverge on a Read/Skip rule for the same input.
+    /// [`Self::next_readable_row_group`] and
+    /// [`Self::peek_next_row_group`]. The three paths therefore cannot
+    /// diverge on a Read/Skip rule for the same input.
+    fn peek_remaining_row_groups(&self) -> Result<Vec<usize>, ParquetError> {
+        let mut readable = Vec::new();
+        self.walk_peekable(|row_group_idx| {
+            readable.push(row_group_idx);
+            PeekStep::Continue
+        })?;
+        Ok(readable)
+    }
+
+    /// Single-value peek: returns the row group `next_readable_row_group`
+    /// would hand out next, or `None` if every remaining row group would
+    /// be skipped. Short-circuits the frontier walk on the first Read
+    /// decision (no `Vec` allocation, no tail traversal) so high-frequency
+    /// callers — dynamic row-group pruners that peek at every RG boundary —
+    /// stay O(1) amortized rather than O(N) per call.
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
+        let mut head = None;
+        self.walk_peekable(|row_group_idx| {
+            head = Some(row_group_idx);
+            PeekStep::Stop
+        })?;
+        Ok(head)
+    }
+
+    /// Walk the queued frontier in order, invoking `on_read` for each
+    /// row group [`classify_row_group`] classifies as Read. The visitor
+    /// returns [`PeekStep::Stop`] to short-circuit the walk (used by
+    /// the single-value variant) or [`PeekStep::Continue`] to keep
+    /// going (used by the multi-value variant).
+    fn walk_peekable<F>(&self, mut on_read: F) -> Result<(), ParquetError>
+    where
+        F: FnMut(usize) -> PeekStep,
+    {
         if self.is_frontier_drained() {
-            return Ok(None);
+            return Ok(());
         }
 
         let mut cursor = self.selection.as_ref().map(PeekSelectionCursor::new);
         let mut budget = self.budget;
         for &row_group_idx in &self.row_groups {
+            // Budget that was non-empty at construction may become
+            // exhausted after a simulated Read on a previous iteration;
+            // mirror `next_readable_row_group`'s early-exit there.
+            if budget.is_exhausted() {
+                break;
+            }
             let row_count = self.row_group_num_rows(row_group_idx)?;
             let selected_rows = match cursor.as_mut() {
                 Some(cursor) => cursor.take(row_count),
@@ -214,13 +271,18 @@ impl RowGroupFrontier {
                 continue;
             }
             match classify_row_group(self.has_predicates, budget, selected_rows) {
-                RowGroupAction::Read => return Ok(Some(row_group_idx)),
+                RowGroupAction::Read { budget_after } => {
+                    if matches!(on_read(row_group_idx), PeekStep::Stop) {
+                        return Ok(());
+                    }
+                    budget = budget_after;
+                }
                 RowGroupAction::Skip { budget_after } => {
                     budget = budget_after;
                 }
             }
         }
-        Ok(None)
+        Ok(())
     }
 
     fn clear_remaining(&mut self) {
@@ -264,7 +326,11 @@ impl RowGroupFrontier {
             };
 
             match classify_row_group(self.has_predicates, self.budget, selected_rows) {
-                RowGroupAction::Read => {
+                // The simulated `budget_after` is ignored on the read
+                // path: the real budget update happens later in
+                // `try_build` via `update_budget_after_row_group`,
+                // which is exact (post row-filter accounting).
+                RowGroupAction::Read { .. } => {
                     let next_row_group = NextRowGroup {
                         row_group_idx,
                         row_count,
@@ -403,15 +469,26 @@ impl RemainingRowGroups {
         self.frontier.row_groups.len()
     }
 
-    /// Peek at the file-level row-group index that the next call to
-    /// [`Self::try_next_reader`] will produce a reader for, after
-    /// simulating the same skip logic [`Self::try_next_reader`] applies
-    /// internally (row-selection emptiness + offset/limit budget). Does
-    /// not mutate state.
+    /// Peek at every row-group index that subsequent
+    /// [`Self::try_next_reader`] calls will produce readers for, in
+    /// order, after simulating the same skip logic
+    /// [`Self::try_next_reader`] applies internally (row-selection
+    /// emptiness + offset/limit budget). Does not mutate state.
     ///
-    /// Returns `None` when the active row group is still being decoded,
-    /// when no row groups remain, or when every remaining row group
-    /// would be skipped under the current selection/budget.
+    /// Returns an empty `Vec` when the active row group is still being
+    /// decoded, when no row groups remain, or when every remaining row
+    /// group would be skipped under the current selection/budget.
+    pub fn peek_remaining_row_groups(&self) -> Result<Vec<usize>, ParquetError> {
+        if self.row_group_reader_builder.has_active_row_group() {
+            return Ok(Vec::new());
+        }
+        self.frontier.peek_remaining_row_groups()
+    }
+
+    /// Single-value peek: the head of [`Self::peek_remaining_row_groups`]
+    /// without the Vec allocation or full walk. Short-circuits on the
+    /// first Read decision so frequent callers (e.g. dynamic row-group
+    /// pruners) stay cheap.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
             return Ok(None);
