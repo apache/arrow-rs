@@ -627,8 +627,116 @@ mod tests {
             vec![3, 0, 2]
         );
         assert_eq!(cleaned.nulls(), Some(&input_nulls));
-        // The null at index 1 originally referenced keys/values 4..8;
+        // The null at index 1 originally referenced keys/values 4..8,
         // those entries should be dropped from the underlying child arrays.
+        assert_eq!(
+            cleaned.keys().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 2, 3, 8, 9]),
+        );
+        assert_eq!(
+            cleaned.values().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30, 80, 90]),
+        );
+    }
+
+    // ===== Underlying child array is sliced =====
+
+    #[test]
+    fn list_cleanup_slices_underlying_values_with_empty_entry() {
+        let sliced_list_values =
+            UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).slice(1, 9);
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
+        let input_nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list_field = Arc::new(Field::new(
+            "item",
+            sliced_list_values.data_type().clone(),
+            false,
+        ));
+        let list: ArrayRef = Arc::new(GenericListArray::<i32>::new(
+            list_field,
+            offsets,
+            Arc::new(sliced_list_values),
+            Some(input_nulls),
+        ));
+
+        let cleaned = cleanup_non_empty_nulls(list).unwrap();
+        let cleaned = cleaned.as_list::<i32>();
+
+        // The null at index 1 originally referenced [4, 5, 6, 7]; those values
+        // should no longer appear in the underlying child array.
+        assert_eq!(
+            cleaned
+                .values()
+                .as_primitive::<arrow_array::types::UInt32Type>(),
+            &UInt32Array::from(vec![1, 2, 3, 8, 9]),
+        );
+    }
+
+    #[test]
+    fn list_cleanup_slices_underlying_values_without_empty_entry() {
+        let sliced_list_values =
+            UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).slice(1, 9);
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
+        let input_nulls = NullBuffer::from(vec![true, false, true]);
+        let list_field = Arc::new(Field::new(
+            "item",
+            sliced_list_values.data_type().clone(),
+            false,
+        ));
+        let list: ArrayRef = Arc::new(GenericListArray::<i32>::new(
+            list_field,
+            offsets,
+            Arc::new(sliced_list_values),
+            Some(input_nulls),
+        ));
+
+        let cleaned = cleanup_non_empty_nulls(list).unwrap();
+        let cleaned = cleaned.as_list::<i32>();
+
+        assert_eq!(
+            cleaned
+                .values()
+                .as_primitive::<arrow_array::types::UInt32Type>(),
+            &UInt32Array::from(vec![1, 2, 3, 8, 9]),
+        );
+    }
+
+    #[test]
+    fn map_cleanup_slices_underlying_entries_with_empty_entry() {
+        let sliced_keys = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).slice(1, 9);
+        let sliced_values =
+            Int32Array::from(vec![-10, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90]).slice(2, 9);
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
+        let input_nulls = NullBuffer::from(vec![true, false, true, true]);
+        let map = build_map_array(offsets, sliced_keys, sliced_values, Some(input_nulls));
+        let array: ArrayRef = Arc::new(map);
+
+        let cleaned = cleanup_non_empty_nulls(array).unwrap();
+        let cleaned = cleaned.as_map();
+
+        assert_eq!(
+            cleaned.keys().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 2, 3, 8, 9]),
+        );
+        assert_eq!(
+            cleaned.values().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30, 80, 90]),
+        );
+    }
+
+    #[test]
+    fn map_cleanup_slices_underlying_entries_without_empty_entry() {
+        let sliced_keys = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).slice(1, 9);
+        let sliced_values =
+            Int32Array::from(vec![0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110]).slice(1, 9);
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
+        let input_nulls = NullBuffer::from(vec![true, false, true]);
+        let map = build_map_array(offsets, sliced_keys, sliced_values, Some(input_nulls));
+        let array: ArrayRef = Arc::new(map);
+
+        let cleaned = cleanup_non_empty_nulls(array).unwrap();
+        let cleaned = cleaned.as_map();
+
         assert_eq!(
             cleaned.keys().as_primitive::<Int32Type>(),
             &Int32Array::from(vec![1, 2, 3, 8, 9]),
