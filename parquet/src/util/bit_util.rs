@@ -71,7 +71,6 @@ pub trait FromBitpacked {
 macro_rules! from_le_bytes {
     ($($ty: ty),*) => {
         $(
-        // SAFETY: this macro is used for types for which all bit patterns are valid.
         impl FromBytes for $ty {
             type Buffer = [u8; size_of::<Self>()];
             fn try_from_le_slice(b: &[u8]) -> Result<Self> {
