@@ -798,6 +798,16 @@ mod tests {
         let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
         assert_eq!(output, expected);
 
+        // test for StringViewArray
+        let left = StringViewArray::from_iter(vec![Some("foo"), Some("bar"), None]);
+        let right = StringViewArray::from_iter(vec![None, Some("yyy"), Some("zzz")]);
+        let output: StringViewArray = concat_elements_dyn(&left, &right)
+            .unwrap()
+            .into_data()
+            .into();
+        let expected = StringViewArray::from_iter(vec![None, Some("baryyy"), None]);
+        assert_eq!(output, expected);
+
         // test for FixedSizeBinaryArray
         let left = FixedSizeBinaryArray::try_from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None])
             .unwrap();
