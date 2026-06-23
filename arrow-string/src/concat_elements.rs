@@ -660,21 +660,61 @@ mod tests {
 
     #[test]
     fn test_binary_view_concat() {
-        let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
-        let right = BinaryViewArray::from_iter(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let long = b"ThisStringIsLongerThan12Bytes" as &[u8];
+        let left = BinaryViewArray::from_iter(vec![
+            Some(b"foo" as &[u8]),
+            Some(b"bar"),
+            None,
+            Some(b"foofoofoo"),
+            Some(b"foo"),
+            Some(long),
+            Some(long),
+        ]);
+        let right = BinaryViewArray::from_iter(vec![
+            None,
+            Some(b"yyy" as &[u8]),
+            Some(b"zzz"),
+            Some(b"barbarbar"),
+            Some(long),
+            Some(b"bar"),
+            Some(long),
+        ]);
 
         let output = concat_elements_binary_view_array(&left, &right).unwrap();
 
-        let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
+        let expected = BinaryViewArray::from_iter(vec![
+            None,
+            Some(b"baryyy" as &[u8]),
+            None,
+            Some(b"foofoofoobarbarbar"),
+            Some(b"fooThisStringIsLongerThan12Bytes"),
+            Some(b"ThisStringIsLongerThan12Bytesbar"),
+            Some(b"ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
+        ]);
         assert_eq!(output, expected);
     }
 
     #[test]
     fn test_string_view_concat() {
-        let left =
-            StringViewArray::from_iter(vec![Some("foo"), Some("bar"), None, Some("foofoofoo")]);
-        let right =
-            StringViewArray::from_iter(vec![None, Some("yyy"), Some("zzz"), Some("barbarbar")]);
+        let long = "ThisStringIsLongerThan12Bytes";
+        let left = StringViewArray::from_iter(vec![
+            Some("foo"),
+            Some("bar"),
+            None,
+            Some("foofoofoo"),
+            Some("foo"),
+            Some(long),
+            Some(long),
+        ]);
+        let right = StringViewArray::from_iter(vec![
+            None,
+            Some("yyy"),
+            Some("zzz"),
+            Some("barbarbar"),
+            Some(long),
+            Some("bar"),
+            Some(long),
+        ]);
 
         let output = concat_elements_string_view_array(&left, &right).unwrap();
 
@@ -683,16 +723,39 @@ mod tests {
             Some("baryyy"),
             None,
             Some("foofoofoobarbarbar"),
+            Some("fooThisStringIsLongerThan12Bytes"),
+            Some("ThisStringIsLongerThan12Bytesbar"),
+            Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
         assert_eq!(output, expected);
 
-        let left = StringViewArray::from_iter(vec![Some("a"), Some("b"), Some("foofoofoo")]);
-        let right = StringViewArray::from_iter(vec![Some("c"), Some("d"), Some("barbarbar")]);
+        let left = StringViewArray::from_iter(vec![
+            Some("a"),
+            Some("b"),
+            Some("foofoofoo"),
+            Some("a"),
+            Some(long),
+            Some(long),
+        ]);
+        let right = StringViewArray::from_iter(vec![
+            Some("c"),
+            Some("d"),
+            Some("barbarbar"),
+            Some(long),
+            Some("d"),
+            Some(long),
+        ]);
 
         let output = concat_elements_string_view_array(&left, &right).unwrap();
 
-        let expected =
-            StringViewArray::from_iter(vec![Some("ac"), Some("bd"), Some("foofoofoobarbarbar")]);
+        let expected = StringViewArray::from_iter(vec![
+            Some("ac"),
+            Some("bd"),
+            Some("foofoofoobarbarbar"),
+            Some("aThisStringIsLongerThan12Bytes"),
+            Some("ThisStringIsLongerThan12Bytesd"),
+            Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
+        ]);
         assert_eq!(output, expected);
     }
 
@@ -789,23 +852,73 @@ mod tests {
         assert_eq!(output, expected);
 
         // test for BinaryViewArray
-        let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
-        let right = BinaryViewArray::from_iter(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
+        let long = b"ThisStringIsLongerThan12Bytes" as &[u8];
+        let left = BinaryViewArray::from_iter(vec![
+            Some(b"foo" as &[u8]),
+            Some(b"bar"),
+            None,
+            Some(b"foofoofoo"),
+            Some(b"foo"),
+            Some(long),
+            Some(long),
+        ]);
+        let right = BinaryViewArray::from_iter(vec![
+            None,
+            Some(b"yyy" as &[u8]),
+            Some(b"zzz"),
+            Some(b"barbarbar"),
+            Some(long),
+            Some(b"bar"),
+            Some(long),
+        ]);
         let output: BinaryViewArray = concat_elements_dyn(&left, &right)
             .unwrap()
             .into_data()
             .into();
-        let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
+        let expected = BinaryViewArray::from_iter(vec![
+            None,
+            Some(b"baryyy" as &[u8]),
+            None,
+            Some(b"foofoofoobarbarbar"),
+            Some(b"fooThisStringIsLongerThan12Bytes"),
+            Some(b"ThisStringIsLongerThan12Bytesbar"),
+            Some(b"ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
+        ]);
         assert_eq!(output, expected);
 
         // test for StringViewArray
-        let left = StringViewArray::from_iter(vec![Some("foo"), Some("bar"), None]);
-        let right = StringViewArray::from_iter(vec![None, Some("yyy"), Some("zzz")]);
+        let long = "ThisStringIsLongerThan12Bytes";
+        let left = StringViewArray::from_iter(vec![
+            Some("foo"),
+            Some("bar"),
+            None,
+            Some("foofoofoo"),
+            Some("foo"),
+            Some(long),
+            Some(long),
+        ]);
+        let right = StringViewArray::from_iter(vec![
+            None,
+            Some("yyy"),
+            Some("zzz"),
+            Some("barbarbar"),
+            Some(long),
+            Some("bar"),
+            Some(long),
+        ]);
         let output: StringViewArray = concat_elements_dyn(&left, &right)
             .unwrap()
             .into_data()
             .into();
-        let expected = StringViewArray::from_iter(vec![None, Some("baryyy"), None]);
+        let expected = StringViewArray::from_iter(vec![
+            None,
+            Some("baryyy"),
+            None,
+            Some("foofoofoobarbarbar"),
+            Some("fooThisStringIsLongerThan12Bytes"),
+            Some("ThisStringIsLongerThan12Bytesbar"),
+            Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
+        ]);
         assert_eq!(output, expected);
 
         // test for FixedSizeBinaryArray
