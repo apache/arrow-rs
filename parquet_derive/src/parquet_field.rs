@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use syn::ext::IdentExt;
+
 #[derive(Debug, PartialEq)]
 pub struct Field {
     ident: syn::Ident,
@@ -293,7 +295,9 @@ impl Field {
         // TODO: Support group types
         // TODO: Add length if dealing with fixedlenbinary
 
-        let field_name = &self.ident.to_string();
+        // unraw the identifier, so a raw identifier like `r#type`
+        // becomes a column named `type` in the parquet schema
+        let field_name = self.ident.unraw().to_string();
         let physical_type = match self.ty.physical_type() {
             parquet::basic::Type::BOOLEAN => quote! {
                 ::parquet::basic::Type::BOOLEAN
@@ -878,6 +882,25 @@ mod test {
             })
             .to_string()
         )
+    }
+
+    #[test]
+    fn test_parquet_type_with_raw_identifier() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ABoringStruct {
+            r#type: i32,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let r#type = Field::from(&fields[0]);
+
+        // the raw identifier `r#type` is named `type` in the parquet schema
+        let snippet = r#type.parquet_type().to_string();
+        assert!(
+            snippet.contains("primitive_type_builder (\"type\""),
+            "{snippet}"
+        );
     }
 
     #[test]

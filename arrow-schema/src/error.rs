@@ -101,9 +101,9 @@ impl Display for ArrowError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrowError::NotYetImplemented(source) => {
-                write!(f, "Not yet implemented: {}", &source)
+                write!(f, "Not yet implemented: {source}")
             }
-            ArrowError::ExternalError(source) => write!(f, "External error: {}", &source),
+            ArrowError::ExternalError(source) => write!(f, "External error: {source}"),
             ArrowError::CastError(desc) => write!(f, "Cast error: {desc}"),
             ArrowError::MemoryError(desc) => write!(f, "Memory error: {desc}"),
             ArrowError::ParseError(desc) => write!(f, "Parser error: {desc}"),
