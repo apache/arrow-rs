@@ -2463,6 +2463,30 @@ mod tests {
     }
 
     #[test]
+    fn test_header_validation_with_truncated_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let csv = "a\n1\n";
+        let err = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_header_validation(true)
+            .with_truncated_rows(true)
+            .build_buffered(Cursor::new(csv.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Csv error: CSV header does not match schema at column 1: expected \"b\" but found \"\"",
+        )
+    }
+
+    #[test]
     fn test_null_boolean() {
         let csv = "true,false\nFalse,True\n,True\nFalse,";
         let schema = Arc::new(Schema::new(vec![
