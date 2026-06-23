@@ -251,7 +251,7 @@ where
                 values_read,
                 levels_read,
                 def_levels.nulls().as_slice(),
-            );
+            )?;
         }
 
         self.num_records += records_read;

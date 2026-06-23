@@ -21,7 +21,7 @@ use arrow::array::{
     MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
     UInt8Array, UInt16Array, UInt16Builder, UnionArray,
 };
-use arrow::datatypes::Int16Type;
+use arrow::datatypes::{Int16Type, IntervalMonthDayNanoType};
 use arrow_array::StringViewArray;
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
@@ -1238,4 +1238,24 @@ fn test_extend_nulls_dense_union() {
     assert_eq!(result_array.child(0).len(), 2);
     // Second child (str) should have 1 entry from extend
     assert_eq!(result_array.child(1).len(), 1);
+}
+
+#[test]
+fn test_interval_month_day_nano_aligned_to_8() {
+    let ty = DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano);
+
+    let offset = 8;
+    let mut buffer = arrow_buffer::MutableBuffer::new(0);
+    buffer.extend_zeros(offset);
+    buffer.push(IntervalMonthDayNanoType::make_value(0, 0, 0));
+    let buffer = Buffer::from(buffer).slice(offset);
+
+    let b = ArrayData::builder(ty.clone())
+        .add_buffer(buffer)
+        .align_buffers(true) // no alignment should be done
+        .build()
+        .unwrap();
+
+    // roundtripping through arraydata shouldnt panic
+    MutableArrayData::new(vec![&b], false, 0);
 }

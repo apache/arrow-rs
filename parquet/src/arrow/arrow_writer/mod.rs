@@ -706,17 +706,21 @@ struct ArrowColumnChunkData {
     length: usize,
     store: Box<dyn PageStore>,
     keys: Vec<PageKey>,
-    /// The dictionary page's serialized blobs (header ‖ data), held in memory
-    /// rather than the store.
+    /// Handles to the dictionary page's blobs (header then data) in the store.
     ///
     /// A dictionary page is produced at most once and bounded by
     /// `dict_page_size_limit`, but it must be written *first* in the chunk even
     /// though the data pages reach the writer before it (see
-    /// [`PageWriter::defers_dictionary_ordering`]). Spilling it would only
-    /// round-trip ~1 page to the backend and straight back, so it is kept here
-    /// and emitted ahead of the data pages at splice. Empty for non-dictionary
-    /// columns.
-    dictionary: Vec<Bytes>,
+    /// [`PageWriter::defers_dictionary_ordering`]). Its header and data are `put`
+    /// into the store like any other page — which keeps the store uniform, and
+    /// lets an oversized dictionary page spill — and their handles are held apart
+    /// so they can be emitted ahead of the data pages at splice.
+    /// Empty for non-dictionary columns.
+    dictionary_keys: Vec<PageKey>,
+    /// Serialized length of the dictionary page (0 if there is none), recorded
+    /// so the data pages can be shifted past it when offsets are rewritten to a
+    /// dictionary-first layout at splice.
+    dictionary_len: usize,
 }
 
 impl ArrowColumnChunkData {
@@ -725,7 +729,8 @@ impl ArrowColumnChunkData {
             length: 0,
             store,
             keys: Vec::new(),
-            dictionary: Vec::new(),
+            dictionary_keys: Vec::new(),
+            dictionary_len: 0,
         }
     }
 
@@ -737,36 +742,35 @@ impl ArrowColumnChunkData {
         Ok(())
     }
 
-    /// Retain a dictionary-page blob in memory (emitted first at splice).
-    fn push_dictionary(&mut self, value: Bytes) {
-        self.dictionary.push(value);
-    }
-
-    /// Total serialized size of the in-memory dictionary page, in bytes.
-    fn dictionary_len(&self) -> usize {
-        self.dictionary.iter().map(Bytes::len).sum()
+    /// Store a dictionary-page blob (header or data) in the page store,
+    /// recording its handle (emitted first at splice) and accumulating its
+    /// serialized length.
+    fn push_dictionary(&mut self, value: Bytes) -> Result<()> {
+        self.dictionary_len += value.len();
+        let key = self.store.put(value)?;
+        self.dictionary_keys.push(key);
+        Ok(())
     }
 
     /// Bytes this chunk currently holds on the heap: whatever the store keeps
-    /// resident (zero for a spilling backend) plus the in-memory dictionary
-    /// page.
+    /// resident (zero for a spilling backend).
     fn memory_size(&self) -> usize {
-        self.store.memory_size() + self.dictionary_len()
+        self.store.memory_size()
     }
 }
 
 /// A streaming [`Read`] over one column chunk's buffered pages, in final file
-/// order: the in-memory dictionary page (if any) first, then the data pages.
+/// order: the dictionary page (if any) first, then the data pages.
 ///
-/// Each data-page blob is taken back out of the [`PageStore`] *as it is
+/// Each blob is taken back out of the [`PageStore`] *as it is
 /// consumed* and released immediately afterwards, so splicing a chunk into the
 /// output file never materializes more than a single page in memory at a time.
 /// This is what keeps the splice phase within the memory bound for a spilling
 /// backend (an in-memory store already holds the bytes, so it is unaffected).
 struct StreamingColumnChunkReader {
-    /// Dictionary-page blobs, emitted before any data page.
-    dictionary: IntoIter<Bytes>,
     store: Box<dyn PageStore>,
+    /// Page handles in final file order: the dictionary page first (if any),
+    /// then the data pages.
     keys: IntoIter<PageKey>,
     /// The blob currently being drained into the output; emptied as it is read.
     current: Bytes,
@@ -774,10 +778,19 @@ struct StreamingColumnChunkReader {
 
 impl StreamingColumnChunkReader {
     fn new(data: ArrowColumnChunkData) -> Self {
+        // The dictionary page must be emitted first, ahead of the data pages,
+        // even though it was the last page produced.
+        let keys = if data.dictionary_keys.is_empty() {
+            data.keys
+        } else {
+            let mut keys = Vec::with_capacity(data.dictionary_keys.len() + data.keys.len());
+            keys.extend(data.dictionary_keys);
+            keys.extend(data.keys);
+            keys
+        };
         Self {
-            dictionary: data.dictionary.into_iter(),
             store: data.store,
-            keys: data.keys.into_iter(),
+            keys: keys.into_iter(),
             current: Bytes::new(),
         }
     }
@@ -786,11 +799,9 @@ impl StreamingColumnChunkReader {
 impl Read for StreamingColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         // Refill from the next blob whenever the current one is drained: the
-        // dictionary page first, then each data page from the store.
+        // dictionary page first, then each data page, all taken from the store.
         while self.current.is_empty() {
-            if let Some(blob) = self.dictionary.next() {
-                self.current = blob;
-            } else if let Some(key) = self.keys.next() {
+            if let Some(key) = self.keys.next() {
                 self.current = self.store.take(key).map_err(std::io::Error::other)?;
             } else {
                 return Ok(0);
@@ -885,10 +896,10 @@ impl PageWriter for ArrowPageWriter {
 
         buf.length += compressed_size;
         if spec.page_type == PageType::DICTIONARY_PAGE {
-            // Held in memory and emitted first at splice — see
-            // `ArrowColumnChunkData::dictionary`.
-            buf.push_dictionary(header);
-            buf.push_dictionary(data);
+            // Recorded apart from the data pages so it is emitted first at
+            // splice — see `ArrowColumnChunkData::dictionary_keys`.
+            buf.push_dictionary(header)?;
+            buf.push_dictionary(data)?;
         } else {
             buf.push(header)?;
             buf.push(data)?;
@@ -975,7 +986,7 @@ impl ArrowColumnChunk {
         // The dictionary page is produced *after* the data pages on this path (so
         // they can stream straight through) but must be written *first*, so move
         // it ahead of the data pages in the recorded offsets before the splice.
-        let close = close.update_dictionary_location(data.dictionary_len())?;
+        let close = close.update_dictionary_location(data.dictionary_len)?;
 
         let reader = StreamingColumnChunkReader::new(data);
         writer.append_column_from_read(reader, close)
@@ -1503,6 +1514,9 @@ impl ArrowColumnWriterFactory {
                 ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
                 _ => out.push(col(leaves.next().unwrap())?),
             },
+            ArrowDataType::RunEndEncoded(_, value_field) => {
+                self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
+            }
             _ => {
                 return Err(ParquetError::NYI(format!(
                     "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
@@ -2089,6 +2103,82 @@ mod tests {
             .flat_map(|b| b.column(0).as_primitive::<Int32Type>().iter())
             .collect();
         assert_eq!(read_values, values);
+    }
+
+    /// The dictionary page is routed through the [`PageStore`] like any other
+    /// page rather than held resident in memory, so a dictionary column chunk's
+    /// *entire* serialized size — dictionary page included — passes through the
+    /// store.
+    #[test]
+    fn dictionary_page_is_routed_through_the_store() {
+        /// A store that sums the bytes handed to `put`.
+        #[derive(Debug, Default)]
+        struct SizeRecordingPageStore {
+            blobs: Vec<Bytes>,
+            bytes_put: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl PageStore for SizeRecordingPageStore {
+            fn put(&mut self, value: Bytes) -> Result<PageKey> {
+                self.bytes_put
+                    .fetch_add(value.len(), std::sync::atomic::Ordering::Relaxed);
+                let key = PageKey::new(self.blobs.len() as u64);
+                self.blobs.push(value);
+                Ok(key)
+            }
+            fn take(&mut self, key: PageKey) -> Result<Bytes> {
+                Ok(std::mem::take(&mut self.blobs[key.get() as usize]))
+            }
+        }
+        #[derive(Debug)]
+        struct Factory {
+            bytes_put: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl PageStoreFactory for Factory {
+            fn create(&self, _args: &PageStoreArgs<'_>) -> Result<Box<dyn PageStore>> {
+                Ok(Box::new(SizeRecordingPageStore {
+                    bytes_put: self.bytes_put.clone(),
+                    ..Default::default()
+                }))
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        // Low cardinality keeps the column dictionary-encoded with a real,
+        // non-empty dictionary page.
+        let values: Vec<&str> = (0..2048)
+            .map(|i| ["alpha", "beta", "gamma", "delta"][i % 4])
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
+            .unwrap();
+
+        let bytes_put = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let opts = ArrowWriterOptions::new().with_page_store_factory(Arc::new(Factory {
+            bytes_put: bytes_put.clone(),
+        }));
+
+        // A single batch / single column means exactly one row group and one
+        // store instance, so the bytes it saw map to one column chunk.
+        let mut buffer = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buffer, schema.clone(), opts).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert!(
+            column.dictionary_page_offset().is_some(),
+            "expected the column to be dictionary-encoded"
+        );
+
+        // The bytes the store was handed must account for the whole chunk,
+        // dictionary page included. Holding the dictionary page apart from the
+        // store would make this fall short by the dictionary page's size.
+        assert_eq!(
+            bytes_put.load(std::sync::atomic::Ordering::Relaxed) as i64,
+            column.compressed_size(),
+            "the dictionary page must pass through the store like any other page"
+        );
     }
 
     #[test]
@@ -5663,5 +5753,239 @@ mod tests {
         // index offset/length for this chunk.
         let cc = file_meta.row_group(0).column(0);
         assert!(cc.column_index_range().is_none());
+    }
+
+    /// Writes a single-column RecordBatch to an in-memory Parquet buffer.
+    fn write_column_to_bytes(array: ArrayRef) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            true,
+        )]));
+        let buf = get_bytes_after_close(
+            schema.clone(),
+            &RecordBatch::try_new(schema, vec![array]).unwrap(),
+        );
+        Bytes::from(buf)
+    }
+
+    /// Reads column 0 from a single-row-group Parquet buffer, projecting it with the given schema.
+    /// Passing a flat schema when the buffer was written from a REE array lets callers decode
+    /// the physical values without the run-end encoding wrapper.
+    fn read_column_with_schema(bytes: Bytes, schema: SchemaRef) -> ArrayRef {
+        let opts = crate::arrow::arrow_reader::ArrowReaderOptions::new().with_schema(schema);
+        ParquetRecordBatchReaderBuilder::try_new_with_options(bytes, opts)
+            .unwrap()
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .column(0)
+            .clone()
+    }
+
+    fn ree_write_read_roundtrip(ree: ArrayRef, flat: ArrayRef) {
+        let flat_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            flat.data_type().clone(),
+            true,
+        )]));
+        let ree_bytes = write_column_to_bytes(ree);
+        let flat_bytes = write_column_to_bytes(flat.clone());
+        assert_eq!(
+            ree_bytes, flat_bytes,
+            "REE and flat bytes should be identical"
+        );
+
+        let decoded_ree = read_column_with_schema(ree_bytes, flat_schema.clone());
+        let decoded_flat = read_column_with_schema(flat_bytes, flat_schema);
+
+        assert_eq!(decoded_ree.as_ref(), flat.as_ref());
+        assert_eq!(decoded_ree.as_ref(), decoded_flat.as_ref());
+    }
+
+    #[test]
+    fn ree_string() {
+        let ree: ArrayRef = Arc::new(
+            [Some("a"), Some("a"), None, Some("b"), Some("b")]
+                .into_iter()
+                .collect::<Int32RunArray>(),
+        );
+        let flat: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("a"),
+            None,
+            Some("b"),
+            Some("b"),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_int32() {
+        let mut b = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        for v in [Some(1), Some(1), None, Some(2), Some(2)] {
+            b.append_option(v);
+        }
+        let ree: ArrayRef = Arc::new(b.finish());
+        let flat: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(2),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_bool() {
+        // run_ends [3, 5, 7] → [T,T,T, null,null, F,F]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![3, 5, 7]),
+                &BooleanArray::from(vec![Some(true), None, Some(false)]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+            None,
+            Some(false),
+            Some(false),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_fixed_size_binary() {
+        let mk = |vals: &[Option<&[u8]>]| -> FixedSizeBinaryArray {
+            let mut b = FixedSizeBinaryBuilder::new(2);
+            for v in vals {
+                match v {
+                    Some(x) => b.append_value(x).unwrap(),
+                    None => b.append_null(),
+                }
+            }
+            b.finish()
+        };
+        // run_ends [2, 4, 6] → [aa,aa, null,null, bb,bb]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![2, 4, 6]),
+                &mk(&[Some(b"aa"), None, Some(b"bb")]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(mk(&[
+            Some(b"aa"),
+            Some(b"aa"),
+            None,
+            None,
+            Some(b"bb"),
+            Some(b"bb"),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_single_run() {
+        let ree: ArrayRef = Arc::new(["x", "x", "x"].into_iter().collect::<Int32RunArray>());
+        let flat: ArrayRef = Arc::new(StringArray::from(vec!["x", "x", "x"]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_float32() {
+        // run_ends [2, 4, 5] → [1.0, 1.0, null, null, 2.5]
+        let ree: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![2, 4, 5]),
+                &Float32Array::from(vec![Some(1.0_f32), None, Some(2.5_f32)]),
+            )
+            .unwrap(),
+        );
+        let flat: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(1.0_f32),
+            Some(1.0_f32),
+            None,
+            None,
+            Some(2.5_f32),
+        ]));
+        ree_write_read_roundtrip(ree, flat);
+    }
+
+    #[test]
+    fn ree_sliced() {
+        // A sliced (non-zero offset) REE array: verify that get_physical_index
+        // correctly accounts for the logical offset when expanding.
+        // Full array: run_ends [3, 5, 7] → [a,a,a, b,b, c,c]
+        // After slice(2, 5) the logical view is [a, b, b, c, c].
+        let full: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &Int32Array::from(vec![3, 5, 7]),
+                &StringArray::from(vec!["a", "b", "c"]),
+            )
+            .unwrap(),
+        );
+        let sliced = full.slice(2, 5);
+        let flat: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "b", "c", "c"]));
+        ree_write_read_roundtrip(sliced, flat);
+    }
+
+    #[test]
+    fn ree_struct_with_ree_child() {
+        // Struct with a REE string field and a REE int field — confirms
+        // recursion visits every child and each collapses to the right leaf type.
+        let run_ends = Int32Array::from(vec![2i32, 3, 5]);
+
+        let col_a: ArrayRef = Arc::new(
+            RunArray::try_new(
+                &run_ends,
+                &StringArray::from(vec![Some("foo"), None, Some("bar")]),
+            )
+            .unwrap(),
+        );
+        let col_b: ArrayRef = Arc::new(
+            RunArray::try_new(&run_ends, &Int32Array::from(vec![Some(1), None, Some(2)])).unwrap(),
+        );
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("a", col_a.data_type().clone(), true),
+                Field::new("b", col_b.data_type().clone(), true),
+            ]),
+            vec![col_a, col_b],
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "row",
+            struct_array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![struct_array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        assert_eq!(parquet_schema.num_columns(), 2);
+        assert_eq!(
+            parquet_schema.column(0).physical_type(),
+            crate::basic::Type::BYTE_ARRAY
+        );
+        assert_eq!(parquet_schema.column(0).path().string(), "row.a");
+        assert_eq!(
+            parquet_schema.column(1).physical_type(),
+            crate::basic::Type::INT32
+        );
+        assert_eq!(parquet_schema.column(1).path().string(), "row.b");
     }
 }
