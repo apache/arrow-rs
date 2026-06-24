@@ -2869,8 +2869,8 @@ mod tests {
         array_builder.append_value(VariantDecimal4::try_new(123, 2).unwrap());
         array_builder.append_value(VariantDecimal8::try_new(123, 3).unwrap());
         array_builder.append_value(VariantDecimal16::try_new(123, 4).unwrap());
-        array_builder.append_value(Variant::Float(5.2));
-        array_builder.append_value(Variant::Double(6.4));
+        array_builder.append_value(Variant::Float(5.0));
+        array_builder.append_value(Variant::Double(6f64));
         array_builder.append_value(Variant::BooleanTrue);
         array_builder.append_value(Variant::BooleanFalse);
         array_builder.append_value(Variant::Binary("helow".as_bytes()));

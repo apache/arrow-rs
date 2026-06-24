@@ -1126,9 +1126,26 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    #[inline]
+    fn downcast_lossless<T>(
+        x: f64,
+        cast: impl FnOnce(f64) -> T,
+        back_to_f64: impl FnOnce(T) -> f64,
+    ) -> Option<T>
+    where
+        T: Copy,
+    {
+        if !x.is_finite() {
+            return None;
+        }
+        let y = cast(x);
+        if back_to_f64(y) == x { Some(y) } else { None }
+    }
+
     /// Converts this variant to an `f16` if possible.
     ///
-    /// Returns `Some(f16)` for floating point values, `None` otherwise.
+    /// Returns `Some(f16)` for floating point values, `None` for other variants
+    /// or can't convert to `f16` lossless.
     ///
     /// # Example
     ///
@@ -1137,32 +1154,36 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use half::f16;
     ///
     /// // you can extract an f16 from a float variant
-    /// let v1 = Variant::from(std::f32::consts::PI);
-    /// assert_eq!(v1.as_f16(), Some(f16::from_f32(std::f32::consts::PI)));
+    /// let v1 = Variant::from(3f32);
+    /// assert_eq!(v1.as_f16(), Some(f16::from_f32(3f32)));
     ///
-    /// // and from a double variant (with loss of precision to nearest f16)
-    /// let v2 = Variant::from(std::f64::consts::PI);
-    /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
+    /// // and from a double variant
+    /// let v2 = Variant::from(3f64);
+    /// assert_eq!(v2.as_f16(), Some(f16::from_f64(3f64)));
     ///
-    /// // but not from integers
-    /// let v3 = Variant::from(2047);
+    /// // but not for that can't convert to f16 lossless
+    /// let v3 = Variant::from(std::f32::consts::PI);
     /// assert_eq!(v3.as_f16(), None);
     ///
-    /// // or not from other variants
-    /// let v4 = Variant::from("hello!");
+    /// // or not from integers
+    /// let v4 = Variant::from(2047);
     /// assert_eq!(v4.as_f16(), None);
+    ///
+    /// // or not from other variants
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_f16(), None);
     pub fn as_f16(&self) -> Option<f16> {
         match *self {
-            Variant::Float(i) => Some(f16::from_f32(i)),
-            Variant::Double(i) => Some(f16::from_f64(i)),
+            Variant::Float(f) => Self::downcast_lossless(f as f64, f16::from_f64, |x| x.to_f64()),
+            Variant::Double(d) => Self::downcast_lossless(d, f16::from_f64, |x| x.to_f64()),
             _ => None,
         }
     }
 
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for floating point values, and integer values with up to 24 bits of
-    /// precision.  `None` otherwise.
+    /// Returns `Some(f32)` for floating point values. `None` for other variants
+    /// or can't convert to `f32` lossless.
     ///
     /// # Examples
     ///
@@ -1173,22 +1194,26 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(std::f32::consts::PI);
     /// assert_eq!(v1.as_f32(), Some(std::f32::consts::PI));
     ///
-    /// // and from a double variant (with loss of precision to nearest f32)
-    /// let v2 = Variant::from(std::f64::consts::PI);
-    /// assert_eq!(v2.as_f32(), Some(std::f32::consts::PI));
+    /// // and from a double variant
+    /// let v2 = Variant::from(3f64);
+    /// assert_eq!(v2.as_f32(), Some(3f32));
     ///
-    /// // but not from integers
-    /// let v3 = Variant::from(16777215i64);
+    /// // but not from double that can't convert to f32 lossless
+    /// let v3 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v3.as_f32(), None);
     ///
-    /// // or not from other variants
-    /// let v4 = Variant::from("hello!");
+    /// // but not from integers
+    /// let v4 = Variant::from(16777215i64);
     /// assert_eq!(v4.as_f32(), None);
+    ///
+    /// // or not from other variants
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_f32(), None);
     /// ```
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
-            Variant::Double(i) => Some(i as f32),
+            Variant::Double(d) => Self::downcast_lossless(d, |x| x as f32, |x| x as f64),
             _ => None,
         }
     }

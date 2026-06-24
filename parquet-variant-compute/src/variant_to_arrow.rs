@@ -1242,7 +1242,7 @@ where
                 cast_options,
                 capacity,
                 NullValue::ArrayElement,
-                false,
+                shredded,
             )?;
             ListElementBuilder::Shredded(Box::new(builder))
         } else {
@@ -1250,7 +1250,7 @@ where
                 element_data_type,
                 cast_options,
                 capacity,
-                false,
+                shredded,
             )?;
             ListElementBuilder::Typed(Box::new(builder))
         };
@@ -1352,7 +1352,7 @@ impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
                 cast_options,
                 capacity,
                 NullValue::ArrayElement,
-                false,
+                shredded,
             )?;
             ListElementBuilder::Shredded(Box::new(builder))
         } else {
@@ -1360,7 +1360,7 @@ impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
                 element_data_type,
                 cast_options,
                 capacity,
-                false,
+                shredded,
             )?;
             ListElementBuilder::Typed(Box::new(builder))
         };
