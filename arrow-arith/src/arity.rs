@@ -121,17 +121,7 @@ where
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
-
-    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
-
-    let values = a
-        .values()
-        .into_iter()
-        .zip(b.values())
-        .map(|(l, r)| op(*l, *r));
-
-    let buffer: Vec<_> = values.collect();
-    Ok(PrimitiveArray::new(buffer.into(), nulls))
+    Ok(a.binary(b, op))
 }
 
 /// Applies a binary and infallible function to values in two arrays, replacing
@@ -268,11 +258,10 @@ where
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
-    let len = a.len();
-
     if a.null_count() == 0 && b.null_count() == 0 {
-        try_binary_no_nulls(len, a, b, op)
+        try_binary_no_nulls(a.len(), a, b, op)
     } else {
+        let len = a.len();
         let nulls =
             NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
 
