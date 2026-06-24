@@ -636,7 +636,7 @@ pub struct RowGroupMetaData {
     /// We can't infer from file offset of first column since there may empty columns in row group.
     file_offset: Option<i64>,
     /// Ordinal position of this row group in file
-    ordinal: Option<i16>,
+    ordinal: Option<i32>,
 }
 
 impl RowGroupMetaData {
@@ -700,7 +700,7 @@ impl RowGroupMetaData {
     /// For example if this is the first row group in the file, this will return 0.
     /// If this is the second row group in the file, this will return 1.
     #[inline(always)]
-    pub fn ordinal(&self) -> Option<i16> {
+    pub fn ordinal(&self) -> Option<i32> {
         self.ordinal
     }
 
@@ -773,7 +773,7 @@ impl RowGroupMetaDataBuilder {
     }
 
     /// Sets ordinal for this row group.
-    pub fn set_ordinal(mut self, value: i16) -> Self {
+    pub fn set_ordinal(mut self, value: i32) -> Self {
         self.0.ordinal = Some(value);
         self
     }

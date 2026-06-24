@@ -754,6 +754,7 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
     write_path_in_schema: bool,
+    write_rg_ordinal: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
@@ -762,6 +763,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         Self {
             writer,
             write_path_in_schema: true,
+            write_rg_ordinal: true,
         }
     }
 
@@ -776,6 +778,21 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Indicate whether or not to emit `path_in_schema`.
     pub(crate) fn write_path_in_schema(&self) -> bool {
         self.write_path_in_schema
+    }
+
+    /// Control the writing of the `ordinal` element of the `RowGroup` struct.
+    ///
+    /// The Thrift `ordinal` field on the `RowGroup` struct is `i16`, but the
+    /// Thrift compact protocol allows for up to 2^31 elements in a list. If
+    /// more than 2^15 row groups are to be written, this can be set to `false`
+    /// to prevent writing the ordinal for some row groups but not others.
+    pub(crate) fn set_write_row_group_ordinal(&mut self, val: bool) {
+        self.write_rg_ordinal = val;
+    }
+
+    /// Indicate whether or not to emit `ordinal`.
+    pub(crate) fn write_row_group_ordinal(&self) -> bool {
+        self.write_rg_ordinal
     }
 
     /// Write a single byte to the output stream.
