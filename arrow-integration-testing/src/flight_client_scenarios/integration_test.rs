@@ -249,9 +249,13 @@ async fn consume_flight_location(
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
 
-        let actual_batch =
-            flight_data_to_arrow_batch(&data, actual_schema.clone(), &dictionaries_by_id, false)
-                .expect("Unable to convert flight data to Arrow batch");
+        let actual_batch = flight_data_to_arrow_batch(
+            &data,
+            actual_schema.clone(),
+            &dictionaries_by_id,
+            arrow_data::UnsafeFlag::new(),
+        )
+        .expect("Unable to convert flight data to Arrow batch");
 
         assert_eq!(actual_schema, actual_batch.schema());
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());

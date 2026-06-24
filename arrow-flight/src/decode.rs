@@ -18,6 +18,7 @@
 use crate::{FlightData, trailers::LazyTrailers};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::UnsafeFlag;
 use arrow_ipc::reader;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
@@ -230,7 +231,7 @@ pub struct FlightDataDecoder {
     /// Seen the end of the inner stream?
     done: bool,
     /// Skip validation of decoded arrays (UTF-8, offset bounds, null counts).
-    skip_validation: bool,
+    skip_validation: UnsafeFlag,
 }
 
 impl Debug for FlightDataDecoder {
@@ -254,14 +255,14 @@ impl FlightDataDecoder {
             state: None,
             response: response.boxed(),
             done: false,
-            skip_validation: false,
+            skip_validation: UnsafeFlag::new(),
         }
     }
 
-    /// Only set for trusted senders, invalid data may cause undefined behavior.
-    /// Can improve performance by skipping validation
-    pub fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.skip_validation = skip_validation;
+    /// # Safety
+    /// Invalid data may cause undefined behavior. Only use for trusted senders.
+    pub unsafe fn with_skip_validation(mut self) -> Self {
+        unsafe { self.skip_validation.set(true) };
         self
     }
 
@@ -354,7 +355,7 @@ impl FlightDataDecoder {
                             &state.dictionaries_by_field,
                             None,
                             &message.version(),
-                            self.skip_validation,
+                            self.skip_validation.clone(),
                         )
                         .map_err(|e| {
                             FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))

@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
+use arrow_data::UnsafeFlag;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::writer::CompressionContext;
 use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
@@ -45,7 +46,12 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in flight_data[1..].iter() {
-        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id, false)?;
+        let batch = flight_data_to_arrow_batch(
+            datum,
+            schema.clone(),
+            &dictionaries_by_id,
+            UnsafeFlag::new(),
+        )?;
         batches.push(batch);
     }
     Ok(batches)
@@ -56,7 +62,7 @@ pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
-    skip_validation: bool,
+    skip_validation: UnsafeFlag,
 ) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
     let message = arrow_ipc::root_as_message(&data.data_header[..])

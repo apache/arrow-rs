@@ -18,6 +18,7 @@
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
 use arrow_buffer::Buffer;
+use arrow_data::UnsafeFlag;
 use arrow_ipc::MessageHeader;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
@@ -651,7 +652,7 @@ pub fn arrow_data_from_flight_data(
                 &dictionaries_by_field,
                 None,
                 &ipc_message.version(),
-                false,
+                UnsafeFlag::new(),
             )?;
             Ok(ArrowFlightData::RecordBatch(record_batch))
         }

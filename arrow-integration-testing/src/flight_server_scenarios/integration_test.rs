@@ -30,6 +30,7 @@ use arrow::{
     ipc::{self, reader, writer},
     record_batch::RecordBatch,
 };
+use arrow_data::UnsafeFlag;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, IpcMessage, PollInfo, PutResult, SchemaAsIpc,
@@ -335,7 +336,7 @@ async fn record_batch_from_message(
         dictionaries_by_id,
         None,
         &message.version(),
-        false,
+        UnsafeFlag::new(),
     );
 
     arrow_batch_result

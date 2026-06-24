@@ -771,17 +771,12 @@ pub fn read_record_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
-    skip_validation: bool,
+    skip_validation: UnsafeFlag,
 ) -> Result<RecordBatch, ArrowError> {
-    let mut decoder =
-        RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
-            .with_projection(projection)
-            .with_require_alignment(false);
-    if skip_validation {
-        let mut flag = UnsafeFlag::new();
-        unsafe { flag.set(true) };
-        decoder = decoder.with_skip_validation(flag);
-    }
+    let decoder = RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+        .with_projection(projection)
+        .with_require_alignment(false)
+        .with_skip_validation(skip_validation);
     decoder.read_record_batch()
 }
 
