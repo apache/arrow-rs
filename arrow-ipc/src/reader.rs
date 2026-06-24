@@ -146,7 +146,7 @@ impl RecordBatchDecoder<'_> {
                 let null_buffer = self.next_buffer()?;
 
                 // read the arrays for each field
-                let mut struct_arrays = vec![];
+                let mut struct_arrays = Vec::with_capacity(struct_fields.len());
                 // TODO investigate whether just knowing the number of buffers could
                 // still work
                 for struct_field in struct_fields {
