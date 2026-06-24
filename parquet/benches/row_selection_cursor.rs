@@ -551,21 +551,35 @@ pub(crate) fn generate_shape_focus_selectors(
 
         let selected_runs = selected_rows.div_ceil(selected_run_len);
         let skipped_rows = cycle_rows - selected_rows;
-        if skipped_rows < selected_runs {
+        let is_last_cycle = remaining_rows == cycle_rows;
+        // Non-final cycles that start with selected rows need a trailing skip so
+        // the next cycle's leading select does not merge into a longer run.
+        let skip_runs = if scenario.start_with_select && is_last_cycle {
+            skipped_rows.min(selected_runs)
+        } else {
+            selected_runs
+        };
+
+        if skipped_rows < selected_runs.saturating_sub(usize::from(
+            scenario.start_with_select && is_last_cycle,
+        )) {
             return Vec::new();
         }
 
-        let base_skip_len = skipped_rows / selected_runs;
-        let extra_skip_runs = skipped_rows % selected_runs;
+        let base_skip_len = skipped_rows / skip_runs;
+        let extra_skip_runs = skipped_rows % skip_runs;
         let mut remaining_selected_rows = selected_rows;
 
         for run_idx in 0..selected_runs {
-            let skip_len = base_skip_len + usize::from(run_idx < extra_skip_runs);
             let select_len = selected_run_len.min(remaining_selected_rows);
             if scenario.start_with_select {
                 selectors.push(RowSelector::select(select_len));
-                selectors.push(RowSelector::skip(skip_len));
+                if run_idx < skip_runs {
+                    let skip_len = base_skip_len + usize::from(run_idx < extra_skip_runs);
+                    selectors.push(RowSelector::skip(skip_len));
+                }
             } else {
+                let skip_len = base_skip_len + usize::from(run_idx < extra_skip_runs);
                 selectors.push(RowSelector::skip(skip_len));
                 selectors.push(RowSelector::select(select_len));
             }
