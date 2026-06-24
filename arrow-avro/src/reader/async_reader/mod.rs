@@ -228,7 +228,7 @@ impl<R> AsyncAvroFileReader<R> {
     /// Drain any remaining buffered records from the decoder.
     #[inline]
     fn poll_flush(&mut self) -> Poll<Option<Result<RecordBatch, AvroError>>> {
-        match self.decoder.flush() {
+        match self.decoder.flush_block() {
             Ok(Some(batch)) => {
                 self.reader_state = ReaderState::Flushing;
                 Poll::Ready(Some(Ok(batch)))
@@ -512,7 +512,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                     // We have a full batch ready, emit it
                     // (This is not mutually exclusive with the block being finished, so the state change is valid)
                     if self.decoder.batch_is_full() {
-                        return match self.decoder.flush() {
+                        return match self.decoder.flush_block() {
                             Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
                             Ok(None) => self.finish_with_error(AvroError::General(
                                 "Decoder reported a full batch, but flush returned None".into(),
@@ -1533,6 +1533,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_alltypes_with_empty_schema_large_batch() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = Arc::new(Schema::new(Vec::<Field>::new()));
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_with_empty_schema_small_batch() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = Arc::new(Schema::new(Vec::<Field>::new()));
+        let batches = read_async_file(&file, 5, None, Some(schema), None)
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 2);
+
+        assert_eq!(batches[0].num_rows(), 5);
+        assert_eq!(batches[0].num_columns(), 0);
+        assert_eq!(batches[1].num_rows(), 3);
+        assert_eq!(batches[1].num_columns(), 0);
+    }
+
+    #[tokio::test]
     async fn test_nested_no_schema_no_projection() {
         // No reader schema, no projection
         let file = arrow_test_data("avro/nested_records.avro");
@@ -1595,6 +1627,31 @@ mod tests {
         assert_eq!(batch.schema().field(0).name(), "f4");
         assert_eq!(batch.schema().field(1).name(), "f2");
         assert_eq!(batch.schema().field(2).name(), "f1");
+    }
+
+    #[tokio::test]
+    async fn test_nested_with_empty_schema() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/nested_records.avro");
+        let schema = Arc::new(
+            Schema::new(Vec::<Field>::new()).with_metadata(HashMap::from([(
+                SCHEMA_METADATA_KEY.into(),
+                r#"{
+                    "type": "record",
+                    "namespace": "ns1",
+                    "name": "record1",
+                    "fields": []
+                }"#
+                .to_owned(),
+            )])),
+        );
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 0);
     }
 
     #[tokio::test]

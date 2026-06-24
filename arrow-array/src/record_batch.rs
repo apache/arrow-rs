@@ -543,37 +543,29 @@ impl RecordBatch {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = self
+        let mut stack: Vec<(usize, ArrayRef, String, FieldRef)> = self
             .columns
             .iter()
             .zip(self.schema.fields())
             .rev()
-            .map(|(c, f)| {
-                let name_vec: Vec<&str> = vec![f.name()];
-                (0, c, name_vec, f)
-            })
+            .map(|(c, f)| (0, c.clone(), f.name().clone(), Arc::clone(f)))
             .collect();
         let mut columns: Vec<ArrayRef> = Vec::new();
         let mut fields: Vec<FieldRef> = Vec::new();
 
         while let Some((depth, c, name, field_ref)) = stack.pop() {
             match field_ref.data_type() {
-                DataType::Struct(ff) if depth < max_level => {
-                    // Need to zip these in reverse to maintain original order
-                    for (cff, fff) in c.as_struct().columns().iter().zip(ff.into_iter()).rev() {
-                        let mut name = name.clone();
-                        name.push(separator);
-                        name.push(fff.name());
-                        stack.push((depth + 1, cff, name, fff))
+                DataType::Struct(_) if depth < max_level => {
+                    let (flat_fields, flat_cols) = c.as_struct().flatten();
+                    for (cff, fff) in flat_cols.into_iter().zip(flat_fields.iter()).rev() {
+                        let child_name = format!("{name}{separator}{}", fff.name());
+                        stack.push((depth + 1, cff, child_name, Arc::clone(fff)))
                     }
                 }
                 _ => {
-                    let updated_field = Field::new(
-                        name.concat(),
-                        field_ref.data_type().clone(),
-                        field_ref.is_nullable(),
-                    );
-                    columns.push(c.clone());
+                    let updated_field =
+                        Field::new(name, field_ref.data_type().clone(), field_ref.is_nullable());
+                    columns.push(c);
                     fields.push(Arc::new(updated_field));
                 }
             }
@@ -973,7 +965,7 @@ mod tests {
     use crate::{
         BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
     };
-    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
     use std::collections::HashMap;
@@ -1770,5 +1762,34 @@ mod tests {
             batch.schema().metadata().get("foo").unwrap().as_str(),
             "bar"
         );
+    }
+
+    #[test]
+    fn test_normalize_nullable_struct() {
+        let child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let struct_nulls =
+            NullBuffer::new(arrow_buffer::BooleanBuffer::from(vec![true, false, true]));
+        let struct_array = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, false)]),
+            vec![child],
+            Some(struct_nulls),
+        )) as ArrayRef;
+
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)])),
+            true,
+        )]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![struct_array]).unwrap();
+
+        let normalized = batch.normalize(".", None).unwrap();
+
+        assert_eq!(normalized.num_columns(), 1);
+        assert_eq!(normalized.schema().field(0).name(), "s.x");
+        assert!(normalized.schema().field(0).is_nullable());
+        let col = normalized.column(0);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1));
+        assert!(col.is_valid(2));
     }
 }

@@ -37,6 +37,14 @@ use std::sync::Arc;
 /// This builder always creates a `VariantArray` using [`BinaryViewArray`] for both
 /// the metadata and value fields.
 ///
+/// `VariantArrayBuilder` implements [`VariantBuilderExt`], so you append values
+/// and nested objects or lists the same way as when building a single
+/// [`Variant`] value with [`VariantBuilder`], rather than constructing a
+/// `VariantBuilder` per row.
+///
+/// [`VariantBuilder`]: parquet_variant::VariantBuilder
+/// [`VariantBuilderExt`]: parquet_variant::VariantBuilderExt
+///
 /// # TODO
 /// 1. Support shredding: <https://github.com/apache/arrow-rs/issues/7895>
 ///
@@ -492,8 +500,8 @@ mod test {
         assert_eq!(variant_array.value(1), Variant::from(42i32));
 
         // the metadata and value fields of non shredded variants should not be null
-        assert!(variant_array.metadata_field().nulls().is_none());
-        assert!(variant_array.value_field().unwrap().nulls().is_none());
+        assert!(variant_array.metadata_column().nulls().is_none());
+        assert!(variant_array.value_column().unwrap().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };
@@ -638,8 +646,8 @@ mod test {
             .finish();
 
         let array2 = VariantArray::from_parts(
-            array.metadata_field().clone(),
-            Some(value_builder.build().unwrap()),
+            array.metadata_column().clone(),
+            Some(Arc::new(value_builder.build().unwrap())),
             None,
             None,
         );

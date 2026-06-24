@@ -22,9 +22,16 @@ description = "Array abstractions for Apache Arrow"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-license = { workspace = true }
+license = "Apache-2.0 AND MIT"
 keywords = { workspace = true }
-include = { workspace = true }
+include = [
+    "benches/*.rs",
+    "src/**/*.rs",
+    "Cargo.toml",
+    "LICENSE.txt",
+    "LICENSE-MIT",
+    "NOTICE.txt",
+]
 edition = { workspace = true }
 rust-version = { workspace = true }
 
