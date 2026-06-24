@@ -474,7 +474,7 @@ pub struct RecordBatchDecoder<'a> {
 
 impl<'a> RecordBatchDecoder<'a> {
     /// Create a reader for decoding arrays from an encoded [`RecordBatch`]
-    fn try_new(
+    pub fn try_new(
         buf: &'a Buffer,
         batch: crate::RecordBatch<'a>,
         schema: SchemaRef,
@@ -530,6 +530,11 @@ impl<'a> RecordBatchDecoder<'a> {
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
     ///
+    /// When enabled, the following checks are bypassed:
+    /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
+    /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
+    /// - Null count consistency and buffer length checks
+    ///
     /// Note this API is somewhat "funky" as it allows the caller to skip validation
     /// without having to use `unsafe` code. If this is ever made public
     /// it should be made clearer that this is a potentially unsafe by
@@ -538,14 +543,15 @@ impl<'a> RecordBatchDecoder<'a> {
     /// # Safety
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
-    /// certain that the data is valid
-    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+    /// certain that the data is valid. Invalid data that bypasses these checks
+    /// may cause undefined behavior when the arrays are later accessed.
+    pub fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
         self.skip_validation = skip_validation;
         self
     }
 
     /// Read the record batch, consuming the reader
-    fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
+    pub fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
             .variadicBufferCounts()
@@ -771,13 +777,11 @@ pub fn read_record_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
-    skip_validation: UnsafeFlag,
 ) -> Result<RecordBatch, ArrowError> {
-    let decoder = RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+    RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
         .with_projection(projection)
         .with_require_alignment(false)
-        .with_skip_validation(skip_validation);
-    decoder.read_record_batch()
+        .read_record_batch()
 }
 
 /// Read the dictionary from the buffer and provided metadata,

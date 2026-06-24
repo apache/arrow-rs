@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{FlightData, trailers::LazyTrailers, utils::flight_data_to_arrow_batch};
+use crate::{FlightData, trailers::LazyTrailers};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_data::UnsafeFlag;
-//use arrow_ipc::reader;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{Stream, StreamExt, ready, stream::BoxStream};
@@ -332,15 +331,25 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let batch = flight_data_to_arrow_batch(
-                    &data,
+                let record_batch = message.header_as_record_batch().ok_or_else(|| {
+                    FlightError::DecodeError(
+                        "Unable to convert flight data header to a record batch".to_string(),
+                    )
+                })?;
+                let buf = if data.data_body.as_ptr() as usize % 64 == 0 {
+                    Buffer::from(data.data_body.clone())
+                } else {
+                    Buffer::from(data.data_body.as_ref())
+                };
+                let batch = arrow_ipc::reader::RecordBatchDecoder::try_new(
+                    &buf,
+                    record_batch,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
-                    self.skip_validation.clone(),
-                )
-                .map_err(|e| {
-                    FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
-                })?;
+                    &message.version(),
+                )?
+                .with_skip_validation(self.skip_validation.clone())
+                .read_record_batch()?;
 
                 Ok(Some(DecodedFlightData::new_record_batch(data, batch)))
             }
