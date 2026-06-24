@@ -492,6 +492,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+#[inline]
 fn scan_ranges_from_selectors<I>(selectors: I, page_locations: &[PageLocation]) -> Vec<Range<u64>>
 where
     I: IntoIterator<Item = RowSelector>,
@@ -544,6 +545,7 @@ where
     ranges
 }
 
+#[inline]
 fn expand_to_batch_boundaries_from_selectors<I>(
     selectors: I,
     batch_size: usize,
@@ -658,6 +660,7 @@ impl RowSelection {
 
     /// Choose the automatic materialisation strategy without converting between
     /// selector and mask backing.
+    #[inline]
     pub(crate) fn auto_selection_strategy(&self, threshold: usize) -> RowSelectionStrategy {
         let (total_rows, effective_count) = match &self.inner {
             RowSelectionInner::Selectors(selectors) => {
