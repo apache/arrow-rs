@@ -760,10 +760,6 @@ impl<'a> MutableArrayData<'a> {
 
     /// Extends the in progress array with a region of the input arrays.
     ///
-    /// # Deprecated
-    /// Use [`try_extend`](Self::try_extend) instead, which returns an [`ArrowError`] on overflow
-    /// rather than panicking.
-    ///
     /// # Panic
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays,
@@ -798,10 +794,6 @@ impl<'a> MutableArrayData<'a> {
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
-    ///
-    /// # Deprecated
-    /// Use [`try_extend_nulls`](Self::try_extend_nulls) instead, which returns an [`ArrowError`]
-    /// on overflow rather than panicking.
     ///
     /// # Panics
     ///

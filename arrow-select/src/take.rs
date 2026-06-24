@@ -671,7 +671,7 @@ where
                 let ix = index.as_usize();
                 let start = list_offsets[ix].as_usize();
                 let end = list_offsets[ix + 1].as_usize();
-                array_data.extend(0, start, end);
+                array_data.try_extend(0, start, end)?;
                 new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
             }
         }
@@ -690,7 +690,7 @@ where
                 let ix = unsafe { indices.value_unchecked(i) }.as_usize();
                 let start = list_offsets[ix].as_usize();
                 let end = list_offsets[ix + 1].as_usize();
-                array_data.extend(0, start, end);
+                array_data.try_extend(0, start, end)?;
                 new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
                 last_filled = i + 1;
             }

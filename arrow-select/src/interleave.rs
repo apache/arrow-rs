@@ -633,7 +633,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         let start = list.offsets()[row_idx].as_usize();
         let size = list.sizes()[row_idx].as_usize();
         if size > 0 {
-            mutable_child.extend(array_idx, start, start + size);
+            mutable_child.try_extend(array_idx, start, start + size)?;
         }
     }
 
