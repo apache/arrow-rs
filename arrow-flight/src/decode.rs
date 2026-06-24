@@ -347,9 +347,14 @@ impl FlightDataDecoder {
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
                     &message.version(),
-                )?
-                .with_skip_validation(self.skip_validation.clone())
-                .read_record_batch()?;
+                )
+                .and_then(|d| {
+                    d.with_skip_validation(self.skip_validation.clone())
+                        .read_record_batch()
+                })
+                .map_err(|e| {
+                    FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
+                })?;
 
                 Ok(Some(DecodedFlightData::new_record_batch(data, batch)))
             }
