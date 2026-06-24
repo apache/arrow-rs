@@ -560,9 +560,9 @@ pub(crate) fn generate_shape_focus_selectors(
             selected_runs
         };
 
-        if skipped_rows < selected_runs.saturating_sub(usize::from(
-            scenario.start_with_select && is_last_cycle,
-        )) {
+        if skipped_rows
+            < selected_runs.saturating_sub(usize::from(scenario.start_with_select && is_last_cycle))
+        {
             return Vec::new();
         }
 
