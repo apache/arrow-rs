@@ -732,7 +732,6 @@ impl IpcDataGenerator {
         let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
 
-        // Build flatbuffer header using the reused builder in the context.
         let fbb = &mut compression_context.fbb;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -817,7 +816,6 @@ impl IpcDataGenerator {
         let body_len = offset as usize + tail_pad;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
 
-        // Build flatbuffer header using the reused builder in the context.
         let fbb = &mut compression_context.fbb;
 
         let compression = batch_compression_type.map(|batch_compression_type| {

@@ -16,7 +16,6 @@
 // under the License.
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
-use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
@@ -160,12 +159,16 @@ pub struct FlightDataEncoderBuilder {
     dictionary_handling: DictionaryHandling,
 }
 
+/// Default target size for encoded [`FlightData`].
+///
+/// gRPC's default max message size is 4MB; this 2MB target gives headroom for
+/// encoding overhead while keeping individual messages well within the limit.
+pub const GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
 impl Default for FlightDataEncoderBuilder {
     fn default() -> Self {
         Self {
-            // Default target size for encoded FlightData. gRPC has a default max message
-            // size of 3MB; we use 3MB so batches are split to stay within that limit.
-            max_flight_data_size: 3 * 1024 * 1024,
+            max_flight_data_size: GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES,
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
             schema: None,
@@ -182,7 +185,8 @@ impl FlightDataEncoderBuilder {
     }
 
     /// Set the (approximate) maximum size, in bytes, of the
-    /// [`FlightData`] produced by this encoder. Defaults to 3MB.
+    /// [`FlightData`] produced by this encoder. Defaults to 2MB
+    /// ([`GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES`]).
     ///
     /// Since there is often a maximum message size for gRPC messages
     /// (typically around 4MB), this encoder splits up [`RecordBatch`]s
@@ -670,12 +674,10 @@ fn split_batch_for_grpc_response(
         .map(|col| col.get_buffer_memory_size())
         .sum::<usize>();
 
+    let n_batches =
+        (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
     let num_rows = batch.num_rows();
-    let rows_per_batch = if size == 0 {
-        num_rows
-    } else {
-        (max_flight_data_size * num_rows / size).max(1)
-    };
+    let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
 
     std::iter::from_fn(move || {
@@ -736,8 +738,7 @@ impl FlightIpcEncoder {
         )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
-        let flight_batch = encoded_batch.into();
-        let flight_batch = encoded_batch.into();
+        let flight_batch: FlightData = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
     }
@@ -1875,7 +1876,7 @@ mod tests {
             .expect("cannot create record batch");
         let split: Vec<_> =
             split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
-        assert_eq!(split.len(), 2);
+        assert_eq!(split.len(), 3);
         assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             n_rows
@@ -1887,14 +1888,14 @@ mod tests {
 
     #[test]
     fn test_split_batch_for_grpc_response_sizes() {
-        // 2000 8 byte entries into 2k pieces: fill to limit, last chunk is remainder
-        verify_split(2000, 2 * 1024, vec![256, 256, 256, 256, 256, 256, 256, 208]);
+        // 2000 8 byte entries into 2k pieces: 8 chunks of 250 rows
+        verify_split(2000, 2 * 1024, vec![250, 250, 250, 250, 250, 250, 250, 250]);
 
-        // 2000 8 byte entries into 4k pieces: fill to limit, last chunk is remainder
-        verify_split(2000, 4 * 1024, vec![512, 512, 512, 464]);
+        // 2000 8 byte entries into 4k pieces: 4 chunks of 500 rows
+        verify_split(2000, 4 * 1024, vec![500, 500, 500, 500]);
 
         // 2023 8 byte entries into 3k pieces does not divide evenly
-        verify_split(2023, 3 * 1024, vec![384, 384, 384, 384, 384, 103]);
+        verify_split(2023, 3 * 1024, vec![337, 337, 337, 337, 337, 337, 1]);
 
         // 10 8 byte entries into 1 byte pieces means each rows gets its own
         verify_split(10, 1, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
@@ -1945,7 +1946,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 152).await;
+        verify_encoded_split(batch, 120).await;
     }
 
     #[tokio::test]
@@ -2008,7 +2009,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 163).await;
+        verify_encoded_split(batch, 56).await;
     }
 
     #[tokio::test]
