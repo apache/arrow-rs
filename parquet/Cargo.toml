@@ -73,7 +73,7 @@ hashbrown = { version = "0.17", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-crc32fast = { version = "1.4.2", optional = true, default-features = false }
+crc32fast = { version = "1.4.2", default-features = false }
 simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
@@ -120,8 +120,8 @@ async = ["futures", "tokio"]
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd"]
-# Verify 32-bit CRC checksum when decoding parquet pages
-crc = ["dep:crc32fast"]
+# Verify 32-bit CRC checksum when decoding parquet pages (crc32fast is always available)
+crc = []
 # Enable SIMD UTF-8 validation
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support

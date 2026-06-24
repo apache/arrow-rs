@@ -107,7 +107,19 @@ pub mod serialized_reader;
 pub mod statistics;
 pub mod writer;
 
-/// The length of the parquet footer in bytes
+/// The length of the parquet footer in bytes (PAR1/PARE format)
 pub const FOOTER_SIZE: usize = 8;
+/// The length of the PARX footer fixed tail in bytes (not including variable-length metadata)
+pub const PARX_FOOTER_SIZE: usize = 16;
 const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
 const PARQUET_MAGIC_ENCR_FOOTER: [u8; 4] = [b'P', b'A', b'R', b'E'];
+pub(crate) const PARQUET_MAGIC_PARX: [u8; 4] = [b'P', b'A', b'R', b'X'];
+/// Feature flag: footer uses modular encryption (equivalent to PARE)
+pub(crate) const PARX_FEATURE_FLAG_ENCRYPTED_FOOTER: u32 = 0x0001;
+/// Feature flag: column `path_in_schema` fields are omitted from the schema (write_path_in_schema=false)
+pub(crate) const PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED: u32 = 0x0002;
+pub(crate) const PARX_KNOWN_FEATURE_FLAGS: u32 =
+    PARX_FEATURE_FLAG_ENCRYPTED_FOOTER | PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED;
+/// Mask of feature flags that represent structural changes requiring PARX format.
+/// Excludes `ENCRYPTED_FOOTER` because encryption can be expressed without PARX via the PARE format.
+pub(crate) const PARX_STRUCTURAL_FEATURE_FLAGS: u32 = PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED;

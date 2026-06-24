@@ -22,6 +22,7 @@ use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, SortingColumn};
+use crate::file::{PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED, PARX_STRUCTURAL_FEATURE_FLAGS};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
@@ -141,6 +142,10 @@ pub enum WriterVersion {
     PARQUET_1_0,
     /// Parquet format version 2.0
     PARQUET_2_0,
+    /// Parquet format version 3.0
+    ///
+    /// Automatically enables the PARX file format.
+    PARQUET_3_0,
 }
 
 impl WriterVersion {
@@ -149,6 +154,7 @@ impl WriterVersion {
         match self {
             WriterVersion::PARQUET_1_0 => 1,
             WriterVersion::PARQUET_2_0 => 2,
+            WriterVersion::PARQUET_3_0 => 3,
         }
     }
 }
@@ -160,6 +166,7 @@ impl FromStr for WriterVersion {
         match s {
             "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
             "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
+            "PARQUET_3_0" | "parquet_3_0" => Ok(WriterVersion::PARQUET_3_0),
             _ => Err(format!("Invalid writer version: {s}")),
         }
     }
@@ -256,6 +263,7 @@ pub struct WriterProperties {
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
+    use_parx_format: bool,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -449,6 +457,19 @@ impl WriterProperties {
         self.write_path_in_schema
     }
 
+    /// Returns whether the PARX file format is enabled.
+    ///
+    /// This value is resolved at [`WriterPropertiesBuilder::build`] time. It defaults to `true`
+    /// when writer version is 3 or greater, or when [`write_path_in_schema`] is `false` (both
+    /// are PARX-only features). It can be overridden with
+    /// [`WriterPropertiesBuilder::with_parx_format`], but setting it to `false` while
+    /// `write_path_in_schema` is also `false` is a build-time panic.
+    ///
+    /// [`write_path_in_schema`]: WriterProperties::write_path_in_schema
+    pub fn use_parx_format(&self) -> bool {
+        self.use_parx_format
+    }
+
     /// EXPERIMENTAL: Returns content-defined chunking options, or `None` if CDC is disabled.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_content_defined_chunking`]
@@ -605,6 +626,7 @@ pub struct WriterPropertiesBuilder {
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
+    use_parx_format: bool,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -630,6 +652,7 @@ impl Default for WriterPropertiesBuilder {
             coerce_types: DEFAULT_COERCE_TYPES,
             content_defined_chunking: None,
             write_path_in_schema: DEFAULT_WRITE_PATH_IN_SCHEMA,
+            use_parx_format: false,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -667,6 +690,23 @@ impl WriterPropertiesBuilder {
             props.resolve_bloom_filter_ndv(default_ndv);
         }
 
+        // Compute which structural PARX flags (those that cannot be expressed in PAR1/PARE)
+        // the current settings would require. Add new PARX-only features here as they are
+        // introduced; the conflict check below catches them automatically.
+        let mut required_structural_flags = 0u32;
+        if !self.write_path_in_schema {
+            required_structural_flags |= PARX_FEATURE_FLAG_PATH_IN_SCHEMA_OMITTED;
+        }
+
+        if !self.use_parx_format && (required_structural_flags & PARX_STRUCTURAL_FEATURE_FLAGS) != 0 {
+            panic!(
+                "Invalid WriterProperties: PARX format is disabled but PARX-only features are \
+                 in use (structural flags: {:#010x}). Either enable PARX format or disable the \
+                 conflicting features.",
+                required_structural_flags & PARX_STRUCTURAL_FEATURE_FLAGS
+            );
+        }
+
         WriterProperties {
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
@@ -685,6 +725,7 @@ impl WriterPropertiesBuilder {
             coerce_types: self.coerce_types,
             content_defined_chunking: self.content_defined_chunking,
             write_path_in_schema: self.write_path_in_schema,
+            use_parx_format: self.use_parx_format,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -693,6 +734,16 @@ impl WriterPropertiesBuilder {
     // ----------------------------------------------------------------------
     // Writer properties related to a file
 
+    /// Enables or disables PARX format writing (defaults to `false`).
+    ///
+    /// When enabled, files use the `PARX` magic number instead of `PAR1`/`PARE`.
+    /// The PARX footer includes feature flags, spec version, and a CRC32 checksum.
+    /// Requires the `parx` feature to be enabled at compile time.
+    pub fn with_parx_format(mut self, use_parx_format: bool) -> Self {
+        self.use_parx_format = use_parx_format;
+        self
+    }
+
     /// Sets the `WriterVersion` written into the parquet metadata (defaults to [`PARQUET_1_0`]
     /// via [`DEFAULT_WRITER_VERSION`])
     ///
@@ -700,6 +751,10 @@ impl WriterPropertiesBuilder {
     ///
     /// [`PARQUET_1_0`]: [WriterVersion::PARQUET_1_0]
     pub fn set_writer_version(mut self, value: WriterVersion) -> Self {
+        if value.as_num() >= 3 {
+            self.use_parx_format = true;
+            self.write_path_in_schema = false;
+        }
         self.writer_version = value;
         self
     }
@@ -933,6 +988,9 @@ impl WriterPropertiesBuilder {
     ///
     /// [GH-563]: https://github.com/apache/parquet-format/issues/563
     pub fn set_write_path_in_schema(mut self, write_path_in_schema: bool) -> Self {
+        if !write_path_in_schema {
+            self.use_parx_format = true;
+        }
         self.write_path_in_schema = write_path_in_schema;
         self
     }
@@ -1348,6 +1406,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             coerce_types: props.coerce_types,
             content_defined_chunking: props.content_defined_chunking,
             write_path_in_schema: props.write_path_in_schema,
+            use_parx_format: props.use_parx_format,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
@@ -2167,6 +2226,17 @@ mod tests {
             props.column_data_page_v2_compression_ratio_threshold(&ColumnPath::from("other")),
             0.5
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "PARX format is disabled but PARX-only features are in use")]
+    fn test_writer_properties_panic_on_parx_disabled_with_path_in_schema_omitted() {
+        // set_write_path_in_schema(false) eagerly enables PARX; calling with_parx_format(false)
+        // after tries to override that, and build() catches the resulting conflict.
+        WriterProperties::builder()
+            .set_write_path_in_schema(false)
+            .with_parx_format(false)
+            .build();
     }
 
     #[test]
