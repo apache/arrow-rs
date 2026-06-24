@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{FlightData, trailers::LazyTrailers};
+use crate::{FlightData, trailers::LazyTrailers, utils::flight_data_to_arrow_batch};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_data::UnsafeFlag;
-use arrow_ipc::reader;
+//use arrow_ipc::reader;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{Stream, StreamExt, ready, stream::BoxStream};
@@ -332,27 +332,15 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let batch = message
-                    .header_as_record_batch()
-                    .ok_or_else(|| {
-                        FlightError::DecodeError(
-                            "Unable to convert flight data header to a record batch".to_string(),
-                        )
-                    })
-                    .and_then(|record_batch| {
-                        reader::read_record_batch(
-                            &Buffer::from(data.data_body.clone()),
-                            record_batch,
-                            Arc::clone(&state.schema),
-                            &state.dictionaries_by_field,
-                            None,
-                            &message.version(),
-                            self.skip_validation.clone(),
-                        )
-                        .map_err(|e| {
-                            FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
-                        })
-                    })?;
+                let batch = flight_data_to_arrow_batch(
+                    &data,
+                    Arc::clone(&state.schema),
+                    &state.dictionaries_by_field,
+                    self.skip_validation.clone(),
+                )
+                .map_err(|e| {
+                    FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
+                })?;
 
                 Ok(Some(DecodedFlightData::new_record_batch(data, batch)))
             }
