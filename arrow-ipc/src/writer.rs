@@ -556,13 +556,26 @@ impl IpcDataGenerator {
             write_options,
             compression_context,
         )?;
-        let mut arrow_data = std::mem::take(&mut compression_context.scratch);
-        let (ipc_message, _, tail_pad) = self.record_batch_to_bytes(
+        let capacity = batch
+            .columns()
+            .iter()
+            .map(|a| estimate_encoded_buffer_count(a.data_type()))
+            .sum();
+        let mut encoded_buffers: Vec<EncodedBuffer> = Vec::with_capacity(capacity);
+        let (ipc_message, body_len, tail_pad) = self.record_batch_to_bytes(
             batch,
             write_options,
             compression_context,
-            &mut IpcBodySink::Write(&mut arrow_data),
+            &mut IpcBodySink::Collect(&mut encoded_buffers),
         )?;
+        let alignment = write_options.alignment;
+        let mut arrow_data = std::mem::take(&mut compression_context.scratch);
+        arrow_data.clear();
+        arrow_data.reserve(body_len); // safe guards against string data that are large
+        for enc in &encoded_buffers {
+            arrow_data.extend_from_slice(enc.as_slice());
+            arrow_data.extend_from_slice(&PADDING[..pad_to_alignment(alignment, enc.len())]);
+        }
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
         Ok((
             encoded_dictionaries,
