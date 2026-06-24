@@ -538,41 +538,26 @@ impl ParquetPushDecoder {
         self.state.row_groups_remaining()
     }
 
-    /// Returns the row-group indices, in order, that subsequent
-    /// [`Self::try_next_reader`] calls will yield readers for, after
-    /// applying any internal skipping (row selection emptiness,
-    /// exhausted budget, finished state).
+    /// Returns the row-group index that the next call to
+    /// [`Self::try_next_reader`] will yield a reader for, after applying
+    /// any internal skipping (row selection emptiness, exhausted budget,
+    /// finished state).
     ///
     /// Safe to call at any time. When called mid-row-group (i.e. while a
     /// previously-emitted [`ParquetRecordBatchReader`] is still being
-    /// drained), the returned list starts at the row group that
+    /// drained), the returned index refers to the row group that
     /// [`Self::try_next_reader`] will produce *after* the current one.
     ///
-    /// Returns an empty `Vec` when:
+    /// Returns `Ok(None)` when:
     /// - the decoder has no more row groups to read, or
     /// - every remaining row group would be skipped.
     ///
     /// This method does not mutate decoder state. It is useful for
     /// callers that maintain per-row-group state in lock-step with the
-    /// decoder (e.g. dynamic row-group pruners or per-RG `RowFilter`
-    /// toggles) to determine which row groups the next readers
-    /// correspond to, since [`Self::try_next_reader`] may silently
-    /// advance past row groups based on filtering and other criteria.
-    ///
-    /// See [`Self::peek_next_row_group`] for a single-value convenience
-    /// wrapper that returns just the head of the list.
-    pub fn peek_remaining_row_groups(&self) -> Result<Vec<usize>, ParquetError> {
-        self.state.peek_remaining_row_groups()
-    }
-
-    /// Single-value peek: the row group `try_next_reader` will produce
-    /// next, or `None` when none remain. Same answer as
-    /// `peek_remaining_row_groups()?.into_iter().next()` but cheaper:
-    /// the frontier walk short-circuits on the first Read decision and
-    /// no `Vec` is allocated. Designed for callers that peek at every
-    /// row-group boundary (e.g. dynamic row-group pruners), where the
-    /// difference is the constant-time hot path vs O(remaining row
-    /// groups) per call.
+    /// decoder (e.g. dynamic row-group pruners) to determine which row
+    /// group the next reader corresponds to, since
+    /// [`Self::try_next_reader`] may silently advance past row groups
+    /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
     }
@@ -879,31 +864,13 @@ impl ParquetDecoderState {
         }
     }
 
-    /// See [`ParquetPushDecoder::peek_remaining_row_groups`] for the
-    /// public API contract. This inner method delegates to the
-    /// underlying [`RemainingRowGroups`] for both `ReadingRowGroup` and
-    /// `DecodingRowGroup`: mid-row-group the answer starts at the row
-    /// group `try_next_reader` will produce *after* the active one
-    /// finishes, which is exactly what
-    /// `RemainingRowGroups::peek_remaining_row_groups` computes from
-    /// the queued frontier.
-    fn peek_remaining_row_groups(&self) -> Result<Vec<usize>, ParquetError> {
-        match self {
-            ParquetDecoderState::ReadingRowGroup {
-                remaining_row_groups,
-            } => remaining_row_groups.peek_remaining_row_groups(),
-            ParquetDecoderState::DecodingRowGroup {
-                remaining_row_groups,
-                ..
-            } => remaining_row_groups.peek_remaining_row_groups(),
-            ParquetDecoderState::Finished => Ok(Vec::new()),
-        }
-    }
-
     /// See [`ParquetPushDecoder::peek_next_row_group`] for the public
-    /// API contract. Same delegation as
-    /// [`Self::peek_remaining_row_groups`] but takes the early-exit
-    /// path on [`RemainingRowGroups`].
+    /// API contract. This inner method delegates to the underlying
+    /// [`RemainingRowGroups`] for both `ReadingRowGroup` and
+    /// `DecodingRowGroup`: mid-row-group the answer is the row group
+    /// `try_next_reader` will produce *after* the active one finishes,
+    /// which is exactly what `RemainingRowGroups::peek_next_row_group`
+    /// computes from the queued frontier.
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         match self {
             ParquetDecoderState::ReadingRowGroup {
@@ -1978,180 +1945,6 @@ mod test {
 
         let _batch3 = expect_data(decoder.try_decode());
         expect_finished(decoder.try_decode());
-    }
-
-    /// `peek_remaining_row_groups` lists every row group `try_next_reader`
-    /// would yield a reader for, in order. With no offset/limit and no
-    /// row selection, that is every row group declared in the file.
-    #[test]
-    fn test_peek_remaining_row_groups_lists_all() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .build()
-            .unwrap();
-
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![0, 1]);
-    }
-
-    /// An `OFFSET` that consumes the entire first row group must drop
-    /// it from `peek_remaining_row_groups` — leaving just the trailing
-    /// row group that survives the budget.
-    #[test]
-    fn test_peek_remaining_row_groups_with_offset_skips_first() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_offset(200)
-            .build()
-            .unwrap();
-
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![1]);
-    }
-
-    /// A `LIMIT` smaller than the first row group caps the readable
-    /// list to just that row group. The peek walker must advance its
-    /// simulated budget after the first Read so the second row group
-    /// is correctly classified as out-of-budget.
-    #[test]
-    fn test_peek_remaining_row_groups_with_limit_caps_list() {
-        // RG 0 has 200 rows. LIMIT 100 admits RG 0; after that the
-        // simulated budget is exhausted, so RG 1 must not appear.
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_limit(100)
-            .build()
-            .unwrap();
-
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![0]);
-    }
-
-    /// `peek_next_row_group` is now defined as `peek_remaining_row_groups`
-    /// followed by `.first()`; the two APIs must always agree on the
-    /// head element across the same decoder.
-    #[test]
-    fn test_peek_apis_agree_on_head() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let head = decoder.peek_next_row_group().unwrap();
-        let list = decoder.peek_remaining_row_groups().unwrap();
-        assert_eq!(head, list.first().copied());
-    }
-
-    /// `peek_remaining_row_groups` must keep working while the decoder
-    /// is in `DecodingRowGroup` state (i.e. `try_decode` is iterating
-    /// batches inside a row group). The returned list starts at the
-    /// row group `try_next_reader` will produce *after* the active one.
-    #[test]
-    fn test_peek_remaining_row_groups_during_decoding_row_group() {
-        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_batch_size(100)
-            .build()
-            .unwrap();
-        decoder
-            .push_range(test_file_range(), TEST_FILE_DATA.clone())
-            .unwrap();
-
-        // First batch of RG 0 — decoder now holds the reader in
-        // `DecodingRowGroup` state.
-        let _batch0 = expect_data(decoder.try_decode());
-        assert!(!decoder.is_at_row_group_boundary());
-        // Multi-value peek must list every row group still queued
-        // *after* the active one — i.e. RG 1.
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![1]);
-
-        // Finish RG 0, start RG 1 — now no row groups remain after.
-        let _batch1 = expect_data(decoder.try_decode());
-        let _batch2 = expect_data(decoder.try_decode());
-        assert!(!decoder.is_at_row_group_boundary());
-        assert_eq!(
-            decoder.peek_remaining_row_groups().unwrap(),
-            Vec::<usize>::new()
-        );
-
-        let _batch3 = expect_data(decoder.try_decode());
-        expect_finished(decoder.try_decode());
-    }
-
-    /// Combined `OFFSET` and `LIMIT` exercise budget chaining across
-    /// Read decisions: the simulated budget after RG 0 must carry the
-    /// `LIMIT` consumption forward so RG 1 sees the correct remaining
-    /// limit.
-    ///
-    /// Setup: 2 row groups of 200 rows each.
-    /// `OFFSET 50 LIMIT 200`. RG 0 contributes rows 50..200 (= 150
-    /// rows, the rest counts against offset). After RG 0:
-    ///   offset → 0, limit → 200 - 150 = 50.
-    /// RG 1 contributes 50 rows then limit is exhausted.
-    /// Both row groups appear in the readable list.
-    #[test]
-    fn test_peek_remaining_row_groups_with_offset_and_limit() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_offset(50)
-            .with_limit(200)
-            .build()
-            .unwrap();
-
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![0, 1]);
-    }
-
-    /// `OFFSET` large enough to skip RG 0 entirely while `LIMIT`
-    /// still allows reading from RG 1 — verifies that a `Skip`
-    /// classification correctly carries the *shrunk* offset budget
-    /// forward instead of erroneously treating it as exhausted.
-    ///
-    /// Setup: 2 row groups of 200 rows each.
-    /// `OFFSET 200 LIMIT 50`. RG 0 contributes 0 rows (all consumed
-    /// by offset). After RG 0: offset → 0, limit → 50.
-    /// RG 1 reads 50 rows.
-    #[test]
-    fn test_peek_remaining_row_groups_offset_skips_then_limit_caps() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_offset(200)
-            .with_limit(50)
-            .build()
-            .unwrap();
-
-        assert_eq!(decoder.peek_remaining_row_groups().unwrap(), vec![1]);
-    }
-
-    /// Combine a `RowSelection` that empties one row group with an
-    /// `OFFSET` that consumes the next one — both silent-skip paths
-    /// composed in the same walk. The peek walker must skip the
-    /// selection-empty RG without touching the budget, then advance
-    /// the budget through the OFFSET-skipped RG, and finally surface
-    /// the third RG as readable.
-    ///
-    /// Setup uses `with_row_groups([0, 1])` (just to be explicit) on
-    /// the 2-RG test file. Then a selection that drops RG 0 entirely
-    /// and selects RG 1's first 50 rows, combined with `OFFSET 50` so
-    /// RG 1's 50 selected rows are also skipped by budget. Expected:
-    /// no row group surfaces (RG 0 selection-skipped, RG 1 budget-skipped).
-    #[test]
-    fn test_peek_remaining_row_groups_selection_then_budget_skip() {
-        let decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
-            .unwrap()
-            .with_row_selection(RowSelection::from(vec![
-                RowSelector::skip(200),  // RG 0 entirely: selection-skip
-                RowSelector::select(50), // RG 1: 50 selected rows
-                RowSelector::skip(150),  // RG 1: rest skipped
-            ]))
-            .with_offset(50) // OFFSET swallows RG 1's 50 selected rows
-            .build()
-            .unwrap();
-
-        // RG 0 disappears via selection-skip (silent, no budget impact).
-        // RG 1 disappears via OFFSET budget-skip (selected_rows=50,
-        // budget.rows_after(50)=0). No row groups remain.
-        assert_eq!(
-            decoder.peek_remaining_row_groups().unwrap(),
-            Vec::<usize>::new()
-        );
-        assert_eq!(decoder.peek_next_row_group().unwrap(), None);
     }
 
     /// Peeking is a read-only operation: calling it repeatedly between
