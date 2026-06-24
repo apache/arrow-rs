@@ -76,8 +76,13 @@ pub fn flight_data_to_arrow_batch(
             )
         })
         .map(|batch| {
+            let buf = if data.data_body.as_ptr() as usize % 64 == 0 {
+                Buffer::from(data.data_body.clone())
+            } else {
+                Buffer::from(data.data_body.as_ref())
+            };
             reader::read_record_batch(
-                &Buffer::from(data.data_body.as_ref()),
+                &buf,
                 batch,
                 schema,
                 dictionaries_by_id,
