@@ -1114,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn into_mutable_should_allow_converting_sliced_owned_buffer_when_not_sliced_from_start() {
+    fn into_mutable_should_allow_converting_sliced_owned_buffer_when_ptr_offset_is_0() {
         let original_buffer_data = [1_u8, 2, 3, 4, 5, 6, 7, 8];
         for slice_length in [0, original_buffer_data.len() - 2] {
             let buffer = Buffer::from(original_buffer_data);
