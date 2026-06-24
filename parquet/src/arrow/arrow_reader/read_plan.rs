@@ -308,7 +308,7 @@ impl ReadPlanBuilder {
 fn build_cursor(selection: RowSelection, strategy: RowSelectionStrategy) -> RowSelectionCursor {
     match (strategy, selection.into_inner()) {
         (RowSelectionStrategy::Mask, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_mask_from_buffer(mask)
+            RowSelectionCursor::new_mask_from_buffer((*mask).into_mask())
         }
         (RowSelectionStrategy::Mask, RowSelectionInner::Selectors(selectors)) => {
             RowSelectionCursor::new_mask_from_selectors(selectors)
@@ -317,7 +317,7 @@ fn build_cursor(selection: RowSelection, strategy: RowSelectionStrategy) -> RowS
             RowSelectionCursor::new_selectors(selectors)
         }
         (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors(mask_to_selectors(&mask))
+            RowSelectionCursor::new_selectors(mask_to_selectors(mask.mask()))
         }
     }
 }

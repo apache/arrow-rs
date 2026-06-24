@@ -25,6 +25,7 @@ use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 /// Policy for picking a strategy to materialize [`RowSelection`] during execution.
 ///
@@ -152,7 +153,48 @@ pub struct RowSelection {
 #[derive(Debug, Clone)]
 pub(crate) enum RowSelectionInner {
     Selectors(Vec<RowSelector>),
-    Mask(BooleanBuffer),
+    Mask(Box<MaskSelection>),
+}
+
+/// Mask-backed [`RowSelection`] storage.
+///
+/// `selectors` is only populated if callers use the borrowed [`RowSelection::iter`]
+/// compatibility API. Internal paths that can stream or consume the bitmap avoid
+/// this cache.
+#[derive(Debug)]
+pub(crate) struct MaskSelection {
+    mask: BooleanBuffer,
+    selectors: OnceLock<Vec<RowSelector>>,
+}
+
+impl MaskSelection {
+    fn new(mask: BooleanBuffer) -> Self {
+        Self {
+            mask,
+            selectors: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn mask(&self) -> &BooleanBuffer {
+        &self.mask
+    }
+
+    pub(crate) fn into_mask(self) -> BooleanBuffer {
+        let Self { mask, .. } = self;
+        mask
+    }
+
+    fn selectors(&self) -> &[RowSelector] {
+        self.selectors
+            .get_or_init(|| mask_to_selectors(&self.mask))
+            .as_slice()
+    }
+}
+
+impl Clone for MaskSelection {
+    fn clone(&self) -> Self {
+        Self::new(self.mask.clone())
+    }
 }
 
 impl Default for RowSelectionInner {
@@ -170,7 +212,7 @@ impl std::fmt::Debug for RowSelection {
                 .finish(),
             RowSelectionInner::Mask(m) => f
                 .debug_struct("RowSelection")
-                .field("mask_len", &m.len())
+                .field("mask_len", &m.mask().len())
                 .finish_non_exhaustive(),
         }
     }
@@ -180,18 +222,18 @@ impl PartialEq for RowSelection {
     fn eq(&self, other: &Self) -> bool {
         match (&self.inner, &other.inner) {
             (RowSelectionInner::Selectors(a), RowSelectionInner::Selectors(b)) => a == b,
-            (RowSelectionInner::Mask(a), RowSelectionInner::Mask(b)) => a == b,
+            (RowSelectionInner::Mask(a), RowSelectionInner::Mask(b)) => a.mask() == b.mask(),
             (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors))
             | (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask)) => {
                 if selectors
                     .iter()
                     .try_fold(0usize, |acc, selector| acc.checked_add(selector.row_count))
-                    != Some(mask.len())
+                    != Some(mask.mask().len())
                 {
                     return false;
                 }
 
-                let mut slices = mask.set_slices().peekable();
+                let mut slices = mask.mask().set_slices().peekable();
                 let mut cursor = 0usize;
 
                 for selector in selectors {
@@ -219,29 +261,30 @@ impl PartialEq for RowSelection {
 
 impl Eq for RowSelection {}
 
-/// Iterator over the [`RowSelector`]s of a [`RowSelection`].
-///
-/// Yields owned [`RowSelector`] values; mask-backed selections stream the
-/// run-length form via [`BitSliceIterator`] without allocation.
+/// Borrowed iterator over the [`RowSelector`]s of a [`RowSelection`].
 #[derive(Debug)]
-pub enum RowSelectionIter<'a> {
-    Selectors(std::iter::Copied<std::slice::Iter<'a, RowSelector>>),
-    Mask(MaskRunIter<'a>),
-}
+pub struct RowSelectionIter<'a>(std::slice::Iter<'a, RowSelector>);
 
-impl Iterator for RowSelectionIter<'_> {
-    type Item = RowSelector;
+impl<'a> Iterator for RowSelectionIter<'a> {
+    type Item = &'a RowSelector;
 
     #[inline]
-    fn next(&mut self) -> Option<RowSelector> {
-        match self {
-            Self::Selectors(it) => it.next(),
-            Self::Mask(it) => it.next(),
-        }
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }
 
-/// Streaming RLE view of a [`BooleanBuffer`].
+/// Streaming RLE view of a [`BooleanBuffer`], yielding owned [`RowSelector`]s
+/// without allocation.
+///
+/// Useful as a zero-cost alternative to [`RowSelection::iter`] for mask-backed
+/// selections, via [`RowSelection::as_mask`]:
+///
+/// ```ignore
+/// if let Some(mask) = selection.as_mask() {
+///     for run in MaskRunIter::new(mask) { ... }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct MaskRunIter<'a> {
     slices: BitSliceIterator<'a>,
@@ -252,7 +295,8 @@ pub struct MaskRunIter<'a> {
 }
 
 impl<'a> MaskRunIter<'a> {
-    fn new(mask: &'a BooleanBuffer) -> Self {
+    /// Create a streaming RLE iterator over a [`BooleanBuffer`].
+    pub fn new(mask: &'a BooleanBuffer) -> Self {
         Self {
             slices: mask.set_slices(),
             cursor: 0,
@@ -361,12 +405,20 @@ fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
 
 /// Applies `other` to the selected rows of `mask`, preserving the original row domain.
 fn and_then_mask(mask: &BooleanBuffer, other: &RowSelection) -> BooleanBuffer {
-    if let Some(other_mask) = other.as_mask() {
-        return and_then_masks(mask, other_mask);
+    match &other.inner {
+        RowSelectionInner::Mask(other_mask) => and_then_masks(mask, other_mask.mask()),
+        RowSelectionInner::Selectors(selectors) => {
+            and_then_mask_from_selectors(mask, selectors.iter().copied())
+        }
     }
+}
 
+fn and_then_mask_from_selectors<I>(mask: &BooleanBuffer, other: I) -> BooleanBuffer
+where
+    I: IntoIterator<Item = RowSelector>,
+{
     let mut builder = BooleanBufferBuilder::new(mask.len());
-    let mut other_iter = other.iter();
+    let mut other_iter = other.into_iter();
     let mut current = other_iter.next();
     let mut cursor = 0usize;
 
@@ -440,6 +492,110 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+fn scan_ranges_from_selectors<I>(selectors: I, page_locations: &[PageLocation]) -> Vec<Range<u64>>
+where
+    I: IntoIterator<Item = RowSelector>,
+{
+    let mut ranges: Vec<Range<u64>> = vec![];
+    let mut row_offset = 0;
+
+    let mut pages = page_locations.iter().peekable();
+    let mut selectors = selectors.into_iter();
+    let mut current_selector = selectors.next();
+    let mut current_page = pages.next();
+
+    let mut current_page_included = false;
+
+    while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
+        if !(selector.skip || current_page_included) {
+            let start = page.offset as u64;
+            let end = start + page.compressed_page_size as u64;
+            ranges.push(start..end);
+            current_page_included = true;
+        }
+
+        if let Some(next_page) = pages.peek() {
+            if row_offset + selector.row_count > next_page.first_row_index as usize {
+                let remaining_in_page = next_page.first_row_index as usize - row_offset;
+                selector.row_count -= remaining_in_page;
+                row_offset += remaining_in_page;
+                current_page = pages.next();
+                current_page_included = false;
+
+                continue;
+            } else {
+                if row_offset + selector.row_count == next_page.first_row_index as usize {
+                    current_page = pages.next();
+                    current_page_included = false;
+                }
+                row_offset += selector.row_count;
+                current_selector = selectors.next();
+            }
+        } else {
+            if !(selector.skip || current_page_included) {
+                let start = page.offset as u64;
+                let end = start + page.compressed_page_size as u64;
+                ranges.push(start..end);
+            }
+            current_selector = selectors.next()
+        }
+    }
+
+    ranges
+}
+
+fn expand_to_batch_boundaries_from_selectors<I>(
+    selectors: I,
+    batch_size: usize,
+    total_rows: usize,
+) -> RowSelection
+where
+    I: IntoIterator<Item = RowSelector>,
+{
+    let mut expanded_ranges = Vec::new();
+    let mut row_offset = 0;
+
+    for selector in selectors {
+        if selector.skip {
+            row_offset += selector.row_count;
+        } else {
+            let start = row_offset;
+            let end = row_offset + selector.row_count;
+
+            // Expand start to batch boundary
+            let expanded_start = (start / batch_size) * batch_size;
+            // Expand end to batch boundary
+            let expanded_end = end.div_ceil(batch_size) * batch_size;
+            let expanded_end = expanded_end.min(total_rows);
+
+            expanded_ranges.push(expanded_start..expanded_end);
+            row_offset += selector.row_count;
+        }
+    }
+
+    // Sort ranges by start position
+    expanded_ranges.sort_by_key(|range| range.start);
+
+    // Merge overlapping or consecutive ranges
+    let mut merged_ranges: Vec<Range<usize>> = Vec::new();
+    for range in expanded_ranges {
+        if let Some(last) = merged_ranges.last_mut() {
+            if range.start <= last.end {
+                // Overlapping or consecutive - merge them
+                last.end = last.end.max(range.end);
+            } else {
+                // No overlap - add new range
+                merged_ranges.push(range);
+            }
+        } else {
+            // First range
+            merged_ranges.push(range);
+        }
+    }
+
+    RowSelection::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+}
+
 /// Skips the first `offset` selected rows of a mask-backed selection.
 fn offset_mask(mask: BooleanBuffer, offset: usize) -> BooleanBuffer {
     let popcount = mask.count_set_bits();
@@ -479,7 +635,7 @@ impl RowSelection {
     /// directly off the bitmap.
     pub fn from_boolean_buffer(mask: BooleanBuffer) -> Self {
         Self {
-            inner: RowSelectionInner::Mask(mask),
+            inner: RowSelectionInner::Mask(Box::new(MaskSelection::new(mask))),
         }
     }
 
@@ -490,7 +646,7 @@ impl RowSelection {
     /// mask-backed selections without materialising the RLE form.
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
-            RowSelectionInner::Mask(m) => Some(m),
+            RowSelectionInner::Mask(m) => Some(m.mask()),
             _ => None,
         }
     }
@@ -514,6 +670,7 @@ impl RowSelection {
                 })
             }
             RowSelectionInner::Mask(mask) => {
+                let mask = mask.mask();
                 let total_rows = mask.len();
                 if total_rows == 0 {
                     (0, 0)
@@ -551,13 +708,13 @@ impl RowSelection {
 
     #[cfg(test)]
     fn selectors(&self) -> Vec<RowSelector> {
-        self.iter().collect()
+        self.iter().copied().collect()
     }
 
     fn into_selectors_vec(self) -> Vec<RowSelector> {
         match self.inner {
             RowSelectionInner::Selectors(s) => s,
-            RowSelectionInner::Mask(m) => mask_to_selectors(&m),
+            RowSelectionInner::Mask(m) => mask_to_selectors(m.mask()),
         }
     }
 
@@ -568,7 +725,7 @@ impl RowSelection {
                 RowSelectionInner::Mask(m) => m,
                 RowSelectionInner::Selectors(_) => unreachable!(),
             };
-            self.inner = RowSelectionInner::Selectors(mask_to_selectors(&mask));
+            self.inner = RowSelectionInner::Selectors(mask_to_selectors(mask.mask()));
         }
         match &mut self.inner {
             RowSelectionInner::Selectors(s) => s,
@@ -637,52 +794,14 @@ impl RowSelection {
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
-        let mut ranges: Vec<Range<u64>> = vec![];
-        let mut row_offset = 0;
-
-        let mut pages = page_locations.iter().peekable();
-        let mut selectors = self.iter();
-        let mut current_selector = selectors.next();
-        let mut current_page = pages.next();
-
-        let mut current_page_included = false;
-
-        while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
-            if !(selector.skip || current_page_included) {
-                let start = page.offset as u64;
-                let end = start + page.compressed_page_size as u64;
-                ranges.push(start..end);
-                current_page_included = true;
+        match &self.inner {
+            RowSelectionInner::Selectors(selectors) => {
+                scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
             }
-
-            if let Some(next_page) = pages.peek() {
-                if row_offset + selector.row_count > next_page.first_row_index as usize {
-                    let remaining_in_page = next_page.first_row_index as usize - row_offset;
-                    selector.row_count -= remaining_in_page;
-                    row_offset += remaining_in_page;
-                    current_page = pages.next();
-                    current_page_included = false;
-
-                    continue;
-                } else {
-                    if row_offset + selector.row_count == next_page.first_row_index as usize {
-                        current_page = pages.next();
-                        current_page_included = false;
-                    }
-                    row_offset += selector.row_count;
-                    current_selector = selectors.next();
-                }
-            } else {
-                if !(selector.skip || current_page_included) {
-                    let start = page.offset as u64;
-                    let end = start + page.compressed_page_size as u64;
-                    ranges.push(start..end);
-                }
-                current_selector = selectors.next()
+            RowSelectionInner::Mask(mask) => {
+                scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
             }
         }
-
-        ranges
     }
 
     /// Returns true if this selection would skip any data pages within the provided columns
@@ -725,16 +844,19 @@ impl RowSelection {
                 RowSelectionInner::Mask(m) => m,
                 RowSelectionInner::Selectors(_) => unreachable!(),
             };
+            let mask = (*mask).into_mask();
             let total = mask.len();
             if row_count >= total {
                 // Whole selection moves into the returned head; leave `self` as
                 // an empty mask so the backing is preserved.
-                self.inner = RowSelectionInner::Mask(BooleanBuffer::new_unset(0));
+                self.inner = RowSelectionInner::Mask(Box::new(MaskSelection::new(
+                    BooleanBuffer::new_unset(0),
+                )));
                 return Self::from_boolean_buffer(mask);
             }
             let head = mask.slice(0, row_count);
             let tail = mask.slice(row_count, total - row_count);
-            self.inner = RowSelectionInner::Mask(tail);
+            self.inner = RowSelectionInner::Mask(Box::new(MaskSelection::new(tail)));
             return Self::from_boolean_buffer(head);
         }
 
@@ -795,70 +917,21 @@ impl RowSelection {
     /// by this RowSelection
     ///
     pub fn and_then(&self, other: &Self) -> Self {
-        if let Some(mask) = self.as_mask() {
-            return Self::from_boolean_buffer(and_then_mask(mask, other));
-        }
-
-        let mut selectors = vec![];
-        let mut first = self.iter().peekable();
-        let mut second = other.iter().peekable();
-
-        let mut to_skip = 0;
-        while let Some(b) = second.peek_mut() {
-            let a = first
-                .peek_mut()
-                .expect("selection exceeds the number of selected rows");
-
-            if b.row_count == 0 {
-                second.next().unwrap();
-                continue;
+        match (&self.inner, &other.inner) {
+            (RowSelectionInner::Mask(mask), _) => {
+                Self::from_boolean_buffer(and_then_mask(mask.mask(), other))
             }
-
-            if a.row_count == 0 {
-                first.next().unwrap();
-                continue;
+            (RowSelectionInner::Selectors(first), RowSelectionInner::Selectors(second)) => {
+                and_then_row_selections(first, second)
             }
-
-            if a.skip {
-                // Records were skipped when producing second
-                to_skip += a.row_count;
-                first.next().unwrap();
-                continue;
-            }
-
-            let skip = b.skip;
-            let to_process = a.row_count.min(b.row_count);
-
-            a.row_count -= to_process;
-            b.row_count -= to_process;
-
-            match skip {
-                true => to_skip += to_process,
-                false => {
-                    if to_skip != 0 {
-                        selectors.push(RowSelector::skip(to_skip));
-                        to_skip = 0;
-                    }
-                    selectors.push(RowSelector::select(to_process))
-                }
+            (RowSelectionInner::Selectors(first), RowSelectionInner::Mask(second)) => {
+                let mut selectors = vec![];
+                let mut first = first.iter().copied().peekable();
+                let mut second = MaskRunIter::new(second.mask()).peekable();
+                and_then_iter(&mut selectors, &mut first, &mut second);
+                Self::from_selectors(selectors)
             }
         }
-
-        for v in first {
-            if v.row_count != 0 {
-                assert!(
-                    v.skip,
-                    "selection contains less than the number of selected rows"
-                );
-                to_skip += v.row_count
-            }
-        }
-
-        if to_skip != 0 {
-            selectors.push(RowSelector::skip(to_skip));
-        }
-
-        Self::from_selectors(selectors)
     }
 
     /// Compute the intersection of two [`RowSelection`]
@@ -868,12 +941,22 @@ impl RowSelection {
     ///
     /// returned:  NNNNNNNNYYNYN
     pub fn intersection(&self, other: &Self) -> Self {
-        if let (Some(l), Some(r)) = (self.as_mask(), other.as_mask()) {
-            return Self::from_boolean_buffer(intersect_masks(l, r));
+        match (&self.inner, &other.inner) {
+            (RowSelectionInner::Mask(l), RowSelectionInner::Mask(r)) => {
+                Self::from_boolean_buffer(intersect_masks(l.mask(), r.mask()))
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
+                intersect_row_selections(l, r)
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
+                let r = mask_to_selectors(r.mask());
+                intersect_row_selections(l, &r)
+            }
+            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
+                let l = mask_to_selectors(l.mask());
+                intersect_row_selections(&l, r)
+            }
         }
-        let l = self.materialize_for_combine();
-        let r = other.materialize_for_combine();
-        intersect_row_selections(&l, &r)
     }
 
     /// Compute the union of two [`RowSelection`]
@@ -883,18 +966,23 @@ impl RowSelection {
     ///
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
-        if let (Some(l), Some(r)) = (self.as_mask(), other.as_mask()) {
-            return Self::from_boolean_buffer(union_masks(l, r));
-        }
-        let l = self.materialize_for_combine();
-        let r = other.materialize_for_combine();
-        union_row_selections(&l, &r)
-    }
-
-    fn materialize_for_combine(&self) -> Vec<RowSelector> {
         match &self.inner {
-            RowSelectionInner::Selectors(s) => s.clone(),
-            RowSelectionInner::Mask(m) => mask_to_selectors(m),
+            RowSelectionInner::Mask(l) => match &other.inner {
+                RowSelectionInner::Mask(r) => {
+                    Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
+                }
+                RowSelectionInner::Selectors(r) => {
+                    let l = mask_to_selectors(l.mask());
+                    union_row_selections(&l, r)
+                }
+            },
+            RowSelectionInner::Selectors(l) => match &other.inner {
+                RowSelectionInner::Mask(r) => {
+                    let r = mask_to_selectors(r.mask());
+                    union_row_selections(l, &r)
+                }
+                RowSelectionInner::Selectors(r) => union_row_selections(l, r),
+            },
         }
     }
 
@@ -902,7 +990,7 @@ impl RowSelection {
     pub fn selects_any(&self) -> bool {
         match &self.inner {
             RowSelectionInner::Selectors(s) => s.iter().any(|x| !x.skip),
-            RowSelectionInner::Mask(m) => m.set_indices().next().is_some(),
+            RowSelectionInner::Mask(m) => m.mask().set_indices().next().is_some(),
         }
     }
 
@@ -910,15 +998,18 @@ impl RowSelection {
     pub(crate) fn trim(mut self) -> Self {
         if let RowSelectionInner::Mask(m) = &self.inner {
             // Position one past the last set bit (= 0 when there are none).
-            let popcount = m.count_set_bits();
+            let mask = m.mask();
+            let popcount = mask.count_set_bits();
             let new_len = if popcount == 0 {
                 0
             } else {
-                m.find_nth_set_bit_position(0, popcount)
+                mask.find_nth_set_bit_position(0, popcount)
             };
-            if new_len != m.len() {
+            if new_len != mask.len() {
                 return Self {
-                    inner: RowSelectionInner::Mask(m.slice(0, new_len)),
+                    inner: RowSelectionInner::Mask(Box::new(MaskSelection::new(
+                        mask.slice(0, new_len),
+                    ))),
                 };
             }
             return self;
@@ -938,7 +1029,7 @@ impl RowSelection {
 
         let mut selectors = match self.inner {
             RowSelectionInner::Mask(mask) => {
-                return Self::from_boolean_buffer(offset_mask(mask, offset));
+                return Self::from_boolean_buffer(offset_mask((*mask).into_mask(), offset));
             }
             RowSelectionInner::Selectors(selectors) => selectors,
         };
@@ -977,7 +1068,7 @@ impl RowSelection {
     pub(crate) fn limit(self, mut limit: usize) -> Self {
         let mut selectors = match self.inner {
             RowSelectionInner::Mask(mask) => {
-                return Self::from_boolean_buffer(limit_mask(mask, limit));
+                return Self::from_boolean_buffer(limit_mask((*mask).into_mask(), limit));
             }
             RowSelectionInner::Selectors(selectors) => selectors,
         };
@@ -999,14 +1090,18 @@ impl RowSelection {
         Self::from_selectors(selectors)
     }
 
-    /// Returns an iterator yielding the [`RowSelector`]s for this selection.
+    /// Returns a borrowed iterator yielding the [`RowSelector`]s for this selection.
     ///
-    /// Mask-backed selections stream the RLE form off the bitmap without
-    /// allocation.
+    /// Mask-backed selections materialize a `Vec<RowSelector>` cache on first
+    /// call (one allocation, `O(set_slices)` work) so the iterator can hand out
+    /// `&RowSelector`; the cache is not copied on clone. For single-pass walks
+    /// over mask-backed selections, prefer streaming directly via
+    /// [`Self::as_mask`] + [`MaskRunIter::new`] — that path is allocation-free
+    /// and avoids populating the cache.
     pub fn iter(&self) -> RowSelectionIter<'_> {
         match &self.inner {
-            RowSelectionInner::Selectors(s) => RowSelectionIter::Selectors(s.iter().copied()),
-            RowSelectionInner::Mask(m) => RowSelectionIter::Mask(MaskRunIter::new(m)),
+            RowSelectionInner::Selectors(s) => RowSelectionIter(s.iter()),
+            RowSelectionInner::Mask(m) => RowSelectionIter(m.selectors().iter()),
         }
     }
 
@@ -1016,7 +1111,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(s) => {
                 s.iter().filter(|x| !x.skip).map(|x| x.row_count).sum()
             }
-            RowSelectionInner::Mask(m) => m.count_set_bits(),
+            RowSelectionInner::Mask(m) => m.mask().count_set_bits(),
         }
     }
 
@@ -1026,7 +1121,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(s) => {
                 s.iter().filter(|x| x.skip).map(|x| x.row_count).sum()
             }
-            RowSelectionInner::Mask(m) => m.len() - m.count_set_bits(),
+            RowSelectionInner::Mask(m) => m.mask().len() - m.mask().count_set_bits(),
         }
     }
 
@@ -1038,48 +1133,18 @@ impl RowSelection {
             return self.clone();
         }
 
-        let mut expanded_ranges = Vec::new();
-        let mut row_offset = 0;
-
-        for selector in self.iter() {
-            if selector.skip {
-                row_offset += selector.row_count;
-            } else {
-                let start = row_offset;
-                let end = row_offset + selector.row_count;
-
-                // Expand start to batch boundary
-                let expanded_start = (start / batch_size) * batch_size;
-                // Expand end to batch boundary
-                let expanded_end = end.div_ceil(batch_size) * batch_size;
-                let expanded_end = expanded_end.min(total_rows);
-
-                expanded_ranges.push(expanded_start..expanded_end);
-                row_offset += selector.row_count;
-            }
+        match &self.inner {
+            RowSelectionInner::Selectors(selectors) => expand_to_batch_boundaries_from_selectors(
+                selectors.iter().copied(),
+                batch_size,
+                total_rows,
+            ),
+            RowSelectionInner::Mask(mask) => expand_to_batch_boundaries_from_selectors(
+                MaskRunIter::new(mask.mask()),
+                batch_size,
+                total_rows,
+            ),
         }
-
-        // Sort ranges by start position
-        expanded_ranges.sort_by_key(|range| range.start);
-
-        // Merge overlapping or consecutive ranges
-        let mut merged_ranges: Vec<Range<usize>> = Vec::new();
-        for range in expanded_ranges {
-            if let Some(last) = merged_ranges.last_mut() {
-                if range.start <= last.end {
-                    // Overlapping or consecutive - merge them
-                    last.end = last.end.max(range.end);
-                } else {
-                    // No overlap - add new range
-                    merged_ranges.push(range);
-                }
-            } else {
-                // First range
-                merged_ranges.push(range);
-            }
-        }
-
-        Self::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
     }
 }
 
@@ -1154,14 +1219,14 @@ impl FromIterator<RowSelection> for RowSelection {
             let total_len: usize = items
                 .iter()
                 .map(|s| match &s.inner {
-                    RowSelectionInner::Mask(m) => m.len(),
+                    RowSelectionInner::Mask(m) => m.mask().len(),
                     RowSelectionInner::Selectors(_) => unreachable!(),
                 })
                 .sum();
             let mut builder = BooleanBufferBuilder::new(total_len);
             for item in items {
                 match item.into_inner() {
-                    RowSelectionInner::Mask(m) => builder.append_buffer(&m),
+                    RowSelectionInner::Mask(m) => builder.append_buffer(m.mask()),
                     RowSelectionInner::Selectors(_) => unreachable!(),
                 }
             }
@@ -1172,6 +1237,78 @@ impl FromIterator<RowSelection> for RowSelection {
             .into_iter()
             .flat_map(|s| s.into_selectors_vec())
             .collect()
+    }
+}
+
+fn and_then_row_selections(first: &[RowSelector], second: &[RowSelector]) -> RowSelection {
+    let mut selectors = vec![];
+    let mut first = first.iter().copied().peekable();
+    let mut second = second.iter().copied().peekable();
+    and_then_iter(&mut selectors, &mut first, &mut second);
+    RowSelection::from_selectors(selectors)
+}
+
+fn and_then_iter<I, J>(
+    selectors: &mut Vec<RowSelector>,
+    first: &mut std::iter::Peekable<I>,
+    second: &mut std::iter::Peekable<J>,
+) where
+    I: Iterator<Item = RowSelector>,
+    J: Iterator<Item = RowSelector>,
+{
+    let mut to_skip = 0;
+    while let Some(b) = second.peek_mut() {
+        let a = first
+            .peek_mut()
+            .expect("selection exceeds the number of selected rows");
+
+        if b.row_count == 0 {
+            second.next().unwrap();
+            continue;
+        }
+
+        if a.row_count == 0 {
+            first.next().unwrap();
+            continue;
+        }
+
+        if a.skip {
+            // Records were skipped when producing second
+            to_skip += a.row_count;
+            first.next().unwrap();
+            continue;
+        }
+
+        let skip = b.skip;
+        let to_process = a.row_count.min(b.row_count);
+
+        a.row_count -= to_process;
+        b.row_count -= to_process;
+
+        match skip {
+            true => to_skip += to_process,
+            false => {
+                if to_skip != 0 {
+                    selectors.push(RowSelector::skip(to_skip));
+                    to_skip = 0;
+                }
+                selectors.push(RowSelector::select(to_process))
+            }
+        }
+    }
+
+    for v in first {
+        if v.row_count != 0 {
+            assert!(
+                v.skip,
+                "selection contains less than the number of selected rows"
+            );
+            to_skip += v.row_count
+        }
+    }
+
+    if to_skip != 0 {
+        selectors.push(RowSelector::skip(to_skip));
     }
 }
 
@@ -1910,9 +2047,84 @@ mod tests {
             RowSelector::select(4),
         ];
 
-        let round_tripped: Vec<RowSelector> =
-            RowSelection::from(selectors.clone()).iter().collect();
+        let round_tripped: Vec<RowSelector> = RowSelection::from(selectors.clone())
+            .iter()
+            .copied()
+            .collect();
         assert_eq!(selectors, round_tripped);
+    }
+
+    #[test]
+    fn test_mask_iter_yields_borrowed_selectors() {
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, false, true, true, false, true, false, false,
+        ]));
+
+        let borrowed: Vec<&RowSelector> = selection.iter().collect();
+        assert_eq!(
+            borrowed,
+            vec![
+                &RowSelector::skip(2),
+                &RowSelector::select(2),
+                &RowSelector::skip(1),
+                &RowSelector::select(1),
+                &RowSelector::skip(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mask_iter_clone_drops_cache() {
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, false, true, true, false, true, false, false,
+        ]));
+
+        let _ = selection.iter().count();
+        match &selection.inner {
+            RowSelectionInner::Mask(m) => assert!(m.selectors.get().is_some()),
+            _ => unreachable!(),
+        }
+
+        let cloned = selection.clone();
+        match &cloned.inner {
+            RowSelectionInner::Mask(m) => assert!(m.selectors.get().is_none()),
+            _ => unreachable!(),
+        }
+
+        let round_tripped: Vec<RowSelector> = cloned.iter().copied().collect();
+        assert_eq!(
+            round_tripped,
+            vec![
+                RowSelector::skip(2),
+                RowSelector::select(2),
+                RowSelector::skip(1),
+                RowSelector::select(1),
+                RowSelector::skip(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mask_run_iter_streams_without_cache() {
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, false, true, true, false, true, false, false,
+        ]));
+        let mut iter = MaskRunIter::new(selection.as_mask().unwrap());
+
+        assert_eq!(iter.next(), Some(RowSelector::skip(2)));
+        assert_eq!(iter.next(), Some(RowSelector::select(2)));
+        assert_eq!(iter.next(), Some(RowSelector::skip(1)));
+        assert_eq!(iter.next(), Some(RowSelector::select(1)));
+        assert_eq!(iter.next(), Some(RowSelector::skip(2)));
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.next(), None);
+
+        let selection =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, true, false]));
+        let mut iter = MaskRunIter::new(selection.as_mask().unwrap());
+        assert_eq!(iter.next(), Some(RowSelector::select(2)));
+        assert_eq!(iter.next(), Some(RowSelector::skip(1)));
+        assert_eq!(iter.next(), None);
     }
 
     #[test]
@@ -2199,7 +2411,7 @@ mod tests {
 
         // NYYYYYN
         assert_eq!(
-            result.iter().collect::<Vec<_>>(),
+            result.iter().copied().collect::<Vec<_>>(),
             vec![
                 RowSelector::skip(10),
                 RowSelector::select(50),
@@ -2439,6 +2651,22 @@ mod tests {
     }
 
     #[test]
+    fn test_selector_and_then_mask() {
+        let outer =
+            RowSelection::from_filters(&[BooleanArray::from(vec![false, true, true, false, true])]);
+        let inner = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]));
+
+        let result = outer.and_then(&inner);
+        assert!(result.as_mask().is_none());
+        assert_eq!(
+            result,
+            RowSelection::from_filters(&[BooleanArray::from(vec![
+                false, true, false, false, true,
+            ])])
+        );
+    }
+
+    #[test]
     fn test_mask_offset_past_end_preserves_empty_mask_backing() {
         let selection =
             RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]))
@@ -2494,6 +2722,33 @@ mod tests {
     }
 
     #[test]
+    fn test_mixed_mask_selector_intersection_and_union() {
+        let mask_bits = vec![true, false, true, false, true, false];
+        let selector_bits = vec![false, true, true, false, false, true];
+        let mask = RowSelection::from_boolean_buffer(BooleanBuffer::from(mask_bits.clone()));
+        let selectors = RowSelection::from_filters(&[BooleanArray::from(selector_bits.clone())]);
+
+        let intersection_bits: Vec<_> = mask_bits
+            .iter()
+            .zip(&selector_bits)
+            .map(|(x, y)| *x && *y)
+            .collect();
+        let expected_intersection =
+            RowSelection::from_filters(&[BooleanArray::from(intersection_bits)]);
+        assert_eq!(mask.intersection(&selectors), expected_intersection);
+        assert_eq!(selectors.intersection(&mask), expected_intersection);
+
+        let union_bits: Vec<_> = mask_bits
+            .iter()
+            .zip(&selector_bits)
+            .map(|(x, y)| *x || *y)
+            .collect();
+        let expected_union = RowSelection::from_filters(&[BooleanArray::from(union_bits)]);
+        assert_eq!(mask.union(&selectors), expected_union);
+        assert_eq!(selectors.union(&mask), expected_union);
+    }
+
+    #[test]
     fn test_mask_intersection_uneven_passes_tail_through() {
         let a_bits = vec![true, true, true, true, true];
         let b_bits = vec![true, false, true];
@@ -2519,6 +2774,15 @@ mod tests {
         assert_eq!(r_mask.len(), 5);
         let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
         assert_eq!(bits, vec![true, true, true, true, false]);
+
+        let a = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, true, false, false, true,
+        ]));
+        let b = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, false]));
+        let r = a.union(&b);
+        let r_mask = r.as_mask().unwrap();
+        let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
+        assert_eq!(bits, vec![true, true, false, false, true]);
     }
 
     #[test]
