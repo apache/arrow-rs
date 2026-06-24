@@ -17,7 +17,7 @@
 
 use crate::{FlightData, trailers::LazyTrailers};
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::Buffer;
 use arrow_data::UnsafeFlag;
 use arrow_ipc::reader;
 use arrow_schema::{Schema, SchemaRef};
@@ -332,14 +332,6 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let data_buffer = if data.data_body.as_ptr() as usize % 64 != 0 {
-                    let mut buf = MutableBuffer::with_capacity(data.data_body.len());
-                    buf.extend_from_slice(&data.data_body);
-                    Buffer::from(buf)
-                } else {
-                    Buffer::from(data.data_body.clone())
-                };
-
                 let batch = message
                     .header_as_record_batch()
                     .ok_or_else(|| {
@@ -349,7 +341,7 @@ impl FlightDataDecoder {
                     })
                     .and_then(|record_batch| {
                         reader::read_record_batch(
-                            &data_buffer,
+                            &Buffer::from(data.data_body.clone()),
                             record_batch,
                             Arc::clone(&state.schema),
                             &state.dictionaries_by_field,
