@@ -799,7 +799,53 @@ impl RowSelection {
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         match &self.inner {
             RowSelectionInner::Selectors(selectors) => {
-                scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
+                let mut ranges: Vec<Range<u64>> = vec![];
+                let mut row_offset = 0;
+
+                let mut pages = page_locations.iter().peekable();
+                let mut selectors = selectors.iter().cloned();
+                let mut current_selector = selectors.next();
+                let mut current_page = pages.next();
+
+                let mut current_page_included = false;
+
+                while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
+                    if !(selector.skip || current_page_included) {
+                        let start = page.offset as u64;
+                        let end = start + page.compressed_page_size as u64;
+                        ranges.push(start..end);
+                        current_page_included = true;
+                    }
+
+                    if let Some(next_page) = pages.peek() {
+                        if row_offset + selector.row_count > next_page.first_row_index as usize {
+                            let remaining_in_page = next_page.first_row_index as usize - row_offset;
+                            selector.row_count -= remaining_in_page;
+                            row_offset += remaining_in_page;
+                            current_page = pages.next();
+                            current_page_included = false;
+
+                            continue;
+                        } else {
+                            if row_offset + selector.row_count == next_page.first_row_index as usize
+                            {
+                                current_page = pages.next();
+                                current_page_included = false;
+                            }
+                            row_offset += selector.row_count;
+                            current_selector = selectors.next();
+                        }
+                    } else {
+                        if !(selector.skip || current_page_included) {
+                            let start = page.offset as u64;
+                            let end = start + page.compressed_page_size as u64;
+                            ranges.push(start..end);
+                        }
+                        current_selector = selectors.next()
+                    }
+                }
+
+                ranges
             }
             RowSelectionInner::Mask(mask) => {
                 scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
@@ -1136,12 +1182,50 @@ impl RowSelection {
             return self.clone();
         }
 
+        // Selector-backed path is inlined here to match `main`'s generated code shape;
+        // see the comment in `scan_ranges` for context.
         match &self.inner {
-            RowSelectionInner::Selectors(selectors) => expand_to_batch_boundaries_from_selectors(
-                selectors.iter().copied(),
-                batch_size,
-                total_rows,
-            ),
+            RowSelectionInner::Selectors(selectors) => {
+                let mut expanded_ranges = Vec::new();
+                let mut row_offset = 0;
+
+                for selector in selectors.iter().cloned() {
+                    if selector.skip {
+                        row_offset += selector.row_count;
+                    } else {
+                        let start = row_offset;
+                        let end = row_offset + selector.row_count;
+
+                        // Expand start to batch boundary
+                        let expanded_start = (start / batch_size) * batch_size;
+                        // Expand end to batch boundary
+                        let expanded_end = end.div_ceil(batch_size) * batch_size;
+                        let expanded_end = expanded_end.min(total_rows);
+
+                        expanded_ranges.push(expanded_start..expanded_end);
+                        row_offset += selector.row_count;
+                    }
+                }
+
+                // Sort ranges by start position
+                expanded_ranges.sort_by_key(|range| range.start);
+
+                // Merge overlapping or consecutive ranges
+                let mut merged_ranges: Vec<Range<usize>> = Vec::new();
+                for range in expanded_ranges {
+                    if let Some(last) = merged_ranges.last_mut() {
+                        if range.start <= last.end {
+                            last.end = last.end.max(range.end);
+                        } else {
+                            merged_ranges.push(range);
+                        }
+                    } else {
+                        merged_ranges.push(range);
+                    }
+                }
+
+                RowSelection::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+            }
             RowSelectionInner::Mask(mask) => expand_to_batch_boundaries_from_selectors(
                 MaskRunIter::new(mask.mask()),
                 batch_size,
