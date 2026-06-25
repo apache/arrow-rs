@@ -25,10 +25,10 @@ use arrow::compute::{
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
-    DecimalType,
+    Decimal256Type, DecimalType,
 };
 use arrow::error::{ArrowError, Result};
-use chrono::{NaiveDate, NaiveTime, Timelike};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use half::f16;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
@@ -68,11 +68,11 @@ pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
-    ($arrow_type:ty, $shred_method:ident, $get_method:ident $(, $cast_fn:expr)?) => {
+    ($arrow_type:ty, $shred_fun:expr, $get_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
                 let value = match shred {
-                    true => variant.$shred_method(),
+                    true => ($shred_fun)(variant),
                     false => $get_method(variant),
                 };
                 $( let value = value.and_then($cast_fn); )?
@@ -83,14 +83,32 @@ macro_rules! impl_primitive_from_variant {
 }
 
 macro_rules! impl_timestamp_from_variant {
-    ($timestamp_type:ty, $variant_method:ident, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
+    ($timestamp_type:ty, $shred_fun:expr, $variant_method:expr, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
         impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
-            #[allow(unused)]
             fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
-                variant.$variant_method().and_then($cast_fn)
+                let value = match shred {
+                    true => ($shred_fun)(variant),
+                    false => $variant_method(variant),
+                };
+
+                value.and_then($cast_fn)
             }
         }
     };
+}
+
+fn convert_to_timestamp_nano(value: &Variant) -> Option<DateTime<Utc>> {
+    match *value {
+        Variant::TimestampNanos(d) | Variant::TimestampMicros(d) => Some(d),
+        _ => None,
+    }
+}
+
+fn convert_to_timestamp_ntz_nano(value: &Variant) -> Option<NaiveDateTime> {
+    match *value {
+        Variant::TimestampNtzNanos(d) | Variant::TimestampNtzMicros(d) => Some(d),
+        _ => None,
+    }
 }
 
 enum NumericKind {
@@ -184,26 +202,37 @@ fn cast_time_utc(value: &Variant<'_, '_>) -> Option<NaiveTime> {
     value.as_time_utc()
 }
 
-impl_primitive_from_variant!(datatypes::Int32Type, as_int32, as_num);
-impl_primitive_from_variant!(datatypes::Int16Type, as_int16, as_num);
-impl_primitive_from_variant!(datatypes::Int8Type, as_int8, as_num);
-impl_primitive_from_variant!(datatypes::Int64Type, as_int64, as_num);
-impl_primitive_from_variant!(datatypes::UInt8Type, as_u8, as_num);
-impl_primitive_from_variant!(datatypes::UInt16Type, as_u16, as_num);
-impl_primitive_from_variant!(datatypes::UInt32Type, as_u32, as_num);
-impl_primitive_from_variant!(datatypes::UInt64Type, as_u64, as_num);
-impl_primitive_from_variant!(datatypes::Float16Type, as_f16, as_num);
-impl_primitive_from_variant!(datatypes::Float32Type, as_f32, as_num);
-impl_primitive_from_variant!(datatypes::Float64Type, as_f64, as_num);
-impl_primitive_from_variant!(datatypes::Date32Type, as_naive_date, cast_naive_date, |v| {
-    Some(datatypes::Date32Type::from_naive_date(v))
-});
-impl_primitive_from_variant!(datatypes::Date64Type, as_naive_date, cast_naive_date, |v| {
-    Some(datatypes::Date64Type::from_naive_date(v))
-});
+// helper function for the types that would never be the shred target type.
+fn always_none<T>(_input: &Variant) -> Option<T> {
+    None
+}
+
+impl_primitive_from_variant!(datatypes::Int32Type, Variant::as_int32, as_num);
+impl_primitive_from_variant!(datatypes::Int16Type, Variant::as_int16, as_num);
+impl_primitive_from_variant!(datatypes::Int8Type, Variant::as_int8, as_num);
+impl_primitive_from_variant!(datatypes::Int64Type, Variant::as_int64, as_num);
+impl_primitive_from_variant!(datatypes::UInt8Type, always_none, as_num);
+impl_primitive_from_variant!(datatypes::UInt16Type, always_none, as_num);
+impl_primitive_from_variant!(datatypes::UInt32Type, always_none, as_num);
+impl_primitive_from_variant!(datatypes::UInt64Type, always_none, as_num);
+impl_primitive_from_variant!(datatypes::Float16Type, always_none, as_num);
+impl_primitive_from_variant!(datatypes::Float32Type, Variant::as_f32, as_num);
+impl_primitive_from_variant!(datatypes::Float64Type, Variant::as_f64, as_num);
+impl_primitive_from_variant!(
+    datatypes::Date32Type,
+    Variant::as_naive_date,
+    cast_naive_date,
+    |v| { Some(datatypes::Date32Type::from_naive_date(v)) }
+);
+impl_primitive_from_variant!(
+    datatypes::Date64Type,
+    Variant::as_naive_date,
+    cast_naive_date,
+    |v| { Some(datatypes::Date64Type::from_naive_date(v)) }
+);
 impl_primitive_from_variant!(
     datatypes::Time32SecondType,
-    as_time_utc,
+    always_none, // would never shred to Time32SecondType
     cast_time_utc,
     |v| {
         // Return None if there are leftover nanoseconds
@@ -216,7 +245,7 @@ impl_primitive_from_variant!(
 );
 impl_primitive_from_variant!(
     datatypes::Time32MillisecondType,
-    as_time_utc,
+    always_none, // would never shred to Time32MillisecondType
     cast_time_utc,
     |v| {
         // Return None if there are leftover microseconds
@@ -232,13 +261,13 @@ impl_primitive_from_variant!(
 );
 impl_primitive_from_variant!(
     datatypes::Time64MicrosecondType,
-    as_time_utc,
+    Variant::as_time_utc,
     cast_time_utc,
     |v| { Some(v.num_seconds_from_midnight() as i64 * 1_000_000 + v.nanosecond() as i64 / 1_000) }
 );
 impl_primitive_from_variant!(
     datatypes::Time64NanosecondType,
-    as_time_utc,
+    always_none, // would never shred to Time64NanosecondType
     cast_time_utc,
     |v| {
         // convert micro to nano seconds
@@ -247,7 +276,8 @@ impl_primitive_from_variant!(
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampSecondType,
-    as_timestamp_ntz_nanos,
+    always_none, // would never shred to TimestampSecondType
+    convert_to_timestamp_ntz_nano,
     ntz = true,
     |timestamp| {
         // Return None if there are leftover nanoseconds
@@ -260,7 +290,8 @@ impl_timestamp_from_variant!(
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampSecondType,
-    as_timestamp_nanos,
+    always_none, // would never shred to TimestampSecondType
+    convert_to_timestamp_nano,
     ntz = false,
     |timestamp| {
         // Return None if there are leftover nanoseconds
@@ -273,7 +304,8 @@ impl_timestamp_from_variant!(
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMillisecondType,
-    as_timestamp_ntz_nanos,
+    always_none, // would never shred to TimestampMillisecondType
+    convert_to_timestamp_ntz_nano,
     ntz = true,
     |timestamp| {
         // Return None if there are leftover microseconds
@@ -286,7 +318,8 @@ impl_timestamp_from_variant!(
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMillisecondType,
-    as_timestamp_nanos,
+    always_none, // would never shred to TimestampMillisecondType
+    convert_to_timestamp_nano,
     ntz = false,
     |timestamp| {
         // Return None if there are leftover microseconds
@@ -299,25 +332,29 @@ impl_timestamp_from_variant!(
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
-    as_timestamp_ntz_micros,
+    Variant::as_timestamp_ntz_micros,
+    Variant::as_timestamp_ntz_micros,
     ntz = true,
     |timestamp| Self::from_naive_datetime(timestamp, None),
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
-    as_timestamp_micros,
+    Variant::as_timestamp_micros,
+    Variant::as_timestamp_micros,
     ntz = false,
     |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
-    as_timestamp_ntz_nanos,
+    Variant::as_timestamp_ntz_nanos,
+    convert_to_timestamp_ntz_nano,
     ntz = true,
     |timestamp| Self::from_naive_datetime(timestamp, None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
-    as_timestamp_nanos,
+    Variant::as_timestamp_nanos,
+    convert_to_timestamp_nano,
     ntz = false,
     |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
@@ -338,7 +375,6 @@ pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
     precision: u8,
     scale: i8,
-    shred: bool,
 ) -> Option<O::Native>
 where
     O: DecimalType,
@@ -346,62 +382,58 @@ where
 {
     let mul = 10_f64.powi(scale as i32);
 
-    match (variant, shred) {
-        (Variant::Int8(i), false) => rescale_decimal::<Decimal32Type, O>(
+    match variant {
+        Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        (Variant::Int16(i), false) => rescale_decimal::<Decimal32Type, O>(
+        Variant::Int16(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        (Variant::Int32(i), false) => rescale_decimal::<Decimal32Type, O>(
+        Variant::Int32(i) => rescale_decimal::<Decimal32Type, O>(
             *i,
             VariantDecimal4::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        (Variant::Int64(i), false) => rescale_decimal::<Decimal64Type, O>(
+        Variant::Int64(i) => rescale_decimal::<Decimal64Type, O>(
             *i,
             VariantDecimal8::MAX_PRECISION,
             0,
             precision,
             scale,
         ),
-        (Variant::Float(f), false) => {
-            single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul)
-        }
-        (Variant::Double(f), false) => single_float_to_decimal::<O>(*f, mul),
+        Variant::Float(f) => single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul),
+        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
         // arrow-cast only support cast string to decimal with scale >=0 for now
         // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
-        (Variant::String(v), false) if scale >= 0 => {
+        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
+        Variant::ShortString(v) if scale >= 0 => {
             parse_string_to_decimal_native::<O>(v, scale as _).ok()
         }
-        (Variant::ShortString(v), false) if scale >= 0 => {
-            parse_string_to_decimal_native::<O>(v, scale as _).ok()
-        }
-        (Variant::Decimal4(d), _) => rescale_decimal::<Decimal32Type, O>(
+        Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
         ),
-        (Variant::Decimal8(d), _) => rescale_decimal::<Decimal64Type, O>(
+        Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
             d.integer(),
             VariantDecimal8::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
         ),
-        (Variant::Decimal16(d), _) => rescale_decimal::<Decimal128Type, O>(
+        Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
             d.integer(),
             VariantDecimal16::MAX_PRECISION,
             d.scale() as i8,
@@ -409,6 +441,59 @@ where
             scale,
         ),
         _ => None,
+    }
+}
+
+/// Return the unscaled integer representation for Arrow decimal type `O` from a `Variant`.
+///
+/// This function is unlike `variant_to_unscaled_decim`, it would never rescale the decimal value,
+/// and only return the unscaled integer representation for the specific decimal variants.
+pub(crate) fn shred_variant_to_unscaled_decimal<O>(variant: &Variant<'_, '_>) -> Option<O::Native>
+where
+    O: ShredDecimalVariant,
+    O::Native: DecimalCast,
+{
+    match variant {
+        Variant::Decimal4(_) | Variant::Decimal8(_) | Variant::Decimal16(_) => {
+            O::shred_variant(variant)
+        }
+        _ => None,
+    }
+}
+pub(crate) trait ShredDecimalVariant: DecimalType {
+    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native>;
+}
+
+impl ShredDecimalVariant for Decimal32Type {
+    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+        match *value {
+            Variant::Decimal4(d) => Some(d.integer()),
+            _ => None,
+        }
+    }
+}
+
+impl ShredDecimalVariant for Decimal64Type {
+    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+        match *value {
+            Variant::Decimal8(d) => Some(d.integer()),
+            _ => None,
+        }
+    }
+}
+
+impl ShredDecimalVariant for Decimal128Type {
+    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+        match *value {
+            Variant::Decimal16(d) => Some(d.integer()),
+            _ => None,
+        }
+    }
+}
+
+impl ShredDecimalVariant for Decimal256Type {
+    fn shred_variant(_value: &Variant<'_, '_>) -> Option<Self::Native> {
+        None // always return none because we'll never shred to decimal256
     }
 }
 
