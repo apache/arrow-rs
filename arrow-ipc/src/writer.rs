@@ -188,10 +188,8 @@ impl IpcWriteOptions {
         }
 
         match (self.batch_compression_type, self.batch_compression_level) {
-            (Some(crate::CompressionType::ZSTD), Some(level)) if !(-999..=22).contains(&level) => {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "ZSTD compression level must be between -999 and 22, got {level}"
-                )));
+            (Some(crate::CompressionType::ZSTD), Some(level)) => {
+                return self.check_zstd_level(level);
             }
             (Some(crate::CompressionType::LZ4_FRAME), Some(_)) => {
                 return Err(ArrowError::InvalidArgumentError(
@@ -200,6 +198,28 @@ impl IpcWriteOptions {
                 ));
             }
             _ => {}
+        }
+
+        Ok(self)
+    }
+
+    #[cfg(not(feature = "zstd"))]
+    fn check_zstd_level(self, _level: i32) -> Result<Self, ArrowError> {
+        Err(ArrowError::InvalidArgumentError(
+            "zstd IPC compression requires the zstd feature".to_string(),
+        ))
+    }
+
+    #[cfg(feature = "zstd")]
+    fn check_zstd_level(self, level: i32) -> Result<Self, ArrowError> {
+        let range = zstd::compression_level_range();
+        if !range.contains(&(level as zstd::zstd_safe::CompressionLevel)) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "ZSTD compression level must be between {} and {}, got {}",
+                range.start(),
+                range.end(),
+                level,
+            )));
         }
 
         Ok(self)
