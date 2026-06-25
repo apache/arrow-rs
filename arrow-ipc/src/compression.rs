@@ -135,7 +135,7 @@ impl CompressionCodec {
     /// [`CompressionType::LZ4_FRAME`] does not yet support compression levels
     /// and ignores this value. Returns an error for unsupported compression
     /// types.
-    pub fn try_new_with_compression_level(
+    pub(crate) fn try_new_with_compression_level(
         compression_type: CompressionType,
         compression_level: i32,
     ) -> Result<Self, ArrowError> {
