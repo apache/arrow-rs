@@ -56,7 +56,7 @@ native_buffer!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 
 impl IntoBuffer for Vec<bool> {
     fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
-        BooleanBuffer::from_iter(self).into_inner()
+        BooleanBuffer::from(self.as_slice()).into_inner()
     }
 }
 

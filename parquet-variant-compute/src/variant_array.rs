@@ -396,7 +396,7 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
-        match (self.typed_value_field(), self.value_field()) {
+        match (self.typed_value_column(), self.value_column()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
                 typed_value_to_variant(typed_value, value, index)
@@ -420,19 +420,19 @@ impl VariantArray {
         }
     }
 
-    /// Return a reference to the metadata field of the [`StructArray`]
-    pub fn metadata_field(&self) -> &ArrayRef {
+    /// Return a reference to the `metadata` column of the [`StructArray`]
+    pub fn metadata_column(&self) -> &ArrayRef {
         &self.metadata
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
     }
 
     /// Return a field to represent this VariantArray in a `Schema` with
@@ -688,14 +688,14 @@ impl ShreddedVariantFieldArray {
         &self.shredding_state
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
     }
 
     /// Returns a reference to the underlying [`StructArray`].
@@ -833,13 +833,13 @@ impl ShreddingState {
         Self { value, typed_value }
     }
 
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `value` column, if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
         self.value.as_ref()
     }
 
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `typed_value` column, if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
         self.typed_value.as_ref()
     }
 
@@ -1393,7 +1393,7 @@ mod test {
 
         // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
         let variant_array = VariantArray::try_new(&input).unwrap();
-        let object = variant_array.typed_value_field().unwrap().as_struct();
+        let object = variant_array.typed_value_column().unwrap().as_struct();
         let id = object.column_by_name("id").unwrap().as_struct();
         let uuid_leaf = id.field_by_name("typed_value").unwrap();
         assert!(uuid_leaf.has_valid_extension_type::<UuidExtension>());
@@ -1554,7 +1554,7 @@ mod test {
             let input = make_variant_struct_with_typed_value(typed_value.clone());
             let variant_array = VariantArray::try_new(&input).unwrap();
             assert_eq!(
-                variant_array.typed_value_field().unwrap().data_type(),
+                variant_array.typed_value_column().unwrap().data_type(),
                 typed_value.data_type(),
             );
         }

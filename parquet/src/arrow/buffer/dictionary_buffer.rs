@@ -206,7 +206,7 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         match self {
             Self::Dict { keys, .. } => {
                 keys.resize(read_offset + levels_read, K::default());
@@ -294,7 +294,9 @@ mod tests {
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        buffer.pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice());
+        buffer
+            .pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice())
+            .unwrap();
 
         // Read some data not preserving the dictionary
 
@@ -305,7 +307,9 @@ mod tests {
 
         valid.extend_from_slice(&[false, false, true, false, true]);
         let null_buffer = Buffer::from_iter(valid.iter().cloned());
-        buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
+        buffer
+            .pad_nulls(read_offset, 2, 5, null_buffer.as_slice())
+            .unwrap();
 
         assert_eq!(buffer.len(), 13);
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
