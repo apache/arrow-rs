@@ -1313,11 +1313,14 @@ mod tests {
         );
         assert!(typed_value_field.is_null(4));
 
-        // Row 5: 3i8 -> should shred successfully (int8->int64 conversion)
+        // Row 5: 3i8 -> should not shred (int8 can't be shredded into int64)
         assert!(!result.is_null(5));
-        assert!(value_field.is_null(5)); // value should be null when shredded
-        assert!(!typed_value_field.is_null(5));
-        assert_eq!(typed_value_field.value(5), 3);
+        assert!(typed_value_field.is_null(5)); // value should contain original
+        assert!(!value_field.is_null(5)); // typed_value should be null
+        assert_eq!(
+            variant_from_arrays_at(metadata_field, value_field, 5).unwrap(),
+            Variant::from(3i8)
+        );
     }
 
     #[test]
@@ -2888,20 +2891,8 @@ mod tests {
             matches!(
                 (v, dt),
                 (Variant::Int8(_), DataType::Int8)
-                    | (Variant::Int8(_), DataType::Int16)
-                    | (Variant::Int8(_), DataType::Int32)
-                    | (Variant::Int8(_), DataType::Int64)
-                    | (Variant::Int16(_), DataType::Int8)
                     | (Variant::Int16(_), DataType::Int16)
-                    | (Variant::Int16(_), DataType::Int32)
-                    | (Variant::Int16(_), DataType::Int64)
-                    | (Variant::Int32(_), DataType::Int8)
-                    | (Variant::Int32(_), DataType::Int16)
                     | (Variant::Int32(_), DataType::Int32)
-                    | (Variant::Int32(_), DataType::Int64)
-                    | (Variant::Int64(_), DataType::Int8)
-                    | (Variant::Int64(_), DataType::Int16)
-                    | (Variant::Int64(_), DataType::Int32)
                     | (Variant::Int64(_), DataType::Int64)
                     | (Variant::Date(_), DataType::Date32)
                     | (
@@ -2909,16 +2900,8 @@ mod tests {
                         DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
                     )
                     | (
-                        Variant::TimestampMicros(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(_))
-                    )
-                    | (
                         Variant::TimestampNtzMicros(_),
                         DataType::Timestamp(TimeUnit::Microsecond, None),
-                    )
-                    | (
-                        Variant::TimestampNtzMicros(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, None)
                     )
                     | (
                         Variant::TimestampNanos(_),
@@ -2929,17 +2912,9 @@ mod tests {
                         DataType::Timestamp(TimeUnit::Nanosecond, None),
                     )
                     | (Variant::Decimal4(_), DataType::Decimal32(_, _))
-                    | (Variant::Decimal4(_), DataType::Decimal64(_, _))
-                    | (Variant::Decimal4(_), DataType::Decimal128(_, _))
-                    | (Variant::Decimal8(_), DataType::Decimal32(_, _))
                     | (Variant::Decimal8(_), DataType::Decimal64(_, _))
-                    | (Variant::Decimal8(_), DataType::Decimal128(_, _))
-                    | (Variant::Decimal16(_), DataType::Decimal32(_, _))
-                    | (Variant::Decimal16(_), DataType::Decimal64(_, _))
                     | (Variant::Decimal16(_), DataType::Decimal128(_, _))
                     | (Variant::Float(_), DataType::Float32)
-                    | (Variant::Float(_), DataType::Float64)
-                    | (Variant::Double(_), DataType::Float32)
                     | (Variant::Double(_), DataType::Float64)
                     | (Variant::BooleanFalse, DataType::Boolean)
                     | (Variant::BooleanTrue, DataType::Boolean)
