@@ -20,7 +20,8 @@ use crate::shred_variant::{
     make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
-    PrimitiveFromVariant, TimestampFromVariant, variant_cast_with_options, variant_to_boolean,
+    PrimitiveFromVariant, ShredDecimalVariant, TimestampFromVariant,
+    shred_variant_to_unscaled_decimal, variant_cast_with_options, variant_to_boolean,
     variant_to_unscaled_decimal,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
@@ -1073,7 +1074,7 @@ where
 
 impl<'a, T> VariantToDecimalArrowRowBuilder<'a, T>
 where
-    T: DecimalType,
+    T: ShredDecimalVariant,
     T::Native: DecimalCast,
 {
     fn new(
@@ -1100,8 +1101,9 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        match variant_cast_with_options(value, self.cast_options, |value| {
-            variant_to_unscaled_decimal::<T>(value, self.precision, self.scale, self.shred)
+        match variant_cast_with_options(value, self.cast_options, |value| match self.shred {
+            true => shred_variant_to_unscaled_decimal::<T>(value),
+            false => variant_to_unscaled_decimal::<T>(value, self.precision, self.scale),
         }) {
             Ok(Some(scaled)) => {
                 self.builder.append_value(scaled);
