@@ -161,9 +161,9 @@ pub struct FlightDataEncoderBuilder {
 
 /// Default target size for encoded [`FlightData`].
 ///
-/// gRPC's default max message size is 4MB; this 2MB target gives headroom for
-/// encoding overhead while keeping individual messages well within the limit.
-pub const GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES: usize = 2 * 1024 * 1024;
+/// Note this value would normally be 4MB, but the size calculation is
+/// somewhat inexact, so we set it to 2MB.
+pub const GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES: usize = 2097152;
 
 impl Default for FlightDataEncoderBuilder {
     fn default() -> Self {
@@ -185,8 +185,7 @@ impl FlightDataEncoderBuilder {
     }
 
     /// Set the (approximate) maximum size, in bytes, of the
-    /// [`FlightData`] produced by this encoder. Defaults to 2MB
-    /// ([`GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES`]).
+    /// [`FlightData`] produced by this encoder. Defaults to 2MB.
     ///
     /// Since there is often a maximum message size for gRPC messages
     /// (typically around 4MB), this encoder splits up [`RecordBatch`]s
