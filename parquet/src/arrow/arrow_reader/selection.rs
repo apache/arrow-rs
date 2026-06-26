@@ -492,7 +492,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
-#[inline]
+#[inline(always)]
 fn scan_ranges_from_selectors<I>(selectors: I, page_locations: &[PageLocation]) -> Vec<Range<u64>>
 where
     I: IntoIterator<Item = RowSelector>,
@@ -545,7 +545,7 @@ where
     ranges
 }
 
-#[inline]
+#[inline(always)]
 fn expand_to_batch_boundaries_from_selectors<I>(
     selectors: I,
     batch_size: usize,
@@ -796,6 +796,7 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    #[inline]
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         match &self.inner {
             RowSelectionInner::Selectors(selectors) => {
@@ -1131,6 +1132,7 @@ impl RowSelection {
     /// Expands the selection to align with batch boundaries.
     /// This is needed when using cached array readers to ensure that
     /// the cached data covers full batches.
+    #[inline]
     pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
         if batch_size == 0 {
             return self.clone();
