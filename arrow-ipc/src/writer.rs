@@ -692,7 +692,7 @@ impl IpcDataGenerator {
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
     ) -> Result<(Vec<u8>, usize, usize), ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
+        let mut fbb = compression_context.take_fbb();
 
         let batch_compression_type = write_options.batch_compression_type;
 
@@ -758,7 +758,10 @@ impl IpcDataGenerator {
         let root = message.finish();
         fbb.finish(root, None);
 
-        Ok((fbb.finished_data().to_vec(), body_len, tail_pad))
+        let ipc_message = fbb.finished_data().to_vec();
+        fbb.reset();
+        compression_context.return_fbb(fbb);
+        Ok((ipc_message, body_len, tail_pad))
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
@@ -771,7 +774,7 @@ impl IpcDataGenerator {
         is_delta: bool,
         compression_context: &mut CompressionContext,
     ) -> Result<EncodedData, ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
+        let mut fbb = compression_context.take_fbb();
 
         let mut arrow_data: Vec<u8> = vec![];
 
@@ -851,10 +854,12 @@ impl IpcDataGenerator {
         };
 
         fbb.finish(root, None);
-        let finished_data = fbb.finished_data();
+        let ipc_message = fbb.finished_data().to_vec();
+        fbb.reset();
+        compression_context.return_fbb(fbb);
 
         Ok(EncodedData {
-            ipc_message: finished_data.to_vec(),
+            ipc_message,
             arrow_data,
         })
     }
