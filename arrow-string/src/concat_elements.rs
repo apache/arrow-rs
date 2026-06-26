@@ -406,44 +406,7 @@ pub fn concat_elements_string_view_array(
 ///
 /// This function errors if the arrays are of different types.
 pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    if left.data_type() != right.data_type() {
-        return Err(ArrowError::ComputeError(format!(
-            "Cannot concat arrays of different types: {} != {}",
-            left.data_type(),
-            right.data_type()
-        )));
-    }
     match (left.data_type(), right.data_type()) {
-        (DataType::Utf8, DataType::Utf8) => {
-            let left = left.as_any().downcast_ref::<StringArray>().unwrap();
-            let right = right.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right)?))
-        }
-        (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right)?))
-        }
-        (DataType::Binary, DataType::Binary) => {
-            let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
-            let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right)?))
-        }
-        (DataType::LargeBinary, DataType::LargeBinary) => {
-            let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right)?))
-        }
-        (DataType::BinaryView, DataType::BinaryView) => {
-            let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-            let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-            Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
-        }
-        (DataType::Utf8View, DataType::Utf8View) => {
-            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
-            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
-            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
-        }
         (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
             let left = left
                 .as_any()
@@ -453,7 +416,48 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
-            Ok(Arc::new(concat_elements_fixed_size_binary(left, right)?))
+            return Ok(Arc::new(concat_elements_fixed_size_binary(left, right)?));
+        }
+        (l, r) => {
+            if l != r {
+                return Err(ArrowError::ComputeError(format!(
+                    "Cannot concat arrays of different types: {} != {}",
+                    l, r
+                )));
+            }
+        }
+    }
+
+    match left.data_type() {
+        DataType::Utf8 => {
+            let left = left.as_any().downcast_ref::<StringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
+        }
+        DataType::LargeUtf8 => {
+            let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
+        }
+        DataType::Binary => {
+            let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right)?))
+        }
+        DataType::LargeBinary => {
+            let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right)?))
+        }
+        DataType::BinaryView => {
+            let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
+        }
+        DataType::Utf8View => {
+            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
         }
         // unimplemented
         _ => Err(ArrowError::NotYetImplemented(format!(
@@ -477,13 +481,16 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_utf8(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = [None, Some("baryyy"), None]
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -495,13 +502,16 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_utf8(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = [Some("foobaz"), Some(""), Some("bar")]
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -509,11 +519,14 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["bar", "baz"]);
 
-        let output = concat_elements_utf8(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = StringArray::from(vec!["foobar", "barbaz"]);
 
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -521,7 +534,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["baz"]);
 
-        let output = concat_elements_utf8(&left, &right);
+        let output = concat_elements_dyn(&left, &right);
 
         assert_eq!(
             output.unwrap_err().to_string(),
@@ -536,7 +549,7 @@ mod tests {
 
         let left_slice = left.slice(0, 3);
         let right_slice = right.slice(1, 3);
-        let output = concat_elements_utf8(
+        let output = concat_elements_dyn(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -552,12 +565,15 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringArray>().unwrap(),
+            &expected
+        );
 
         let left_slice = left.slice(2, 2);
         let right_slice = right.slice(1, 2);
 
-        let output = concat_elements_utf8(
+        let output = concat_elements_dyn(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -571,7 +587,10 @@ mod tests {
 
         let expected = [None, Some("bazfar")].into_iter().collect::<StringArray>();
 
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -617,11 +636,38 @@ mod tests {
         let right = FixedSizeBinaryArray::try_from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")])
             .unwrap();
 
-        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected =
             FixedSizeBinaryArray::try_from(vec![None, Some(b"baryyy" as &[u8]), None]).unwrap();
-        assert_eq!(output, expected);
+        assert_eq!(
+            output
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_mixed_fixed_size_binary_concat() {
+        let left =
+            FixedSizeBinaryArray::try_from(vec![Some(b"foobar" as &[u8]), Some(b"barbaz"), None])
+                .unwrap();
+        let right = FixedSizeBinaryArray::try_from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")])
+            .unwrap();
+
+        let output = concat_elements_dyn(&left, &right).unwrap();
+
+        let expected =
+            FixedSizeBinaryArray::try_from(vec![None, Some(b"barbazyyy" as &[u8]), None]).unwrap();
+        assert_eq!(
+            output
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -629,10 +675,16 @@ mod tests {
         let left = FixedSizeBinaryArray::try_from(vec![b"ab" as &[u8], b"cd"]).unwrap();
         let right = FixedSizeBinaryArray::try_from(vec![b"12" as &[u8], b"34"]).unwrap();
 
-        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = FixedSizeBinaryArray::try_from(vec![b"ab12" as &[u8], b"cd34"]).unwrap();
-        assert_eq!(output, expected);
+        assert_eq!(
+            output
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -640,7 +692,7 @@ mod tests {
         let left = FixedSizeBinaryArray::try_from(vec![b"ab" as &[u8], b"cd"]).unwrap();
         let right = FixedSizeBinaryArray::try_from(vec![b"12" as &[u8]]).unwrap();
 
-        let output = concat_elements_fixed_size_binary(&left, &right);
+        let output = concat_elements_dyn(&left, &right);
         assert_eq!(
             output.unwrap_err().to_string(),
             "Compute error: Arrays must have the same length: 2 != 1".to_string()
@@ -652,10 +704,16 @@ mod tests {
         let left = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
         let right = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
 
-        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
-        assert_eq!(output, expected);
+        assert_eq!(
+            output
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -716,7 +774,7 @@ mod tests {
             Some(long),
         ]);
 
-        let output = concat_elements_string_view_array(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = StringViewArray::from_iter(vec![
             None,
@@ -727,7 +785,10 @@ mod tests {
             Some("ThisStringIsLongerThan12Bytesbar"),
             Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringViewArray>().unwrap(),
+            &expected
+        );
 
         let left = StringViewArray::from_iter(vec![
             Some("a"),
@@ -746,7 +807,7 @@ mod tests {
             Some(long),
         ]);
 
-        let output = concat_elements_string_view_array(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = StringViewArray::from_iter(vec![
             Some("ac"),
@@ -756,7 +817,10 @@ mod tests {
             Some("ThisStringIsLongerThan12Bytesd"),
             Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<StringViewArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -774,7 +838,7 @@ mod tests {
             Some(b""),
         ]);
 
-        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = BinaryViewArray::from_iter(vec![
             Some(b"foobar" as &[u8]),
@@ -782,7 +846,10 @@ mod tests {
             Some(b""),
             Some(b"baz"),
         ]);
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<BinaryViewArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
@@ -790,7 +857,7 @@ mod tests {
         let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar")]);
         let right = BinaryViewArray::from_iter(vec![Some(b"baz" as &[u8])]);
 
-        let output = concat_elements_binary_view_array(&left, &right);
+        let output = concat_elements_dyn(&left, &right);
         assert_eq!(
             output.unwrap_err().to_string(),
             "Compute error: Arrays must have the same length: 2 != 1".to_string()
@@ -802,9 +869,12 @@ mod tests {
         let left = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
         let right = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
 
-        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
-        assert_eq!(output, expected);
+        assert_eq!(
+            output.as_any().downcast_ref::<BinaryViewArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]
