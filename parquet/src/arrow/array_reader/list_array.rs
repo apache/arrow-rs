@@ -32,6 +32,23 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Implementation of list array reader.
+///
+/// Reconstructs a `List`/`LargeList` from a child reader's definition and
+/// repetition levels. See [`ArrayReader`] for how the `def_level` (`D`) and
+/// `rep_level` (`R`) below are interpreted.
+///
+/// ```text
+/// list at level D     d >= D       present, ≥1 element
+///                     d == D - 1   present but empty []
+///                     d <= D - 2   null            (nullable lists only)
+/// ```
+///
+/// For example, with `D == 2`, the rows:
+/// * `[10, null, 20]`
+/// * `null`
+/// * `[]`
+///
+/// produce child def levels `3, 2, 3`, then `0`, then `1`.
 pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     item_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
