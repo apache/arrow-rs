@@ -180,7 +180,7 @@ and send to another process (using the [`arrow-flight`] crate).
 
 Generally speaking, the [`arrow`] crate offers functionality for using Arrow
 arrays, and [`datafusion`] offers most operations typically found in SQL,
-including `join`s and window functions.
+including `join`s and window function.
 
 You can find more details about each crate in their respective READMEs.
 
