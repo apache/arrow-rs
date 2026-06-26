@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::DecodeResult;
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection, RowSelector};
+use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
 use crate::arrow::push_decoder::reader_builder::{
     RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
@@ -37,58 +37,6 @@ enum QueuedRowGroupDecision {
     Skip { remaining_budget: RowBudget },
 }
 
-/// Borrowed cursor over a [`RowSelection`] that counts selected rows in
-/// each row group's slice without mutating the selection.
-///
-/// Used by [`RowGroupFrontier::peek_next_row_group`] to walk per-row-group
-/// selection slices without cloning the underlying selectors.
-struct PeekSelectionCursor<'a> {
-    iter: Box<dyn Iterator<Item = &'a RowSelector> + 'a>,
-    /// The selector currently being consumed (only partly used).
-    current: Option<&'a RowSelector>,
-    /// Rows already consumed from `current`.
-    consumed_in_current: usize,
-}
-
-impl<'a> PeekSelectionCursor<'a> {
-    fn new(selection: &'a RowSelection) -> Self {
-        Self {
-            iter: Box::new(selection.iter()),
-            current: None,
-            consumed_in_current: 0,
-        }
-    }
-
-    /// Consume the next `row_count` rows from the cursor and return the
-    /// number of those rows that are selected (i.e. `!selector.skip`).
-    /// Advances the cursor past the consumed range.
-    fn take(&mut self, row_count: usize) -> usize {
-        let mut selected = 0usize;
-        let mut remaining = row_count;
-        while remaining > 0 {
-            if self.current.is_none() {
-                self.current = self.iter.next();
-                self.consumed_in_current = 0;
-                if self.current.is_none() {
-                    break;
-                }
-            }
-            let selector = self.current.expect("current selector present");
-            let available = selector.row_count.saturating_sub(self.consumed_in_current);
-            let consume = available.min(remaining);
-            if !selector.skip {
-                selected += consume;
-            }
-            remaining -= consume;
-            self.consumed_in_current += consume;
-            if self.consumed_in_current >= selector.row_count {
-                self.current = None;
-            }
-        }
-        selected
-    }
-}
-
 /// Work item handed from [`RowGroupFrontier`] to [`RowGroupReaderBuilder`].
 #[derive(Debug)]
 struct NextRowGroup {
@@ -101,7 +49,7 @@ struct NextRowGroup {
     budget: RowBudget,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RowGroupFrontier {
     /// Metadata used to resolve row counts for queued row groups.
     parquet_metadata: Arc<ParquetMetaData>,
@@ -145,60 +93,21 @@ impl RowGroupFrontier {
         self.budget = budget;
     }
 
-    /// Peek at the next row-group index `next_readable_row_group` would
-    /// hand out, without mutating any state. Returns `None` if every
+    /// Peek at the next row-group index [`Self::next_readable_row_group`]
+    /// would hand out, without mutating any state. Returns `None` if every
     /// remaining row group would be skipped under the current
     /// selection/budget, or if the queue is empty.
     ///
-    /// Walks the queued frontier via [`PeekSelectionCursor`] so the
-    /// real `RowSelection` is not cloned. The Read/Skip rule inlined
-    /// below is intentionally kept in lock-step with
-    /// [`Self::plan_selected_row_group`]; both touch a small enough
-    /// set of decisions that a shared helper would obscure more than
-    /// it saves. The `peek_matches_next_readable_first_hit` test
-    /// asserts the lock-step on the head element across a range of
-    /// inputs.
+    /// Runs the real [`Self::next_readable_row_group`] advance logic on a
+    /// throwaway clone of the frontier, so peek can never drift from the
+    /// read path. The clone copies the queued row-group indices and optional
+    /// row-selection (a `Vec<RowSelector>`); see
+    /// [`RemainingRowGroups::peek_next_row_group`].
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
-        // Short-circuit: budget exhausted or selection drained ⇒ same
-        // outcome as `next_readable_row_group`'s early return.
-        if self.budget.is_exhausted()
-            || self
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.row_count() == 0)
-        {
-            return Ok(None);
-        }
-
-        let mut cursor = self.selection.as_ref().map(PeekSelectionCursor::new);
-        let mut budget = self.budget;
-        for &row_group_idx in &self.row_groups {
-            if budget.is_exhausted() {
-                break;
-            }
-            let row_count = self.row_group_num_rows(row_group_idx)?;
-            let selected_rows = match cursor.as_mut() {
-                Some(cursor) => cursor.take(row_count),
-                None => row_count,
-            };
-            if selected_rows == 0 {
-                // Selection-skip: mirrors `next_readable_row_group`'s
-                // "selected_rows == 0 ⇒ pop_front, continue".
-                continue;
-            }
-            // Inline Read/Skip rule — keep in lock-step with
-            // `plan_selected_row_group`.
-            if self.has_predicates {
-                return Ok(Some(row_group_idx));
-            }
-            let rows_after_budget = budget.rows_after(selected_rows);
-            if rows_after_budget != 0 {
-                return Ok(Some(row_group_idx));
-            }
-            // Budget skip: advance the simulated budget and keep walking.
-            budget = budget.advance(selected_rows, rows_after_budget);
-        }
-        Ok(None)
+        Ok(self
+            .clone()
+            .next_readable_row_group()?
+            .map(|next_row_group| next_row_group.row_group_idx))
     }
 
     fn clear_remaining(&mut self) {
@@ -416,6 +325,12 @@ impl RemainingRowGroups {
     /// Returns `None` when the active row group is still being decoded,
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
+    ///
+    /// Cost: one clone of the queued row-group indices and optional
+    /// row-selection per call (the frontier is cloned so the real advance
+    /// logic can run non-destructively). For callers that peek once per
+    /// row-group boundary this is O(remaining row groups + selectors) per
+    /// boundary.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
             return Ok(None);
