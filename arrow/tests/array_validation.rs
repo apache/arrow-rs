@@ -561,7 +561,7 @@ fn test_validate_large_utf8_char_boundary() {
 
 /// Test that the array of type `data_type` that has invalid indexes (out of bounds)
 fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref(b"abcd");
     // First two offsets are fine, then 5 is out of bounds
     let offsets: Vec<T> = [0, 1, 2, 5, 2]
         .iter()
@@ -606,7 +606,7 @@ fn test_validate_large_binary_out_of_bounds() {
 
 // validate that indexes don't go bacwards check indexes that go backwards
 fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref(b"abcd");
     // First three offsets are fine, then 1 goes backwards
     let offsets: Vec<T> = [0, 1, 2, 2, 1]
         .iter()
