@@ -72,17 +72,15 @@ fn add_benchmark(c: &mut Criterion) {
         // Precomputed strategies: Slices / Indices
         let optimized = FilterBuilder::new(&filter_array).optimize().build();
 
-        c.bench_function(&format!("filter_bits ({label})"), |b| {
-            b.iter(|| bench_filter_bits(&lazy, &data))
-        });
-
-        c.bench_function(&format!("filter_bits optimized ({label})"), |b| {
-            b.iter(|| bench_filter_bits(&optimized, &data))
-        });
-
-        c.bench_function(&format!("filter_bits sliced ({label})"), |b| {
-            b.iter(|| bench_filter_bits(&lazy, &sliced))
-        });
+        for (suffix, predicate, array) in [
+            ("", &lazy, &data),
+            (" optimized", &optimized, &data),
+            (" sliced", &lazy, &sliced),
+        ] {
+            c.bench_function(&format!("filter_bits{suffix} ({label})"), |b| {
+                b.iter(|| bench_filter_bits(predicate, array))
+            });
+        }
     }
 }
 

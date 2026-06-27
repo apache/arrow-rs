@@ -755,10 +755,7 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     let mut current = 0_u64;
     let mut filled = 0_u32;
 
-    let chunks = value_chunks
-        .iter()
-        .zip(mask_chunks.iter())
-        .chain([(value_chunks.remainder_bits(), mask_chunks.remainder_bits())]);
+    let chunks = value_chunks.iter_padded().zip(mask_chunks.iter_padded());
 
     for (values, mask) in chunks {
         let bits = bit_util::compress(values, mask);
@@ -768,11 +765,8 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
             out.extend_from_slice(&current.to_le_bytes());
             filled = filled + count - 64;
             // The bits of `bits` that did not fit in `current`, if any
-            current = if filled == 0 {
-                0
-            } else {
-                bits >> (count - filled)
-            };
+            // (`checked_shr` yields 0 when the carry is a full word)
+            current = bits.checked_shr(count - filled).unwrap_or(0);
         } else {
             filled += count;
         }
