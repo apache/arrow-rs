@@ -36,14 +36,9 @@ pub struct CompressionContext {
 }
 
 impl CompressionContext {
-    /// Takes the stored fbb, leaving a zero-capacity placeholder. Must be returned via [`Self::return_fbb`].
-    pub(crate) fn take_fbb(&mut self) -> FlatBufferBuilder<'static> {
-        std::mem::take(&mut self.fbb)
-    }
-
-    /// Returns the fbb after calling [`FlatBufferBuilder::reset`], preserving its allocation.
-    pub(crate) fn return_fbb(&mut self, fbb: FlatBufferBuilder<'static>) {
-        self.fbb = fbb;
+    /// Get a mutable reference to the [`FlatBufferBuilder`] that is reused across IPC writes.
+    pub(crate) fn mut_fbb(&mut self) -> &mut FlatBufferBuilder<'static> {
+        &mut self.fbb
     }
 
     #[cfg(feature = "zstd")]
