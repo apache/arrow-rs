@@ -402,6 +402,11 @@ pub fn concat_elements_string_view_array(
 
 /// Returns the elementwise concatenation of [`Array`]s.
 ///
+/// The output array will have the same type as the input arrays (which must have the same type).
+///
+/// Concatenation of `FixedSizeBinaryArray` instances with different sizes is supported. The output
+/// type is `FixedSizeBinaryArray` with the sum of the sizes of the two input arrays as size.
+///
 /// # Errors
 ///
 /// This function errors if the arrays are of different types.
