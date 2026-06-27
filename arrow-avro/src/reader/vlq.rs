@@ -32,8 +32,17 @@ impl VLQDecoder {
     pub fn long(&mut self, buf: &mut &[u8]) -> Option<i64> {
         while let Some(byte) = buf.first().copied() {
             *buf = &buf[1..];
-            self.in_progress |= ((byte & 0x7F) as u64) << self.shift;
-            self.shift += 7;
+            // A valid varint that fits in `u64` is at most 10 bytes, so
+            // the shift is at most 63. Use `checked_shl` to silently drop
+            // contributions past bit 63 instead of panicking with
+            // "attempt to shift left with overflow", and saturate the
+            // shift counter so a stream of continuation bytes can't wrap
+            // it past `u32::MAX` either. The terminator byte (high bit
+            // clear) still ends the varint, so a malformed varint that
+            // never terminates either runs out of input (returns `None`)
+            // or yields a truncated `u64` from the trailing terminator.
+            self.in_progress |= ((byte & 0x7F) as u64).checked_shl(self.shift).unwrap_or(0);
+            self.shift = self.shift.saturating_add(7);
             if byte & 0x80 == 0 {
                 let val = self.in_progress;
                 self.in_progress = 0;
@@ -162,5 +171,27 @@ mod tests {
         for _ in 0..1000 {
             varint_test(rand::random());
         }
+    }
+
+    /// Regression test for an overlong zig-zag varint that previously
+    /// panicked inside `((byte & 0x7F) as u64) << self.shift` with
+    /// "attempt to shift left with overflow" once `self.shift` reached
+    /// 64. Found by the `arrow-avro/fuzz/avro_reader` cargo-fuzz harness
+    /// being prototyped in apache/arrow-rs#5332. The 14-byte continuation
+    /// run plus terminator below drives `self.shift` well past 63;
+    /// after this patch the call returns a (truncated) value instead of
+    /// panicking.
+    #[test]
+    fn test_long_overlong_varint_does_not_panic() {
+        let mut decoder = VLQDecoder::default();
+        // Twelve continuation bytes (all 0x7F-payloads with high bit set)
+        // followed by a clean terminator. Shift would otherwise reach 84.
+        let mut bytes: &[u8] = &[
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+        ];
+        let _ = decoder.long(&mut bytes);
+        // The next call must start a fresh varint, with state reset.
+        let mut next: &[u8] = &[0x02];
+        assert_eq!(decoder.long(&mut next), Some(1));
     }
 }
