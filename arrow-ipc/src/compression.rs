@@ -18,22 +18,24 @@
 use crate::CompressionType;
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
+use flatbuffers::FlatBufferBuilder;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
-/// Additional context that may be needed for compression.
-///
-/// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
-/// compression calls to avoid the performance overhead of initialising a new context for every
-/// compression.
+/// - The flatbuffer builder (`fbb`) is reset and reused across calls.
+/// - The zstd compressor (when enabled) is kept alive to avoid re-initialisation overhead.
 #[derive(Default)]
-pub struct CompressionContext {
+pub struct IpcWriteContext {
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
+    pub(crate) fbb: FlatBufferBuilder<'static>,
+    /// Scratch buffer for the IPC arrow data body. When set by the caller before
+    /// encode(), the existing allocation is reused instead of creating a fresh Vec.
+    pub scratch: Vec<u8>,
 }
 
-impl CompressionContext {
+impl IpcWriteContext {
     #[cfg(feature = "zstd")]
     fn zstd_compressor(&mut self) -> &mut zstd::bulk::Compressor<'static> {
         self.compressor.get_or_insert_with(|| {
@@ -43,9 +45,9 @@ impl CompressionContext {
     }
 }
 
-impl std::fmt::Debug for CompressionContext {
+impl std::fmt::Debug for IpcWriteContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ds = f.debug_struct("CompressionContext");
+        let mut ds = f.debug_struct("IpcWriteContext");
 
         #[cfg(feature = "zstd")]
         ds.field(
@@ -143,7 +145,7 @@ impl CompressionCodec {
         &self,
         input: &[u8],
         output: &mut Vec<u8>,
-        context: &mut CompressionContext,
+        context: &mut IpcWriteContext,
     ) -> Result<usize, ArrowError> {
         let uncompressed_data_len = input.len();
         let original_output_len = output.len();
@@ -209,7 +211,7 @@ impl CompressionCodec {
         &self,
         input: &[u8],
         output: &mut Vec<u8>,
-        context: &mut CompressionContext,
+        context: &mut IpcWriteContext,
     ) -> Result<(), ArrowError> {
         match self {
             CompressionCodec::Lz4Frame => compress_lz4(input, output),
@@ -278,7 +280,7 @@ fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, A
 fn compress_zstd(
     input: &[u8],
     output: &mut Vec<u8>,
-    context: &mut CompressionContext,
+    context: &mut IpcWriteContext,
 ) -> Result<(), ArrowError> {
     let result = context.zstd_compressor().compress(input)?;
     output.extend_from_slice(&result);
@@ -290,7 +292,7 @@ fn compress_zstd(
 fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
-    _context: &mut CompressionContext,
+    _context: &mut IpcWriteContext,
 ) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC compression requires the zstd feature".to_string(),

@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
@@ -372,15 +372,15 @@ impl FlightDataEncoder {
             DictionaryHandling::Resend => batch,
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
-
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
-            let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
+            let (flight_dictionaries, flight_batch) = self
+                .encoder
+                .encode_batch(&batch, self.max_flight_data_size)?;
             for dict in flight_dictionaries {
                 self.queue_message(dict);
             }
             self.queue_message(flight_batch);
         }
-
         Ok(())
     }
 }
@@ -701,7 +701,7 @@ struct FlightIpcEncoder {
     options: IpcWriteOptions,
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
-    compression_context: CompressionContext,
+    compression_context: IpcWriteContext,
 }
 
 impl FlightIpcEncoder {
@@ -710,7 +710,7 @@ impl FlightIpcEncoder {
             options,
             data_gen: IpcDataGenerator::default(),
             dictionary_tracker: DictionaryTracker::new(error_on_replacement),
-            compression_context: CompressionContext::default(),
+            compression_context: IpcWriteContext::default(),
         }
     }
 
@@ -724,7 +724,11 @@ impl FlightIpcEncoder {
     fn encode_batch(
         &mut self,
         batch: &RecordBatch,
-    ) -> Result<(impl Iterator<Item = FlightData> + use<>, FlightData)> {
+        max_flight_data_size: usize,
+    ) -> Result<(impl Iterator<Item = FlightData> + 'static, FlightData)> {
+        self.compression_context
+            .scratch
+            .reserve(max_flight_data_size);
         let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
@@ -733,7 +737,7 @@ impl FlightIpcEncoder {
         )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
-        let flight_batch = encoded_batch.into();
+        let flight_batch: FlightData = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
     }
@@ -1833,7 +1837,7 @@ mod tests {
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
         let mut dictionary_tracker = DictionaryTracker::new(false);
-        let mut compression_context = CompressionContext::default();
+        let mut compression_context = IpcWriteContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
             .encode(
