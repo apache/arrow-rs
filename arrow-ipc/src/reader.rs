@@ -1803,6 +1803,16 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// Maximum bytes of IPC message metadata we will allocate up front from an
+/// untrusted header. Real Arrow IPC metadata is a FlatBuffer schema descriptor
+/// — well under 1 MiB even for very wide tables — so this is a generous cap.
+const MAX_META_LEN: usize = 16 * 1024 * 1024;
+
+/// Maximum bytes of IPC message body we will allocate up front from an
+/// untrusted header. Single Arrow record batches above 2 GiB are rare in
+/// practice and would push past `usize`-on-32-bit anyway.
+const MAX_BODY_LEN: usize = 2 * 1024 * 1024 * 1024;
+
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
@@ -1834,6 +1844,16 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         };
 
+        // Both `meta_len` and the message's `bodyLength` come from untrusted
+        // input. Reject obviously-out-of-range claims up front so a 4-byte
+        // header can't force a multi-GB allocation before any read can
+        // surface the truncation.
+        if meta_len > MAX_META_LEN {
+            return Err(ArrowError::ParseError(format!(
+                "IPC message metadata length {meta_len} exceeds {MAX_META_LEN}"
+            )));
+        }
+
         self.buf.resize(meta_len, 0);
         self.reader.read_exact(&mut self.buf)?;
 
@@ -1841,7 +1861,17 @@ impl<R: Read> MessageReader<R> {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
+        let body_len_i64 = message.bodyLength();
+        let body_len = usize::try_from(body_len_i64).map_err(|_| {
+            ArrowError::ParseError(format!("Invalid message bodyLength: {body_len_i64}"))
+        })?;
+        if body_len > MAX_BODY_LEN {
+            return Err(ArrowError::ParseError(format!(
+                "IPC message body length {body_len} exceeds {MAX_BODY_LEN}"
+            )));
+        }
+
+        let mut buf = MutableBuffer::from_len_zeroed(body_len);
         self.reader.read_exact(&mut buf)?;
 
         Ok(Some((message, buf)))
@@ -2090,6 +2120,22 @@ mod tests {
             batch_err.unwrap().to_string(),
             "Parser error: Invalid metadata length: -1"
         );
+    }
+
+    /// Regression test: an IPC stream whose first 4 bytes claim a 1.2 GiB
+    /// metadata payload should not drive a multi-GB allocation; it should
+    /// surface as a `ParseError` once `read_to_end` notices the underlying
+    /// stream cannot deliver that many bytes.
+    ///
+    /// Repro from cargo-fuzz `fuzz_ipc_reader` libFuzzer harness.
+    #[test]
+    fn test_stream_reader_huge_meta_len_does_not_oom() {
+        let bytes: [u8; 4] = [0x00, 0x1b, 0x00, 0x48];
+        // i32::from_le_bytes => 0x4800_1b00 = 1_207_975_168 (~1.15 GiB).
+        // Pre-fix this caused MutableBuffer::from_len_zeroed(~1.2 GiB) /
+        // self.buf.resize(~1.2 GiB, 0) before any short-read check ran.
+        let result = StreamReader::try_new(Cursor::new(bytes), None);
+        assert!(result.is_err(), "expected error, got {result:?}");
     }
 
     #[test]
