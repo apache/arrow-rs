@@ -412,6 +412,36 @@ pub fn concat_elements_string_view_array(
 /// This function errors if the arrays are of different types.
 pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match (left.data_type(), right.data_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let left = left.as_any().downcast_ref::<StringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
+        }
+        (DataType::Utf8View, DataType::Utf8View) => {
+            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            Ok(Arc::new(concat_elements_utf8(left, right)?))
+        }
+        (DataType::Binary, DataType::Binary) => {
+            let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right)?))
+        }
+        (DataType::BinaryView, DataType::BinaryView) => {
+            let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
+        }
+        (DataType::LargeBinary, DataType::LargeBinary) => {
+            let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            Ok(Arc::new(concat_element_binary(left, right)?))
+        }
         (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
             let left = left
                 .as_any()
@@ -421,54 +451,22 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
-            return Ok(Arc::new(concat_elements_fixed_size_binary(left, right)?));
-        }
-        (l, r) => {
-            if l != r {
-                return Err(ArrowError::ComputeError(format!(
-                    "Cannot concat arrays of different types: {} != {}",
-                    l, r
-                )));
-            }
-        }
-    }
-
-    match left.data_type() {
-        DataType::Utf8 => {
-            let left = left.as_any().downcast_ref::<StringArray>().unwrap();
-            let right = right.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right)?))
-        }
-        DataType::LargeUtf8 => {
-            let left = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            let right = right.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(Arc::new(concat_elements_utf8(left, right)?))
-        }
-        DataType::Binary => {
-            let left = left.as_any().downcast_ref::<BinaryArray>().unwrap();
-            let right = right.as_any().downcast_ref::<BinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right)?))
-        }
-        DataType::LargeBinary => {
-            let left = left.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            let right = right.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-            Ok(Arc::new(concat_element_binary(left, right)?))
-        }
-        DataType::BinaryView => {
-            let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-            let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-            Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
-        }
-        DataType::Utf8View => {
-            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
-            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
-            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
+            Ok(Arc::new(concat_elements_fixed_size_binary(left, right)?))
         }
         // unimplemented
-        _ => Err(ArrowError::NotYetImplemented(format!(
-            "concat not supported for {}",
-            left.data_type()
-        ))),
+        (l, r) => {
+            if l != r {
+                Err(ArrowError::ComputeError(format!(
+                    "Cannot concat arrays of different types: {} != {}",
+                    l, r
+                )))
+            } else {
+                Err(ArrowError::NotYetImplemented(format!(
+                    "concat not supported for {}",
+                    left.data_type()
+                )))
+            }
+        }
     }
 }
 
