@@ -582,22 +582,20 @@ impl ArrowWriterOptions {
     /// Sets the [`PageStoreFactory`] used to buffer completed pages while a row
     /// group is being written.
     ///
-    /// By default (an [`InMemoryPageStore`] per column chunk) completed pages
-    /// are buffered on the heap until the row group is flushed, so peak memory
-    /// grows with the row group size. Supplying a factory that spills to a temp
-    /// file or object storage instead bounds peak write memory, decoupling it
-    /// from the row group size while keeping large, read-optimal row groups.
+    /// The default implementation ([`InMemoryPageStore`]) buffers all completed
+    /// pages on the heap until the row group is flushed, so peak write memory
+    /// grows with the row group size. Using this API, pages can be spilled to a
+    /// file or object storage instead, reducing peak write memory substantially
+    /// at the expense of an extra write to and read from secondary storage.
     ///
-    /// # Example: a custom [`PageStore`]
+    /// # Example: spilling pages to a temp file
     ///
-    /// A store only has to map an opaque, store-allocated [`PageKey`] to a blob
-    /// and hand the blob back once. The keys need not be dense or sequential —
-    /// here a `HashMap`-backed store mints sparse handles, proving the writer
-    /// relies only on the opaque-handle contract. A real spilling backend would
-    /// write the bytes to a temp file in `put` and read them back in `take`.
+    /// A simple spilling backend uses one temp file per column chunk; `put`
+    /// appends the page and `take` reads it back.
     ///
     /// ```
-    /// # use std::collections::HashMap;
+    /// # use std::fs::File;
+    /// # use std::io::{Read, Seek, SeekFrom, Write};
     /// # use std::sync::Arc;
     /// # use bytes::Bytes;
     /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
@@ -605,54 +603,64 @@ impl ArrowWriterOptions {
     /// #     ArrowWriter, ArrowWriterOptions, PageKey, PageStore, PageStoreArgs, PageStoreFactory,
     /// # };
     /// # use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
-    /// # use parquet::errors::{ParquetError, Result};
-    /// #[derive(Default)]
-    /// struct MapPageStore {
-    ///     blobs: HashMap<u64, Bytes>,
-    ///     next: u64,
+    /// # use parquet::errors::Result;
+    /// struct TempFilePageStore {
+    ///     file: File,
+    ///     /// Total size of the file
+    ///     end: u64,
+    ///     /// Location of pages: (offset, len)
+    ///     locs: Vec<(u64, usize)>,
     /// }
     ///
-    /// impl PageStore for MapPageStore {
+    /// impl PageStore for TempFilePageStore {
     ///     fn put(&mut self, value: Bytes) -> Result<PageKey> {
-    ///         // Mint a sparse handle (every other integer) to show the writer
-    ///         // never assumes anything about the key's value.
-    ///         let key = PageKey::new(self.next);
-    ///         self.next += 2;
-    ///         self.blobs.insert(key.get(), value);
+    ///         // Append to the end of the file
+    ///         self.file.seek(SeekFrom::Start(self.end))?;
+    ///         self.file.write_all(&value)?;
+    ///         let key = PageKey::new(self.locs.len() as u64);
+    ///         self.locs.push((self.end, value.len()));
+    ///         self.end += value.len() as u64;
     ///         Ok(key)
     ///     }
     ///
     ///     fn take(&mut self, key: PageKey) -> Result<Bytes> {
-    ///         self.blobs
-    ///             .remove(&key.get())
-    ///             .ok_or_else(|| ParquetError::General(format!("invalid key {}", key.get())))
+    ///         let (offset, len) = self.locs[key.get() as usize];
+    ///         let mut buf = vec![0u8; len];
+    ///         self.file.seek(SeekFrom::Start(offset))?;
+    ///         self.file.read_exact(&mut buf)?;
+    ///         Ok(Bytes::from(buf))
     ///     }
     /// }
     ///
+    /// /// Factory for creating [`TempFilePageStore`]
     /// #[derive(Debug)]
-    /// struct MapPageStoreFactory;
+    /// struct TempFilePageStoreFactory;
     ///
-    /// impl PageStoreFactory for MapPageStoreFactory {
+    /// impl PageStoreFactory for TempFilePageStoreFactory {
     ///     fn create(&self, args: &PageStoreArgs<'_>) -> Result<Box<dyn PageStore>> {
     ///         // `args` exposes the column index and descriptor (physical/logical
-    ///         // type, path), so a real backend could spill only large columns.
+    ///         // type, path), so a real backend might choose to spill only large columns.
     ///         let _ = (args.column_index(), args.column_descriptor());
-    ///         Ok(Box::new(MapPageStore::default()))
+    ///         Ok(Box::new(TempFilePageStore {
+    ///             file: tempfile::tempfile()?, // temp file is cleaned on drop
+    ///             end: 0,
+    ///             locs: Vec::new(),
+    ///         }))
     ///     }
     /// }
-    ///
+    /// // write 1000 integers
     /// let col = Arc::new(Int64Array::from_iter_values(0..1000)) as ArrayRef;
     /// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
     ///
     /// let options =
-    ///     ArrowWriterOptions::new().with_page_store_factory(Arc::new(MapPageStoreFactory));
+    ///     ArrowWriterOptions::new().with_page_store_factory(Arc::new(TempFilePageStoreFactory));
     /// let mut buffer = Vec::new();
     /// let mut writer =
     ///     ArrowWriter::try_new_with_options(&mut buffer, to_write.schema(), options).unwrap();
     /// writer.write(&to_write).unwrap();
     /// writer.close().unwrap();
     ///
-    /// // The file is byte-identical to one written with the default store.
+    /// // buffer now holds valid Parquet data, which can be read as normal:
     /// let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024).unwrap();
     /// assert_eq!(to_write, reader.next().unwrap().unwrap());
     /// ```
@@ -706,17 +714,21 @@ struct ArrowColumnChunkData {
     length: usize,
     store: Box<dyn PageStore>,
     keys: Vec<PageKey>,
-    /// The dictionary page's serialized blobs (header ‖ data), held in memory
-    /// rather than the store.
+    /// Handles to the dictionary page's blobs (header then data) in the store.
     ///
     /// A dictionary page is produced at most once and bounded by
     /// `dict_page_size_limit`, but it must be written *first* in the chunk even
     /// though the data pages reach the writer before it (see
-    /// [`PageWriter::defers_dictionary_ordering`]). Spilling it would only
-    /// round-trip ~1 page to the backend and straight back, so it is kept here
-    /// and emitted ahead of the data pages at splice. Empty for non-dictionary
-    /// columns.
-    dictionary: Vec<Bytes>,
+    /// [`PageWriter::defers_dictionary_ordering`]). Its header and data are `put`
+    /// into the store like any other page — which keeps the store uniform, and
+    /// lets an oversized dictionary page spill — and their handles are held apart
+    /// so they can be emitted ahead of the data pages at splice.
+    /// Empty for non-dictionary columns.
+    dictionary_keys: Vec<PageKey>,
+    /// Serialized length of the dictionary page (0 if there is none), recorded
+    /// so the data pages can be shifted past it when offsets are rewritten to a
+    /// dictionary-first layout at splice.
+    dictionary_len: usize,
 }
 
 impl ArrowColumnChunkData {
@@ -725,7 +737,8 @@ impl ArrowColumnChunkData {
             length: 0,
             store,
             keys: Vec::new(),
-            dictionary: Vec::new(),
+            dictionary_keys: Vec::new(),
+            dictionary_len: 0,
         }
     }
 
@@ -737,36 +750,35 @@ impl ArrowColumnChunkData {
         Ok(())
     }
 
-    /// Retain a dictionary-page blob in memory (emitted first at splice).
-    fn push_dictionary(&mut self, value: Bytes) {
-        self.dictionary.push(value);
-    }
-
-    /// Total serialized size of the in-memory dictionary page, in bytes.
-    fn dictionary_len(&self) -> usize {
-        self.dictionary.iter().map(Bytes::len).sum()
+    /// Store a dictionary-page blob (header or data) in the page store,
+    /// recording its handle (emitted first at splice) and accumulating its
+    /// serialized length.
+    fn push_dictionary(&mut self, value: Bytes) -> Result<()> {
+        self.dictionary_len += value.len();
+        let key = self.store.put(value)?;
+        self.dictionary_keys.push(key);
+        Ok(())
     }
 
     /// Bytes this chunk currently holds on the heap: whatever the store keeps
-    /// resident (zero for a spilling backend) plus the in-memory dictionary
-    /// page.
+    /// resident (zero for a spilling backend).
     fn memory_size(&self) -> usize {
-        self.store.memory_size() + self.dictionary_len()
+        self.store.memory_size()
     }
 }
 
 /// A streaming [`Read`] over one column chunk's buffered pages, in final file
-/// order: the in-memory dictionary page (if any) first, then the data pages.
+/// order: the dictionary page (if any) first, then the data pages.
 ///
-/// Each data-page blob is taken back out of the [`PageStore`] *as it is
+/// Each blob is taken back out of the [`PageStore`] *as it is
 /// consumed* and released immediately afterwards, so splicing a chunk into the
 /// output file never materializes more than a single page in memory at a time.
 /// This is what keeps the splice phase within the memory bound for a spilling
 /// backend (an in-memory store already holds the bytes, so it is unaffected).
 struct StreamingColumnChunkReader {
-    /// Dictionary-page blobs, emitted before any data page.
-    dictionary: IntoIter<Bytes>,
     store: Box<dyn PageStore>,
+    /// Page handles in final file order: the dictionary page first (if any),
+    /// then the data pages.
     keys: IntoIter<PageKey>,
     /// The blob currently being drained into the output; emptied as it is read.
     current: Bytes,
@@ -774,10 +786,19 @@ struct StreamingColumnChunkReader {
 
 impl StreamingColumnChunkReader {
     fn new(data: ArrowColumnChunkData) -> Self {
+        // The dictionary page must be emitted first, ahead of the data pages,
+        // even though it was the last page produced.
+        let keys = if data.dictionary_keys.is_empty() {
+            data.keys
+        } else {
+            let mut keys = Vec::with_capacity(data.dictionary_keys.len() + data.keys.len());
+            keys.extend(data.dictionary_keys);
+            keys.extend(data.keys);
+            keys
+        };
         Self {
-            dictionary: data.dictionary.into_iter(),
             store: data.store,
-            keys: data.keys.into_iter(),
+            keys: keys.into_iter(),
             current: Bytes::new(),
         }
     }
@@ -786,11 +807,9 @@ impl StreamingColumnChunkReader {
 impl Read for StreamingColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         // Refill from the next blob whenever the current one is drained: the
-        // dictionary page first, then each data page from the store.
+        // dictionary page first, then each data page, all taken from the store.
         while self.current.is_empty() {
-            if let Some(blob) = self.dictionary.next() {
-                self.current = blob;
-            } else if let Some(key) = self.keys.next() {
+            if let Some(key) = self.keys.next() {
                 self.current = self.store.take(key).map_err(std::io::Error::other)?;
             } else {
                 return Ok(0);
@@ -885,10 +904,10 @@ impl PageWriter for ArrowPageWriter {
 
         buf.length += compressed_size;
         if spec.page_type == PageType::DICTIONARY_PAGE {
-            // Held in memory and emitted first at splice — see
-            // `ArrowColumnChunkData::dictionary`.
-            buf.push_dictionary(header);
-            buf.push_dictionary(data);
+            // Recorded apart from the data pages so it is emitted first at
+            // splice — see `ArrowColumnChunkData::dictionary_keys`.
+            buf.push_dictionary(header)?;
+            buf.push_dictionary(data)?;
         } else {
             buf.push(header)?;
             buf.push(data)?;
@@ -975,7 +994,7 @@ impl ArrowColumnChunk {
         // The dictionary page is produced *after* the data pages on this path (so
         // they can stream straight through) but must be written *first*, so move
         // it ahead of the data pages in the recorded offsets before the splice.
-        let close = close.update_dictionary_location(data.dictionary_len())?;
+        let close = close.update_dictionary_location(data.dictionary_len)?;
 
         let reader = StreamingColumnChunkReader::new(data);
         writer.append_column_from_read(reader, close)
@@ -2092,6 +2111,82 @@ mod tests {
             .flat_map(|b| b.column(0).as_primitive::<Int32Type>().iter())
             .collect();
         assert_eq!(read_values, values);
+    }
+
+    /// The dictionary page is routed through the [`PageStore`] like any other
+    /// page rather than held resident in memory, so a dictionary column chunk's
+    /// *entire* serialized size — dictionary page included — passes through the
+    /// store.
+    #[test]
+    fn dictionary_page_is_routed_through_the_store() {
+        /// A store that sums the bytes handed to `put`.
+        #[derive(Debug, Default)]
+        struct SizeRecordingPageStore {
+            blobs: Vec<Bytes>,
+            bytes_put: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl PageStore for SizeRecordingPageStore {
+            fn put(&mut self, value: Bytes) -> Result<PageKey> {
+                self.bytes_put
+                    .fetch_add(value.len(), std::sync::atomic::Ordering::Relaxed);
+                let key = PageKey::new(self.blobs.len() as u64);
+                self.blobs.push(value);
+                Ok(key)
+            }
+            fn take(&mut self, key: PageKey) -> Result<Bytes> {
+                Ok(std::mem::take(&mut self.blobs[key.get() as usize]))
+            }
+        }
+        #[derive(Debug)]
+        struct Factory {
+            bytes_put: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl PageStoreFactory for Factory {
+            fn create(&self, _args: &PageStoreArgs<'_>) -> Result<Box<dyn PageStore>> {
+                Ok(Box::new(SizeRecordingPageStore {
+                    bytes_put: self.bytes_put.clone(),
+                    ..Default::default()
+                }))
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        // Low cardinality keeps the column dictionary-encoded with a real,
+        // non-empty dictionary page.
+        let values: Vec<&str> = (0..2048)
+            .map(|i| ["alpha", "beta", "gamma", "delta"][i % 4])
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
+            .unwrap();
+
+        let bytes_put = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let opts = ArrowWriterOptions::new().with_page_store_factory(Arc::new(Factory {
+            bytes_put: bytes_put.clone(),
+        }));
+
+        // A single batch / single column means exactly one row group and one
+        // store instance, so the bytes it saw map to one column chunk.
+        let mut buffer = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buffer, schema.clone(), opts).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert!(
+            column.dictionary_page_offset().is_some(),
+            "expected the column to be dictionary-encoded"
+        );
+
+        // The bytes the store was handed must account for the whole chunk,
+        // dictionary page included. Holding the dictionary page apart from the
+        // store would make this fall short by the dictionary page's size.
+        assert_eq!(
+            bytes_put.load(std::sync::atomic::Ordering::Relaxed) as i64,
+            column.compressed_size(),
+            "the dictionary page must pass through the store like any other page"
+        );
     }
 
     #[test]

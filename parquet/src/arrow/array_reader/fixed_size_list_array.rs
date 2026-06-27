@@ -156,10 +156,14 @@ impl ArrayReader for FixedSizeListArrayReader {
 
                         if let Some(start) = start_idx.take() {
                             // Flush pending child items
-                            child_data_builder.extend(0, start, child_idx);
+                            child_data_builder
+                                .try_extend(0, start, child_idx)
+                                .map_err(|e| general_err!("{}", e))?;
                         }
                         // Pad list with nulls
-                        child_data_builder.extend_nulls(self.fixed_size);
+                        child_data_builder
+                            .try_extend_nulls(self.fixed_size)
+                            .map_err(|e| general_err!("{}", e))?;
 
                         if let Some(validity) = validity.as_mut() {
                             // Valid if empty list
@@ -179,7 +183,9 @@ impl ArrayReader for FixedSizeListArrayReader {
             }
             Some(start) => {
                 // Flush pending child items
-                child_data_builder.extend(0, start, child_idx);
+                child_data_builder
+                    .try_extend(0, start, child_idx)
+                    .map_err(|e| general_err!("{}", e))?;
                 child_data_builder.freeze()
             }
             None => child_data_builder.freeze(),

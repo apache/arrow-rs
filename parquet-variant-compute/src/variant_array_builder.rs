@@ -37,6 +37,14 @@ use std::sync::Arc;
 /// This builder always creates a `VariantArray` using [`BinaryViewArray`] for both
 /// the metadata and value fields.
 ///
+/// `VariantArrayBuilder` implements [`VariantBuilderExt`], so you append values
+/// and nested objects or lists the same way as when building a single
+/// [`Variant`] value with [`VariantBuilder`], rather than constructing a
+/// `VariantBuilder` per row.
+///
+/// [`VariantBuilder`]: parquet_variant::VariantBuilder
+/// [`VariantBuilderExt`]: parquet_variant::VariantBuilderExt
+///
 /// # TODO
 /// 1. Support shredding: <https://github.com/apache/arrow-rs/issues/7895>
 ///

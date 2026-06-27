@@ -29,6 +29,7 @@ pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> 
             mutable
                 .buffer1
                 .extend_from_slice(&values[start..start + len]);
+            Ok(())
         },
     )
 }
@@ -43,10 +44,15 @@ where
             mutable
                 .buffer1
                 .extend(values[start..start + len].iter().map(|x| *x + offset));
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), arrow_schema::ArrowError> {
     mutable.buffer1.extend_zeros(len * size_of::<T>());
+    Ok(())
 }
