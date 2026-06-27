@@ -1260,7 +1260,7 @@ mod tests {
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
     use arrow_data::{ArrayData, ArrayDataBuilder};
-    use arrow_schema::{Fields, Schema};
+    use arrow_schema::{Fields, Schema, TimeUnit};
 
     #[test]
     fn test_calculate_array_levels_twitter_example() {
@@ -2526,6 +2526,22 @@ mod tests {
             logical_nulls,
         };
         assert_eq!(levels[0], expected_level);
+    }
+
+    #[test]
+    fn timestamp_utc_aliases_accepted_by_writer() {
+        // Verifies that LevelInfoBuilder::try_new (the writer's entry point)
+        // accepts arrays whose timezone is a UTC alias different from the field's.
+        // Detailed equivalence tests live in arrow_schema::datatype::tests.
+        let field = Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            true,
+        );
+        let array = Arc::new(TimestampMicrosecondArray::from(vec![0_i64, 1]).with_timezone("UTC"))
+            as ArrayRef;
+        LevelInfoBuilder::try_new(&field, Default::default(), &array)
+            .expect("UTC and +00:00 should be treated as compatible");
     }
 
     #[test]
