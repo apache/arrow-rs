@@ -18,6 +18,7 @@
 use crate::ArrayData;
 use crate::transform::_MutableArrayData;
 use arrow_buffer::ArrowNativeType;
+use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
 
@@ -33,23 +34,35 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
             for i in start..start + len {
                 mutable.buffer1.push(new_offset);
                 mutable.buffer2.push(sizes[i]);
-                new_offset = new_offset.checked_add(&sizes[i]).expect("offset overflow");
+                new_offset = new_offset.checked_add(&sizes[i]).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "offset overflow: data exceeds the capacity of the offset type. \
+                         Try splitting into smaller batches or using a larger type \
+                         (e.g. LargeListView instead of ListView)"
+                            .to_string(),
+                    )
+                })?;
 
                 let size = sizes[i].as_usize();
                 if size > 0 {
                     let child_start = offsets[i].as_usize();
-                    mutable.child_data[0].extend(index, child_start, child_start + size);
+                    mutable.child_data[0].try_extend(index, child_start, child_start + size)?;
                 }
             }
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), ArrowError> {
     let offset_buffer = &mut mutable.buffer1;
     let sizes_buffer = &mut mutable.buffer2;
 
     // We push 0 as a placeholder for NULL values in both the offsets and sizes
     (0..len).for_each(|_| offset_buffer.push(T::default()));
     (0..len).for_each(|_| sizes_buffer.push(T::default()));
+    Ok(())
 }
