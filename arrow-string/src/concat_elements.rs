@@ -470,6 +470,7 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::cast::AsArray;
     use arrow_buffer::Buffer;
 
     #[test]
@@ -487,10 +488,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(
-            output.as_any().downcast_ref::<StringArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string(), &expected);
     }
 
     #[test]
@@ -508,10 +506,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(
-            output.as_any().downcast_ref::<StringArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string(), &expected);
     }
 
     #[test]
@@ -523,10 +518,7 @@ mod tests {
 
         let expected = StringArray::from(vec!["foobar", "barbaz"]);
 
-        assert_eq!(
-            output.as_any().downcast_ref::<StringArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string(), &expected);
     }
 
     #[test]
@@ -565,10 +557,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        assert_eq!(
-            output.as_any().downcast_ref::<StringArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string(), &expected);
 
         let left_slice = left.slice(2, 2);
         let right_slice = right.slice(1, 2);
@@ -587,10 +576,7 @@ mod tests {
 
         let expected = [None, Some("bazfar")].into_iter().collect::<StringArray>();
 
-        assert_eq!(
-            output.as_any().downcast_ref::<StringArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string(), &expected);
     }
 
     #[test]
@@ -640,13 +626,7 @@ mod tests {
 
         let expected =
             FixedSizeBinaryArray::try_from(vec![None, Some(b"baryyy" as &[u8]), None]).unwrap();
-        assert_eq!(
-            output
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_fixed_size_binary(), &expected);
     }
 
     #[test]
@@ -661,13 +641,7 @@ mod tests {
 
         let expected =
             FixedSizeBinaryArray::try_from(vec![None, Some(b"barbazyyy" as &[u8]), None]).unwrap();
-        assert_eq!(
-            output
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_fixed_size_binary(), &expected);
     }
 
     #[test]
@@ -678,13 +652,7 @@ mod tests {
         let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = FixedSizeBinaryArray::try_from(vec![b"ab12" as &[u8], b"cd34"]).unwrap();
-        assert_eq!(
-            output
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_fixed_size_binary(), &expected);
     }
 
     #[test]
@@ -707,13 +675,7 @@ mod tests {
         let output = concat_elements_dyn(&left, &right).unwrap();
 
         let expected = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
-        assert_eq!(
-            output
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_fixed_size_binary(), &expected);
     }
 
     #[test]
@@ -785,10 +747,7 @@ mod tests {
             Some("ThisStringIsLongerThan12Bytesbar"),
             Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(
-            output.as_any().downcast_ref::<StringViewArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string_view(), &expected);
 
         let left = StringViewArray::from_iter(vec![
             Some("a"),
@@ -817,10 +776,7 @@ mod tests {
             Some("ThisStringIsLongerThan12Bytesd"),
             Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(
-            output.as_any().downcast_ref::<StringViewArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_string_view(), &expected);
     }
 
     #[test]
@@ -846,10 +802,7 @@ mod tests {
             Some(b""),
             Some(b"baz"),
         ]);
-        assert_eq!(
-            output.as_any().downcast_ref::<BinaryViewArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_binary_view(), &expected);
     }
 
     #[test]
@@ -871,10 +824,7 @@ mod tests {
 
         let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
-        assert_eq!(
-            output.as_any().downcast_ref::<BinaryViewArray>().unwrap(),
-            &expected
-        );
+        assert_eq!(output.as_binary_view(), &expected);
     }
 
     #[test]
@@ -883,43 +833,31 @@ mod tests {
         let left = StringArray::from(vec![Some("foo"), Some("bar"), None]);
         let right = StringArray::from(vec![None, Some("yyy"), Some("zzz")]);
 
-        let output: StringArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = StringArray::from(vec![None, Some("baryyy"), None]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_string(), &expected);
 
         // test for LargeStringArray
         let left = LargeStringArray::from(vec![Some("foo"), Some("bar"), None]);
         let right = LargeStringArray::from(vec![None, Some("yyy"), Some("zzz")]);
 
-        let output: LargeStringArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = LargeStringArray::from(vec![None, Some("baryyy"), None]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_string(), &expected);
 
         // test for BinaryArray
         let left = BinaryArray::from_opt_vec(vec![Some(b"foo"), Some(b"bar"), None]);
         let right = BinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
-        let output: BinaryArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = BinaryArray::from_opt_vec(vec![None, Some(b"baryyy"), None]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_binary(), &expected);
 
         // test for LargeBinaryArray
         let left = LargeBinaryArray::from_opt_vec(vec![Some(b"foo"), Some(b"bar"), None]);
         let right = LargeBinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
-        let output: LargeBinaryArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = LargeBinaryArray::from_opt_vec(vec![None, Some(b"baryyy"), None]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_binary(), &expected);
 
         // test for BinaryViewArray
         let long = b"ThisStringIsLongerThan12Bytes" as &[u8];
@@ -941,10 +879,7 @@ mod tests {
             Some(b"bar"),
             Some(long),
         ]);
-        let output: BinaryViewArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = BinaryViewArray::from_iter(vec![
             None,
             Some(b"baryyy" as &[u8]),
@@ -954,7 +889,7 @@ mod tests {
             Some(b"ThisStringIsLongerThan12Bytesbar"),
             Some(b"ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_binary_view(), &expected);
 
         // test for StringViewArray
         let long = "ThisStringIsLongerThan12Bytes";
@@ -976,10 +911,7 @@ mod tests {
             Some("bar"),
             Some(long),
         ]);
-        let output: StringViewArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected = StringViewArray::from_iter(vec![
             None,
             Some("baryyy"),
@@ -989,20 +921,17 @@ mod tests {
             Some("ThisStringIsLongerThan12Bytesbar"),
             Some("ThisStringIsLongerThan12BytesThisStringIsLongerThan12Bytes"),
         ]);
-        assert_eq!(output, expected);
+        assert_eq!(output.as_string_view(), &expected);
 
         // test for FixedSizeBinaryArray
         let left = FixedSizeBinaryArray::try_from(vec![Some(b"foo" as &[u8]), Some(b"bar"), None])
             .unwrap();
         let right = FixedSizeBinaryArray::try_from(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")])
             .unwrap();
-        let output: FixedSizeBinaryArray = concat_elements_dyn(&left, &right)
-            .unwrap()
-            .into_data()
-            .into();
+        let output = concat_elements_dyn(&left, &right).unwrap();
         let expected =
             FixedSizeBinaryArray::try_from(vec![None, Some(b"baryyy" as &[u8]), None]).unwrap();
-        assert_eq!(output, expected);
+        assert_eq!(output.as_fixed_size_binary(), &expected);
     }
 
     #[test]
