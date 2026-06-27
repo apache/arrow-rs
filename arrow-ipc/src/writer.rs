@@ -43,7 +43,7 @@ use arrow_schema::*;
 
 use crate::CONTINUATION_MARKER;
 use crate::compression::CompressionCodec;
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub use crate::compression::{CompressionContext, IpcWriteContext};
 use crate::convert::IpcSchemaEncoder;
 

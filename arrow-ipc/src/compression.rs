@@ -30,7 +30,7 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 /// compression.
 #[derive(Default)]
 pub struct IpcWriteContext {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) scratch: Vec<u8>,
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
@@ -60,7 +60,7 @@ impl std::fmt::Debug for IpcWriteContext {
 }
 
 /// Deprecated alias for [`IpcWriteContext`].
-#[deprecated(since = "57.0.0", note = "Use IpcWriteContext instead")]
+#[deprecated(since = "59.1.0", note = "Use IpcWriteContext instead")]
 pub type CompressionContext = IpcWriteContext;
 
 /// Additional context that may be needed for decompression.

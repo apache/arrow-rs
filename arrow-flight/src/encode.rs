@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{IpcWriteContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
