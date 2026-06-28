@@ -92,6 +92,7 @@ pub(crate) fn shred_variant_with_options(
         cast_options,
         array.len(),
         NullValue::TopLevelVariant,
+        true,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -145,6 +146,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     cast_options: &'a CastOptions,
     capacity: usize,
     null_value: NullValue,
+    shred: bool,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -193,7 +195,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, shred)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
@@ -376,6 +378,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
                 cast_options,
                 capacity,
                 NullValue::ObjectField,
+                true,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -1046,6 +1049,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             primitive_builder.append_null().unwrap();
@@ -1076,6 +1080,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             array_builder.append_null().unwrap();
@@ -1104,6 +1109,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             object_builder.append_null().unwrap();

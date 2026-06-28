@@ -29,14 +29,19 @@ use crate::decoder::{
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
-use arrow::array::ArrowNativeTypeOp;
+use arrow::array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow::compute::{
     DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default, num_cast,
     parse_string_to_decimal_native, single_bool_to_numeric, single_decimal_to_float_lossy,
     single_float_to_decimal,
 };
-use arrow::datatypes::{Decimal32Type, Decimal64Type, Decimal128Type, DecimalType};
+use arrow::datatypes::{
+    Decimal32Type, Decimal64Type, Decimal128Type, DecimalType, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 
+use arrow::compute::kernels::cast_utils::{Parser, parse_date, string_to_datetime};
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use num_traits::NumCast;
@@ -582,8 +587,12 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `NaiveDate` if possible.
     ///
-    /// Returns `Some(NaiveDate)` for date variants,
-    /// `None` for non-date variants.
+    /// Returns `Some(NaiveDate)` for date variants and string variants
+    /// that can be parsed as dates. Supports ISO date strings (`"2025-04-12"`),
+    /// compact date strings (`"20250412"`), flexible formats (`"2025-4-2"`),
+    /// and datetime strings (`"2025-04-12T10:30:00Z"`, date part extracted).
+    ///
+    /// Returns `None` for non-date, non-string variants or unparseable strings.
     ///
     /// # Examples
     ///
@@ -596,15 +605,28 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(date);
     /// assert_eq!(v1.as_naive_date(), Some(date));
     ///
-    /// // but not from other variants
-    /// let v2 = Variant::from("hello!");
-    /// assert_eq!(v2.as_naive_date(), None);
+    /// // or from an ISO date string
+    /// let v2 = Variant::from("2025-04-12");
+    /// assert_eq!(v2.as_naive_date(), Some(date));
+    ///
+    /// // or from a compact date string
+    /// let v3 = Variant::from("20250412");
+    /// assert_eq!(v3.as_naive_date(), Some(date));
+    ///
+    /// // or from a datetime string (date part is extracted)
+    /// let v4 = Variant::from("2025-04-12T10:30:00Z");
+    /// assert_eq!(v4.as_naive_date(), Some(date));
+    ///
+    /// // but not from unparseable strings
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_naive_date(), None);
     /// ```
     pub fn as_naive_date(&self) -> Option<NaiveDate> {
-        if let Variant::Date(d) = self {
-            Some(*d)
-        } else {
-            None
+        match *self {
+            Variant::Date(d) => Some(d),
+            Variant::ShortString(s) => parse_date(s.as_ref()),
+            Variant::String(s) => parse_date(s),
+            _ => None,
         }
     }
 
@@ -628,18 +650,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_micros(), Some(datetime));
     ///
+    /// // or from string variant
+    /// let v2 = Variant::from("2026-06-10T12:34:56.780Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// assert_eq!(v2.as_timestamp_micros(), Some(datetime));
+    ///
     /// // but not for other variants.
     /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
     ///     .unwrap()
     ///     .and_hms_nano_opt(12, 33, 54, 123456789)
     ///     .unwrap()
     ///     .and_utc();
-    /// let v2 = Variant::from(datetime_nanos);
-    /// assert_eq!(v2.as_timestamp_micros(), None);
+    /// let v3 = Variant::from(datetime_nanos);
+    /// assert_eq!(v3.as_timestamp_micros(), None);
     /// ```
     pub fn as_timestamp_micros(&self) -> Option<DateTime<Utc>> {
         match *self {
             Variant::TimestampMicros(d) => Some(d),
+            Variant::ShortString(s) => string_to_datetime(&Utc, s.as_ref()).ok(),
+            Variant::String(s) => string_to_datetime(&Utc, s).ok(),
             _ => None,
         }
     }
@@ -663,17 +696,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_ntz_micros(), Some(datetime));
     ///
+    /// // or from string variant
+    /// let v2 = Variant::from("2026-06-10T12:34:56.780Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap();
+    /// assert_eq!(v2.as_timestamp_ntz_micros(), Some(datetime));
+    ///
     /// // but not for other variants.
     /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
     ///     .unwrap()
     ///     .and_hms_nano_opt(12, 33, 54, 123456789)
     ///     .unwrap();
-    /// let v2 = Variant::from(datetime_nanos);
-    /// assert_eq!(v2.as_timestamp_micros(), None);
+    /// let v3 = Variant::from(datetime_nanos);
+    /// assert_eq!(v3.as_timestamp_micros(), None);
     /// ```
     pub fn as_timestamp_ntz_micros(&self) -> Option<NaiveDateTime> {
         match *self {
             Variant::TimestampNtzMicros(d) => Some(d),
+            Variant::String(s) => string_to_datetime(&Utc, s).ok().map(|dt| dt.naive_utc()),
+            Variant::ShortString(s) => string_to_datetime(&Utc, s.as_ref())
+                .ok()
+                .map(|dt| dt.naive_utc()),
             _ => None,
         }
     }
@@ -708,13 +753,24 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(datetime_micros);
     /// assert_eq!(v2.as_timestamp_nanos(), Some(datetime_micros));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::from("2026-06-10T12:34:56.123456789Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 123456789)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// assert_eq!(v3.as_timestamp_nanos(), Some(datetime));
+    ///
     /// // but not for other variants.
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_timestamp_nanos(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_timestamp_nanos(), None);
     /// ```
     pub fn as_timestamp_nanos(&self) -> Option<DateTime<Utc>> {
         match *self {
             Variant::TimestampNanos(d) | Variant::TimestampMicros(d) => Some(d),
+            Variant::ShortString(s) => string_to_datetime(&Utc, s.as_ref()).ok(),
+            Variant::String(s) => string_to_datetime(&Utc, s).ok(),
             _ => None,
         }
     }
@@ -747,13 +803,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(datetime_micros);
     /// assert_eq!(v2.as_timestamp_ntz_nanos(), Some(datetime_micros));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::from("2026-06-10T12:34:56.123456789Z");
+    /// let datetime = NaiveDate::from_ymd_opt(2026, 6, 10)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 123456789)
+    ///     .unwrap();
+    /// assert_eq!(v3.as_timestamp_ntz_nanos(), Some(datetime));
+    ///
     /// // but not for other variants.
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_timestamp_ntz_nanos(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_timestamp_ntz_nanos(), None);
     /// ```
     pub fn as_timestamp_ntz_nanos(&self) -> Option<NaiveDateTime> {
         match *self {
             Variant::TimestampNtzNanos(d) | Variant::TimestampNtzMicros(d) => Some(d),
+            Variant::String(s) => string_to_datetime(&Utc, s).ok().map(|dt| dt.naive_utc()),
+            Variant::ShortString(s) => string_to_datetime(&Utc, s.as_ref())
+                .ok()
+                .map(|dt| dt.naive_utc()),
             _ => None,
         }
     }
@@ -778,10 +846,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v2.as_u8_slice(), None);
     /// ```
     pub fn as_u8_slice(&'v self) -> Option<&'v [u8]> {
-        if let Variant::Binary(d) = self {
-            Some(d)
-        } else {
-            None
+        match self {
+            Variant::Binary(d) => Some(d),
+            _ => None,
         }
     }
 
@@ -811,9 +878,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to a `uuid hyphenated string` if possible.
+    /// Converts this variant to a `Uuid` if possible.
     ///
-    /// Returns `Some(String)` for UUID variants, `None` for non-UUID variants.
+    /// Returns `Some(Uuid)` for UUID variants and string variants that can be
+    /// parsed as UUIDs.
     ///
     /// # Examples
     ///
@@ -824,15 +892,24 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let s = uuid::Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     /// let v1 = Variant::Uuid(s);
     /// assert_eq!(s, v1.as_uuid().unwrap());
-    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid().unwrap().to_string());
     ///
-    /// //but not from other variants
-    /// let v2 = Variant::from(1234);
-    /// assert_eq!(None, v2.as_uuid())
+    /// // or from a UUID-format string
+    /// let v2 = Variant::from("67e55044-10b1-426f-9247-bb680e5fe0c8");
+    /// assert_eq!(s, v2.as_uuid().unwrap());
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from(1234);
+    /// assert_eq!(None, v3.as_uuid());
+    ///
+    /// // or non-UUID strings
+    /// let v4 = Variant::from("not-a-uuid");
+    /// assert_eq!(None, v4.as_uuid());
     /// ```
     pub fn as_uuid(&self) -> Option<Uuid> {
         match self {
             Variant::Uuid(u) => Some(*u),
+            Variant::ShortString(s) => Uuid::parse_str(s.as_ref()).ok(),
+            Variant::String(s) => Uuid::parse_str(s).ok(),
             _ => None,
         }
     }
@@ -860,14 +937,15 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts a boolean or numeric variant(integers, floating-point, and decimals)
+    /// Converts a boolean, string or numeric variant(integers, floating-point, and decimals)
     /// to the specified numeric type `T`.
     ///
     /// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
     /// the conversion succeeds, `None` if the variant can't be casted to type `T`.
-    fn as_num<T>(&self) -> Option<T>
+    fn as_num<T>(&self) -> Option<T::Native>
     where
-        T: DecimalCastTarget,
+        T: ArrowPrimitiveType + Parser,
+        T::Native: DecimalCastTarget,
     {
         match *self {
             Variant::BooleanFalse => single_bool_to_numeric(false),
@@ -878,28 +956,30 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => num_cast(i),
             Variant::Float(f) => num_cast(f),
             Variant::Double(d) => num_cast(d),
-            Variant::Decimal4(d) => {
-                Self::cast_decimal_to_num::<Decimal32Type, T, _>(d.integer(), d.scale(), |x| {
-                    x as f64
-                })
-            }
-            Variant::Decimal8(d) => {
-                Self::cast_decimal_to_num::<Decimal64Type, T, _>(d.integer(), d.scale(), |x| {
-                    x as f64
-                })
-            }
-            Variant::Decimal16(d) => {
-                Self::cast_decimal_to_num::<Decimal128Type, T, _>(d.integer(), d.scale(), |x| {
-                    x as f64
-                })
-            }
+            Variant::Decimal4(d) => Self::cast_decimal_to_num::<Decimal32Type, T::Native, _>(
+                d.integer(),
+                d.scale(),
+                |x| x as f64,
+            ),
+            Variant::Decimal8(d) => Self::cast_decimal_to_num::<Decimal64Type, T::Native, _>(
+                d.integer(),
+                d.scale(),
+                |x| x as f64,
+            ),
+            Variant::Decimal16(d) => Self::cast_decimal_to_num::<Decimal128Type, T::Native, _>(
+                d.integer(),
+                d.scale(),
+                |x| x as f64,
+            ),
+            Variant::ShortString(s) => T::parse(s.as_ref()),
+            Variant::String(s) => T::parse(s),
             _ => None,
         }
     }
 
     /// Converts this variant to an `i8` if possible.
     ///
-    /// Returns `Some(i8)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(i8)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `i8` range,
     /// `None` for other variants or values that would overflow.
     ///
@@ -916,16 +996,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::BooleanFalse;
     /// assert_eq!(v2.as_int8(), Some(0));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::String("123");
+    /// assert_eq!(v3.as_int8(), Some(123i8));
+    ///
     /// // but not if it would overflow
-    /// let v3 = Variant::from(1234i64);
-    /// assert_eq!(v3.as_int8(), None);
+    /// let v4 = Variant::from(1234i64);
+    /// assert_eq!(v4.as_int8(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_int8(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_int8(), None);
     /// ```
     pub fn as_int8(&self) -> Option<i8> {
-        self.as_num()
+        self.as_num::<Int8Type>()
     }
 
     /// Converts this variant to an `i16` if possible.
@@ -947,21 +1031,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::BooleanFalse;
     /// assert_eq!(v2.as_int16(), Some(0));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::String("123");
+    /// assert_eq!(v3.as_int16(), Some(123i16));
+    ///
     /// // but not if it would overflow
-    /// let v3 = Variant::from(123456i64);
-    /// assert_eq!(v3.as_int16(), None);
+    /// let v4 = Variant::from(123456i64);
+    /// assert_eq!(v4.as_int16(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_int16(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_int16(), None);
     /// ```
     pub fn as_int16(&self) -> Option<i16> {
-        self.as_num()
+        self.as_num::<Int16Type>()
     }
 
     /// Converts this variant to an `i32` if possible.
     ///
-    /// Returns `Some(i32)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(i32)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `i32` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -978,21 +1066,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::BooleanFalse;
     /// assert_eq!(v2.as_int32(), Some(0));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::String("12345");
+    /// assert_eq!(v3.as_int32(), Some(12345i32));
+    ///
     /// // but not if it would overflow
-    /// let v3 = Variant::from(12345678901i64);
-    /// assert_eq!(v3.as_int32(), None);
+    /// let v4 = Variant::from(12345678901i64);
+    /// assert_eq!(v4.as_int32(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_int32(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_int32(), None);
     /// ```
     pub fn as_int32(&self) -> Option<i32> {
-        self.as_num()
+        self.as_num::<Int32Type>()
     }
 
     /// Converts this variant to an `i64` if possible.
     ///
-    /// Returns `Some(i64)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(i64)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `i64` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -1009,17 +1101,21 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::BooleanFalse;
     /// assert_eq!(v2.as_int64(), Some(0));
     ///
+    /// // or from string variant
+    /// let v3 = Variant::String("123456");
+    /// assert_eq!(v3.as_int64(), Some(123456i64));
+    ///
     /// // but not a variant that cannot be cast into an integer
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_int64(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_int64(), None);
     /// ```
     pub fn as_int64(&self) -> Option<i64> {
-        self.as_num()
+        self.as_num::<Int64Type>()
     }
 
     /// Converts this variant to a `u8` if possible.
     ///
-    /// Returns `Some(u8)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(u8)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `u8` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -1046,21 +1142,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v4 = Variant::BooleanFalse;
     /// assert_eq!(v4.as_u8(), Some(0));
     ///
+    /// // or from string variant
+    /// let v5 = Variant::String("123");
+    /// assert_eq!(v5.as_u8(), Some(123u8));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v5 = Variant::from(-1);
-    ///  assert_eq!(v5.as_u8(), None);
+    ///  let v6 = Variant::from(-1);
+    ///  assert_eq!(v6.as_u8(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v6 = Variant::from("hello!");
-    ///  assert_eq!(v6.as_u8(), None);
+    ///  let v7 = Variant::from("hello!");
+    ///  assert_eq!(v7.as_u8(), None);
     /// ```
     pub fn as_u8(&self) -> Option<u8> {
-        self.as_num()
+        self.as_num::<UInt8Type>()
     }
 
     /// Converts this variant to an `u16` if possible.
     ///
-    /// Returns `Some(u16)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(u16)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `u16` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -1087,21 +1187,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v4= Variant::BooleanFalse;
     /// assert_eq!(v4.as_u16(), Some(0));
     ///
+    /// // or from string variant
+    /// let v5 = Variant::String("1234");
+    /// assert_eq!(v5.as_u16(), Some(1234u16));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v5 = Variant::from(-1);
-    ///  assert_eq!(v5.as_u16(), None);
+    ///  let v6 = Variant::from(-1);
+    ///  assert_eq!(v6.as_u16(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v6 = Variant::from("hello!");
-    ///  assert_eq!(v6.as_u16(), None);
+    ///  let v7 = Variant::from("hello!");
+    ///  assert_eq!(v7.as_u16(), None);
     /// ```
     pub fn as_u16(&self) -> Option<u16> {
-        self.as_num()
+        self.as_num::<UInt16Type>()
     }
 
     /// Converts this variant to an `u32` if possible.
     ///
-    /// Returns `Some(u32)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(u32)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `u32` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -1128,21 +1232,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v4 = Variant::BooleanFalse;
     /// assert_eq!(v4.as_u32(), Some(0));
     ///
+    /// // or from string variant
+    /// let v5 = Variant::String("12345");
+    /// assert_eq!(v5.as_u32(), Some(12345u32));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v5 = Variant::from(-1);
-    ///  assert_eq!(v5.as_u32(), None);
+    ///  let v6 = Variant::from(-1);
+    ///  assert_eq!(v6.as_u32(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v6 = Variant::from("hello!");
-    ///  assert_eq!(v6.as_u32(), None);
+    ///  let v7 = Variant::from("hello!");
+    ///  assert_eq!(v7.as_u32(), None);
     /// ```
     pub fn as_u32(&self) -> Option<u32> {
-        self.as_num()
+        self.as_num::<UInt32Type>()
     }
 
     /// Converts this variant to an `u64` if possible.
     ///
-    /// Returns `Some(u64)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(u64)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `u64` range
     /// `None` for other variants or values that would overflow.
     ///
@@ -1169,16 +1277,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v4 = Variant::BooleanFalse;
     /// assert_eq!(v4.as_u64(), Some(0));
     ///
+    /// // or from string variant
+    /// let v5 = Variant::String("12345");
+    /// assert_eq!(v5.as_u64(), Some(12345u64));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v5 = Variant::from(-1);
-    ///  assert_eq!(v5.as_u64(), None);
+    ///  let v6 = Variant::from(-1);
+    ///  assert_eq!(v6.as_u64(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v6 = Variant::from("hello!");
-    ///  assert_eq!(v6.as_u64(), None);
+    ///  let v7 = Variant::from("hello!");
+    ///  assert_eq!(v7.as_u64(), None);
     /// ```
     pub fn as_u64(&self) -> Option<u64> {
-        self.as_num()
+        self.as_num::<UInt64Type>()
     }
 
     fn convert_string_to_decimal<D, VD>(input: &str) -> Option<VD>
@@ -1230,7 +1342,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_decimal4(&self) -> Option<VariantDecimal4> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-                self.as_num::<i32>().and_then(|x| x.try_into().ok())
+                self.as_num::<Int32Type>().and_then(|x| x.try_into().ok())
             }
             Variant::Float(f) => single_float_to_decimal::<Decimal32Type>(f as _, 1f64)
                 .and_then(|x: i32| x.try_into().ok()),
@@ -1281,7 +1393,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_decimal8(&self) -> Option<VariantDecimal8> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-                self.as_num::<i64>().and_then(|x| x.try_into().ok())
+                self.as_num::<Int64Type>().and_then(|x| x.try_into().ok())
             }
             Variant::Float(f) => single_float_to_decimal::<Decimal64Type>(f as _, 1f64)
                 .and_then(|x: i64| x.try_into().ok()),
@@ -1324,7 +1436,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-                let x = self.as_num::<i64>()?;
+                let x = self.as_num::<Int64Type>()?;
                 <i128 as From<i64>>::from(x).try_into().ok()
             }
             Variant::Float(f) => {
@@ -1347,7 +1459,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f16` if possible.
     ///
-    /// Returns `Some(f16)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(f16)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `f16` range
     /// `None` otherwise.
     ///
@@ -1365,24 +1477,28 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
     ///
-    /// // and from boolean
+    /// // and from boolean variant
     /// let v3 = Variant::BooleanTrue;
     /// assert_eq!(v3.as_f16(), Some(f16::from_f32(1.0)));
     ///
+    /// // and from string variant
+    /// let v4 = Variant::String("123.45");
+    /// assert_eq!(v4.as_f16(), Some(f16::from_f32(123.45f32)));
+    ///
     /// // return inf if overflow
-    /// let v4 = Variant::from(123456);
-    /// assert_eq!(v4.as_f16(), Some(f16::INFINITY));
+    /// let v5 = Variant::from(123456);
+    /// assert_eq!(v5.as_f16(), Some(f16::INFINITY));
     ///
     /// // but not from other variants
-    /// let v5 = Variant::from("hello!");
-    /// assert_eq!(v5.as_f16(), None);
+    /// let v6 = Variant::from("hello!");
+    /// assert_eq!(v6.as_f16(), None);
     pub fn as_f16(&self) -> Option<f16> {
-        self.as_num()
+        self.as_num::<Float16Type>()
     }
 
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(f32)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `f32` range
     /// `None` otherwise.
     ///
@@ -1403,21 +1519,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v3 = Variant::BooleanTrue;
     /// assert_eq!(v3.as_f32(), Some(1.0));
     ///
+    /// // and from string variant
+    /// let v4 = Variant::String("123.45");
+    /// assert_eq!(v4.as_f32(), Some(123.45f32));
+    ///
     /// // and return inf if overflow
-    /// let v4 = Variant::from(f64::MAX);
-    /// assert_eq!(v4.as_f32(), Some(f32::INFINITY));
+    /// let v5 = Variant::from(f64::MAX);
+    /// assert_eq!(v5.as_f32(), Some(f32::INFINITY));
     ///
     /// // but not from other variants
-    /// let v5 = Variant::from("hello!");
-    /// assert_eq!(v5.as_f32(), None);
+    /// let v6 = Variant::from("hello!");
+    /// assert_eq!(v6.as_f32(), None);
     /// ```
     pub fn as_f32(&self) -> Option<f32> {
-        self.as_num()
+        self.as_num::<Float32Type>()
     }
 
     /// Converts this variant to an `f64` if possible.
     ///
-    /// Returns `Some(f64)` for boolean and numeric variants(integers, floating-point,
+    /// Returns `Some(f64)` for boolean, string and numeric variants(integers, floating-point,
     /// and decimals with scale 0) that fit in `f64` range
     /// `None` for other variants or can't be represented by an f64.
     ///
@@ -1438,12 +1558,16 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v3 = Variant::BooleanTrue;
     /// assert_eq!(v3.as_f64(), Some(1.0f64));
     ///
+    /// // and from string variant
+    /// let v4 = Variant::String("123.45");
+    /// assert_eq!(v4.as_f64(), Some(123.45f64));
+    ///
     /// // but not from other variants
     /// let v5 = Variant::from("hello!");
     /// assert_eq!(v5.as_f64(), None);
     /// ```
     pub fn as_f64(&self) -> Option<f64> {
-        self.as_num()
+        self.as_num::<Float64Type>()
     }
 
     /// Converts this variant to an `Object` if it is an [`VariantObject`].
@@ -1541,8 +1665,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `NaiveTime` if possible.
     ///
-    /// Returns `Some(NaiveTime)` for `Variant::Time`,
-    /// `None` for non-Time variants.
+    /// Returns `Some(NaiveTime)` for a time and string variant.
+    /// `None` for the other variants.
     ///
     /// # Example
     ///
@@ -1555,15 +1679,35 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(time);
     /// assert_eq!(Some(time), v1.as_time_utc());
     ///
+    /// // or from string variant
+    /// let v2 = Variant::String("1234567");
+    /// let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+    /// assert_eq!(Some(time), v2.as_time_utc());
+    ///
     /// // but not from other variants.
-    /// let v2 = Variant::from("Hello");
-    /// assert_eq!(None, v2.as_time_utc());
+    /// let v3 = Variant::from("Hello");
+    /// assert_eq!(None, v3.as_time_utc());
     /// ```
     pub fn as_time_utc(&'m self) -> Option<NaiveTime> {
-        if let Variant::Time(time) = self {
-            Some(*time)
-        } else {
-            None
+        match *self {
+            Variant::Time(time) => Some(time),
+            Variant::ShortString(s) => {
+                Time64MicrosecondType::parse(s.as_ref()).and_then(|nanos_since_midnight| {
+                    NaiveTime::from_num_seconds_from_midnight_opt(
+                        (nanos_since_midnight / 1_000_000_000) as u32,
+                        (nanos_since_midnight % 1_000_000_000) as u32,
+                    )
+                })
+            }
+            Variant::String(s) => {
+                Time64MicrosecondType::parse(s).and_then(|nanos_since_midnight| {
+                    NaiveTime::from_num_seconds_from_midnight_opt(
+                        (nanos_since_midnight / 1_000_000_000) as u32,
+                        (nanos_since_midnight % 1_000_000_000) as u32,
+                    )
+                })
+            }
+            _ => None,
         }
     }
 
