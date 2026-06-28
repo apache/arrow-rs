@@ -589,6 +589,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset,
             metrics,
             max_predicate_cache_size,
+            long_skip_share_threshold,
         } = self;
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -614,6 +615,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset,
             metrics,
             max_predicate_cache_size,
+            long_skip_share_threshold,
         }
         .build()?;
 

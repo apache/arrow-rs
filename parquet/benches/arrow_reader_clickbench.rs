@@ -50,6 +50,28 @@ use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+/// Long-skip-share threshold the ClickBench benchmarks pass to
+/// `with_long_skip_share_threshold`.
+///
+/// The default `0.75` is the value that produced the best results during PR
+/// #9659 testing. Override via the
+/// `PARQUET_BENCH_LONG_SKIP_SHARE_THRESHOLD` env var to sweep alternatives;
+/// set to `none` (case-insensitive) to disable deferral entirely. Any other
+/// non-parseable value panics so misconfigured runs fail loudly instead of
+/// silently falling back.
+fn bench_long_skip_share_threshold() -> Option<f64> {
+    const DEFAULT: f64 = 0.75;
+    const ENV_VAR: &str = "PARQUET_BENCH_LONG_SKIP_SHARE_THRESHOLD";
+    match std::env::var(ENV_VAR) {
+        Ok(s) if s.eq_ignore_ascii_case("none") => None,
+        Ok(s) => Some(
+            s.parse()
+                .unwrap_or_else(|_| panic!("{ENV_VAR}={s:?} is not a valid f64")),
+        ),
+        Err(_) => Some(DEFAULT),
+    }
+}
+
 fn async_reader(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -716,15 +738,15 @@ impl ReadTest {
         };
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_long_skip_share_threshold(bench_long_skip_share_threshold());
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -747,15 +769,15 @@ impl ReadTest {
         let reader = ParquetObjectReader::new(store, location);
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             reader,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_long_skip_share_threshold(bench_long_skip_share_threshold());
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -774,15 +796,15 @@ impl ReadTest {
         };
 
         // setup the reader
-        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchReaderBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_long_skip_share_threshold(bench_long_skip_share_threshold());
+        let reader = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;

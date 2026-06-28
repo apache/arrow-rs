@@ -263,6 +263,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// Scatter threshold for filter deferral
+    long_skip_share_threshold: Option<f64>,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -305,6 +308,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        long_skip_share_threshold: Option<f64>,
     ) -> Self {
         Self {
             batch_size,
@@ -315,6 +319,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            long_skip_share_threshold,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -409,7 +414,9 @@ impl RowGroupReaderBuilder {
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_row_selection_policy(self.row_selection_policy);
+            .with_metrics(self.metrics.clone())
+            .with_row_selection_policy(self.row_selection_policy)
+            .with_long_skip_share_threshold(self.long_skip_share_threshold);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -637,11 +644,12 @@ impl RowGroupReaderBuilder {
                     .then(|| budget.selected_row_limit())
                     .flatten();
 
-                // Evaluate the filter via `with_predicate_options`, opting into
-                // early termination when this is the final predicate and an
-                // output limit was set.
+                // Evaluate the filter via `with_predicate_options`. `row_count`
+                // feeds both per-predicate selectivity metrics and the
+                // optional early-termination padding for the final predicate.
                 let mut predicate_options =
-                    PredicateOptions::new(array_reader, filter_info.current_mut());
+                    PredicateOptions::new(array_reader, filter_info.current_mut())
+                        .with_total_rows(row_count);
                 if let Some(limit) = predicate_limit {
                     predicate_options = predicate_options.with_limit(limit, row_count);
                 }
@@ -916,7 +924,7 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 232);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 288);
     }
 
     #[test]
