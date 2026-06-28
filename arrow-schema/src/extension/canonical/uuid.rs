@@ -123,30 +123,19 @@ mod tests {
     #[test]
     #[should_panic(expected = "Uuid extension type expects no metadata")]
     fn with_metadata() {
-        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "unexpected".to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, Uuid::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "unexpected"),
+        ]);
         field.extension_type::<Uuid>();
     }
 
     #[test]
     fn empty_metadata_string_is_treated_as_none() -> Result<(), ArrowError> {
-        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, Uuid::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, ""),
+        ]);
         field.try_extension_type::<Uuid>()?;
         Ok(())
     }

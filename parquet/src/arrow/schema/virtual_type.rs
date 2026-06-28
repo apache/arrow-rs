@@ -153,11 +153,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Extension type name missing")]
     fn row_number_missing_name() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false)
+            .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "")]);
         field.extension_type::<RowNumber>();
     }
 
@@ -170,34 +167,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn row_number_missing_metadata() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                RowNumber::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, RowNumber::NAME)]);
         field.extension_type::<RowNumber>();
     }
 
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn row_number_invalid_metadata() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [
-                (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    RowNumber::NAME.to_owned(),
-                ),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "non-empty".to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, RowNumber::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "non-empty"),
+        ]);
         field.extension_type::<RowNumber>();
     }
 
@@ -213,11 +194,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Extension type name missing")]
     fn row_group_index_missing_name() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false)
+            .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "")]);
         field.extension_type::<RowGroupIndex>();
     }
 
@@ -230,34 +208,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn row_group_index_missing_metadata() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                RowGroupIndex::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, RowGroupIndex::NAME)]);
         field.extension_type::<RowGroupIndex>();
     }
 
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn row_group_index_invalid_metadata() {
-        let field = Field::new("", DataType::Int64, false).with_metadata(
-            [
-                (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    RowGroupIndex::NAME.to_owned(),
-                ),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    "non-empty".to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Int64, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, RowGroupIndex::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, "non-empty"),
+        ]);
         field.extension_type::<RowGroupIndex>();
     }
 }

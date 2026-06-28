@@ -5482,34 +5482,14 @@ mod test {
             #[cfg(not(feature = "avro_custom_types"))]
             {
                 let schema = Arc::new(Schema::new(vec![
-                    Field::new("duration_time_nanos", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-nanos".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_micros", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-micros".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_millis", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-millis".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_seconds", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-seconds".to_string(),
-                        )]
-                        .into(),
-                    ),
+                    Field::new("duration_time_nanos", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-nanos")]),
+                    Field::new("duration_time_micros", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-micros")]),
+                    Field::new("duration_time_millis", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-millis")]),
+                    Field::new("duration_time_seconds", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-seconds")]),
                 ]));
 
                 let nanos =
@@ -8431,7 +8411,7 @@ mod test {
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
         const UUID_LOGICAL_KEY: &str = "logicalType";
 
-        let uuid_md_top: Option<HashMap<String, String>> = batch
+        let uuid_md_top: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("uuid_str")
             .ok()
@@ -8449,7 +8429,7 @@ mod test {
                 }
             });
 
-        let uuid_md_union: Option<HashMap<String, String>> = batch
+        let uuid_md_union: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("union_uuid_or_fixed10")
             .ok()

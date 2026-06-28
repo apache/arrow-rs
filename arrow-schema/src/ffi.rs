@@ -929,7 +929,7 @@ mod tests {
             Field::new("address", DataType::Utf8, false),
             Field::new("priority", DataType::UInt8, false),
         ])
-        .with_metadata([("hello".to_string(), "world".to_string())].into());
+        .with_metadata([("hello", "world")]);
 
         round_trip_schema(schema);
 

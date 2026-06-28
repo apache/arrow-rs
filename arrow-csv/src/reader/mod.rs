@@ -728,7 +728,7 @@ fn validate_header(rows: &StringRecords<'_>, fields: &Fields) -> Result<(), Arro
 fn parse(
     rows: &StringRecords<'_>,
     fields: &Fields,
-    metadata: Option<std::collections::HashMap<String, String>>,
+    metadata: Option<Metadata>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
     null_regex: &NullRegex,
@@ -1381,7 +1381,7 @@ mod tests {
         assert_eq!(37, batch.num_rows());
         assert_eq!(3, batch.num_columns());
 
-        assert_eq!(&metadata, batch.schema().metadata());
+        assert_eq!(batch.schema().metadata(), &metadata);
     }
 
     #[test]

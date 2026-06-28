@@ -37,6 +37,8 @@ mod field;
 pub use field::*;
 mod fields;
 pub use fields::*;
+mod metadata;
+pub use metadata::*;
 mod schema;
 pub use schema::*;
 use std::ops;
