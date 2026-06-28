@@ -102,8 +102,8 @@ impl From<io::Error> for ParquetError {
 }
 
 #[cfg(any(feature = "snap", test))]
-impl From<snap::Error> for ParquetError {
-    fn from(e: snap::Error) -> ParquetError {
+impl From<snipsnap::Error> for ParquetError {
+    fn from(e: snipsnap::Error) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }

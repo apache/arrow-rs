@@ -371,25 +371,26 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     })?;
 
     // open input file decoder
-    let input_file_decoder = match args.csv_compression {
-        Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
-        Compression::SNAPPY => Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>,
-        Compression::GZIP(_) => {
-            Box::new(flate2::read::MultiGzDecoder::new(input_file)) as Box<dyn Read>
-        }
-        Compression::BROTLI(_) => {
-            Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>
-        }
-        Compression::LZ4 => {
-            Box::new(lz4_flex::frame::FrameDecoder::new(input_file)) as Box<dyn Read>
-        }
-        Compression::ZSTD(_) => {
-            Box::new(zstd::Decoder::new(input_file).map_err(|e| {
+    let input_file_decoder =
+        match args.csv_compression {
+            Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
+            Compression::SNAPPY => {
+                Box::new(snipsnap::read::FrameDecoder::new(input_file)) as Box<dyn Read>
+            }
+            Compression::GZIP(_) => {
+                Box::new(flate2::read::MultiGzDecoder::new(input_file)) as Box<dyn Read>
+            }
+            Compression::BROTLI(_) => {
+                Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>
+            }
+            Compression::LZ4 => {
+                Box::new(lz4_flex::frame::FrameDecoder::new(input_file)) as Box<dyn Read>
+            }
+            Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
                 ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
-            })?) as Box<dyn Read>
-        }
-        d => unimplemented!("compression type {d}"),
-    };
+            })?) as Box<dyn Read>,
+            d => unimplemented!("compression type {d}"),
+        };
 
     // create input csv reader
     let builder = configure_reader_builder(args, arrow_schema);
@@ -427,7 +428,7 @@ mod tests {
     use flate2::write::GzEncoder;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::reader::{FileReader, SerializedFileReader};
-    use snap::write::FrameEncoder;
+    use snipsnap::write::FrameEncoder;
     use tempfile::NamedTempFile;
 
     #[test]
