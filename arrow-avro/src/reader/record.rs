@@ -2286,33 +2286,55 @@ fn process_blockwise(
         match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
-                let count = (-block_count) as usize;
+                // `unsigned_abs` avoids overflowing `-block_count` for `i64::MIN` (#10235)
+                let count = block_count.unsigned_abs() as usize;
                 // A negative count is followed by a long of the size in bytes
-                let size_in_bytes = buf.get_long()? as usize;
+                let raw_size = buf.get_long()?;
+                let size_in_bytes = usize::try_from(raw_size).map_err(|_| {
+                    AvroError::ParseError(format!("Block size cannot be negative, got {raw_size}"))
+                })?;
                 match negative_behavior {
                     NegativeBlockBehavior::ProcessItems => {
                         // Process items one-by-one after reading size
-                        for _ in 0..count {
-                            on_item(buf)?;
-                        }
+                        process_block_items(buf, count, &mut on_item)?;
                     }
                     NegativeBlockBehavior::SkipBySize => {
                         // Skip the entire block payload at once
                         let _ = buf.get_fixed(size_in_bytes)?;
                     }
                 }
-                total += count;
+                total = total.saturating_add(count);
             }
             Ordering::Greater => {
                 let count = block_count as usize;
-                for _ in 0..count {
-                    on_item(buf)?;
-                }
-                total += count;
+                process_block_items(buf, count, &mut on_item)?;
+                total = total.saturating_add(count);
             }
         }
     }
     Ok(total)
+}
+
+/// Decode `count` block items, rejecting a `count` larger than the bytes left to
+/// decode them from. A crafted block can advertise up to `i64::MAX` items which,
+/// with a zero-byte decoder like `null`, would otherwise spin forever (#10235).
+/// Items that read input each need at least one byte, so a real `count` always fits.
+#[inline]
+fn process_block_items(
+    buf: &mut AvroCursor,
+    count: usize,
+    on_item: &mut impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
+) -> Result<(), AvroError> {
+    let remaining = buf.remaining();
+    if count > remaining {
+        return Err(AvroError::ParseError(format!(
+            "Block declares {count} items but only {remaining} bytes remain"
+        )));
+    }
+    for _ in 0..count {
+        on_item(buf)?;
+    }
+    Ok(())
 }
 
 #[inline]
@@ -3432,6 +3454,52 @@ mod tests {
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), 2);
         assert_eq!(values.value(2), 3);
+    }
+
+    /// Zig-zag + unsigned-LEB128 encode, correct for all `i64` including `MIN`/`MAX`
+    /// (`encode_avro_long` loops forever on those two values).
+    fn encode_avro_long_extreme(value: i64) -> Vec<u8> {
+        let mut n = ((value << 1) ^ (value >> 63)) as u64;
+        let mut out = Vec::new();
+        while n >= 0x80 {
+            out.push((n as u8) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+        out
+    }
+
+    // `array<null>` is the worst case: items consume no bytes, so without a bound the
+    // loop never advances the cursor and spins for the whole `block_count` (#10235).
+    fn array_of_null_decoder() -> Decoder {
+        let list_dt = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Null))));
+        Decoder::try_new(&list_dt).unwrap()
+    }
+
+    #[test]
+    fn test_array_block_count_i64_max_errors() {
+        // A positive `i64::MAX` block count must error rather than spin the item loop.
+        let mut decoder = array_of_null_decoder();
+        let mut data = encode_avro_long_extreme(i64::MAX); // item count
+        data.extend_from_slice(&encode_avro_long(0)); // empty-block terminator
+        let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
+        assert!(
+            err.to_string().contains("bytes remain"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_array_block_count_i64_min_errors() {
+        // `i64::MIN` previously overflowed `-block_count` before spinning the loop.
+        let mut decoder = array_of_null_decoder();
+        let mut data = encode_avro_long_extreme(i64::MIN); // negative item count
+        data.extend_from_slice(&encode_avro_long(0)); // block size in bytes
+        let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
+        assert!(
+            err.to_string().contains("bytes remain"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
