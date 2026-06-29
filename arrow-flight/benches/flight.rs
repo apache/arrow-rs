@@ -182,7 +182,9 @@ fn bench_decode_dictionary_stream(c: &mut Criterion) {
 }
 
 fn bench_do_put_dictionary(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let (channel, _) = rt.block_on(start_server());
     let mut g = c.benchmark_group("do_put_dictionary");
 
