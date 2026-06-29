@@ -18,6 +18,7 @@
 use crate::CompressionType;
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
+use flatbuffers::FlatBufferBuilder;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
@@ -27,14 +28,20 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 ///
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
 /// compression calls to avoid the performance overhead of initialising a new context for every
-/// compression.
+/// compression. Also holds a [`FlatBufferBuilder`] that is reused across IPC writes.
 #[derive(Default)]
 pub struct CompressionContext {
+    fbb: FlatBufferBuilder<'static>,
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
 }
 
 impl CompressionContext {
+    /// Get a mutable reference to the [`FlatBufferBuilder`] that is reused across IPC writes.
+    pub(crate) fn mut_fbb(&mut self) -> &mut FlatBufferBuilder<'static> {
+        &mut self.fbb
+    }
+
     #[cfg(feature = "zstd")]
     fn zstd_compressor(&mut self, level: i32) -> &mut zstd::bulk::Compressor<'static> {
         self.compressor.get_or_insert_with(|| {
