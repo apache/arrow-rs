@@ -62,8 +62,8 @@ use arrow::compute::{and, or};
 use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
 use arrow_reader_common::{
-    COLUMN_NAMES, InMemoryReader, UTF8_VIEW_MISSING_VALUE, post_filter_projected_num_rows,
-    projection_names, read_projection_for_post_filter, write_parquet_file,
+    COLUMN_NAMES, InMemoryReader, post_filter_projected_num_rows, projection_names,
+    read_projection_for_post_filter, write_parquet_file,
 };
 use bytes::Bytes;
 use criterion::{
@@ -74,16 +74,11 @@ use parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelectionPoli
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use std::sync::Arc;
 
-/// ProjectionCase defines the projection mode for the benchmark:
-/// either projecting all columns or excluding the column that is used for filtering.
+/// ProjectionCase defines the output projection mode for each benchmark case.
 #[derive(Clone, Copy)]
 enum ProjectionCase {
-    AllColumns,
     ExcludeFilterColumn,
-    FilterColumnsOnly,
     CountOnly,
-    FixedColumns,
-    Float64AndTs,
     Float64Only,
     Int64AndFloat64,
     Int64AndUtf8,
@@ -94,12 +89,8 @@ enum ProjectionCase {
 impl std::fmt::Display for ProjectionCase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
-            ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
             ProjectionCase::CountOnly => write!(f, "count_only"),
-            ProjectionCase::FixedColumns => write!(f, "fixed_columns"),
-            ProjectionCase::Float64AndTs => write!(f, "float64_and_ts"),
             ProjectionCase::Float64Only => write!(f, "float64_only"),
             ProjectionCase::Int64AndFloat64 => write!(f, "int64_and_float64"),
             ProjectionCase::Int64AndUtf8 => write!(f, "int64_and_utf8"),
@@ -143,22 +134,6 @@ impl AsyncStrategy {
 /// The variants correspond to the different filter patterns.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FilterType {
-    /// "Point Lookup": selects a single row
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │     ...       │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │      ...      │
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    /// (1 RowSelection of 1 row)
-    PointLookup,
     /// unselective (99%) unclustered filter
     /// ```text
     /// ┌───────────────┐    ┌───────────────┐
@@ -240,46 +215,8 @@ pub(crate) enum FilterType {
     /// └───────────────┘    └───────────────┘
     /// ```
     SparseScalarFixedOutput,
-    /// Scalar range predicate derived from TPC-DS Q9 `ss_quantity BETWEEN ...`
-    /// subqueries. The selected rows are random and moderately selective, and
-    /// benchmark projections cover both count-only and numeric aggregate cases.
-    /// Fragmented ~20% selection: approx 100,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    QuantityRangePredicate,
-
     // Multi-predicate shapes. These focus predicate evaluation cost
     // independently of projection cost.
-    /// Multiple cheap scalar predicates, very small output, and projected
-    /// predicate columns used later by grouping. Derived from ClickBench Q40.
-    /// Fragmented ~0.8% selection: approx 4,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    MultiScalarProjectedKey,
     /// Complex OR predicate over dictionary/string-like and scalar columns
     /// where predicate evaluation dominates reader time. Derived from TPC-DS
     /// Q41.
@@ -302,36 +239,12 @@ pub(crate) enum FilterType {
 
     // Projected-predicate shapes. At least one predicate column is also needed
     // in the final projection.
-    /// Shape of TPC-DS Q21 after dynamic-filter pruning: sparse fragmented
-    /// fixed-width predicates where the final projection still includes the
-    /// predicate columns. This protects against choosing selectors for columns
-    /// that were already decoded/cached by predicate evaluation.
-    /// Fragmented ~7% selection: approx 36,000 selected rows in 500K.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    SparseProjectedPredicatesFixedOutput,
     /// Projected-predicate shape derived from TPC-DS Q2 fact scans: the
     /// dynamic filter applies to the date key, the same date key is projected,
     /// and an additional fixed-width sales value can still be deferred by
     /// predicate pushdown.
-    /// Selectivity ranges from 1% to 50%: approx 5K to 250K selected rows in
-    /// 500K.
-    /// The 1% variants also cover a TPC-DS Q41-like item scan where predicate
-    /// and output overlap, selection is highly fragmented, and the deferred
-    /// output payload is small enough that post-filtering can be faster than
-    /// row-filter pushdown.
+    /// The baseline keeps an 8% sparse fixed-width point, a 50% dense
+    /// fixed-width point, and a 40% variable-width output guardrail.
     ///
     /// ```text
     /// ┌───────────────┐    ┌───────────────┐
@@ -346,15 +259,13 @@ pub(crate) enum FilterType {
     /// │      ...      │    │      ...      │
     /// └───────────────┘    └───────────────┘
     /// ```
-    ProjectedPredicate1Pct,
     ProjectedPredicate8Pct,
-    ProjectedPredicate20Pct,
     ProjectedPredicate40Pct,
     ProjectedPredicate50Pct,
     /// Exact shape for the projected-predicate moderate-selectivity gate:
     /// a clustered 20% timestamp predicate where the predicate column is
     /// projected and the deferred output is variable-width.
-    /// Clustered 8% or 20% selection: 40,000 or 100,000 selected rows in 500K.
+    /// Clustered 20% selection: approx 100,000 selected rows in 500K.
     ///
     /// ```text
     /// ┌───────────────┐    ┌───────────────┐
@@ -369,61 +280,28 @@ pub(crate) enum FilterType {
     /// │               │    │               │
     /// └───────────────┘    └───────────────┘
     /// ```
-    ClusteredTs8PctProjectedPredicate,
     ClusteredTs20PctProjectedPredicate,
-    /// Sparse variable-width predicate shaped like TPC-DS Q83 dynamic
-    /// `i_item_id` filters, where the predicate column is also projected.
-    /// Sparse 0.1% selection: 500 sentinel rows in 500K, one every 1,000 rows.
-    ///
-    /// ```text
-    /// ┌───────────────┐    ┌───────────────┐
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// │               │    │               │
-    /// │      ...      │    │      ...      │
-    /// │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │
-    /// └───────────────┘    └───────────────┘
-    /// ```
-    Utf8ViewMissing,
 }
 
 impl std::fmt::Display for FilterType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            FilterType::PointLookup => "int64 == 9999",
             FilterType::UnselectiveUnclustered => "float64 <= 99.0",
             FilterType::UnselectiveClustered => "ts < 9000",
-            FilterType::Utf8ViewMissing => "utf8View == '<missing>'",
             FilterType::ScalarPrefixUtf8Output => "int64 == 62 AND ts < 9000",
             FilterType::SparseScalarFixedOutput => "int64 < 8 AND ts < 9000",
-            FilterType::MultiScalarProjectedKey => "int64 == 62 AND float64 > 10.0 AND ts < 9000",
             FilterType::ComplexOrMixedPredicates => {
                 "(utf8View <> '' AND int64 < 8) OR (ts < 100 AND float64 > 95.0)"
             }
-            FilterType::SparseProjectedPredicatesFixedOutput => {
-                "int64 < 8 AND ts < 9000 projected predicates"
-            }
-            FilterType::ProjectedPredicate1Pct => "int64 < 1 projected predicate",
             FilterType::ProjectedPredicate8Pct => "int64 < 8 projected predicate with fixed output",
-            FilterType::ProjectedPredicate20Pct => {
-                "int64 < 20 projected predicate with fixed output"
-            }
             FilterType::ProjectedPredicate40Pct => {
                 "int64 < 40 projected predicate with fixed output"
             }
             FilterType::ProjectedPredicate50Pct => {
                 "int64 < 50 projected predicate with fixed output"
             }
-            FilterType::QuantityRangePredicate => "int64 > 0 AND int64 < 21",
             FilterType::ClusteredTs20PctProjectedPredicate => {
                 "ts < 2000 projected predicate with utf8 output"
-            }
-            FilterType::ClusteredTs8PctProjectedPredicate => {
-                "ts < 800 projected predicate with utf8 output"
             }
         };
         write!(f, "{s}")
@@ -434,12 +312,6 @@ impl FilterType {
     /// Applies the specified filter on the given RecordBatch and returns a BooleanArray mask.
     pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> arrow::error::Result<BooleanArray> {
         match self {
-            // Point Lookup on int64 column
-            FilterType::PointLookup => {
-                let array = batch.column(batch.schema().index_of("int64")?);
-                let scalar = Int64Array::new_scalar(9999);
-                eq(array, &scalar)
-            }
             // Unselective Unclustered on float64 column: NOT (float64 > 99.0)
             FilterType::UnselectiveUnclustered => {
                 let array = batch.column(batch.schema().index_of("float64")?);
@@ -450,11 +322,6 @@ impl FilterType {
                 let array = batch.column(batch.schema().index_of("ts")?);
                 lt(array, &TimestampMillisecondArray::new_scalar(9000))
             }
-            FilterType::Utf8ViewMissing => {
-                let array = batch.column(batch.schema().index_of("utf8View")?);
-                let scalar = StringViewArray::new_scalar(UTF8_VIEW_MISSING_VALUE);
-                eq(array, &scalar)
-            }
             // ScalarPrefixUtf8Output: a cheap fragmented scalar predicate
             // evaluated before decoding a variable-width output column.
             FilterType::ScalarPrefixUtf8Output => {
@@ -464,22 +331,12 @@ impl FilterType {
                 let date_like_range = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
                 and(&counter_match, &date_like_range)
             }
-            FilterType::SparseScalarFixedOutput
-            | FilterType::SparseProjectedPredicatesFixedOutput => {
+            FilterType::SparseScalarFixedOutput => {
                 let int64 = batch.column(batch.schema().index_of("int64")?);
                 let ts = batch.column(batch.schema().index_of("ts")?);
                 let counter_like = lt(int64, &Int64Array::new_scalar(8))?;
                 let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
                 and(&counter_like, &date_like)
-            }
-            FilterType::MultiScalarProjectedKey => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let float64 = batch.column(batch.schema().index_of("float64")?);
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
-                let width_match = gt(float64, &Float64Array::new_scalar(10.0))?;
-                let date_like = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
-                and(&and(&counter_match, &width_match)?, &date_like)
             }
             FilterType::ComplexOrMixedPredicates => {
                 let int64 = batch.column(batch.schema().index_of("int64")?);
@@ -496,31 +353,17 @@ impl FilterType {
                 )?;
                 or(&string_branch, &scalar_branch)
             }
-            FilterType::ProjectedPredicate1Pct
-            | FilterType::ProjectedPredicate8Pct
-            | FilterType::ProjectedPredicate20Pct
+            FilterType::ProjectedPredicate8Pct
             | FilterType::ProjectedPredicate40Pct
             | FilterType::ProjectedPredicate50Pct => {
                 let int64 = batch.column(batch.schema().index_of("int64")?);
                 let threshold = match self {
-                    FilterType::ProjectedPredicate1Pct => 1,
                     FilterType::ProjectedPredicate8Pct => 8,
-                    FilterType::ProjectedPredicate20Pct => 20,
                     FilterType::ProjectedPredicate40Pct => 40,
                     FilterType::ProjectedPredicate50Pct => 50,
                     _ => unreachable!(),
                 };
                 lt(int64, &Int64Array::new_scalar(threshold))
-            }
-            FilterType::QuantityRangePredicate => {
-                let int64 = batch.column(batch.schema().index_of("int64")?);
-                let lower = gt(int64, &Int64Array::new_scalar(0))?;
-                let upper = lt(int64, &Int64Array::new_scalar(21))?;
-                and(&lower, &upper)
-            }
-            FilterType::ClusteredTs8PctProjectedPredicate => {
-                let ts = batch.column(batch.schema().index_of("ts")?);
-                lt(ts, &TimestampMillisecondArray::new_scalar(800))
             }
             FilterType::ClusteredTs20PctProjectedPredicate => {
                 let ts = batch.column(batch.schema().index_of("ts")?);
@@ -532,23 +375,15 @@ impl FilterType {
     /// Return the indexes in the batch's schema that are used for filtering.
     fn filter_projection(&self) -> &'static [usize] {
         match self {
-            FilterType::PointLookup => &[0],
             FilterType::UnselectiveUnclustered => &[1],
             FilterType::UnselectiveClustered => &[3],
-            FilterType::Utf8ViewMissing => &[2],
             FilterType::ScalarPrefixUtf8Output => &[0, 3],
-            FilterType::MultiScalarProjectedKey => &[0, 1, 3],
-            FilterType::SparseScalarFixedOutput
-            | FilterType::SparseProjectedPredicatesFixedOutput => &[0, 3],
+            FilterType::SparseScalarFixedOutput => &[0, 3],
             FilterType::ComplexOrMixedPredicates => &[0, 1, 2, 3],
-            FilterType::ProjectedPredicate1Pct
-            | FilterType::ProjectedPredicate8Pct
-            | FilterType::ProjectedPredicate20Pct
+            FilterType::ProjectedPredicate8Pct
             | FilterType::ProjectedPredicate40Pct
             | FilterType::ProjectedPredicate50Pct => &[0],
-            FilterType::QuantityRangePredicate => &[0],
-            FilterType::ClusteredTs8PctProjectedPredicate
-            | FilterType::ClusteredTs20PctProjectedPredicate => &[3],
+            FilterType::ClusteredTs20PctProjectedPredicate => &[3],
         }
     }
 }
@@ -564,26 +399,79 @@ impl FilterType {
 ///
 /// Coverage is organized by reader-level dimensions instead of individual
 /// queries:
-/// - selection shape: point lookup, sparse fragmented, moderate fragmented,
-///   dense fragmented, and clustered ranges.
-/// - output relationship: filter-only, count-only, deferred fixed-width,
-///   deferred variable-width, and projected predicate columns.
-/// - predicate shape: single scalar, scalar conjunctions, scalar plus
-///   variable-width predicates, mixed OR predicates, and dynamic-filter-like
-///   projected predicates.
+/// - selection shape: sparse fragmented, dense fragmented, and clustered
+///   ranges.
+/// - output relationship: count-only, deferred fixed-width, deferred
+///   variable-width, and projected predicate columns.
+/// - predicate shape: single scalar, scalar plus variable-width predicates,
+///   mixed OR predicates, and dynamic-filter-like projected predicates.
 /// - policy boundary: strategy rows compare full post-filtering with `Auto`,
 ///   forced selectors, and forced masks for every shape.
+///
+/// The landed baseline intentionally keeps a small set of representative cases
+/// instead of the larger local tuning sweep used during policy development.
 ///
 /// Individual [`FilterType`] variants include shaded-row diagrams for the
 /// representative selection shapes.
 fn benchmark_async_auto_policy_focus(c: &mut Criterion) {
     let parquet_file = Bytes::from(write_parquet_file());
     let mut cases = Vec::new();
-    push_baseline_selectivity_cases(&mut cases, &parquet_file);
-    push_filter_only_cases(&mut cases, &parquet_file);
-    push_deferred_output_cases(&mut cases, &parquet_file);
-    push_predicate_cost_cases(&mut cases, &parquet_file);
-    push_projected_predicate_cases(&mut cases, &parquet_file);
+    push_focus_cases(
+        &mut cases,
+        &parquet_file,
+        &[
+            (
+                "high_selectivity_float64",
+                FilterType::UnselectiveUnclustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "high_selectivity_ts_clustered",
+                FilterType::UnselectiveClustered,
+                ProjectionCase::ExcludeFilterColumn,
+            ),
+            (
+                "sparse_scalar_count_only",
+                FilterType::SparseScalarFixedOutput,
+                ProjectionCase::CountOnly,
+            ),
+            (
+                "sparse_scalar_fixed_output",
+                FilterType::SparseScalarFixedOutput,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "scalar_prefix_utf8_output",
+                FilterType::ScalarPrefixUtf8Output,
+                ProjectionCase::Utf8Only,
+            ),
+            (
+                "complex_or_mixed_predicates",
+                FilterType::ComplexOrMixedPredicates,
+                ProjectionCase::Float64Only,
+            ),
+            (
+                "projected_predicate_8pct_fixed_output",
+                FilterType::ProjectedPredicate8Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_50pct_fixed_output",
+                FilterType::ProjectedPredicate50Pct,
+                ProjectionCase::Int64AndFloat64,
+            ),
+            (
+                "projected_predicate_40pct_varwidth_output",
+                FilterType::ProjectedPredicate40Pct,
+                ProjectionCase::Int64AndUtf8,
+            ),
+            (
+                "clustered_ts_20pct_varwidth_output",
+                FilterType::ClusteredTs20PctProjectedPredicate,
+                ProjectionCase::TsAndUtf8,
+            ),
+        ],
+    );
 
     let strategies = [
         AsyncStrategy::FullPostFilter,
@@ -621,186 +509,6 @@ fn push_focus_cases(
                     projection_case,
                 )
             }),
-    );
-}
-
-fn push_baseline_selectivity_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    // Keep only high-selectivity baseline shapes that are not already covered by
-    // the existing async row-filter strategy matrix.
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "high_selectivity_float64",
-                FilterType::UnselectiveUnclustered,
-                ProjectionCase::ExcludeFilterColumn,
-            ),
-            (
-                "high_selectivity_ts_clustered",
-                FilterType::UnselectiveClustered,
-                ProjectionCase::ExcludeFilterColumn,
-            ),
-        ],
-    );
-}
-
-fn push_filter_only_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "point_lookup_filter_only",
-                FilterType::PointLookup,
-                ProjectionCase::FilterColumnsOnly,
-            ),
-            (
-                "sparse_scalar_count_only",
-                FilterType::SparseScalarFixedOutput,
-                ProjectionCase::CountOnly,
-            ),
-        ],
-    );
-}
-
-fn push_deferred_output_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "scalar_prefix_utf8_output",
-                FilterType::ScalarPrefixUtf8Output,
-                ProjectionCase::Utf8Only,
-            ),
-            (
-                "sparse_scalar_fixed_output",
-                FilterType::SparseScalarFixedOutput,
-                ProjectionCase::Float64Only,
-            ),
-            (
-                "quantity_range_numeric_output",
-                FilterType::QuantityRangePredicate,
-                ProjectionCase::Float64Only,
-            ),
-        ],
-    );
-}
-
-fn push_predicate_cost_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "multi_scalar_projected_key",
-                FilterType::MultiScalarProjectedKey,
-                ProjectionCase::Float64AndTs,
-            ),
-            (
-                "complex_or_mixed_predicates",
-                FilterType::ComplexOrMixedPredicates,
-                ProjectionCase::Float64Only,
-            ),
-        ],
-    );
-}
-
-fn push_projected_predicate_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    // Projected-predicate shapes. The predicate column is also projected, so
-    // pushdown must not assume the predicate decode is purely overhead.
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[(
-            "sparse_projected_predicates_fixed_output",
-            FilterType::SparseProjectedPredicatesFixedOutput,
-            ProjectionCase::FixedColumns,
-        )],
-    );
-
-    push_projected_predicate_sweep(cases, parquet_file);
-    push_clustered_projected_predicate_cases(cases, parquet_file);
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[(
-            "sparse_utf8_projected_predicate",
-            FilterType::Utf8ViewMissing,
-            ProjectionCase::AllColumns,
-        )],
-    );
-}
-
-fn push_projected_predicate_sweep(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    // Fixed-output boundary points anchor the post-filter shortcut across
-    // fragmented selectivity. Variable-width guardrails make the deferred-output
-    // cost boundary explicit without expanding the full Cartesian product.
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "projected_predicate_1pct_fixed_output",
-                FilterType::ProjectedPredicate1Pct,
-                ProjectionCase::Int64AndFloat64,
-            ),
-            (
-                "projected_predicate_8pct_fixed_output",
-                FilterType::ProjectedPredicate8Pct,
-                ProjectionCase::Int64AndFloat64,
-            ),
-            (
-                "projected_predicate_20pct_fixed_output",
-                FilterType::ProjectedPredicate20Pct,
-                ProjectionCase::Int64AndFloat64,
-            ),
-            (
-                "projected_predicate_50pct_fixed_output",
-                FilterType::ProjectedPredicate50Pct,
-                ProjectionCase::Int64AndFloat64,
-            ),
-            (
-                "projected_predicate_8pct_varwidth_output",
-                FilterType::ProjectedPredicate8Pct,
-                ProjectionCase::Int64AndUtf8,
-            ),
-            (
-                "projected_predicate_40pct_varwidth_output",
-                FilterType::ProjectedPredicate40Pct,
-                ProjectionCase::Int64AndUtf8,
-            ),
-        ],
-    );
-}
-
-fn push_clustered_projected_predicate_cases(cases: &mut Vec<AsyncFocusCase>, parquet_file: &Bytes) {
-    push_focus_cases(
-        cases,
-        parquet_file,
-        &[
-            (
-                "clustered_ts_8pct_fixed_output",
-                FilterType::ClusteredTs8PctProjectedPredicate,
-                ProjectionCase::Float64AndTs,
-            ),
-            (
-                "clustered_ts_8pct_varwidth_output",
-                FilterType::ClusteredTs8PctProjectedPredicate,
-                ProjectionCase::TsAndUtf8,
-            ),
-            (
-                "clustered_ts_20pct_fixed_output",
-                FilterType::ClusteredTs20PctProjectedPredicate,
-                ProjectionCase::Float64AndTs,
-            ),
-            (
-                "clustered_ts_20pct_varwidth_output",
-                FilterType::ClusteredTs20PctProjectedPredicate,
-                ProjectionCase::TsAndUtf8,
-            ),
-        ],
     );
 }
 
@@ -855,7 +563,6 @@ fn benchmark_async_focus_case(
     );
     let sparse_int64_pred_mask = ProjectionMask::roots(schema_descr, [0]);
     let sparse_ts_pred_mask = ProjectionMask::roots(schema_descr, [3]);
-    let scalar_float64_pred_mask = ProjectionMask::roots(schema_descr, [1]);
 
     for strategy in strategies.iter().copied() {
         let bench_id = BenchmarkId::new(
@@ -870,7 +577,6 @@ fn benchmark_async_focus_case(
                 let pred_mask = pred_mask.clone();
                 let sparse_int64_pred_mask = sparse_int64_pred_mask.clone();
                 let sparse_ts_pred_mask = sparse_ts_pred_mask.clone();
-                let scalar_float64_pred_mask = scalar_float64_pred_mask.clone();
                 let projection_mask = projection_mask.clone();
                 let read_projection_mask = read_projection_mask.clone();
                 let output_column_names = output_column_names.clone();
@@ -882,7 +588,6 @@ fn benchmark_async_focus_case(
                             pred_mask,
                             sparse_int64_pred_mask,
                             sparse_ts_pred_mask,
-                            scalar_float64_pred_mask,
                         );
                         benchmark_async_reader_with_policy(
                             reader,
@@ -909,19 +614,13 @@ fn benchmark_async_focus_case(
 fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCase) -> Vec<usize> {
     let filter_columns = filter_type.filter_projection();
     match projection_case {
-        ProjectionCase::AllColumns | ProjectionCase::ExcludeFilterColumn => COLUMN_NAMES
+        ProjectionCase::ExcludeFilterColumn => COLUMN_NAMES
             .iter()
             .enumerate()
             .map(|(idx, _)| idx)
-            .filter(move |idx| {
-                matches!(projection_case, ProjectionCase::AllColumns)
-                    || !filter_columns.contains(idx)
-            })
+            .filter(move |idx| !filter_columns.contains(idx))
             .collect(),
-        ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
         ProjectionCase::CountOnly => vec![],
-        ProjectionCase::FixedColumns => vec![0, 1, 3],
-        ProjectionCase::Float64AndTs => vec![1, 3],
         ProjectionCase::Float64Only => vec![1],
         ProjectionCase::Int64AndFloat64 => vec![0, 1],
         ProjectionCase::Int64AndUtf8 => vec![0, 2],
@@ -940,33 +639,9 @@ fn row_filter_for_focus_case(
     pred_mask: ProjectionMask,
     sparse_int64_pred_mask: ProjectionMask,
     sparse_ts_pred_mask: ProjectionMask,
-    scalar_float64_pred_mask: ProjectionMask,
 ) -> RowFilter {
     match filter_type {
-        FilterType::MultiScalarProjectedKey => {
-            let int64_filter =
-                ArrowPredicateFn::new(sparse_int64_pred_mask, move |batch: RecordBatch| {
-                    let int64 = batch.column(batch.schema().index_of("int64")?);
-                    eq(int64, &Int64Array::new_scalar(62))
-                });
-            let float64_filter =
-                ArrowPredicateFn::new(scalar_float64_pred_mask, move |batch: RecordBatch| {
-                    let float64 = batch.column(batch.schema().index_of("float64")?);
-                    gt(float64, &Float64Array::new_scalar(10.0))
-                });
-            let ts_filter =
-                ArrowPredicateFn::new(sparse_ts_pred_mask, move |batch: RecordBatch| {
-                    let ts = batch.column(batch.schema().index_of("ts")?);
-                    lt(ts, &TimestampMillisecondArray::new_scalar(9000))
-                });
-
-            RowFilter::new(vec![
-                Box::new(int64_filter),
-                Box::new(float64_filter),
-                Box::new(ts_filter),
-            ])
-        }
-        FilterType::SparseScalarFixedOutput | FilterType::SparseProjectedPredicatesFixedOutput => {
+        FilterType::SparseScalarFixedOutput => {
             let int64_filter =
                 ArrowPredicateFn::new(sparse_int64_pred_mask, move |batch: RecordBatch| {
                     let int64 = batch.column(batch.schema().index_of("int64")?);
