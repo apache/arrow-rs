@@ -44,9 +44,8 @@ md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
-
 # Enable async APIs
-async = ["futures", "tokio"]
+async = ["tokio", "futures"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 
