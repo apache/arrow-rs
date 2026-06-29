@@ -339,7 +339,7 @@ mod variable;
 ///
 /// Lists are encoded by first encoding all child elements to the row format.
 ///
-/// the Map encoding is the same with the only difference being that the child elements are key-value pairs
+/// The Map encoding is the same with the only difference being that the child elements are key-value pairs
 ///
 /// A list/map value is then encoded as the concatenation of each of the child elements,
 /// separately encoded using the variable length encoding described above, followed
@@ -378,6 +378,41 @@ mod variable;
 ///```
 ///
 /// With `[]` represented by an empty byte array, and `null` a null byte array.
+///
+/// ### Map Equality
+///
+/// **Note:** Maps with different order of keys are not equal in row format
+/// i.e. row_format({"hello": 1, "world": 2}) != row_format({"world": 2, "hello": 1})
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_row::{RowConverter, SortField};
+/// # use arrow_array::{Int32Array, StringArray};
+///
+/// // [{ "hello": 1, "world": 2 }, { "hey": 3, "you": 4 }]
+/// let map_1 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(vec![
+///   Some(vec![("hello", Some(1)), ("world", Some(2))]),
+///   Some(vec![("hey", Some(3)), ("you", Some(4))]),
+/// ], false);
+/// // [{ "world": 2, "hello": 1 }, { "hey": 3, "you": 4 }]
+/// let map_2 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(vec![
+///   Some(vec![("world", Some(2)), ("hello", Some(1))]),
+///   Some(vec![("hey", Some(3)), ("you", Some(4))]),
+/// ], false);
+///
+/// let converter = RowConverter::new(vec![SortField::new(map_1.data_type().clone())]).unwrap();
+///
+/// let map_1_rows = converter.convert_columns(&[Arc::new(map_1)]).unwrap();
+/// let map_2_rows = converter.convert_columns(&[Arc::new(map_2)]).unwrap();
+///
+/// // Attention! these maps are NOT equal since the order of the keys are different
+/// assert_ne!(map_1_rows.row(0), map_2_rows.row(0));
+///
+/// // These maps ARE equal since the order and the content of the keys and values are the same
+/// assert_eq!(map_1_rows.row(1), map_2_rows.row(1));
+/// ```
+///
+/// If you DO want to treat maps with different order of keys as the same in row format you should canonicalize them first.
 ///
 /// ## Fixed Size List Encoding
 ///
@@ -4169,46 +4204,31 @@ mod tests {
     }
 
     #[test]
-    fn two_maps_with_different_keys_order_should_still_match() {
-        // { "hello": 1, "world": 2 }
-        let map_1 = {
-            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
-
-            builder.keys().append_value("hello");
-            builder.values().append_value(1);
-
-            builder.keys().append_value("world");
-            builder.values().append_value(2);
-
-            builder.append(true).unwrap();
-
-            Arc::new(builder.finish()) as ArrayRef
-        };
-
+    fn two_maps_with_different_keys_order_should_sort_by_entry_order() {
+        let map_1: ArrayRef =
+            Arc::new(MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+                vec![Some(vec![("hello", Some(1)), ("world", Some(2))])],
+                false,
+            ));
         // { "world": 2, "hello": 1 }
-        let map_2 = {
-            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
-
-            builder.keys().append_value("world");
-            builder.values().append_value(2);
-
-            builder.keys().append_value("hello");
-            builder.values().append_value(1);
-
-            builder.append(true).unwrap();
-
-            Arc::new(builder.finish()) as ArrayRef
-        };
+        let map_2: ArrayRef =
+            Arc::new(MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+                vec![Some(vec![("world", Some(2)), ("hello", Some(1))])],
+                false,
+            ));
 
         let converter = RowConverter::new(vec![SortField::new(map_1.data_type().clone())]).unwrap();
 
         let map_1_rows = converter.convert_columns(&[Arc::clone(&map_1)]).unwrap();
         let map_2_rows = converter.convert_columns(&[Arc::clone(&map_2)]).unwrap();
 
-        assert_eq!(map_1_rows.row(0), map_2_rows.row(0));
+        assert_ne!(map_1_rows.row(0), map_2_rows.row(0));
+        assert!(map_1_rows.row(0) < map_2_rows.row(0));
 
-        // TODO - what would the expected returned array be?
-        // if they are the same rows they will produce the same output, TODO - this should be noted if we decide to go that path
+        let back_1 = converter.convert_rows(&map_1_rows).unwrap();
+        let back_2 = converter.convert_rows(&map_2_rows).unwrap();
+        assert_eq!(&back_1[0], &map_1);
+        assert_eq!(&back_2[0], &map_2);
     }
 
     #[test]
