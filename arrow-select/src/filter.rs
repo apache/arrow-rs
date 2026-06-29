@@ -494,12 +494,24 @@ impl FilterPredicate {
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
-        let (null_count, nulls) = filter_null_mask(nulls, self)?;
-        let buffer = BooleanBuffer::new(nulls, 0, self.count);
+        let nulls = nulls?;
+        if nulls.null_count() == 0 {
+            return None;
+        }
 
+        let nulls = filter_bits(nulls.inner(), self);
+        // The filtered `nulls` has a length of `self.count` bits and therefore
+        // the null count is this minus the number of valid bits
+        let null_count = self.count - nulls.count_set_bits_offset(0, self.count);
+
+        if null_count == 0 {
+            return None;
+        }
+
+        let buffer = BooleanBuffer::new(nulls, 0, self.count);
         debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
-        // SAFETY: `filter_null_mask` derived `null_count` from `buffer`, so it
-        // matches the number of unset bits as required by `new_unchecked`.
+        // SAFETY: `null_count` was derived from `buffer` above, so it matches
+        // the number of unset bits as required by `new_unchecked`.
         Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
     }
 }
@@ -577,13 +589,15 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
                 match &predicate.strategy {
                     IterationStrategy::Slices(slices) => {
-                        slices
-                            .iter()
-                            .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                        for (start, end) in slices {
+                            mutable.try_extend(0, *start, *end)?;
+                        }
                     }
                     _ => {
                         let iter = SlicesIterator::new(&predicate.filter);
-                        iter.for_each(|(start, end)| mutable.extend(0, start, end));
+                        for (start, end) in iter {
+                            mutable.try_extend(0, start, end)?;
+                        }
                     }
                 }
 
@@ -1020,13 +1034,7 @@ fn filter_struct(
         .map(|column| filter_array(column, predicate))
         .collect::<Result<_, _>>()?;
 
-    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
-
-        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
-    } else {
-        None
-    };
+    let nulls = predicate.filter_nulls(array.nulls());
 
     Ok(unsafe {
         StructArray::new_unchecked_with_length(

@@ -582,7 +582,7 @@ fn concat_fallback(arrays: &[&dyn Array], capacity: Capacities) -> Result<ArrayR
     let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
 
     for (i, a) in arrays.iter().enumerate() {
-        mutable.extend(i, 0, a.len())
+        mutable.try_extend(i, 0, a.len())?
     }
 
     Ok(make_array(mutable.freeze()))
@@ -592,6 +592,16 @@ fn concat_fallback(arrays: &[&dyn Array], capacity: Capacities) -> Result<ArrayR
 ///
 /// The output batch has the specified `schemas`; The schema of the
 /// input are ignored.
+///
+/// # Notes
+///
+/// - Callers should budget for peak memory use to approach 2x the input
+///   size, as the input batches and output arrays co-exist during construction.
+/// - Arrays with `i32` offsets, such as `StringArray` and `BinaryArray`, only
+///   support up to ~2GiB of payloads. Concatenating large arrays of these types
+///   can cause offset overflows.
+///
+/// # Errors
 ///
 /// Returns an error if the types of underlying arrays are different.
 pub fn concat_batches<'a>(

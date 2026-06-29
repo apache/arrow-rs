@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn fixed_size_binary_with_non_zero_offset() {
-        let values: [u8; 15] = *b"hellotherearrow";
+        let values = b"hellotherearrow";
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
 
@@ -664,7 +664,7 @@ mod tests {
             3,
         )));
         // array is `[null, "arrow"]`
-        let array = FixedSizeBinaryArray::new(5, Buffer::from(&values), nulls).slice(1, 2);
+        let array = FixedSizeBinaryArray::new(5, Buffer::from(values), nulls).slice(1, 2);
         // result is `[null, "rrow"]`
         let result = substring(&array, 1, None).unwrap();
         let result = result
