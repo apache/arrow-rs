@@ -585,6 +585,32 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+/// Parse the ISO 8601 signed extended-year form (`±YYYY[Y...]-MM-DD`) into
+/// raw `(year, month, day)` components, without validating the calendar date.
+///
+/// The caller must have already verified that `string` begins with `+` or `-`;
+/// the year must have at least 4 digits. Returns `None` if the shape is
+/// malformed or any component fails to parse numerically.
+fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
+    debug_assert!(string.starts_with('+') || string.starts_with('-'));
+    // Skip the sign and look for the hyphen that terminates the year digits.
+    // Per ISO 8601 the unsigned year part must be at least 4 digits.
+    let rest = &string[1..];
+    let hyphen = rest.find('-')?;
+    if hyphen < 4 {
+        return None;
+    }
+    // The year substring is the sign and the digits (but not the separator),
+    // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999".
+    let year: i32 = string[..hyphen + 1].parse().ok()?;
+    // The remainder should begin with a '-' which we strip off, leaving the month-day part.
+    let remainder = string[hyphen + 1..].strip_prefix('-')?;
+    let mut parts = remainder.splitn(2, '-');
+    let month: u32 = parts.next()?.parse().ok()?;
+    let day: u32 = parts.next()?.parse().ok()?;
+    Some((year, month, day))
+}
+
 fn parse_date(string: &str) -> Option<NaiveDate> {
     // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
     //
@@ -594,21 +620,7 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
     //
     // [ISO 8601]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/time/format/DateTimeFormatter.html#ISO_LOCAL_DATE
     if string.starts_with('+') || string.starts_with('-') {
-        // Skip the sign and look for the hyphen that terminates the year digits.
-        // According to ISO 8601 the unsigned part must be at least 4 digits.
-        let rest = &string[1..];
-        let hyphen = rest.find('-')?;
-        if hyphen < 4 {
-            return None;
-        }
-        // The year substring is the sign and the digits (but not the separator)
-        // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999"
-        let year: i32 = string[..hyphen + 1].parse().ok()?;
-        // The remainder should begin with a '-' which we strip off, leaving the month-day part.
-        let remainder = string[hyphen + 1..].strip_prefix('-')?;
-        let mut parts = remainder.splitn(2, '-');
-        let month: u32 = parts.next()?.parse().ok()?;
-        let day: u32 = parts.next()?.parse().ok()?;
+        let (year, month, day) = parse_extended_ymd(string)?;
         return NaiveDate::from_ymd_opt(year, month, day);
     }
 
@@ -679,10 +691,30 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year as _, month as _, day as _)
 }
 
+/// Parse a date string into days since 1970-01-01, covering the full
+/// `Date32` range (years ≈ ±5,881,580) for the signed extended-year form.
+///
+/// The Gregorian calendar repeats exactly every 400 years (146,097 days), so
+/// we fold the year into `[0, 400)`, validate the folded date, and add
+/// `era * 146_097` to recover the absolute day count.
+///
+/// For all other inputs, behavior matches [`parse_date`].
+fn parse_date_to_days(string: &str) -> Option<i32> {
+    if string.starts_with('+') || string.starts_with('-') {
+        let (year, month, day) = parse_extended_ymd(string)?;
+        let y = year as i64;
+        let era = y.div_euclid(400);
+        let yoe = y.rem_euclid(400) as i32;
+        let nd = NaiveDate::from_ymd_opt(yoe, month, day)?;
+        let in_era = (nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
+        return i32::try_from(era * 146_097 + in_era).ok();
+    }
+    parse_date(string).map(|nd| nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+}
+
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
-        let date = parse_date(string)?;
-        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        parse_date_to_days(string)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
@@ -1281,7 +1313,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} centuries as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1297,7 +1329,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} decades as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1312,7 +1344,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} years as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1322,7 +1354,7 @@ impl Interval {
                 let months = amount.integer.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} months in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 
@@ -1344,7 +1376,7 @@ impl Interval {
                 let days = amount.integer.mul_checked(7)?.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} weeks as days in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 
@@ -1795,6 +1827,32 @@ mod tests {
         for case in err_cases {
             assert_eq!(Date32Type::parse(case), None);
         }
+    }
+
+    #[test]
+    fn parse_date32_extended_year() {
+        // `Date32` covers any i32 days-from-epoch, verify we can parse it
+        let cases: &[(&str, i32)] = &[
+            ("+1970-01-01", 0),
+            ("+2024-01-01", 19_723),
+            ("-0001-01-01", -719_893),
+            ("+29349-01-26", 10_000_000),
+            ("+2739877-01-03", 1_000_000_000),
+            // Extremes of the Date32 representable range.
+            ("+5881580-07-11", i32::MAX),
+            ("-5877641-06-23", i32::MIN),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(Date32Type::parse(input), Some(*expected), "input: {input}");
+        }
+
+        // One past Date32::MAX / MIN overflows i32 days-from-epoch.
+        assert_eq!(Date32Type::parse("+5881580-07-12"), None);
+        assert_eq!(Date32Type::parse("-5877641-06-22"), None);
+        // Invalid calendar dates still rejected regardless of year magnitude.
+        assert_eq!(Date32Type::parse("+2739877-02-30"), None);
+        assert_eq!(Date32Type::parse("+2739877-13-01"), None);
+        assert_eq!(Date32Type::parse("-2739877-02-30"), None);
     }
 
     #[test]

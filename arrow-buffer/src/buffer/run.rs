@@ -294,6 +294,12 @@ where
         self.run_ends
     }
 
+    /// Claim memory used by this buffer in the provided memory pool.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.run_ends.claim(pool);
+    }
+
     /// Returns the physical indices corresponding to the provided logical indices.
     ///
     /// Given a slice of logical indices, this method returns a `Vec` containing the

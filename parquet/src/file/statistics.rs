@@ -125,19 +125,18 @@ pub(crate) fn from_thrift_page_stats(
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {null_count}",
-                )));
-            }
-
             // Generic null count.
-            let null_count = Some(null_count as u64);
+            let null_count = stats
+                .null_count
+                .map(|null_count| {
+                    if null_count < 0 {
+                        return Err(ParquetError::General(format!(
+                            "Statistics null count is negative {null_count}",
+                        )));
+                    }
+                    Ok(null_count as u64)
+                })
+                .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -431,9 +430,20 @@ impl Statistics {
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
     ///
-    /// Note this API returns Some(0) even if the null count was not present
-    /// in the statistics.
-    /// See <https://github.com/apache/arrow-rs/pull/6216/files>
+    /// Note: Versions of this library prior to `58.1.0` returned `0` if the null count
+    /// was not available. This method now returns `None` in that case.
+    ///
+    /// Also, versions of this library prior to `53.1.0` did not store a null count
+    /// statistic when the null count was `0`.
+    ///
+    /// It is unsound to assume that missing nullcount stats mean the column contains no nulls,
+    /// but code that depends on the old behavior can restore it by defaulting to zero:
+    ///
+    /// ```no_run
+    /// # use parquet::file::statistics::Statistics;
+    /// # let statistics: Statistics = todo!();
+    /// let null_count = statistics.null_count_opt().unwrap_or(0);
+    /// ```
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
     }
@@ -1064,21 +1074,7 @@ mod tests {
         let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
             .unwrap()
             .unwrap();
-        // TODO: remove branch when we no longer support assuming null_count==None in the thrift
-        // means null_count = Some(0)
-        if null_count.is_none() {
-            assert_ne!(round_tripped, statistics);
-            assert!(round_tripped.null_count_opt().is_some());
-            assert_eq!(round_tripped.null_count_opt(), Some(0));
-            assert_eq!(round_tripped.min_bytes_opt(), statistics.min_bytes_opt());
-            assert_eq!(round_tripped.max_bytes_opt(), statistics.max_bytes_opt());
-            assert_eq!(
-                round_tripped.distinct_count_opt(),
-                statistics.distinct_count_opt()
-            );
-        } else {
-            assert_eq!(round_tripped, statistics);
-        }
+        assert_eq!(round_tripped, statistics);
     }
 
     fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {

@@ -58,6 +58,13 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Fast path: any all-null input maps to an all-null VariantArray.
+    if input.null_count() == input.len() {
+        let mut array_builder = VariantArrayBuilder::new(input.len());
+        array_builder.append_nulls(input.len());
+        return Ok(array_builder.build());
+    }
+
     // Create row builder for the input array type
     let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 

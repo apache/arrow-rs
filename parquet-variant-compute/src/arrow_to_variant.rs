@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
-    GenericListViewArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
+    GenericStringArray, ListLikeArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::{CastOptions, kernels::cast};
 use arrow::datatypes::{
@@ -32,7 +32,6 @@ use parquet_variant::{
     VariantDecimal16, VariantDecimalType,
 };
 use std::collections::HashMap;
-use std::ops::Range;
 
 // ============================================================================
 // Row-oriented builders for efficient Arrow-to-Variant conversion
@@ -549,54 +548,6 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
         }
         list_builder.finish();
         Ok(())
-    }
-}
-
-/// Trait for list-like arrays that can provide element ranges
-pub(crate) trait ListLikeArray: Array {
-    /// Get the values array
-    fn values(&self) -> &ArrayRef;
-
-    /// Get the start and end indices for a list element
-    fn element_range(&self, index: usize) -> Range<usize>;
-}
-
-impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
-    fn values(&self) -> &ArrayRef {
-        self.values()
-    }
-
-    fn element_range(&self, index: usize) -> Range<usize> {
-        let offsets = self.offsets();
-        let start = offsets[index].as_usize();
-        let end = offsets[index + 1].as_usize();
-        start..end
-    }
-}
-
-impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
-    fn values(&self) -> &ArrayRef {
-        self.values()
-    }
-
-    fn element_range(&self, index: usize) -> Range<usize> {
-        let offsets = self.value_offsets();
-        let sizes = self.value_sizes();
-        let offset = offsets[index].as_usize();
-        let size = sizes[index].as_usize();
-        offset..(offset + size)
-    }
-}
-
-impl ListLikeArray for FixedSizeListArray {
-    fn values(&self) -> &ArrayRef {
-        self.values()
-    }
-
-    fn element_range(&self, index: usize) -> Range<usize> {
-        let value_length = self.value_length().as_usize();
-        let offset = index * value_length;
-        offset..(offset + value_length)
     }
 }
 

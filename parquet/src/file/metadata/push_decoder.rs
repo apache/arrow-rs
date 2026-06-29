@@ -308,7 +308,7 @@ impl ParquetMetaDataPushDecoder {
 
     #[cfg(feature = "encryption")]
     /// Provide decryption properties for decoding encrypted Parquet files
-    pub(crate) fn with_file_decryption_properties(
+    pub fn with_file_decryption_properties(
         mut self,
         file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
@@ -356,6 +356,11 @@ impl ParquetMetaDataPushDecoder {
         }
         self.buffers.push_range(range, buffer);
         Ok(())
+    }
+
+    /// Clear any staged byte ranges currently buffered for future decode work.
+    pub fn clear_all_ranges(&mut self) {
+        self.buffers.clear_all_ranges();
     }
 
     /// Try to decode the metadata from the pushed data, returning the
@@ -571,6 +576,23 @@ mod tests {
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.column_index().is_some());
         assert!(metadata.offset_index().is_some());
+    }
+
+    #[test]
+    fn test_metadata_decoder_clear_all_ranges() {
+        let file_len = test_file_len();
+        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len).unwrap();
+
+        metadata_decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+        assert_eq!(metadata_decoder.buffers.buffered_bytes(), test_file_len());
+
+        metadata_decoder.clear_all_ranges();
+        assert_eq!(metadata_decoder.buffers.buffered_bytes(), 0);
+
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        assert_eq!(ranges, vec![test_file_len() - 8..test_file_len()]);
     }
 
     /// Decode the metadata incrementally, simulating a scenario where exactly the data needed

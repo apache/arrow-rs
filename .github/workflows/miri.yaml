@@ -46,8 +46,11 @@ jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -55,8 +58,11 @@ jobs:
           rustup toolchain install nightly --component miri
           rustup override set nightly
           cargo miri setup
+      - name: Set up nextest
+        run: |
+          cargo install cargo-nextest --version 0.9.132 --locked
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 4

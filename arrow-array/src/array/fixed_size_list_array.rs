@@ -528,6 +528,26 @@ unsafe impl Array for FixedSizeListArray {
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
+}
+
+impl super::ListLikeArray for FixedSizeListArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let value_length = self.value_length().as_usize();
+        let offset = index * value_length;
+        offset..(offset + value_length)
+    }
 }
 
 impl ArrayAccessor for FixedSizeListArray {
@@ -625,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
+    #[should_panic(expected = "assertion failed: end <= self.len()")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]

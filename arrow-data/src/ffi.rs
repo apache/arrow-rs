@@ -25,7 +25,7 @@ use arrow_schema::DataType;
 use std::ffi::c_void;
 
 /// ABI-compatible struct for ArrowArray from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
+/// See <https://arrow.apache.org/docs/format/CDataInterface.html#the-arrowarray-structure>
 ///
 /// ```
 /// # use arrow_data::ArrayData;
@@ -37,21 +37,31 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
-    length: i64,
-    null_count: i64,
-    offset: i64,
-    n_buffers: i64,
-    n_children: i64,
-    buffers: *mut *const c_void,
-    children: *mut *mut FFI_ArrowArray,
-    dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
-    // When exported, this MUST contain everything that is owned by this array.
-    // for example, any buffer pointed to in `buffers` must be here, as well
-    // as the `buffers` pointer itself.
-    // In other words, everything in [FFI_ArrowArray] must be owned by
-    // `private_data` and can assume that they do not outlive `private_data`.
-    private_data: *mut c_void,
+    /// Logical length of the array
+    pub length: i64,
+    /// Number of null items in the array
+    pub null_count: i64,
+    /// logical offset inside the array
+    pub offset: i64,
+    /// Number of physical buffers backing this array
+    pub n_buffers: i64,
+    /// Number of children this array has
+    pub n_children: i64,
+    /// C array of pointers to the start of each physical buffer backing this array
+    pub buffers: *mut *const c_void,
+    /// C array of pointers to each child array of this array
+    pub children: *mut *mut FFI_ArrowArray,
+    /// Pointer to the underlying array of dictionary values
+    pub dictionary: *mut FFI_ArrowArray,
+    /// Pointer to a producer-provided release callback
+    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    /// Opaque pointer to producer-provided private data
+    /// When exported, this MUST contain everything that is owned by this array.
+    /// For example, any buffer pointed to in `buffers` must be here, as well
+    /// as the `buffers` pointer itself.
+    /// In other words, everything in [FFI_ArrowArray] must be owned by
+    /// `private_data` and can assume that they do not outlive `private_data`.
+    pub private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {

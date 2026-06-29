@@ -134,6 +134,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
         ],
         DataType::FixedSizeBinary(size) => {
+            if *size < 0 {
+                panic!("cannot construct buffers from FixedSizeBinary({size})");
+            }
             [MutableBuffer::new(capacity * *size as usize), empty_buffer]
         }
         DataType::Dictionary(k, _) => [
@@ -253,6 +256,18 @@ pub struct ArrayData {
 /// A thread-safe, shared reference to the Arrow array data.
 pub type ArrayDataRef = Arc<ArrayData>;
 
+fn checked_len_plus_offset(
+    data_type: &DataType,
+    len: usize,
+    offset: usize,
+) -> Result<usize, ArrowError> {
+    len.checked_add(offset).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
+            "Length {len} with offset {offset} overflows usize for {data_type}"
+        ))
+    })
+}
+
 impl ArrayData {
     /// Create a new ArrayData instance;
     ///
@@ -324,7 +339,8 @@ impl ArrayData {
         // because we use this buffer to calculate `null_count`
         // in `Self::new_unchecked`.
         if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
-            let needed_len = bit_util::ceil(len + offset, 8);
+            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
+            let needed_len = bit_util::ceil(len_plus_offset, 8);
             if null_bit_buffer.len() < needed_len {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "null_bit_buffer size too small. got {} needed {}",
@@ -576,9 +592,12 @@ impl ArrayData {
     ///
     /// # Panics
     ///
-    /// Panics if `offset + length > self.len()`.
+    /// Panics if `offset + length` overflows or is greater than `self.len()`.
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
-        assert!((offset + length) <= self.len());
+        let end = offset
+            .checked_add(length)
+            .expect("offset + length overflow");
+        assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
@@ -618,6 +637,10 @@ impl ArrayData {
     }
 
     /// Returns a new [`ArrayData`] valid for `data_type` containing `len` null values
+    ///
+    /// # Panics
+    /// This function panics if:
+    /// * the datatype `data_type` has incorrect layout
     pub fn new_null(data_type: &DataType, len: usize) -> Self {
         let bit_len = bit_util::ceil(len, 8);
         let zeroed = |len: usize| Buffer::from(MutableBuffer::from_len_zeroed(len));
@@ -634,7 +657,12 @@ impl ArrayData {
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
-                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![], true),
+                DataType::FixedSizeBinary(i) => {
+                    if *i < 0 {
+                        panic!("cannot construct null data from FixedSizeBinary({i})");
+                    }
+                    (vec![zeroed(*i as usize * len)], vec![], true)
+                }
                 DataType::List(f) | DataType::Map(f, _) => (
                     vec![zeroed((len + 1) * 4)],
                     vec![ArrayData::new_empty(f.data_type())],
@@ -814,8 +842,8 @@ impl ArrayData {
     /// See [ArrayData::validate_data] to validate fully the offset content
     /// and the validity of utf8 data
     pub fn validate(&self) -> Result<(), ArrowError> {
-        // Need at least this mich space in each buffer
-        let len_plus_offset = self.len + self.offset;
+        // Need at least this much space in each buffer
+        let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
 
         // Check that the data layout conforms to the spec
         let layout = layout(&self.data_type);
@@ -965,7 +993,9 @@ impl ArrayData {
             return Ok(&[]);
         }
 
-        self.typed_buffer(0, self.len + 1)
+        let len = checked_len_plus_offset(&self.data_type, self.len, 1)?;
+
+        self.typed_buffer(0, len)
     }
 
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
@@ -976,7 +1006,14 @@ impl ArrayData {
     ) -> Result<&[T], ArrowError> {
         let buffer = &self.buffers[idx];
 
-        let required_len = (len + self.offset) * mem::size_of::<T>();
+        let required_elements = checked_len_plus_offset(&self.data_type, len, self.offset)?;
+        let byte_width = mem::size_of::<T>();
+        let required_len = required_elements.checked_mul(byte_width).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Buffer {idx} of {} byte length overflow: {} elements of {} bytes exceeds usize",
+                self.data_type, required_elements, byte_width
+            ))
+        })?;
 
         if buffer.len() < required_len {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -988,7 +1025,7 @@ impl ArrayData {
             )));
         }
 
-        Ok(&buffer.typed_data::<T>()[self.offset..self.offset + len])
+        Ok(&buffer.typed_data::<T>()[self.offset..required_elements])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -1172,13 +1209,15 @@ impl ArrayData {
                 for (i, (_, field)) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
-                    if mode == &UnionMode::Sparse && field_data.len < (self.len + self.offset) {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
-                            i,
-                            field_data.len,
-                            self.len + self.offset
-                        )));
+                    if mode == &UnionMode::Sparse {
+                        let len_plus_offset =
+                            checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
+                        if field_data.len < len_plus_offset {
+                            return Err(ArrowError::InvalidArgumentError(format!(
+                                "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
+                                i, field_data.len, len_plus_offset
+                            )));
+                        }
                     }
                 }
                 Ok(())
@@ -1554,7 +1593,7 @@ impl ArrayData {
     where
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
-        let required_len = self.len + self.offset;
+        let required_len = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
         let buffer = &self.buffers[0];
 
         // This should have been checked as part of `validate()` prior
@@ -1562,7 +1601,7 @@ impl ArrayData {
         assert!(buffer.len() / mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
-        let indexes: &[T] = &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
+        let indexes: &[T] = &buffer.typed_data::<T>()[self.offset..required_len];
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)
@@ -1612,10 +1651,11 @@ impl ArrayData {
             Ok(())
         })?;
 
-        if prev_value.as_usize() < (self.offset + self.len) {
+        let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
+        if prev_value.as_usize() < len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                self.offset + self.len
+                len_plus_offset
             )));
         }
         Ok(())
@@ -1658,6 +1698,30 @@ impl ArrayData {
     /// Converts this [`ArrayData`] into an [`ArrayDataBuilder`]
     pub fn into_builder(self) -> ArrayDataBuilder {
         self.into()
+    }
+
+    /// Claim memory used by this ArrayData in the provided memory pool.
+    ///
+    /// This claims memory for:
+    /// - All buffers in self.buffers
+    /// - All child ArrayData recursively
+    /// - The null buffer if present
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        // Claim all data buffers
+        for buffer in &self.buffers {
+            buffer.claim(pool);
+        }
+
+        // Claim null buffer if present
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+
+        // Recursively claim child data
+        for child in &self.child_data {
+            child.claim(pool);
+        }
     }
 }
 
@@ -2146,12 +2210,6 @@ impl ArrayDataBuilder {
         Ok(data)
     }
 
-    /// Creates an array data, validating all inputs, and aligning any buffers
-    #[deprecated(since = "54.1.0", note = "Use ArrayData::align_buffers instead")]
-    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
-        self.align_buffers(true).build()
-    }
-
     /// Ensure that all buffers are aligned, copying data if necessary
     ///
     /// Rust requires that arrays are aligned to their corresponding primitive,
@@ -2207,6 +2265,22 @@ impl From<ArrayData> for ArrayDataBuilder {
             align_buffers: false,
             skip_validation: UnsafeFlag::new(),
         }
+    }
+}
+
+/// Get byte width of FixedSizeBinary size
+/// # Panics:
+/// - Panics if the `data_type` is not FixedSizeBinary
+/// - Panics if byte width is negative
+pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::FixedSizeBinary(i) => {
+            if *i < 0 {
+                panic!("cannot compare FixedSizeBinary({})", *i);
+            }
+            *i as usize
+        }
+        _ => unreachable!(),
     }
 }
 
@@ -2346,6 +2420,99 @@ mod tests {
         assert_eq!(data.len() - 2, new_data.len());
         assert_eq!(2, new_data.offset());
         assert_eq!(data.null_count() - 1, new_data.null_count());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + length overflow")]
+    fn test_slice_panics_on_offset_length_overflow() {
+        let data = ArrayData::builder(DataType::Int32)
+            .len(4)
+            .add_buffer(make_i32_buffer(4))
+            .build()
+            .unwrap();
+        let sliced = data.slice(1, 3);
+
+        sliced.slice(1, usize::MAX);
+    }
+
+    #[test]
+    fn test_typed_offsets_length_overflow() {
+        let data = ArrayData {
+            data_type: DataType::Binary,
+            len: usize::MAX,
+            offset: 0,
+            buffers: vec![Buffer::from_slice_ref([0_i32])],
+            child_data: vec![],
+            nulls: None,
+        };
+        let err = data.typed_offsets::<i32>().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 1 overflows usize for Binary",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn test_validate_typed_buffer_length_overflow() {
+        let data = ArrayData {
+            data_type: DataType::Binary,
+            len: 0,
+            offset: 2,
+            buffers: vec![Buffer::from_slice_ref([0_i32])],
+            child_data: vec![],
+            nulls: None,
+        };
+        let err = data.typed_buffer::<i32>(0, usize::MAX).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 2 overflows usize for Binary",
+                usize::MAX
+            )
+        );
+    }
+
+    // Exercises ArrayData::try_new with len + offset overflowing
+    fn try_new_binary_length_offset_overflow() -> Result<ArrayData, ArrowError> {
+        ArrayData::try_new(
+            DataType::Binary,
+            usize::MAX,
+            None,
+            1,
+            vec![
+                Buffer::from_slice_ref([0_i32]),
+                Buffer::from_iter(std::iter::empty::<u8>()),
+            ],
+            vec![],
+        )
+    }
+
+    #[cfg(not(feature = "force_validate"))]
+    #[test]
+    fn test_try_new_length_offset_overflow() {
+        let err = try_new_binary_length_offset_overflow().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 1 overflows usize for Binary",
+                usize::MAX
+            )
+        );
+    }
+
+    #[cfg(feature = "force_validate")]
+    #[test]
+    #[should_panic(
+        expected = "Length 18446744073709551615 with offset 1 overflows usize for Binary"
+    )]
+    fn test_try_new_length_offset_overflow_force_validate() {
+        try_new_binary_length_offset_overflow().unwrap();
     }
 
     #[test]

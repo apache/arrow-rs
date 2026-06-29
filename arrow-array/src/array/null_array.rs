@@ -133,6 +133,11 @@ unsafe impl Array for NullArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // NullArray has no buffers to claim
+    }
 }
 
 impl From<ArrayData> for NullArray {
@@ -225,7 +230,7 @@ mod tests {
 
         // Simulate a NULL value in the parent array, for instance, if array being queried by
         // invalid index
-        mutable.extend_nulls(1);
+        mutable.try_extend_nulls(1).unwrap();
         let data = mutable.freeze();
 
         let struct_array = Arc::new(StructArray::from(data.clone()));

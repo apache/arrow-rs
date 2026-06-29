@@ -17,11 +17,15 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::compute::{DecimalCast, rescale_decimal};
+use arrow::compute::{
+    CastOptions, DecimalCast, parse_string_to_decimal_native, rescale_decimal,
+    single_float_to_decimal,
+};
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
 };
+use arrow::error::{ArrowError, Result};
 use chrono::Timelike;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
@@ -35,6 +39,27 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
 /// timestamp type -- the `NTZ` param here.
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+}
+
+/// Cast a single `Variant` value with safe/strict semantics.
+///
+/// Returns `Ok(Some(_))` on successful conversion.
+/// Returns `Ok(None)` when conversion fails in safe mode or the source value is `Variant::Null`.
+/// Returns `Err(_)` when conversion fails in strict mode.
+pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
+    variant: &'a Variant<'m, 'v>,
+    cast_options: &CastOptions<'_>,
+    cast: impl FnOnce(&'a Variant<'m, 'v>) -> Option<T>,
+) -> Result<Option<T>> {
+    if let Some(value) = cast(variant) {
+        Ok(Some(value))
+    } else if matches!(variant, Variant::Null) || cast_options.safe {
+        Ok(None)
+    } else {
+        Err(ArrowError::CastError(format!(
+            "Failed to cast variant value {variant:?}"
+        )))
+    }
 }
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
@@ -94,7 +119,7 @@ impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| 
     }
 });
 impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
-    Some((v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64)
+    Some(v.num_seconds_from_midnight() as i64 * 1_000_000 + v.nanosecond() as i64 / 1_000)
 });
 impl_primitive_from_variant!(datatypes::Time64NanosecondType, as_time_utc, |v| {
     // convert micro to nano seconds
@@ -109,7 +134,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() != 0 {
             None
         } else {
-            Self::make_value(timestamp)
+            Self::from_naive_datetime(timestamp, None)
         }
     }
 );
@@ -122,7 +147,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() != 0 {
             None
         } else {
-            Self::make_value(timestamp.naive_utc())
+            Self::from_naive_datetime(timestamp.naive_utc(), None)
         }
     }
 );
@@ -135,7 +160,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() % 1_000_000 != 0 {
             None
         } else {
-            Self::make_value(timestamp)
+            Self::from_naive_datetime(timestamp, None)
         }
     }
 );
@@ -148,7 +173,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() % 1_000_000 != 0 {
             None
         } else {
-            Self::make_value(timestamp.naive_utc())
+            Self::from_naive_datetime(timestamp.naive_utc(), None)
         }
     }
 );
@@ -156,25 +181,25 @@ impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
     ntz = true,
-    Self::make_value,
+    |timestamp| Self::from_naive_datetime(timestamp, None),
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_micros,
     ntz = false,
-    |timestamp| Self::make_value(timestamp.naive_utc())
+    |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
     as_timestamp_ntz_nanos,
     ntz = true,
-    Self::make_value
+    |timestamp| Self::from_naive_datetime(timestamp, None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
     as_timestamp_nanos,
     ntz = false,
-    |timestamp| Self::make_value(timestamp.naive_utc())
+    |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
 
 /// Returns the unscaled integer representation for Arrow decimal type `O`
@@ -182,9 +207,12 @@ impl_timestamp_from_variant!(
 ///
 /// - `precision` and `scale` specify the target Arrow decimal parameters
 /// - Integer variants (`Int8/16/32/64`) are treated as decimals with scale 0
+/// - Floating point variants (`Float/Double`) are converted to decimals with the given scale
+/// - String variants (`String/ShortString`) are parsed as decimals with the given scale
 /// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
 ///
-/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` and
+/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` for integers,
+/// `single_float_to_decimal` for floats, and `parse_string_to_decimal_native` for strings.
 /// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
@@ -195,6 +223,8 @@ where
     O: DecimalType,
     O::Native: DecimalCast,
 {
+    let mul = 10_f64.powi(scale as i32);
+
     match variant {
         Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
@@ -224,6 +254,14 @@ where
             precision,
             scale,
         ),
+        Variant::Float(f) => single_float_to_decimal::<O>(f64::from(*f), mul),
+        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
+        // arrow-cast only support cast string to decimal with scale >=0 for now
+        // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
+        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
+        Variant::ShortString(v) if scale >= 0 => {
+            parse_string_to_decimal_native::<O>(v, scale as _).ok()
+        }
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,

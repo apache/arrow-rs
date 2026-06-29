@@ -39,6 +39,8 @@ bench = false
 force_validate = []
 # Enable ffi support
 ffi = ["arrow-schema/ffi"]
+# Enable memory tracking support
+pool = ["arrow-buffer/pool"]
 
 [package.metadata.docs.rs]
 all-features = true

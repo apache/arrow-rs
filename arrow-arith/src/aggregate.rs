@@ -20,7 +20,7 @@
 use arrow_array::cast::*;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer};
+use arrow_buffer::NullBuffer;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
@@ -75,6 +75,36 @@ impl<T: ArrowNativeTypeOp> NumericAccumulator<T> for SumAccumulator<T> {
 
     fn finish(&mut self) -> T {
         self.sum
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProductAccumulator<T: ArrowNativeTypeOp> {
+    product: T,
+}
+
+impl<T: ArrowNativeTypeOp> Default for ProductAccumulator<T> {
+    fn default() -> Self {
+        Self { product: T::ONE }
+    }
+}
+
+impl<T: ArrowNativeTypeOp> NumericAccumulator<T> for ProductAccumulator<T> {
+    fn accumulate(&mut self, value: T) {
+        self.product = self.product.mul_wrapping(value);
+    }
+
+    fn accumulate_nullable(&mut self, value: T, valid: bool) {
+        let product = self.product;
+        self.product = select(valid, product.mul_wrapping(value), product)
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.product = self.product.mul_wrapping(other.product);
+    }
+
+    fn finish(&mut self) -> T {
+        self.product
     }
 }
 
@@ -540,12 +570,10 @@ pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
 /// Returns the sum of values in the array.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `sum_array_checked` instead.
-pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+/// For an overflow-checking variant, use [`sum_array_checked`] instead.
+pub fn sum_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
             let null_count = array.null_count();
@@ -567,6 +595,12 @@ where
 
             Some(sum)
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => ree::sum_wrapping::<types::Int16Type, T>(&array),
+            DataType::Int32 => ree::sum_wrapping::<types::Int32Type, T>(&array),
+            DataType::Int64 => ree::sum_wrapping::<types::Int64Type, T>(&array),
+            _ => unreachable!(),
+        },
         _ => sum::<T>(as_primitive_array(&array)),
     }
 }
@@ -574,14 +608,12 @@ where
 /// Returns the sum of values in the array.
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `sum_array` instead.
-pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
+/// use [`sum_array`] instead.
+/// Additionally returns an `Err` on run-end-encoded arrays with a provided
+/// values type parameter that is incorrect.
+pub fn sum_array_checked<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
     array: A,
-) -> Result<Option<T::Native>, ArrowError>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+) -> Result<Option<T::Native>, ArrowError> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
             let null_count = array.null_count();
@@ -603,27 +635,123 @@ where
 
             Ok(Some(sum))
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => ree::sum_checked::<types::Int16Type, T>(&array),
+            DataType::Int32 => ree::sum_checked::<types::Int32Type, T>(&array),
+            DataType::Int64 => ree::sum_checked::<types::Int64Type, T>(&array),
+            _ => unreachable!(),
+        },
         _ => sum_checked::<T>(as_primitive_array(&array)),
+    }
+}
+
+// Logic for summing run-end-encoded arrays.
+mod ree {
+    use std::convert::Infallible;
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::RunEndIndexType;
+    use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray, TypedRunArray};
+    use arrow_buffer::ArrowNativeType;
+    use arrow_schema::ArrowError;
+
+    /// Downcasts an array to a TypedRunArray.
+    fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
+        array: &'a dyn Array,
+    ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
+        let array = array.as_run_opt::<I>()?;
+        // We only support RunArray wrapping primitive types.
+        array.downcast::<PrimitiveArray<V>>()
+    }
+
+    /// Computes the sum (wrapping) of the array values.
+    pub(super) fn sum_wrapping<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Option<V::Native> {
+        let ree = downcast::<I, V>(array)?;
+        let Ok(sum) = fold(ree, |acc, val, len| -> Result<V::Native, Infallible> {
+            Ok(acc.add_wrapping(val.mul_wrapping(V::Native::usize_as(len))))
+        });
+        sum
+    }
+
+    /// Computes the sum (erroring on overflow) of the array values.
+    pub(super) fn sum_checked<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Result<Option<V::Native>, ArrowError> {
+        let Some(ree) = downcast::<I, V>(array) else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Input run array values are not a PrimitiveArray".to_string(),
+            ));
+        };
+        fold(ree, |acc, val, len| -> Result<V::Native, ArrowError> {
+            let Some(len) = V::Native::from_usize(len) else {
+                return Err(ArrowError::ArithmeticOverflow(format!(
+                    "Cannot convert a run-end index ({:?}) to the value type ({})",
+                    len,
+                    std::any::type_name::<V::Native>()
+                )));
+            };
+            acc.add_checked(val.mul_checked(len)?)
+        })
+    }
+
+    /// Folds over the values in a run-end-encoded array.
+    fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
+        array: TypedRunArray<'a, I, PrimitiveArray<V>>,
+        mut f: F,
+    ) -> Result<Option<V::Native>, E>
+    where
+        F: FnMut(V::Native, V::Native, usize) -> Result<V::Native, E>,
+    {
+        let run_ends = array.run_ends();
+        let logical_start = run_ends.offset();
+        let logical_end = run_ends.offset() + run_ends.len();
+        let run_ends = run_ends.sliced_values();
+
+        let values_slice = array.run_array().values_slice();
+        let values = values_slice
+            .as_any()
+            .downcast_ref::<PrimitiveArray<V>>()
+            // Safety: we know the values array is PrimitiveArray<V>.
+            .unwrap();
+
+        let mut prev_end = 0;
+        let mut acc = V::Native::ZERO;
+        let mut has_non_null_value = false;
+
+        for (run_end, value) in run_ends.zip(values) {
+            let current_run_end = run_end.as_usize().clamp(logical_start, logical_end);
+            let run_length = current_run_end - prev_end;
+
+            if let Some(value) = value {
+                has_non_null_value = true;
+                acc = f(acc, value, run_length)?;
+            }
+
+            prev_end = current_run_end;
+            if current_run_end == logical_end {
+                break;
+            }
+        }
+
+        Ok(if has_non_null_value { Some(acc) } else { None })
     }
 }
 
 /// Returns the min of values in the array of `ArrowNumericType` type, or dictionary
 /// array with value of `ArrowNumericType` type.
-pub fn min_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeType,
-{
+pub fn min_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     min_max_array_helper::<T, A, _, _>(array, |a, b| a.is_gt(*b), min)
 }
 
 /// Returns the max of values in the array of `ArrowNumericType` type, or dictionary
 /// array with value of `ArrowNumericType` type.
-pub fn max_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+pub fn max_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     min_max_array_helper::<T, A, _, _>(array, |a, b| a.is_lt(*b), max)
 }
 
@@ -639,6 +767,20 @@ where
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
+        DataType::RunEndEncoded(run_ends, _) => {
+            // We can directly perform min/max on the values child array, as any
+            // run must have non-zero length.
+            let array: &dyn Array = &array;
+            let values = match run_ends.data_type() {
+                DataType::Int16 => array.as_run_opt::<types::Int16Type>()?.values_slice(),
+                DataType::Int32 => array.as_run_opt::<types::Int32Type>()?.values_slice(),
+                DataType::Int64 => array.as_run_opt::<types::Int64Type>()?.values_slice(),
+                _ => return None,
+            };
+            // We only support RunArray wrapping primitive types.
+            let values = values.as_any().downcast_ref::<PrimitiveArray<T>>()?;
+            m(values)
+        }
         _ => m(as_primitive_array(&array)),
     }
 }
@@ -751,12 +893,10 @@ pub fn bool_or(array: &BooleanArray) -> Option<bool> {
 /// Returns `Ok(None)` if the array is empty or only contains null values.
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `sum` instead.
-pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>, ArrowError>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+/// use [`sum`] instead.
+pub fn sum_checked<T: ArrowNumericType>(
+    array: &PrimitiveArray<T>,
+) -> Result<Option<T::Native>, ArrowError> {
     let null_count = array.null_count();
 
     if null_count == array.len() {
@@ -799,12 +939,63 @@ where
 /// Returns `None` if the array is empty or only contains null values.
 ///
 /// This doesn't detect overflow in release mode by default. Once overflowing, the result will
-/// wrap around. For an overflow-checking variant, use `sum_checked` instead.
-pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: ArrowNativeTypeOp,
-{
+/// wrap around. For an overflow-checking variant, use [`sum_checked`] instead.
+pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, SumAccumulator<T::Native>>(array)
+}
+
+/// Returns the product of values in the primitive array.
+///
+/// Returns `None` if the array is empty or only contains null values.
+///
+/// This doesn't detect overflow in release mode by default. Once overflowing, the result will
+/// wrap around. For an overflow-checking variant, use [`product_checked`] instead.
+pub fn product<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
+    aggregate::<T::Native, T, ProductAccumulator<T::Native>>(array)
+}
+
+/// Returns the product of values in the primitive array.
+///
+/// Returns `Ok(None)` if the array is empty or only contains null values.
+///
+/// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
+/// use [`product`] instead.
+pub fn product_checked<T: ArrowNumericType>(
+    array: &PrimitiveArray<T>,
+) -> Result<Option<T::Native>, ArrowError> {
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return Ok(None);
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.nulls() {
+        None => {
+            let product = data.iter().try_fold(T::Native::ONE, |accumulator, value| {
+                accumulator.mul_checked(*value)
+            })?;
+
+            Ok(Some(product))
+        }
+        Some(nulls) => {
+            let mut product = T::Native::ONE;
+
+            try_for_each_valid_idx(
+                nulls.len(),
+                nulls.offset(),
+                nulls.null_count(),
+                Some(nulls.validity()),
+                |idx| {
+                    unsafe { product = product.mul_checked(array.value_unchecked(idx))? };
+                    Ok::<_, ArrowError>(())
+                },
+            )?;
+
+            Ok(Some(product))
+        }
+    }
 }
 
 /// Returns the minimum value in the array, according to the natural order.
@@ -818,10 +1009,7 @@ where
 /// let result = min(&array);
 /// assert_eq!(result, Some(2));
 /// ```
-pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: PartialOrd,
-{
+pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, MinAccumulator<T::Native>>(array)
 }
 
@@ -836,10 +1024,7 @@ where
 /// let result = max(&array);
 /// assert_eq!(result, Some(8));
 /// ```
-pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: PartialOrd,
-{
+pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, MaxAccumulator<T::Native>>(array)
 }
 
@@ -860,6 +1045,67 @@ mod tests {
     fn test_primitive_array_float_sum() {
         let a = Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5]);
         assert_eq!(16.5, sum(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_product() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(120, product(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_float_product() {
+        let a = Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(120.0, product(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_product_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(30, product(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_product_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, product(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_product_empty() {
+        let a = Int32Array::from(Vec::<i32>::new());
+        assert_eq!(None, product(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_product_checked() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(120, product_checked(&a).unwrap().unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_product_checked_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(30, product_checked(&a).unwrap().unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_product_checked_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, product_checked(&a).unwrap());
+    }
+
+    #[test]
+    fn test_product_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 2]);
+        // wrapping variant silently overflows
+        assert_eq!(product(&a).unwrap(), -2);
+    }
+
+    #[test]
+    fn test_product_checked_overflow() {
+        let a = Int32Array::from(vec![i32::MAX, 2]);
+        product_checked(&a).expect_err("overflow should be detected");
     }
 
     #[test]
@@ -1749,5 +1995,171 @@ mod tests {
 
         sum_checked(&a).expect_err("overflow should be detected");
         sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
+    }
+
+    /// Helper for building a RunArray.
+    fn make_run_array<'a, I: RunEndIndexType, V: ArrowNumericType, ItemType>(
+        values: impl IntoIterator<Item = &'a ItemType>,
+    ) -> RunArray<I>
+    where
+        ItemType: Clone + Into<Option<V::Native>> + 'static,
+    {
+        let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
+        for v in values.into_iter() {
+            builder.append_option((*v).clone().into());
+        }
+        builder.finish()
+    }
+
+    #[test]
+    fn test_ree_sum_array_basic() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[10, 10, 20, 30, 30, 30]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(130));
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(130));
+    }
+
+    #[test]
+    fn test_ree_sum_array_empty() {
+        let run_array = make_run_array::<Int16Type, Int32Type, i32>(&[]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_sum_array_with_nulls() {
+        let run_array =
+            make_run_array::<Int16Type, Int32Type, _>(&[Some(10), None, Some(20), None, Some(30)]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(60));
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(60));
+    }
+
+    #[test]
+    fn test_ree_sum_array_with_only_nulls() {
+        let run_array = make_run_array::<Int16Type, Int16Type, _>(&[None, None, None, None, None]);
+        let typed_array = run_array.downcast::<Int16Array>().unwrap();
+
+        let result = sum_array::<Int16Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = sum_array_checked::<Int16Type, _>(typed_array).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_sum_array_overflow() {
+        let run_array = make_run_array::<Int16Type, Int8Type, _>(&[126, 2]);
+        let typed_array = run_array.downcast::<Int8Array>().unwrap();
+
+        // i8 range is -128..=127. 126+2 overflows to -128.
+        let result = sum_array::<Int8Type, _>(typed_array);
+        assert_eq!(result, Some(-128));
+
+        let result = sum_array_checked::<Int8Type, _>(typed_array);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ree_sum_array_sliced() {
+        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[0, 10, 10, 10, 20, 30, 30, 30]);
+        // Skip 2 values at the start and 1 at the end.
+        let sliced = run_array.slice(2, 5);
+        let typed_array = sliced.downcast::<UInt8Array>().unwrap();
+
+        let result = sum_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(100));
+
+        let result = sum_array_checked::<UInt8Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(100));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_basic() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[30, 30, 10, 20, 20]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(30));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_empty() {
+        let run_array = make_run_array::<Int16Type, Int32Type, i32>(&[]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_min_max_array_float() {
+        let run_array = make_run_array::<Int16Type, Float64Type, _>(&[5.5, 5.5, 2.1, 8.9, 8.9]);
+        let typed_array = run_array.downcast::<Float64Array>().unwrap();
+
+        let result = min_array::<Float64Type, _>(typed_array);
+        assert_eq!(result, Some(2.1));
+
+        let result = max_array::<Float64Type, _>(typed_array);
+        assert_eq!(result, Some(8.9));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_with_nulls() {
+        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[None, Some(10)]);
+        let typed_array = run_array.downcast::<UInt8Array>().unwrap();
+
+        let result = min_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_sliced() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[0, 30, 30, 10, 20, 20, 100]);
+        // Skip 1 value at the start and 1 at the end.
+        let sliced = run_array.slice(1, 5);
+        let typed_array = sliced.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(30));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_sliced_mid_run() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[0, 0, 30, 10, 20, 100, 100]);
+        // Skip 1 value at the start and 1 at the end.
+        let sliced = run_array.slice(1, 5);
+        let typed_array = sliced.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(0));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(100));
     }
 }

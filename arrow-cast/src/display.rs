@@ -80,6 +80,8 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
     /// Show types in visual representation batches
     types_info: bool,
+    /// Whether string values should be quoted
+    quoted_strings: bool,
     /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
     /// provide custom formatters.
     formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
@@ -102,6 +104,7 @@ impl PartialEq for FormatOptions<'_> {
             && self.time_format == other.time_format
             && self.duration_format == other.duration_format
             && self.types_info == other.types_info
+            && self.quoted_strings == other.quoted_strings
             && match (self.formatter_factory, other.formatter_factory) {
                 (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
                 (None, None) => true,
@@ -123,6 +126,7 @@ impl Hash for FormatOptions<'_> {
         self.time_format.hash(state);
         self.duration_format.hash(state);
         self.types_info.hash(state);
+        self.quoted_strings.hash(state);
         self.formatter_factory
             .map(|f| f as *const dyn ArrayFormatterFactory)
             .hash(state);
@@ -142,6 +146,7 @@ impl<'a> FormatOptions<'a> {
             time_format: None,
             duration_format: DurationFormat::ISO8601,
             types_info: false,
+            quoted_strings: false,
             formatter_factory: None,
         }
     }
@@ -217,6 +222,17 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
+    /// Sets whether string values should be quoted
+    ///
+    /// When `true`, strings are formatted using [`Debug`]-style with double quotes and escaping.
+    /// Defaults to `false`
+    pub const fn with_quoted_strings(self, quoted_strings: bool) -> Self {
+        Self {
+            quoted_strings,
+            ..self
+        }
+    }
+
     /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
     ///
     /// Using [`None`] causes pretty-printers to use the default [`ArrayFormatter`]s.
@@ -274,6 +290,11 @@ impl<'a> FormatOptions<'a> {
     /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
+    }
+
+    /// Returns whether string values should be quoted.
+    pub const fn quoted_strings(&self) -> bool {
+        self.quoted_strings
     }
 
     /// Returns the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
@@ -1081,16 +1102,38 @@ impl Display for MillisecondsFormatter<'_> {
     }
 }
 
-impl<O: OffsetSizeTrait> DisplayIndex for &GenericStringArray<O> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", self.value(idx))?;
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericStringArray<O> {
+    type State = bool;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.quoted_strings())
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value = self.value(idx);
+        if *state {
+            write!(f, "{:?}", value)?;
+        } else {
+            write!(f, "{}", value)?;
+        }
         Ok(())
     }
 }
 
-impl DisplayIndex for &StringViewArray {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", self.value(idx))?;
+impl<'a> DisplayIndexState<'a> for &'a StringViewArray {
+    type State = bool;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.quoted_strings())
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value = self.value(idx);
+        if *state {
+            write!(f, "{:?}", value)?;
+        } else {
+            write!(f, "{}", value)?;
+        }
         Ok(())
     }
 }

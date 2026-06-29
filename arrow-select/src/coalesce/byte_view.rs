@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::{FilterPredicate, FilterSelection, filter_null_mask};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{Buffer, NullBufferBuilder};
+use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -101,7 +102,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         if self.views.capacity() == 0 {
             self.views.reserve(self.batch_size);
         }
-        debug_assert_eq!(self.views.capacity(), self.batch_size);
     }
 
     /// Finishes in progress buffer, if any
@@ -110,6 +110,61 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             return;
         };
         self.completed.push(next_buffer.into());
+    }
+
+    fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
+        let selected_count = filter.count();
+        let current_len = self.views.len();
+        self.views.reserve(selected_count);
+
+        let mut written = 0;
+
+        unsafe {
+            let mut out = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
+
+            match filter.selection() {
+                FilterSelection::None => {}
+                FilterSelection::All { .. } => {
+                    std::ptr::copy_nonoverlapping(views.as_ptr(), out, selected_count);
+                    written = selected_count;
+                }
+                FilterSelection::Slices(slices) => {
+                    slices.for_each(|(start, end)| {
+                        let len = end - start;
+                        std::ptr::copy_nonoverlapping(views.as_ptr().add(start), out, len);
+                        out = out.add(len);
+                        written += len;
+                    });
+                }
+                FilterSelection::Indices(indices) => {
+                    indices.for_each(|idx| {
+                        out.write(*views.get_unchecked(idx));
+                        out = out.add(1);
+                        written += 1;
+                    });
+                }
+            }
+
+            self.views.set_len(current_len + written);
+        }
+
+        debug_assert_eq!(written, selected_count);
+    }
+
+    fn append_nulls_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        source_nulls: Option<&NullBuffer>,
+    ) {
+        let Some((null_count, nulls)) = filter_null_mask(source_nulls, filter) else {
+            self.nulls.append_n_non_nulls(filter.count());
+            return;
+        };
+
+        let nulls = unsafe {
+            NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
+        };
+        self.nulls.append_buffer(&nulls);
     }
 
     /// Append views to self.views, updating the buffer index if necessary
@@ -326,7 +381,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         };
 
         let buffers = s.data_buffers();
-        let views = &s.views().as_ref()[offset..offset + len];
+        // SAFETY: copy_rows is called with ranges derived from the source array.
+        let views = unsafe { s.views().as_ref().get_unchecked(offset..offset + len) };
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
@@ -344,6 +400,59 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             self.append_views_and_update_buffer_index(views, buffers);
         }
         self.source = Some(source);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            )
+        })?;
+
+        let s = source.array.as_byte_view::<B>();
+
+        if !s.data_buffers().is_empty() {
+            // Restore the source taken above before returning the guard error.
+            self.source = Some(source);
+            return Err(ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray::copy_rows_by_filter requires inline views"
+                    .to_string(),
+            ));
+        }
+
+        self.append_nulls_by_filter(filter, s.nulls());
+        self.append_views_by_filter(s.views(), filter);
+
+        self.source = Some(source);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter_from(
+        &mut self,
+        source: ArrayRef,
+        filter: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        let s = source.as_byte_view::<B>();
+        if s.data_buffers().is_empty() {
+            self.ensure_capacity();
+            self.append_nulls_by_filter(filter, s.nulls());
+            self.append_views_by_filter(s.views(), filter);
+            return Ok(());
+        }
+
+        // Match the filter kernel: filter views/nulls, but reuse data buffers.
+        let filtered = filter.filter(source.as_ref())?;
+        let filtered = filtered.as_byte_view::<B>();
+
+        self.ensure_capacity();
+        if let Some(nulls) = filtered.nulls().as_ref() {
+            self.nulls.append_buffer(nulls);
+        } else {
+            self.nulls.append_n_non_nulls(filter.count());
+        }
+        self.append_views_and_update_buffer_index(filtered.views(), filtered.data_buffers());
         Ok(())
     }
 
@@ -406,6 +515,9 @@ impl BufferSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::FilterBuilder;
+    use arrow_array::types::BinaryViewType;
+    use arrow_array::{BinaryViewArray, BooleanArray};
 
     #[test]
     fn test_buffer_source() {
@@ -444,5 +556,55 @@ mod tests {
         assert_eq!(source.next_buffer(500_000).capacity(), 1024 * 1024);
         // Can override with larger size request
         assert_eq!(source.next_buffer(2_000_000).capacity(), 2_000_000);
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_rejects_non_inline_views() {
+        let values: Vec<Option<&[u8]>> = vec![Some(b"This value is longer than 12 bytes")];
+        let array = BinaryViewArray::from_iter(values);
+        assert!(!array.data_buffers().is_empty());
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(1);
+        in_progress.set_source(Some(Arc::new(array)));
+
+        let filter = BooleanArray::from(vec![true]);
+        let predicate = FilterBuilder::new(&filter).build();
+        let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
+
+        assert!(
+            err.to_string().contains("requires inline views"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_from_reuses_non_inline_buffers() {
+        let values = (0..32)
+            .map(|i| format!("This value is longer than 12 bytes: {i}").into_bytes())
+            .collect::<Vec<_>>();
+        let array = BinaryViewArray::from_iter(values.iter().map(|v| Some(v.as_slice())));
+        assert!(!array.data_buffers().is_empty());
+        let source_buffer = array.data_buffers()[0].as_ptr();
+
+        let filter = BooleanArray::from((0..32).map(|i| i == 3 || i == 29).collect::<Vec<_>>());
+        let predicate = FilterBuilder::new(&filter).build();
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(32);
+        in_progress
+            .copy_rows_by_filter_from(Arc::new(array), &predicate)
+            .unwrap();
+        let output = in_progress.finish().unwrap();
+        let output = output.as_binary_view();
+
+        assert_eq!(output.len(), 2);
+        assert_eq!(output.value(0), values[3].as_slice());
+        assert_eq!(output.value(1), values[29].as_slice());
+        assert!(
+            output
+                .data_buffers()
+                .iter()
+                .any(|buffer| std::ptr::addr_eq(buffer.as_ptr(), source_buffer)),
+            "expected filtered output to reuse the source data buffer"
+        );
     }
 }

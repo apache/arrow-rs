@@ -45,9 +45,8 @@ pub struct StreamDecoder {
     require_alignment: bool,
     /// Should validation be skipped when reading data? Defaults to false.
     ///
-    /// See [`FileDecoder::with_skip_validation`] for details.
+    /// See [`StreamDecoder::with_skip_validation`] for details.
     ///
-    /// [`FileDecoder::with_skip_validation`]: crate::reader::FileDecoder::with_skip_validation
     skip_validation: UnsafeFlag,
 }
 
@@ -102,7 +101,7 @@ impl StreamDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
@@ -112,6 +111,20 @@ impl StreamDecoder {
     /// Return the schema if decoded, else None.
     pub fn schema(&self) -> Option<SchemaRef> {
         self.schema.as_ref().map(|schema| schema.clone())
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust the input data and are
+    /// sure the data you are reading is valid Arrow IPC stream data, otherwise
+    /// undefined behavior may result.
+    ///
+    /// For example, DataFusion uses this when reading spill files it wrote itself.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        unsafe { self.skip_validation.set(skip_validation) };
+        self
     }
 
     /// Try to read the next [`RecordBatch`] from the provided [`Buffer`]

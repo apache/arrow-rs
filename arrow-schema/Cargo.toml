@@ -54,7 +54,7 @@ all-features = true
 
 [dev-dependencies]
 criterion = { workspace = true, default-features = false }
-insta = "1.43.1"
+insta = { workspace = true, default-features = true }
 postcard = { version = "1.0.10", default-features = false, features = ["use-std"] }
 
 [[bench]]

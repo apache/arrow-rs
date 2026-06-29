@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
 pub trait OffsetSizeTrait:
-    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd + num_traits::CheckedSub
 {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
@@ -619,6 +619,28 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> 
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListArray<OffsetSize> {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let offsets = self.offsets();
+        let start = offsets[index].as_usize();
+        let end = offsets[index + 1].as_usize();
+        start..end
     }
 }
 

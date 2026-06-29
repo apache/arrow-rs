@@ -61,7 +61,7 @@ bitflags! {
 }
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
+/// See <https://arrow.apache.org/docs/format/CDataInterface.html#the-arrowschema-structure>
 ///
 /// ```
 /// # use arrow_schema::DataType;
@@ -75,16 +75,25 @@ bitflags! {
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
-    format: *const c_char,
-    name: *const c_char,
-    metadata: *const c_char,
+    /// Null-terminated, UTF8-encoded string describing the data type
+    pub format: *const c_char,
+    /// Null-terminated, UTF8-encoded string of the field or array name
+    pub name: *const c_char,
+    /// Binary string describing the type’s metadata
+    pub metadata: *const c_char,
+    /// A bitfield of flags enriching the type description
     /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
-    flags: i64,
-    n_children: i64,
-    children: *mut *mut FFI_ArrowSchema,
-    dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    private_data: *mut c_void,
+    pub flags: i64,
+    /// The number of children this type has
+    pub n_children: i64,
+    /// C array of pointers to each child type of this type
+    pub children: *mut *mut FFI_ArrowSchema,
+    /// Pointer to the type of dictionary values
+    pub dictionary: *mut FFI_ArrowSchema,
+    /// Pointer to a producer-provided release callback
+    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    /// Opaque pointer to producer-provided private data
+    pub private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {

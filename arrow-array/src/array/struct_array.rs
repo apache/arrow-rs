@@ -319,12 +319,25 @@ impl StructArray {
     ///
     /// Note: A schema can currently have duplicate field names, in which case
     /// the first field will always be selected.
-    /// This issue will be addressed in [ARROW-11178](https://issues.apache.org/jira/browse/ARROW-11178)
+    /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
     pub fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
-        self.column_names()
-            .iter()
-            .position(|c| c == &column_name)
-            .map(|pos| self.column(pos))
+        self.fields()
+            .find(column_name)
+            .map(|(pos, _)| self.column(pos))
+    }
+
+    /// Returns the [`FieldRef`] at `pos`.
+    pub fn field(&self, pos: usize) -> &FieldRef {
+        &self.fields()[pos]
+    }
+
+    /// Return the [`FieldRef`] whose name equals to `field_name`
+    ///
+    /// Note: A schema can currently have duplicate field names, in which case
+    /// the first field will always be selected.
+    /// This issue will be addressed in [#9205](https://github.com/apache/arrow-rs/issues/9205)
+    pub fn field_by_name(&self, field_name: &str) -> Option<&FieldRef> {
+        self.fields().find(field_name).map(|(_, field)| field)
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -342,6 +355,70 @@ impl StructArray {
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
             fields,
         }
+    }
+
+    /// Returns the children of this [`StructArray`] with the struct's validity
+    /// bitmap AND'd into each child's validity bitmap.
+    ///
+    /// This ensures that positions where the struct itself is null are also
+    /// null in each returned child array. Fields that were non-nullable are
+    /// marked nullable in the returned [`Fields`] when the struct has nulls.
+    ///
+    /// If the struct has no nulls, children and fields are returned as-is.
+    ///
+    /// This mirrors the semantics of C++ Arrow's `StructArray::Flatten`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Array, ArrayRef, Int32Array, StructArray};
+    /// # use arrow_buffer::{BooleanBuffer, NullBuffer};
+    /// # use arrow_schema::{DataType, Field, Fields};
+    /// let child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+    /// let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, false, true]));
+    /// let sa = StructArray::new(
+    ///     Fields::from(vec![Field::new("a", DataType::Int32, false)]),
+    ///     vec![child],
+    ///     Some(struct_nulls),
+    /// );
+    /// let (fields, columns) = sa.flatten();
+    /// assert!(fields[0].is_nullable());
+    /// assert!(columns[0].is_null(1));
+    /// ```
+    pub fn flatten(&self) -> (Fields, Vec<ArrayRef>) {
+        let schema_fields = self.fields();
+
+        let struct_nulls = match &self.nulls {
+            Some(n) => n,
+            None => return (schema_fields.clone(), self.fields.clone()),
+        };
+
+        let new_fields: Fields = schema_fields
+            .iter()
+            .map(|f| {
+                if f.is_nullable() {
+                    Arc::clone(f)
+                } else {
+                    Arc::new(f.as_ref().clone().with_nullable(true))
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        let new_columns = self
+            .fields
+            .iter()
+            .map(|child| {
+                let merged = NullBuffer::union(Some(struct_nulls), child.nulls());
+                // SAFETY: We only make the null buffer more restrictive (adding nulls).
+                // All data buffers and child data remain unchanged.
+                let data = child.to_data().into_builder().nulls(merged);
+                make_array(unsafe { data.build_unchecked() })
+            })
+            .collect();
+
+        (new_fields, new_columns)
     }
 }
 
@@ -467,6 +544,16 @@ unsafe impl Array for StructArray {
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for field in &self.fields {
+            field.claim(pool);
+        }
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
     }
 }
 
@@ -644,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
+    #[should_panic(expected = "assertion failed: end <= self.len()")]
     fn test_struct_array_from_data_with_offset_and_length_error() {
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
@@ -680,6 +767,27 @@ mod tests {
         ]);
         assert_eq!(struct_array["b"].as_ref(), boolean.as_ref());
         assert_eq!(struct_array["c"].as_ref(), int.as_ref());
+    }
+
+    #[test]
+    fn test_struct_array_field_access() {
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+
+        let b_field = Arc::new(Field::new("b", DataType::Boolean, false));
+        let c_field = Arc::new(Field::new("c", DataType::Int32, false));
+
+        let struct_array = StructArray::from(vec![
+            (b_field.clone(), boolean as ArrayRef),
+            (c_field.clone(), int as ArrayRef),
+        ]);
+
+        assert_eq!(struct_array.field(0), &b_field);
+        assert_eq!(struct_array.field(1), &c_field);
+
+        assert_eq!(struct_array.field_by_name("b"), Some(&b_field));
+        assert_eq!(struct_array.field_by_name("c"), Some(&c_field));
+        assert_eq!(struct_array.field_by_name("d"), None);
     }
 
     /// validates that the in-memory representation follows [the spec](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
@@ -947,5 +1055,141 @@ mod tests {
         let nulls = None;
 
         StructArray::try_new(fields, arrays, nulls).expect("should not error");
+    }
+
+    #[test]
+    fn test_flatten_no_nulls() {
+        let child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let sa = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            child,
+        )]);
+
+        let (fields, columns) = sa.flatten();
+
+        assert_eq!(columns.len(), 1);
+        assert!(!fields[0].is_nullable());
+        assert_eq!(columns[0].null_count(), 0);
+        assert_eq!(columns[0].len(), 3);
+    }
+
+    #[test]
+    fn test_flatten_struct_nulls_child_no_nulls() {
+        let child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, false, true]));
+        let sa = StructArray::new(
+            Fields::from(vec![Field::new("a", DataType::Int32, false)]),
+            vec![child],
+            Some(struct_nulls),
+        );
+
+        let (fields, columns) = sa.flatten();
+
+        assert!(fields[0].is_nullable());
+        assert!(columns[0].is_valid(0));
+        assert!(columns[0].is_null(1));
+        assert!(columns[0].is_valid(2));
+        assert_eq!(columns[0].null_count(), 1);
+    }
+
+    #[test]
+    fn test_flatten_both_have_nulls() {
+        // struct validity: [valid, null,  valid, valid]
+        // child validity:  [valid, valid, null,  valid]
+        // expected:        [valid, null,  null,  valid]
+        let child = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, false, true, true]));
+        let sa = StructArray::new(
+            Fields::from(vec![Field::new("a", DataType::Int32, true)]),
+            vec![child],
+            Some(struct_nulls),
+        );
+
+        let (fields, columns) = sa.flatten();
+
+        assert!(fields[0].is_nullable());
+        assert!(columns[0].is_valid(0));
+        assert!(columns[0].is_null(1));
+        assert!(columns[0].is_null(2));
+        assert!(columns[0].is_valid(3));
+        assert_eq!(columns[0].null_count(), 2);
+    }
+
+    #[test]
+    fn test_flatten_sliced_struct() {
+        let child = Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef;
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, false, true, false]));
+        let sa = StructArray::new(
+            Fields::from(vec![Field::new("a", DataType::Int32, false)]),
+            vec![child],
+            Some(struct_nulls),
+        );
+        let sliced = sa.slice(1, 2);
+
+        let (fields, columns) = sliced.flatten();
+
+        assert!(fields[0].is_nullable());
+        assert_eq!(columns[0].len(), 2);
+        assert!(columns[0].is_null(0));
+        assert!(columns[0].is_valid(1));
+    }
+
+    #[test]
+    fn test_flatten_multiple_children() {
+        let int_child = Arc::new(Int32Array::from(vec![Some(1), Some(2), None])) as ArrayRef;
+        let str_child = Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])) as ArrayRef;
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, false, true]));
+        let sa = StructArray::new(
+            Fields::from(vec![
+                Field::new("ints", DataType::Int32, true),
+                Field::new("strs", DataType::Utf8, true),
+            ]),
+            vec![int_child, str_child],
+            Some(struct_nulls),
+        );
+
+        let (fields, columns) = sa.flatten();
+
+        assert_eq!(fields.len(), 2);
+        // int: [valid, null(struct), null(child)] => null_count=2
+        assert_eq!(columns[0].null_count(), 2);
+        assert!(columns[0].is_valid(0));
+        assert!(columns[0].is_null(1));
+        assert!(columns[0].is_null(2));
+        // str: [valid, null(struct+child), valid] => null_count=1
+        assert_eq!(columns[1].null_count(), 1);
+        assert!(columns[1].is_valid(0));
+        assert!(columns[1].is_null(1));
+        assert!(columns[1].is_valid(2));
+    }
+
+    #[test]
+    fn test_flatten_empty_struct() {
+        let sa = StructArray::new_empty_fields(5, Some(NullBuffer::new_null(5)));
+
+        let (fields, columns) = sa.flatten();
+
+        assert_eq!(fields.len(), 0);
+        assert_eq!(columns.len(), 0);
+    }
+
+    #[test]
+    fn test_flatten_field_nullability_update() {
+        let non_null_child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let nullable_child = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let sa = StructArray::new(
+            Fields::from(vec![
+                Field::new("non_null", DataType::Int32, false),
+                Field::new("nullable", DataType::Int32, true),
+            ]),
+            vec![non_null_child, nullable_child],
+            Some(struct_nulls),
+        );
+
+        let (fields, _columns) = sa.flatten();
+
+        assert!(fields[0].is_nullable()); // was false, now true
+        assert!(fields[1].is_nullable()); // was true, stays true
     }
 }

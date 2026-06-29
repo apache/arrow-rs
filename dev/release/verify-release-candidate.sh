@@ -33,23 +33,27 @@ set -o pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ARROW_DIR="$(dirname $(dirname ${SOURCE_DIR}))"
-ARROW_DIST_URL='https://dist.apache.org/repos/dist/dev/arrow'
+ARROW_RC_URL="https://dist.apache.org/repos/dist/dev/arrow"
+ARROW_KEYS_URL="https://www.apache.org/dyn/closer.lua?action=download&filename=arrow/KEYS"
 
-download_dist_file() {
+download_file() {
   curl \
     --silent \
     --show-error \
     --fail \
     --location \
-    --remote-name $ARROW_DIST_URL/$1
+    --output "$2" \
+    "$1"
 }
 
 download_rc_file() {
-  download_dist_file apache-arrow-rs-${VERSION}-rc${RC_NUMBER}/$1
+  download_file \
+  "${ARROW_RC_URL}/apache-arrow-rs-${VERSION}-rc${RC_NUMBER}/$1" \
+  "$1"
 }
 
 import_gpg_keys() {
-  download_dist_file KEYS
+  download_file "${ARROW_KEYS_URL}" KEYS
   gpg --import KEYS
 }
 

@@ -102,7 +102,7 @@ fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST
     let DataType::FixedSizeList(inner_field, size) = array.data_type() else {
         unreachable!()
     };
-    let array = if to.data_type() != inner_field.data_type() {
+    let array = if to != inner_field {
         // To transform inner type, can first cast to FSL with new inner type.
         let fsl_to = DataType::FixedSizeList(to.clone(), *size);
         let array = cast_with_options(array, &fsl_to, cast_options)?;
@@ -190,10 +190,14 @@ where
             if cast_options.safe || array.is_null(idx) {
                 if last_pos != start_pos {
                     // Extend with valid slices
-                    mutable.extend(0, last_pos, start_pos);
+                    mutable
+                        .try_extend(0, last_pos, start_pos)
+                        .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 }
                 // Pad this slice with nulls
-                mutable.extend_nulls(size as _);
+                mutable
+                    .try_extend_nulls(size as _)
+                    .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 null_builder.set_bit(idx, false);
                 // Set last_pos to the end of this slice's values
                 last_pos = end_pos
@@ -211,7 +215,9 @@ where
             if mutable.len() != cap {
                 // Remaining slices were all correct length
                 let remaining = cap - mutable.len();
-                mutable.extend(0, last_pos, last_pos + remaining)
+                mutable
+                    .try_extend(0, last_pos, last_pos + remaining)
+                    .map_err(|e| ArrowError::CastError(e.to_string()))?;
             }
             make_array(mutable.freeze())
         }
@@ -252,7 +258,9 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
         if len != size as usize {
             // Nulls in FixedSizeListArray take up space and so we must pad the values
             if cast_options.safe || array.is_null(idx) {
-                mutable.extend_nulls(size as _);
+                mutable
+                    .try_extend_nulls(size as _)
+                    .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 null_builder.set_bit(idx, false);
             } else {
                 return Err(ArrowError::CastError(format!(
@@ -260,7 +268,9 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
                 )));
             }
         } else {
-            mutable.extend(0, offset, offset + len);
+            mutable
+                .try_extend(0, offset, offset + len)
+                .map_err(|e| ArrowError::CastError(e.to_string()))?;
         }
     }
 

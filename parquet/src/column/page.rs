@@ -197,6 +197,15 @@ impl CompressedPage {
         self.compressed_page.buffer()
     }
 
+    /// Returns the number of heap bytes this page currently holds.
+    ///
+    /// This is the page's compressed buffer (the embedded [`Bytes`]); use it to
+    /// account for a buffered page's memory footprint rather than reaching for
+    /// `data().len()` at each call site.
+    pub fn memory_usage(&self) -> usize {
+        self.compressed_page.buffer().len()
+    }
+
     /// Returns the thrift page header
     pub(crate) fn to_thrift_header(&self) -> Result<PageHeader> {
         let uncompressed_size = self.uncompressed_size();
@@ -406,7 +415,14 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// [(#4327)]: https://github.com/apache/arrow-rs/pull/4327
     /// [(#4943)]: https://github.com/apache/arrow-rs/pull/4943
     fn at_record_boundary(&mut self) -> Result<bool> {
-        Ok(self.peek_next_page()?.is_none())
+        match self.peek_next_page()? {
+            // Last page in the column chunk - always a record boundary
+            None => Ok(true),
+            // A V2 data page is required by the parquet spec to start at a
+            // record boundary, so the current page ends at one.  V2 pages
+            // are identified by having `num_rows` set in their header.
+            Some(metadata) => Ok(metadata.num_rows.is_some()),
+        }
     }
 }
 
@@ -422,6 +438,55 @@ pub trait PageWriter: Send {
     /// This method is called for every compressed page we write into underlying buffer,
     /// either data page or dictionary page.
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec>;
+
+    /// **Unstable, not public API.** This is an internal protocol between
+    /// [`GenericColumnWriter`] and its in-crate page writers; it is hidden from
+    /// the rendered docs and may change or be removed without a major version
+    /// bump. External `PageWriter` implementations should not override it. See
+    /// the page-spilling cleanup tracked in
+    /// <https://github.com/apache/arrow-rs/pull/10020>.
+    ///
+    /// Whether this writer resolves the final page layout itself (at flush)
+    /// rather than committing bytes to their final position as pages arrive.
+    ///
+    /// The dictionary page of a column chunk must be written *first*, but it is
+    /// not finalized until every value has been seen. A writer that commits
+    /// bytes live (e.g. straight to a file) therefore relies on the column
+    /// writer buffering the dictionary-encoded data pages in memory until the
+    /// dictionary page is ready — see [`GenericColumnWriter`]'s `data_pages`.
+    ///
+    /// A writer that instead buffers the whole chunk and splices it later (the
+    /// [`ArrowWriter`] path) can accept data pages *before* the dictionary page
+    /// and order them itself at flush. Returning `true` tells the column writer
+    /// to skip that in-memory buffering and stream dictionary-column data pages
+    /// straight through, bounding the column writer's memory.
+    ///
+    /// [`GenericColumnWriter`]: crate::column::writer::GenericColumnWriter
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    #[doc(hidden)]
+    fn defers_dictionary_ordering(&self) -> bool {
+        false
+    }
+
+    /// **Unstable, not public API.** Companion to
+    /// [`defers_dictionary_ordering`](Self::defers_dictionary_ordering): an
+    /// internal hook for the column writer's memory accounting, hidden from the
+    /// rendered docs and subject to change or removal without a major version
+    /// bump. External `PageWriter` implementations should not override it.
+    ///
+    /// The number of bytes this writer is currently holding **in memory** for
+    /// pages it has been handed (i.e. completed pages not yet committed to their
+    /// final destination).
+    ///
+    /// Used by the column writer to report its memory footprint. The default is
+    /// `0`: a writer that streams pages straight to their destination retains
+    /// nothing. A writer that buffers pages should report what it actually holds
+    /// on the heap — which, when it spills to a backing store, can be far less
+    /// than the bytes written.
+    #[doc(hidden)]
+    fn buffered_memory_size(&self) -> usize {
+        0
+    }
 
     /// Closes resources and flushes underlying sink.
     /// Page writer should not be used after this method is called.

@@ -792,6 +792,12 @@ unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
             + self.keys.get_buffer_memory_size()
             + self.values.get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.keys.claim(pool);
+        self.values.claim(pool);
+    }
 }
 
 impl<T: ArrowDictionaryKeyType> std::fmt::Debug for DictionaryArray<T> {
@@ -910,6 +916,11 @@ unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'
 
     fn get_array_memory_size(&self) -> usize {
         self.dictionary.get_array_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.dictionary.claim(pool);
     }
 }
 

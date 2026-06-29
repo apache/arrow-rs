@@ -126,6 +126,14 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         self.buffer
     }
 
+    /// Claim memory used by this buffer in the provided memory pool.
+    ///
+    /// See [`Buffer::claim`] for details.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.buffer.claim(pool);
+    }
+
     /// Returns true if this [`ScalarBuffer`] is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
     /// return false when the arrays are logically equal

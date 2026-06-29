@@ -46,6 +46,8 @@ github:
         strict: true
         # don't require any jobs to pass
         contexts: []
+      required_pull_request_reviews:
+        required_approving_review_count: 1
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true

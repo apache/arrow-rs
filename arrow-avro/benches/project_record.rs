@@ -121,7 +121,22 @@ fn gen_double(mut rng: impl Rng, sc: &ApacheSchema, n: usize, prefix: &[u8]) -> 
     )
 }
 
-const READER_SCHEMA: &str = r#"
+fn gen_mixed(mut rng: impl Rng, sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
+        sc,
+        prefix,
+        (0..n).map(|i| {
+            Value::Record(vec![
+                ("f1".into(), Value::Int(rng.random())),
+                ("f2".into(), Value::Long(rng.random())),
+                ("f3".into(), Value::String(format!("name-{i}"))),
+                ("f4".into(), Value::Double(rng.random())),
+            ])
+        }),
+    )
+}
+
+const SKIP_READER_SCHEMA: &str = r#"
     {
         "type":"record",
         "name":"table",
@@ -175,11 +190,42 @@ const DOUBLE_SCHEMA: &str = r#"
     }
     "#;
 
-fn new_decoder(schema_json: &'static str, batch_size: usize) -> Decoder {
+const MIX_SCHEMA: &str = r#"
+    {
+        "type":"record",
+        "name":"Mix",
+        "fields": [
+            { "name": "f1", "type": "int" },
+            { "name": "f2", "type": "long" },
+            { "name": "f3", "type": "string" },
+            { "name": "f4", "type": "double" }
+        ]
+    }
+    "#;
+
+// Project the record type writen to MIX_SCHEMA:
+// skip "f2" and "f4", add "f5" with a default
+const PROJECT_READER_SCHEMA: &str = r#"
+    {
+        "type":"record",
+        "name":"Mix",
+        "fields": [
+            { "name": "f1", "type": "int" },
+            { "name": "f3", "type": "string" },
+            { "name": "f5", "type": "long", "default": 0 }
+        ]
+    }
+    "#;
+
+fn new_decoder(
+    schema_json: &'static str,
+    reader_schema_json: &'static str,
+    batch_size: usize,
+) -> Decoder {
     let schema = AvroSchema::new(schema_json.to_owned());
     let mut store = SchemaStore::new();
     store.register(schema).unwrap();
-    let reader_schema = AvroSchema::new(READER_SCHEMA.to_owned());
+    let reader_schema = AvroSchema::new(reader_schema_json.to_owned());
     ReaderBuilder::new()
         .with_writer_schema_store(store)
         .with_batch_size(batch_size)
@@ -215,19 +261,24 @@ fn bench_with_decoder<F>(
 fn criterion_benches(c: &mut Criterion) {
     let data = gen_avro_data_with(INT_SCHEMA, NUM_ROWS, gen_int);
     bench_with_decoder(c, "skip_int", &data, NUM_ROWS, || {
-        new_decoder(INT_SCHEMA, BATCH_SIZE)
+        new_decoder(INT_SCHEMA, SKIP_READER_SCHEMA, BATCH_SIZE)
     });
     let data = gen_avro_data_with(LONG_SCHEMA, NUM_ROWS, gen_long);
     bench_with_decoder(c, "skip_long", &data, NUM_ROWS, || {
-        new_decoder(LONG_SCHEMA, BATCH_SIZE)
+        new_decoder(LONG_SCHEMA, SKIP_READER_SCHEMA, BATCH_SIZE)
     });
     let data = gen_avro_data_with(FLOAT_SCHEMA, NUM_ROWS, gen_float);
     bench_with_decoder(c, "skip_float", &data, NUM_ROWS, || {
-        new_decoder(FLOAT_SCHEMA, BATCH_SIZE)
+        new_decoder(FLOAT_SCHEMA, SKIP_READER_SCHEMA, BATCH_SIZE)
     });
     let data = gen_avro_data_with(DOUBLE_SCHEMA, NUM_ROWS, gen_double);
     bench_with_decoder(c, "skip_double", &data, NUM_ROWS, || {
-        new_decoder(DOUBLE_SCHEMA, BATCH_SIZE)
+        new_decoder(DOUBLE_SCHEMA, SKIP_READER_SCHEMA, BATCH_SIZE)
+    });
+
+    let data = gen_avro_data_with(MIX_SCHEMA, NUM_ROWS, gen_mixed);
+    bench_with_decoder(c, "project_primitives", &data, NUM_ROWS, || {
+        new_decoder(MIX_SCHEMA, PROJECT_READER_SCHEMA, BATCH_SIZE)
     });
 }
 

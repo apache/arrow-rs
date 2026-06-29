@@ -21,28 +21,25 @@ use arrow_schema::ArrowError;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
+const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
 /// Additional context that may be needed for compression.
 ///
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
 /// compression calls to avoid the performance overhead of initialising a new context for every
 /// compression.
+#[derive(Default)]
 pub struct CompressionContext {
     #[cfg(feature = "zstd")]
-    compressor: zstd::bulk::Compressor<'static>,
+    compressor: Option<zstd::bulk::Compressor<'static>>,
 }
 
-// the reason we allow derivable_impls here is because when zstd feature is not enabled, this
-// becomes derivable. however with zstd feature want to be explicit about the compression level.
-#[allow(clippy::derivable_impls)]
-impl Default for CompressionContext {
-    fn default() -> Self {
-        CompressionContext {
-            // safety: `new` here will only return error here if using an invalid compression level
-            #[cfg(feature = "zstd")]
-            compressor: zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)
-                .expect("can use default compression level"),
-        }
+impl CompressionContext {
+    #[cfg(feature = "zstd")]
+    fn zstd_compressor(&mut self, level: i32) -> &mut zstd::bulk::Compressor<'static> {
+        self.compressor.get_or_insert_with(|| {
+            zstd::bulk::Compressor::new(level).expect("can use default compression level")
+        })
     }
 }
 
@@ -51,7 +48,10 @@ impl std::fmt::Debug for CompressionContext {
         let mut ds = f.debug_struct("CompressionContext");
 
         #[cfg(feature = "zstd")]
-        ds.field("compressor", &"zstd::bulk::Compressor");
+        ds.field(
+            "compressor",
+            &self.compressor.as_ref().map(|_| "zstd::bulk::Compressor"),
+        );
 
         ds.finish()
     }
@@ -64,12 +64,19 @@ impl std::fmt::Debug for CompressionContext {
 /// context for every decompression.
 pub struct DecompressionContext {
     #[cfg(feature = "zstd")]
-    decompressor: zstd::bulk::Decompressor<'static>,
+    decompressor: Option<zstd::bulk::Decompressor<'static>>,
 }
 
 impl DecompressionContext {
     pub(crate) fn new() -> Self {
         Default::default()
+    }
+
+    #[cfg(feature = "zstd")]
+    fn zstd_decompressor(&mut self) -> &mut zstd::bulk::Decompressor<'static> {
+        self.decompressor.get_or_insert_with(|| {
+            zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
+        })
     }
 }
 
@@ -78,7 +85,7 @@ impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
             #[cfg(feature = "zstd")]
-            decompressor: zstd::bulk::Decompressor::new().expect("can create zstd decompressor"),
+            decompressor: None,
         }
     }
 }
@@ -88,7 +95,13 @@ impl std::fmt::Debug for DecompressionContext {
         let mut ds = f.debug_struct("DecompressionContext");
 
         #[cfg(feature = "zstd")]
-        ds.field("decompressor", &"zstd::bulk::Decompressor");
+        ds.field(
+            "decompressor",
+            &self
+                .decompressor
+                .as_ref()
+                .map(|_| "zstd::bulk::Decompressor"),
+        );
 
         ds.finish()
     }
@@ -98,7 +111,7 @@ impl std::fmt::Debug for DecompressionContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionCodec {
     Lz4Frame,
-    Zstd,
+    Zstd(i32),
 }
 
 impl TryFrom<CompressionType> for CompressionCodec {
@@ -106,7 +119,7 @@ impl TryFrom<CompressionType> for CompressionCodec {
 
     fn try_from(compression_type: CompressionType) -> Result<Self, ArrowError> {
         match compression_type {
-            CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
+            CompressionType::ZSTD => Ok(CompressionCodec::Zstd(DEFAULT_ZSTD_COMPRESSION_LEVEL)),
             CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
             other_type => Err(ArrowError::NotYetImplemented(format!(
                 "compression type {other_type:?} not supported "
@@ -116,6 +129,25 @@ impl TryFrom<CompressionType> for CompressionCodec {
 }
 
 impl CompressionCodec {
+    /// Creates a [`CompressionCodec`] with an explicit compression level.
+    ///
+    /// The level is used for [`CompressionType::ZSTD`].
+    /// [`CompressionType::LZ4_FRAME`] does not yet support compression levels
+    /// and ignores this value. Returns an error for unsupported compression
+    /// types.
+    pub(crate) fn try_new_with_compression_level(
+        compression_type: CompressionType,
+        compression_level: i32,
+    ) -> Result<Self, ArrowError> {
+        match compression_type {
+            CompressionType::ZSTD => Ok(CompressionCodec::Zstd(compression_level)),
+            CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
+            other_type => Err(ArrowError::NotYetImplemented(format!(
+                "compression type {other_type:?} not supported "
+            ))),
+        }
+    }
+
     /// Compresses the data in `input` to `output` and appends the
     /// data using the specified compression mechanism.
     ///
@@ -170,7 +202,7 @@ impl CompressionCodec {
     ) -> Result<Buffer, ArrowError> {
         // read the first 8 bytes to determine if the data is
         // compressed
-        let decompressed_length = read_uncompressed_size(input);
+        let decompressed_length = read_uncompressed_size(input)?;
         let buffer = if decompressed_length == 0 {
             // empty
             Buffer::from([])
@@ -200,7 +232,7 @@ impl CompressionCodec {
     ) -> Result<(), ArrowError> {
         match self {
             CompressionCodec::Lz4Frame => compress_lz4(input, output),
-            CompressionCodec::Zstd => compress_zstd(input, output, context),
+            CompressionCodec::Zstd(level) => compress_zstd(input, output, context, *level),
         }
     }
 
@@ -214,7 +246,7 @@ impl CompressionCodec {
     ) -> Result<Vec<u8>, ArrowError> {
         let ret = match self {
             CompressionCodec::Lz4Frame => decompress_lz4(input, decompressed_size)?,
-            CompressionCodec::Zstd => decompress_zstd(input, decompressed_size, context)?,
+            CompressionCodec::Zstd(_) => decompress_zstd(input, decompressed_size, context)?,
         };
         if ret.len() != decompressed_size {
             return Err(ArrowError::IpcError(format!(
@@ -266,8 +298,9 @@ fn compress_zstd(
     input: &[u8],
     output: &mut Vec<u8>,
     context: &mut CompressionContext,
+    level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.compressor.compress(input)?;
+    let result = context.zstd_compressor(level).compress(input)?;
     output.extend_from_slice(&result);
     Ok(())
 }
@@ -278,6 +311,7 @@ fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
     _context: &mut CompressionContext,
+    _level: i32,
 ) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC compression requires the zstd feature".to_string(),
@@ -290,7 +324,9 @@ fn decompress_zstd(
     decompressed_size: usize,
     context: &mut DecompressionContext,
 ) -> Result<Vec<u8>, ArrowError> {
-    let output = context.decompressor.decompress(input, decompressed_size)?;
+    let output = context
+        .zstd_decompressor()
+        .decompress(input, decompressed_size)?;
     Ok(output)
 }
 
@@ -311,11 +347,16 @@ fn decompress_zstd(
 ///   LENGTH_NO_COMPRESSED_DATA: indicate that the data that follows is not compressed
 ///    0: indicate that there is no data
 ///   positive number: indicate the uncompressed length for the following data
+/// Returns an error if the input buffer is shorter than 8 bytes
 #[inline]
-fn read_uncompressed_size(buffer: &[u8]) -> i64 {
-    let len_buffer = &buffer[0..8];
-    // 64-bit little-endian signed integer
-    i64::from_le_bytes(len_buffer.try_into().unwrap())
+fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
+    let len_buffer = buffer.get(..LENGTH_OF_PREFIX_DATA as usize).ok_or_else(|| {
+        ArrowError::IpcError(format!(
+            "Compressed IPC buffer is too short: expected at least {LENGTH_OF_PREFIX_DATA} bytes, got {}",
+            buffer.len()
+        ))
+    })?;
+    Ok(i64::from_le_bytes(len_buffer.try_into().unwrap()))
 }
 
 #[cfg(test)]
@@ -343,7 +384,7 @@ mod tests {
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
-        let codec = super::CompressionCodec::Zstd;
+        let codec = super::CompressionCodec::Zstd(super::DEFAULT_ZSTD_COMPRESSION_LEVEL);
         let mut output_bytes: Vec<u8> = Vec::new();
         codec
             .compress(input_bytes, &mut output_bytes, &mut Default::default())
@@ -356,5 +397,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    #[test]
+    fn test_read_uncompressed_size_rejects_short_prefix() {
+        let err = super::read_uncompressed_size(&[1, 2, 3, 4, 5, 6, 7])
+            .expect_err("short compressed IPC prefix should return an error");
+
+        assert!(
+            err.to_string()
+                .contains("Compressed IPC buffer is too short"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -329,18 +329,12 @@ impl FlightDataEncoder {
     }
 
     /// Place the `FlightData` in the queue to send
+    #[inline]
     fn queue_message(&mut self, mut data: FlightData) {
         if let Some(descriptor) = self.descriptor.take() {
             data.flight_descriptor = Some(descriptor);
         }
         self.queue.push_back(data);
-    }
-
-    /// Place the `FlightData` in the queue to send
-    fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
-        for data in datas {
-            self.queue_message(data)
-        }
     }
 
     /// Encodes schema as a [`FlightData`] in self.queue.
@@ -381,8 +375,9 @@ impl FlightDataEncoder {
 
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
             let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
-
-            self.queue_messages(flight_dictionaries);
+            for dict in flight_dictionaries {
+                self.queue_message(dict);
+            }
             self.queue_message(flight_batch);
         }
 
@@ -528,13 +523,28 @@ fn prepare_field_for_flight(
         }
         DataType::Dictionary(_, value_type) => {
             if !send_dictionaries {
-                Field::new(
+                // Recurse into value type to handle nested dicts being stripped
+                let value_field = Field::new(
                     field.name(),
                     value_type.as_ref().clone(),
                     field.is_nullable(),
+                );
+                prepare_field_for_flight(
+                    &Arc::new(value_field),
+                    dictionary_tracker,
+                    send_dictionaries,
                 )
                 .with_metadata(field.metadata().clone())
             } else {
+                // Recurse into value type BEFORE registering this dict's id,
+                // matching the depth-first order of encode_dictionaries in the
+                // IPC writer which processes nested dicts before the parent.
+                let value_field = Field::new("values", value_type.as_ref().clone(), true);
+                prepare_field_for_flight(
+                    &Arc::new(value_field),
+                    dictionary_tracker,
+                    send_dictionaries,
+                );
                 dictionary_tracker.next_dict_id();
                 #[allow(deprecated)]
                 Field::new_dict(
@@ -547,6 +557,44 @@ fn prepare_field_for_flight(
                 .with_metadata(field.metadata().clone())
             }
         }
+        DataType::ListView(inner) | DataType::LargeListView(inner) => {
+            let prepared = prepare_field_for_flight(inner, dictionary_tracker, send_dictionaries);
+            Field::new(
+                field.name(),
+                match field.data_type() {
+                    DataType::ListView(_) => DataType::ListView(Arc::new(prepared)),
+                    _ => DataType::LargeListView(Arc::new(prepared)),
+                },
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone())
+        }
+        DataType::FixedSizeList(inner, size) => Field::new(
+            field.name(),
+            DataType::FixedSizeList(
+                Arc::new(prepare_field_for_flight(
+                    inner,
+                    dictionary_tracker,
+                    send_dictionaries,
+                )),
+                *size,
+            ),
+            field.is_nullable(),
+        )
+        .with_metadata(field.metadata().clone()),
+        DataType::RunEndEncoded(run_ends, values) => Field::new(
+            field.name(),
+            DataType::RunEndEncoded(
+                run_ends.clone(),
+                Arc::new(prepare_field_for_flight(
+                    values,
+                    dictionary_tracker,
+                    send_dictionaries,
+                )),
+            ),
+            field.is_nullable(),
+        )
+        .with_metadata(field.metadata().clone()),
         DataType::Map(inner, sorted) => Field::new(
             field.name(),
             DataType::Map(
@@ -556,7 +604,37 @@ fn prepare_field_for_flight(
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
-        _ => field.as_ref().clone(),
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Timestamp(_, _)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_)
+        | DataType::Interval(_)
+        | DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => field.as_ref().clone(),
     }
 }
 
@@ -573,33 +651,7 @@ fn prepare_schema_for_flight(
     let fields: Fields = schema
         .fields()
         .iter()
-        .map(|field| match field.data_type() {
-            DataType::Dictionary(_, value_type) => {
-                if !send_dictionaries {
-                    Field::new(
-                        field.name(),
-                        value_type.as_ref().clone(),
-                        field.is_nullable(),
-                    )
-                    .with_metadata(field.metadata().clone())
-                } else {
-                    dictionary_tracker.next_dict_id();
-                    #[allow(deprecated)]
-                    Field::new_dict(
-                        field.name(),
-                        field.data_type().clone(),
-                        field.is_nullable(),
-                        0,
-                        field.dict_is_ordered().unwrap_or_default(),
-                    )
-                    .with_metadata(field.metadata().clone())
-                }
-            }
-            tpe if tpe.is_nested() => {
-                prepare_field_for_flight(field, dictionary_tracker, send_dictionaries)
-            }
-            _ => field.as_ref().clone(),
-        })
+        .map(|field| prepare_field_for_flight(field, dictionary_tracker, send_dictionaries))
         .collect();
 
     Schema::new(fields).with_metadata(schema.metadata().clone())
@@ -614,7 +666,7 @@ fn prepare_schema_for_flight(
 fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_flight_data_size: usize,
-) -> Vec<RecordBatch> {
+) -> impl Iterator<Item = RecordBatch> {
     let size = batch
         .columns()
         .iter()
@@ -623,18 +675,20 @@ fn split_batch_for_grpc_response(
 
     let n_batches =
         (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
-    let rows_per_batch = (batch.num_rows() / n_batches).max(1);
-    let mut out = Vec::with_capacity(n_batches + 1);
-
+    let num_rows = batch.num_rows();
+    let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
-    while offset < batch.num_rows() {
-        let length = (rows_per_batch).min(batch.num_rows() - offset);
-        out.push(batch.slice(offset, length));
 
-        offset += length;
-    }
-
-    out
+    std::iter::from_fn(move || {
+        if offset < num_rows {
+            let length = rows_per_batch.min(num_rows - offset);
+            let slice = batch.slice(offset, length);
+            offset += length;
+            Some(slice)
+        } else {
+            None
+        }
+    })
 }
 
 /// The data needed to encode a stream of flight data, holding on to
@@ -667,7 +721,10 @@ impl FlightIpcEncoder {
 
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
-    fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
+    fn encode_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(impl Iterator<Item = FlightData> + use<>, FlightData)> {
         let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
@@ -675,7 +732,7 @@ impl FlightIpcEncoder {
             &mut self.compression_context,
         )?;
 
-        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
         let flight_batch = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
@@ -729,15 +786,16 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 mod tests {
     use crate::decode::{DecodedPayload, FlightDataDecoder};
     use arrow_array::builder::{
-        GenericByteDictionaryBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
+        FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, ListBuilder,
+        StringDictionaryBuilder, StructBuilder,
     };
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
     use arrow_buffer::ScalarBuffer;
     use arrow_cast::pretty::pretty_format_batches;
-    use arrow_ipc::MetadataVersion;
+    use arrow_ipc::{CompressionType, MetadataVersion};
     use arrow_schema::{UnionFields, UnionMode};
-    use builder::{GenericStringBuilder, MapBuilder};
+    use builder::MapBuilder;
     use std::collections::HashMap;
 
     use super::*;
@@ -833,6 +891,27 @@ mod tests {
         let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
 
         verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    #[tokio::test]
+    async fn test_compression_round_trip() {
+        // Round trip a batch through Flight with IPC body compression enabled. This exercises
+        // the compressed `IpcDataGenerator::encode` path (per-buffer codec output), which the
+        // uncompressed Flight tests and the writer-based compression tests do not cover.
+        let ints = Int32Array::from_iter_values((0..1024).map(|i| i % 8));
+        let strings = StringArray::from_iter_values((0..1024).map(|i| format!("value-{}", i % 8)));
+        let batch = RecordBatch::try_from_iter(vec![
+            ("ints", Arc::new(ints) as ArrayRef),
+            ("strings", Arc::new(strings) as ArrayRef),
+        ])
+        .unwrap();
+
+        for compression in [CompressionType::LZ4_FRAME, CompressionType::ZSTD] {
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(compression))
+                .unwrap();
+            verify_flight_round_trip_with_options(vec![batch.clone()], options).await;
+        }
     }
 
     #[tokio::test]
@@ -1447,34 +1526,24 @@ mod tests {
 
         let expected_schema = Arc::new(expected_schema);
 
-        // Builder without dictionary fields
-        let mut builder = MapBuilder::new(
-            None,
-            GenericStringBuilder::<i32>::new(),
-            GenericStringBuilder::<i32>::new(),
+        // array without dictionary fields
+        let arr1 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("a")),
+                ("k2", None),
+                ("k3", Some("b")),
+            ])],
+            false,
         );
 
-        // {"k1":"a","k2":null,"k3":"b"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("a");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("b");
-        builder.append(true).unwrap();
-
-        let arr1 = builder.finish();
-
-        // {"k1":"c","k2":null,"k3":"d"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("c");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("d");
-        builder.append(true).unwrap();
-
-        let arr2 = builder.finish();
+        let arr2 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("c")),
+                ("k2", None),
+                ("k3", Some("d")),
+            ])],
+            false,
+        );
 
         let mut expected_arrays = vec![arr1, arr2].into_iter();
 
@@ -1540,11 +1609,174 @@ mod tests {
         verify_flight_round_trip(vec![batch1, batch2]).await;
     }
 
-    async fn verify_flight_round_trip(mut batches: Vec<RecordBatch>) {
+    #[tokio::test]
+    async fn test_dictionary_ree_resend() {
+        let dict_values1 = vec![Some("a"), None, Some("b")]
+            .into_iter()
+            .collect::<DictionaryArray<Int32Type>>();
+        let run_ends1 = Int32Array::from(vec![1, 2, 3]);
+        let arr1 = RunArray::try_new(&run_ends1, &dict_values1).unwrap();
+
+        let dict_values2 = vec![Some("c"), Some("a")]
+            .into_iter()
+            .collect::<DictionaryArray<Int32Type>>();
+        let run_ends2 = Int32Array::from(vec![1, 2]);
+        let arr2 = RunArray::try_new(&run_ends2, &dict_values2).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            arr1.data_type().clone(),
+            true,
+        )]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
+
+        verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_of_struct_of_dict_resend() {
+        // Dict(Int8, Struct { dict: Dict(Int32, Utf8), int: Int32 })
+        // This exercises the Dictionary branch recursing into its value type
+        // before assigning its own dict_id (depth-first ordering).
+        let struct_fields: Vec<Field> = vec![
+            Field::new_dictionary("dict", DataType::Int32, DataType::Utf8, true),
+            Field::new("int", DataType::Int32, false),
+        ];
+
+        let inner_values =
+            StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
+        let inner_keys = Int32Array::from_iter_values([0, 1, 2, 3, 0]);
+        let inner_dict = DictionaryArray::new(inner_keys, Arc::new(inner_values));
+        let int_array = Int32Array::from(vec![10, 20, 30, 40, 50]);
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(struct_fields[0].clone()),
+                Arc::new(inner_dict) as ArrayRef,
+            ),
+            (
+                Arc::new(struct_fields[1].clone()),
+                Arc::new(int_array) as ArrayRef,
+            ),
+        ]);
+
+        let outer_keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+        let arr1 = DictionaryArray::new(outer_keys, Arc::new(struct_array));
+
+        let inner_values2 = StringArray::from(vec![Some("x"), Some("y")]);
+        let inner_keys2 = Int32Array::from_iter_values([0, 1, 0]);
+        let inner_dict2 = DictionaryArray::new(inner_keys2, Arc::new(inner_values2));
+        let int_array2 = Int32Array::from(vec![100, 200, 300]);
+
+        let struct_array2 = StructArray::from(vec![
+            (
+                Arc::new(struct_fields[0].clone()),
+                Arc::new(inner_dict2) as ArrayRef,
+            ),
+            (
+                Arc::new(struct_fields[1].clone()),
+                Arc::new(int_array2) as ArrayRef,
+            ),
+        ]);
+
+        let outer_keys2 = Int8Array::from_iter_values([0, 1]);
+        let arr2 = DictionaryArray::new(outer_keys2, Arc::new(struct_array2));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dict_struct",
+            arr1.data_type().clone(),
+            false,
+        )]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
+
+        verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    async fn verify_dictionary_list_view_resend<O: OffsetSizeTrait>() {
+        let mut builder =
+            GenericListViewBuilder::<O, _>::new(StringDictionaryBuilder::<UInt16Type>::new());
+
+        builder.append_value(vec![Some("a"), None, Some("b")]);
+        let arr1 = builder.finish();
+
+        builder.append_value(vec![Some("c"), None, Some("d")]);
+        let arr2 = builder.finish();
+
+        let inner = Arc::new(Field::new_dictionary(
+            "item",
+            DataType::UInt16,
+            DataType::Utf8,
+            true,
+        ));
+        let dt = if O::IS_LARGE {
+            DataType::LargeListView(inner)
+        } else {
+            DataType::ListView(inner)
+        };
+        let schema = Arc::new(Schema::new(vec![Field::new("dict_list_view", dt, true)]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
+
+        verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_list_view_resend() {
+        verify_dictionary_list_view_resend::<i32>().await;
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_large_list_view_resend() {
+        verify_dictionary_list_view_resend::<i64>().await;
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_fixed_size_list_resend() {
+        let mut builder =
+            FixedSizeListBuilder::new(StringDictionaryBuilder::<UInt16Type>::new(), 2);
+
+        builder.values().append_value("a");
+        builder.values().append_value("b");
+        builder.append(true);
+        let arr1 = builder.finish();
+
+        builder.values().append_value("c");
+        builder.values().append_value("d");
+        builder.append(true);
+        let arr2 = builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new_fixed_size_list(
+            "dict_fsl",
+            Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
+            2,
+            true,
+        )]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
+
+        verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    async fn verify_flight_round_trip(batches: Vec<RecordBatch>) {
+        verify_flight_round_trip_with_options(batches, IpcWriteOptions::default()).await;
+    }
+
+    /// Encode `batches` through a [`FlightDataEncoderBuilder`] using `options`, decode them
+    /// again, and assert the decoded batches match the originals.
+    async fn verify_flight_round_trip_with_options(
+        mut batches: Vec<RecordBatch>,
+        options: IpcWriteOptions,
+    ) {
         let expected_schema = batches.first().unwrap().schema();
 
         let encoder = FlightDataEncoderBuilder::default()
-            .with_options(IpcWriteOptions::default())
+            .with_options(options)
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
@@ -1626,7 +1858,8 @@ mod tests {
         let c = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 1);
         assert_eq!(batch, split[0]);
 
@@ -1636,7 +1869,8 @@ mod tests {
         let c = UInt8Array::from((0..n_rows).map(|i| (i % 256) as u8).collect::<Vec<_>>());
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 3);
         assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
@@ -1680,7 +1914,8 @@ mod tests {
 
         let input_rows = batch.num_rows();
 
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes).collect();
         let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
         let output_rows: usize = sizes.iter().sum();
 

@@ -531,7 +531,7 @@ where
 
 /// Parses given string to specified decimal native (i128/i256) based on given
 /// scale. Returns an `Err` if it cannot parse given string.
-pub(crate) fn parse_string_to_decimal_native<T: DecimalType>(
+pub fn parse_string_to_decimal_native<T: DecimalType>(
     value_str: &str,
     scale: usize,
 ) -> Result<T::Native, ArrowError>
@@ -558,6 +558,12 @@ where
 
     let integers = first_part;
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
+
+    if integers.is_empty() && decimals.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid decimal format: {value_str:?}"
+        )));
+    }
 
     if !integers.is_empty() && !integers.as_bytes()[0].is_ascii_digit() {
         return Err(ArrowError::InvalidArgumentError(format!(
@@ -777,7 +783,7 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, D>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -785,7 +791,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
@@ -802,6 +808,17 @@ where
     }
 }
 
+/// Cast a single floating point value to a decimal native with the given multiple.
+/// Returns `None` if the value cannot be represented with the requested precision.
+#[inline(always)]
+pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: DecimalCast,
+{
+    D::Native::from_f64((mul * input).round())
+}
+
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
     base: D::Native,
@@ -812,7 +829,7 @@ where
     T: ArrowPrimitiveType,
     <T as ArrowPrimitiveType>::Native: NumCast,
     D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
     let array = array.as_primitive::<D>();
 
@@ -962,6 +979,17 @@ mod tests {
             parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
             12345679_i128
         );
+
+        for value in ["", " ", ".", "+", "-", "+.", "-."] {
+            assert!(
+                parse_string_to_decimal_native::<Decimal128Type>(value, 2).is_err(),
+                "expected {value:?} to fail parsing as Decimal128"
+            );
+            assert!(
+                parse_string_to_decimal_native::<Decimal256Type>(value, 2).is_err(),
+                "expected {value:?} to fail parsing as Decimal256"
+            );
+        }
         Ok(())
     }
 

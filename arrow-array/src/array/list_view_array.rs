@@ -223,6 +223,35 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         Self::try_new(field, offsets, sizes, values, nulls).unwrap()
     }
 
+    /// Create a new [`GenericListViewArray`] from the provided parts without validation
+    ///
+    /// See [`Self::try_new`] for the checked version of this function, and the
+    /// documentation of that function for the invariants that must be upheld.
+    ///
+    /// # Safety
+    ///
+    /// The parts must form a valid [`ListViewArray`] or [`LargeListViewArray`] according
+    /// to the Arrow spec.
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        offsets: ScalarBuffer<OffsetSize>,
+        sizes: ScalarBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(field, offsets, sizes, values, nulls);
+        }
+
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+            value_sizes: sizes,
+        }
+    }
+
     /// Create a new [`GenericListViewArray`] of length `len` where all values are null
     pub fn new_null(field: FieldRef, len: usize) -> Self {
         let values = new_empty_array(field.data_type());
@@ -485,6 +514,28 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSi
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.value_sizes.claim(pool);
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListViewArray<OffsetSize> {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let offset = self.value_offsets()[index].as_usize();
+        let size = self.value_sizes()[index].as_usize();
+        offset..(offset + size)
     }
 }
 

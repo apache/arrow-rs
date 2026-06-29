@@ -67,6 +67,28 @@
 //! * [`ArrowColumnWriter`] for writing using multiple threads,
 //! * [`RowFilter`] to apply filters during decode
 //!
+//! ### EXPERIMENTAL: Content-Defined Chunking
+//!
+//! [`ArrowWriter`] supports content-defined chunking (CDC), which creates data page
+//! boundaries based on content rather than fixed sizes. CDC enables efficient
+//! deduplication in content-addressable storage (CAS) systems: when the same data
+//! appears in successive file versions, it will produce identical byte sequences that
+//! CAS backends can deduplicate.
+//!
+//! Enable CDC via [`WriterProperties`]:
+//!
+//! ```rust
+//! # use parquet::file::properties::{WriterProperties, CdcOptions};
+//! let props = WriterProperties::builder()
+//!     .set_content_defined_chunking(Some(CdcOptions::default()))
+//!     .build();
+//! ```
+//!
+//! See [`CdcOptions`] for chunk size and normalization parameters.
+//!
+//! [`WriterProperties`]: file::properties::WriterProperties
+//! [`CdcOptions`]: file::properties::CdcOptions
+//!
 //! [`ArrowWriter`]: arrow::arrow_writer::ArrowWriter
 //! [`ParquetRecordBatchReaderBuilder`]: arrow::arrow_reader::ParquetRecordBatchReaderBuilder
 //! [`ParquetPushDecoder`]: arrow::push_decoder::ParquetPushDecoder
@@ -154,22 +176,6 @@ compile_error!(
 pub mod errors;
 pub mod basic;
 
-/// Automatically generated code from the Parquet thrift definition.
-///
-/// This module code generated from [parquet.thrift]. See [crate::file] for
-/// more information on reading Parquet encoded data.
-///
-/// [parquet.thrift]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
-// see parquet/CONTRIBUTING.md for instructions on regenerating
-// Don't try clippy and format auto generated code
-#[allow(clippy::all, missing_docs)]
-#[rustfmt::skip]
-#[deprecated(
-    since = "57.0.0",
-    note = "The `format` module is no longer maintained, and will be removed in `59.0.0`"
-)]
-pub mod format;
-
 #[macro_use]
 pub mod data_type;
 
@@ -200,7 +206,7 @@ pub mod schema;
 
 mod parquet_macros;
 mod parquet_thrift;
-pub mod thrift;
+
 /// What data is needed to read the next item from a decoder.
 ///
 /// This is used to communicate between the decoder and the caller
