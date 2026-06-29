@@ -41,6 +41,12 @@ impl<'a> AvroCursor<'a> {
         self.start_len - self.buf.len()
     }
 
+    /// Returns the number of bytes left to read
+    #[inline]
+    pub(crate) fn remaining(&self) -> usize {
+        self.buf.len()
+    }
+
     /// Read a single `u8`
     #[inline]
     pub(crate) fn get_u8(&mut self) -> Result<u8, AvroError> {
