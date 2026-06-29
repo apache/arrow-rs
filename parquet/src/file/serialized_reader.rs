@@ -547,8 +547,19 @@ enum SerializedPageReaderState {
         dictionary_page: Option<PageLocation>,
         /// The total number of rows in this column chunk
         total_rows: usize,
-        /// The index of the data page within this column chunk
+        /// The original (forward-order) index of the next data page to emit
+        /// within this column chunk. Used as the page ordinal for encryption
+        /// AAD and for telemetry.
+        ///
+        /// In forward mode this starts at 0 and increments after each emit;
+        /// in reverse mode it starts at `page_locations.len() - 1` and
+        /// decrements after each emit.
         page_index: usize,
+        /// If `true`, data pages are emitted from the back of `page_locations`
+        /// to the front (after the dictionary page, which is always emitted
+        /// first). Tracking issue:
+        /// <https://github.com/apache/arrow-rs/issues/9934>
+        reverse: bool,
     },
 }
 
@@ -628,6 +639,45 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         Ok(self)
     }
 
+    /// Configure this reader to emit data pages in **reverse order**.
+    ///
+    /// When enabled, the dictionary page (if any) is still emitted first
+    /// because data pages depend on it; subsequent data pages are then
+    /// emitted from the last `PageLocation` to the first. Each page is
+    /// decoded forward — only the page-traversal order is reversed.
+    ///
+    /// Reverse iteration only takes effect when this reader was constructed
+    /// with `page_locations` (i.e. an `OffsetIndex` was available). In
+    /// `Values` mode (no `OffsetIndex`) the flag is ignored, since random
+    /// page access requires the page index.
+    ///
+    /// Should be called before any page is read; calling after iteration
+    /// has begun yields an unspecified page ordinal but does not corrupt
+    /// page contents.
+    ///
+    /// Tracking: <https://github.com/apache/arrow-rs/issues/9934>
+    #[doc(hidden)]
+    pub fn with_reverse_pages(mut self, enable: bool) -> Self {
+        if let SerializedPageReaderState::Pages {
+            page_locations,
+            page_index,
+            reverse,
+            ..
+        } = &mut self.state
+        {
+            *reverse = enable;
+            // Page ordinal must reflect the original forward position so
+            // encryption AAD stays correct. Reverse mode emits the
+            // back-most page first, which has ordinal `len - 1`.
+            *page_index = if enable {
+                page_locations.len().saturating_sub(1)
+            } else {
+                0
+            };
+        }
+        self
+    }
+
     /// Creates a new serialized page with custom options.
     pub fn new_with_properties(
         reader: Arc<R>,
@@ -657,6 +707,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                     dictionary_page,
                     total_rows,
                     page_index: 0,
+                    reverse: false,
                 }
             }
             None => SerializedPageReaderState::Values {
@@ -731,14 +782,18 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             SerializedPageReaderState::Pages {
                 page_locations,
                 dictionary_page,
+                reverse,
                 ..
             } => {
                 if let Some(page) = dictionary_page {
                     Ok(Some(page.offset as u64))
-                } else if let Some(page) = page_locations.front() {
-                    Ok(Some(page.offset as u64))
                 } else {
-                    Ok(None)
+                    let next = if *reverse {
+                        page_locations.back()
+                    } else {
+                        page_locations.front()
+                    };
+                    Ok(next.map(|page| page.offset as u64))
                 }
             }
         }
@@ -978,14 +1033,22 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     page_locations,
                     dictionary_page,
                     page_index,
+                    reverse,
                     ..
                 } => {
                     let (front, is_dictionary_page) = match dictionary_page.take() {
                         Some(front) => (front, true),
-                        None => match page_locations.pop_front() {
-                            Some(front) => (front, false),
-                            None => return Ok(None),
-                        },
+                        None => {
+                            let popped = if *reverse {
+                                page_locations.pop_back()
+                            } else {
+                                page_locations.pop_front()
+                            };
+                            match popped {
+                                Some(front) => (front, false),
+                                None => return Ok(None),
+                            }
+                        }
                     };
 
                     let page_len = usize::try_from(front.compressed_page_size)?;
@@ -1003,7 +1066,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;
 
                     if !is_dictionary_page {
-                        *page_index += 1;
+                        if *reverse {
+                            *page_index = page_index.saturating_sub(1);
+                        } else {
+                            *page_index += 1;
+                        }
                     }
                     decode_page(
                         header,
@@ -1066,6 +1133,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 dictionary_page,
                 total_rows,
                 page_index: _,
+                reverse,
             } => {
                 if dictionary_page.is_some() {
                     Ok(Some(PageMetadata {
@@ -1073,6 +1141,19 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         num_levels: None,
                         is_dict: true,
                     }))
+                } else if *reverse {
+                    if let Some(page) = page_locations.back() {
+                        // The back-most page covers rows
+                        // `[page.first_row_index, total_rows)` since there
+                        // is no successor in the original forward order.
+                        Ok(Some(PageMetadata {
+                            num_rows: Some(*total_rows - page.first_row_index as usize),
+                            num_levels: None,
+                            is_dict: false,
+                        }))
+                    } else {
+                        Ok(None)
+                    }
                 } else if let Some(page) = page_locations.front() {
                     let next_rows = page_locations
                         .get(1)
@@ -1138,15 +1219,25 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 page_locations,
                 dictionary_page,
                 page_index,
+                reverse,
                 ..
             } => {
                 if dictionary_page.is_some() {
                     // If a dictionary page exists, consume it by taking it (sets to None)
                     dictionary_page.take();
                 } else {
-                    // If no dictionary page exists, simply pop the data page from page_locations
-                    if page_locations.pop_front().is_some() {
-                        *page_index += 1;
+                    // Pop the next data page in iteration direction
+                    let popped = if *reverse {
+                        page_locations.pop_back()
+                    } else {
+                        page_locations.pop_front()
+                    };
+                    if popped.is_some() {
+                        if *reverse {
+                            *page_index = page_index.saturating_sub(1);
+                        } else {
+                            *page_index += 1;
+                        }
                     }
                 }
 
@@ -2870,5 +2961,811 @@ mod tests {
             num_rows += 1;
         }
         assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
+    }
+}
+
+#[cfg(test)]
+mod reverse_pages_tests {
+    //! Tests for `SerializedPageReader::with_reverse_pages(true)`. Tracking
+    //! issue: <https://github.com/apache/arrow-rs/issues/9934>.
+    //!
+    //! These tests cover both the **page-level** equivalence (reverse output
+    //! is byte-identical to forward output once page order is normalized) and
+    //! the **value-level** equivalence (decoded values, including with NULLs
+    //! and across DataPage V1 / V2, match between the two readers).
+
+    use super::*;
+    use crate::basic::{Compression, Repetition, Type as PhysicalType};
+    use crate::column::page::{Page, PageReader};
+    use crate::column::reader::ColumnReaderImpl;
+    use crate::data_type::{ByteArray, ByteArrayType, DataType, Int32Type, Int64Type};
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+    use crate::file::page_index::offset_index::OffsetIndexMetaData;
+    use crate::file::properties::{WriterProperties, WriterVersion};
+    use crate::file::writer::SerializedFileWriter;
+    use crate::schema::types::Type as SchemaType;
+    use bytes::Bytes;
+    use std::sync::Arc;
+
+    // ------------------------------------------------------------------ //
+    // Test fixtures
+    // ------------------------------------------------------------------ //
+
+    #[derive(Clone)]
+    struct TestFileSpec {
+        compression: Compression,
+        enable_dict: bool,
+        writer_version: WriterVersion,
+        data_page_row_count_limit: usize,
+        data_page_size_limit: usize,
+    }
+
+    impl Default for TestFileSpec {
+        fn default() -> Self {
+            Self {
+                compression: Compression::UNCOMPRESSED,
+                enable_dict: false,
+                writer_version: WriterVersion::PARQUET_1_0,
+                data_page_row_count_limit: 64,
+                data_page_size_limit: 256,
+            }
+        }
+    }
+
+    impl TestFileSpec {
+        fn build_props(&self) -> Arc<WriterProperties> {
+            Arc::new(
+                WriterProperties::builder()
+                    .set_compression(self.compression)
+                    .set_dictionary_enabled(self.enable_dict)
+                    .set_writer_version(self.writer_version)
+                    .set_data_page_row_count_limit(self.data_page_row_count_limit)
+                    .set_data_page_size_limit(self.data_page_size_limit)
+                    .build(),
+            )
+        }
+    }
+
+    fn schema_of(physical: PhysicalType, optional: bool) -> Arc<SchemaType> {
+        let repetition = if optional {
+            Repetition::OPTIONAL
+        } else {
+            Repetition::REQUIRED
+        };
+        let leaf = SchemaType::primitive_type_builder("value", physical)
+            .with_repetition(repetition)
+            .build()
+            .unwrap();
+        Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(leaf)])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn write_int32_file(spec: &TestFileSpec, values: &[i32], def_levels: Option<&[i16]>) -> Bytes {
+        let schema = schema_of(PhysicalType::INT32, def_levels.is_some());
+        let props = spec.build_props();
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut writer = SerializedFileWriter::new(&mut buf, schema, props).unwrap();
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer
+                .typed::<Int32Type>()
+                .write_batch(values, def_levels, None)
+                .unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+            writer.close().unwrap();
+        }
+        Bytes::from(buf)
+    }
+
+    fn write_int64_file(spec: &TestFileSpec, values: &[i64]) -> Bytes {
+        let schema = schema_of(PhysicalType::INT64, false);
+        let props = spec.build_props();
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut writer = SerializedFileWriter::new(&mut buf, schema, props).unwrap();
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer
+                .typed::<Int64Type>()
+                .write_batch(values, None, None)
+                .unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+            writer.close().unwrap();
+        }
+        Bytes::from(buf)
+    }
+
+    fn write_byte_array_file(spec: &TestFileSpec, values: &[ByteArray]) -> Bytes {
+        let schema = schema_of(PhysicalType::BYTE_ARRAY, false);
+        let props = spec.build_props();
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut writer = SerializedFileWriter::new(&mut buf, schema, props).unwrap();
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer
+                .typed::<ByteArrayType>()
+                .write_batch(values, None, None)
+                .unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+            writer.close().unwrap();
+        }
+        Bytes::from(buf)
+    }
+
+    fn open_with_offset_index(bytes: Bytes) -> (Bytes, Arc<ParquetMetaData>) {
+        let mut metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
+        metadata_reader.try_parse(&bytes).unwrap();
+        let metadata = Arc::new(metadata_reader.finish().unwrap());
+        (bytes, metadata)
+    }
+
+    fn page_row_counts(offset_index: &OffsetIndexMetaData, total_rows: usize) -> Vec<usize> {
+        let locs = offset_index.page_locations();
+        let mut counts = Vec::with_capacity(locs.len());
+        for i in 0..locs.len() {
+            let next = locs
+                .get(i + 1)
+                .map(|x| x.first_row_index as usize)
+                .unwrap_or(total_rows);
+            counts.push(next - locs[i].first_row_index as usize);
+        }
+        counts
+    }
+
+    /// Build a forward `SerializedPageReader` from chunk + offset index.
+    fn forward_reader(
+        chunk_reader: Arc<Bytes>,
+        column_chunk: &crate::file::metadata::ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Vec<PageLocation>,
+    ) -> SerializedPageReader<Bytes> {
+        SerializedPageReader::new(chunk_reader, column_chunk, total_rows, Some(page_locations))
+            .unwrap()
+    }
+
+    /// Build a reverse `SerializedPageReader` (forward constructor + flag).
+    fn reverse_reader(
+        chunk_reader: Arc<Bytes>,
+        column_chunk: &crate::file::metadata::ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Vec<PageLocation>,
+    ) -> SerializedPageReader<Bytes> {
+        SerializedPageReader::new(chunk_reader, column_chunk, total_rows, Some(page_locations))
+            .unwrap()
+            .with_reverse_pages(true)
+    }
+
+    // ------------------------------------------------------------------ //
+    // Page-level (buffer / metadata) verification
+    // ------------------------------------------------------------------ //
+
+    fn collect_data_pages(reader: &mut dyn PageReader) -> Vec<Page> {
+        let mut out = Vec::new();
+        while let Some(page) = reader.get_next_page().unwrap() {
+            if !page.is_dictionary_page() {
+                out.push(page);
+            }
+        }
+        out
+    }
+
+    fn assert_pages_match_forward_reverse(bytes: Bytes) {
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let page_locations = offset_index.page_locations().clone();
+
+        let mut forward = forward_reader(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            page_locations.clone(),
+        );
+        let forward_pages = collect_data_pages(&mut forward);
+
+        let mut reverse = reverse_reader(chunk_reader, column_chunk, total_rows, page_locations);
+        let reverse_pages = collect_data_pages(&mut reverse);
+
+        assert_eq!(
+            forward_pages.len(),
+            reverse_pages.len(),
+            "page count mismatch"
+        );
+        assert!(
+            forward_pages.len() > 1,
+            "expected >1 data page, got {}",
+            forward_pages.len()
+        );
+
+        for (i, (f, r)) in forward_pages
+            .iter()
+            .zip(reverse_pages.iter().rev())
+            .enumerate()
+        {
+            assert_eq!(f.buffer().as_ref(), r.buffer().as_ref(), "page {i} buffer");
+            assert_eq!(f.num_values(), r.num_values(), "page {i} num_values");
+            assert_eq!(f.encoding(), r.encoding(), "page {i} encoding");
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    // Value-level verification (the strong correctness guarantee)
+    // ------------------------------------------------------------------ //
+
+    fn decode_values_per_page<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        column_descr: crate::schema::types::ColumnDescPtr,
+        page_row_counts: &[usize],
+    ) -> Vec<Vec<T::T>>
+    where
+        T::T: Default + Clone,
+    {
+        let mut col_reader: ColumnReaderImpl<T> = ColumnReaderImpl::new(column_descr, page_reader);
+        let mut chunks = Vec::with_capacity(page_row_counts.len());
+        for &want in page_row_counts {
+            // The column-value decoder *appends* to the output buffer, so
+            // it must start empty.
+            let mut values: Vec<T::T> = Vec::with_capacity(want);
+            let (records, _levels, _vals) = col_reader
+                .read_records(want, None, None, &mut values)
+                .unwrap();
+            assert_eq!(records, want, "expected {want} records, got {records}");
+            chunks.push(values);
+        }
+        chunks
+    }
+
+    fn decode_all<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        column_descr: crate::schema::types::ColumnDescPtr,
+        total_rows: usize,
+        capture_defs: bool,
+    ) -> (Vec<T::T>, Vec<i16>)
+    where
+        T::T: Default + Clone,
+    {
+        let mut col_reader: ColumnReaderImpl<T> = ColumnReaderImpl::new(column_descr, page_reader);
+        let mut values: Vec<T::T> = Vec::new();
+        let mut defs: Vec<i16> = Vec::new();
+        let mut total_records = 0usize;
+        while total_records < total_rows {
+            let want = total_rows - total_records;
+            let (records, _, _) = if capture_defs {
+                col_reader
+                    .read_records(want, Some(&mut defs), None, &mut values)
+                    .unwrap()
+            } else {
+                col_reader
+                    .read_records(want, None, None, &mut values)
+                    .unwrap()
+            };
+            if records == 0 {
+                break;
+            }
+            total_records += records;
+        }
+        assert_eq!(
+            total_records, total_rows,
+            "did not fully drain column chunk"
+        );
+        (values, defs)
+    }
+
+    fn run_value_decode_match<T: DataType>(bytes: Bytes)
+    where
+        T::T: Default + Clone + std::fmt::Debug + PartialEq,
+    {
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let page_locations = offset_index.page_locations().clone();
+        let column_descr = metadata.file_metadata().schema_descr().column(0);
+
+        let counts = page_row_counts(offset_index, total_rows);
+        let counts_reversed: Vec<usize> = counts.iter().rev().cloned().collect();
+
+        let forward = Box::new(forward_reader(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            page_locations.clone(),
+        ));
+        let forward_chunks = decode_values_per_page::<T>(forward, column_descr.clone(), &counts);
+
+        let reverse = Box::new(reverse_reader(
+            chunk_reader,
+            column_chunk,
+            total_rows,
+            page_locations,
+        ));
+        let reverse_chunks = decode_values_per_page::<T>(reverse, column_descr, &counts_reversed);
+
+        let normalized: Vec<Vec<T::T>> = reverse_chunks.into_iter().rev().collect();
+        assert_eq!(
+            normalized, forward_chunks,
+            "decoded values mismatch between forward and reverse readers"
+        );
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: page-level buffer / metadata
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn pages_match_uncompressed_no_dict() {
+        let spec = TestFileSpec::default();
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn pages_match_uncompressed_with_dict() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn pages_match_snappy() {
+        let spec = TestFileSpec {
+            compression: Compression::SNAPPY,
+            enable_dict: true,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn pages_match_gzip() {
+        let spec = TestFileSpec {
+            compression: Compression::GZIP(Default::default()),
+            enable_dict: false,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn pages_match_zstd() {
+        let spec = TestFileSpec {
+            compression: Compression::ZSTD(Default::default()),
+            enable_dict: false,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn pages_match_data_page_v2() {
+        let spec = TestFileSpec {
+            writer_version: WriterVersion::PARQUET_2_0,
+            enable_dict: false,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        assert_pages_match_forward_reverse(write_int32_file(&spec, &values, None));
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: value-level decode equivalence
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn decode_values_match_int32() {
+        let spec = TestFileSpec::default();
+        let values: Vec<i32> = (0..2_000).collect();
+        run_value_decode_match::<Int32Type>(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn decode_values_match_int32_with_dict() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            ..TestFileSpec::default()
+        };
+        // Small value range so dict encoding actually engages.
+        let values: Vec<i32> = (0..2_000).map(|i| i % 50).collect();
+        run_value_decode_match::<Int32Type>(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn decode_values_match_int32_data_page_v2() {
+        let spec = TestFileSpec {
+            writer_version: WriterVersion::PARQUET_2_0,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).collect();
+        run_value_decode_match::<Int32Type>(write_int32_file(&spec, &values, None));
+    }
+
+    #[test]
+    fn decode_values_match_int64() {
+        let spec = TestFileSpec::default();
+        let values: Vec<i64> = (0..2_000).map(|i| (i as i64) * 7919).collect();
+        run_value_decode_match::<Int64Type>(write_int64_file(&spec, &values));
+    }
+
+    #[test]
+    fn decode_values_match_byte_array() {
+        let spec = TestFileSpec {
+            data_page_size_limit: 1024,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<ByteArray> = (0..1_000)
+            .map(|i| ByteArray::from(format!("string-value-{i:05}").as_str()))
+            .collect();
+        run_value_decode_match::<ByteArrayType>(write_byte_array_file(&spec, &values));
+    }
+
+    #[test]
+    fn decode_values_match_byte_array_with_dict() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            data_page_size_limit: 1024,
+            ..TestFileSpec::default()
+        };
+        // Repeated strings → dict encoding.
+        let values: Vec<ByteArray> = (0..2_000)
+            .map(|i| ByteArray::from(format!("v{}", i % 20).as_str()))
+            .collect();
+        run_value_decode_match::<ByteArrayType>(write_byte_array_file(&spec, &values));
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: NULLable column
+    // ------------------------------------------------------------------ //
+
+    fn slice_in_order<T: Clone>(input: &[T], counts: &[usize]) -> Vec<Vec<T>> {
+        let mut out = Vec::with_capacity(counts.len());
+        let mut off = 0;
+        for &c in counts {
+            out.push(input[off..off + c].to_vec());
+            off += c;
+        }
+        out
+    }
+
+    fn run_value_decode_match_with_nulls(bytes: Bytes) {
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let page_locations = offset_index.page_locations().clone();
+        let column_descr = metadata.file_metadata().schema_descr().column(0);
+        let counts = page_row_counts(offset_index, total_rows);
+        assert!(counts.len() > 1, "test must produce multiple pages");
+
+        let forward = Box::new(forward_reader(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            page_locations.clone(),
+        ));
+        let (fwd_values, fwd_defs) =
+            decode_all::<Int32Type>(forward, column_descr.clone(), total_rows, true);
+
+        let reverse = Box::new(reverse_reader(
+            chunk_reader,
+            column_chunk,
+            total_rows,
+            page_locations,
+        ));
+        let (rev_values, rev_defs) =
+            decode_all::<Int32Type>(reverse, column_descr, total_rows, true);
+
+        assert_eq!(fwd_defs.len(), total_rows);
+        assert_eq!(rev_defs.len(), total_rows);
+
+        let fwd_def_pages: Vec<Vec<i16>> = slice_in_order(&fwd_defs, &counts);
+        let counts_rev_emit: Vec<usize> = counts.iter().rev().copied().collect();
+        let rev_def_pages_emit_order: Vec<Vec<i16>> = slice_in_order(&rev_defs, &counts_rev_emit);
+        let rev_def_pages_page_order: Vec<Vec<i16>> =
+            rev_def_pages_emit_order.iter().rev().cloned().collect();
+        assert_eq!(
+            fwd_def_pages, rev_def_pages_page_order,
+            "per-page def_levels diverged"
+        );
+
+        let fwd_val_counts: Vec<usize> = fwd_def_pages
+            .iter()
+            .map(|s| s.iter().filter(|&&d| d == 1).count())
+            .collect();
+        let rev_val_counts_emit: Vec<usize> = rev_def_pages_emit_order
+            .iter()
+            .map(|s| s.iter().filter(|&&d| d == 1).count())
+            .collect();
+        let fwd_val_pages: Vec<Vec<i32>> = slice_in_order(&fwd_values, &fwd_val_counts);
+        let rev_val_pages_emit: Vec<Vec<i32>> = slice_in_order(&rev_values, &rev_val_counts_emit);
+        let rev_val_pages_page_order: Vec<Vec<i32>> =
+            rev_val_pages_emit.iter().rev().cloned().collect();
+        assert_eq!(
+            fwd_val_pages, rev_val_pages_page_order,
+            "per-page values diverged"
+        );
+    }
+
+    #[test]
+    fn decode_values_match_with_nulls_v1() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            data_page_row_count_limit: 128,
+            data_page_size_limit: 4096,
+            ..TestFileSpec::default()
+        };
+        let total = 2_000usize;
+        let mut values: Vec<i32> = Vec::new();
+        let mut defs: Vec<i16> = Vec::with_capacity(total);
+        for i in 0..total {
+            if i % 3 == 0 {
+                defs.push(0);
+            } else {
+                defs.push(1);
+                values.push(i as i32);
+            }
+        }
+        run_value_decode_match_with_nulls(write_int32_file(&spec, &values, Some(&defs)));
+    }
+
+    #[test]
+    fn decode_values_match_with_nulls_v2() {
+        let spec = TestFileSpec {
+            writer_version: WriterVersion::PARQUET_2_0,
+            enable_dict: true,
+            data_page_row_count_limit: 128,
+            data_page_size_limit: 4096,
+            ..TestFileSpec::default()
+        };
+        let total = 2_000usize;
+        let mut values: Vec<i32> = Vec::new();
+        let mut defs: Vec<i16> = Vec::with_capacity(total);
+        for i in 0..total {
+            if i % 4 == 0 {
+                defs.push(0);
+            } else {
+                defs.push(1);
+                values.push(i as i32);
+            }
+        }
+        run_value_decode_match_with_nulls(write_int32_file(&spec, &values, Some(&defs)));
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: state-machine API surface
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn peek_next_page_state_machine() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..1_000).map(|i| i % 50).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let num_data_pages = offset_index.page_locations().len();
+        let page_locations = offset_index.page_locations().clone();
+
+        let mut reverse = reverse_reader(chunk_reader, column_chunk, total_rows, page_locations);
+
+        let peek = reverse.peek_next_page().unwrap().unwrap();
+        assert!(peek.is_dict, "first peek should be dictionary page");
+
+        let dict = reverse.get_next_page().unwrap().unwrap();
+        assert!(dict.is_dictionary_page());
+
+        for i in 0..num_data_pages {
+            let peek = reverse.peek_next_page().unwrap().unwrap();
+            assert!(!peek.is_dict, "data page {i} unexpectedly marked is_dict");
+            let page = reverse.get_next_page().unwrap().unwrap();
+            assert!(
+                !page.is_dictionary_page(),
+                "got unexpected dict page at index {i}"
+            );
+        }
+
+        assert!(reverse.peek_next_page().unwrap().is_none());
+        assert!(reverse.get_next_page().unwrap().is_none());
+    }
+
+    #[test]
+    fn skip_next_page_advances_state() {
+        let spec = TestFileSpec {
+            data_page_row_count_limit: 100,
+            data_page_size_limit: 16 * 1024 * 1024,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..10_000).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let num_data_pages = offset_index.page_locations().len();
+        assert!(num_data_pages >= 3);
+        let page_locations = offset_index.page_locations().clone();
+
+        let mut reverse = reverse_reader(chunk_reader, column_chunk, total_rows, page_locations);
+        for _ in 0..num_data_pages {
+            reverse.skip_next_page().unwrap();
+        }
+        assert!(reverse.get_next_page().unwrap().is_none());
+    }
+
+    #[test]
+    fn skip_next_page_with_dict_consumes_dict_first() {
+        let spec = TestFileSpec {
+            enable_dict: true,
+            data_page_row_count_limit: 100,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..2_000).map(|i| i % 50).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        let num_data_pages = offset_index.page_locations().len();
+        let page_locations = offset_index.page_locations().clone();
+
+        let mut reverse = reverse_reader(chunk_reader, column_chunk, total_rows, page_locations);
+        // First skip drops the dictionary; subsequent skips drop data pages.
+        reverse.skip_next_page().unwrap();
+        for _ in 0..num_data_pages {
+            reverse.skip_next_page().unwrap();
+        }
+        assert!(reverse.get_next_page().unwrap().is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: edge cases
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn single_data_page_works() {
+        let spec = TestFileSpec {
+            data_page_row_count_limit: usize::MAX,
+            data_page_size_limit: 16 * 1024 * 1024,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..100).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        assert_eq!(offset_index.page_locations().len(), 1);
+        let column_descr = metadata.file_metadata().schema_descr().column(0);
+        let page_locations = offset_index.page_locations().clone();
+
+        let reverse = Box::new(reverse_reader(
+            chunk_reader,
+            column_chunk,
+            total_rows,
+            page_locations,
+        ));
+        let chunks = decode_values_per_page::<Int32Type>(reverse, column_descr, &[total_rows]);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], values);
+    }
+
+    #[test]
+    fn large_file_50k_rows() {
+        let spec = TestFileSpec {
+            compression: Compression::SNAPPY,
+            enable_dict: true,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = (0..50_000).map(|i| i % 1024).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+
+        let (bytes2, metadata) = open_with_offset_index(bytes.clone());
+        let offset_index = &metadata.offset_index().unwrap()[0][0];
+        assert!(
+            offset_index.page_locations().len() > 20,
+            "expected many pages, got {}",
+            offset_index.page_locations().len()
+        );
+
+        assert_pages_match_forward_reverse(bytes2);
+        run_value_decode_match::<Int32Type>(bytes);
+    }
+
+    #[test]
+    fn peek_returns_none_for_empty_chunk() {
+        let spec = TestFileSpec {
+            enable_dict: false,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = vec![];
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+        let offset_index = match metadata.offset_index() {
+            Some(oi) if !oi[0].is_empty() => &oi[0][0],
+            _ => return,
+        };
+        let page_locations = offset_index.page_locations().clone();
+
+        let mut reverse = reverse_reader(chunk_reader, column_chunk, total_rows, page_locations);
+
+        let peek1 = reverse.peek_next_page().unwrap();
+        let page1 = reverse.get_next_page().unwrap();
+        assert_eq!(peek1.is_some(), page1.is_some());
+
+        while reverse.get_next_page().unwrap().is_some() {}
+        assert!(reverse.peek_next_page().unwrap().is_none());
+        assert!(reverse.get_next_page().unwrap().is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // Tests: API behavior (no-op cases)
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn with_reverse_pages_is_noop_in_values_mode() {
+        // No `page_locations` → Values mode → flag should be ignored without
+        // changing behavior.
+        let spec = TestFileSpec::default();
+        let values: Vec<i32> = (0..200).collect();
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let total_rows = rg.num_rows() as usize;
+
+        let plain = SerializedPageReader::new(chunk_reader.clone(), column_chunk, total_rows, None)
+            .unwrap();
+        let plain_pages = plain.collect::<Result<Vec<_>>>().unwrap();
+
+        let flagged = SerializedPageReader::new(chunk_reader, column_chunk, total_rows, None)
+            .unwrap()
+            .with_reverse_pages(true);
+        let flagged_pages = flagged.collect::<Result<Vec<_>>>().unwrap();
+
+        assert_eq!(plain_pages.len(), flagged_pages.len());
+        for (a, b) in plain_pages.iter().zip(flagged_pages.iter()) {
+            assert_eq!(a.buffer().as_ref(), b.buffer().as_ref());
+        }
     }
 }
