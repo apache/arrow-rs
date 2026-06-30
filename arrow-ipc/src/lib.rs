@@ -69,7 +69,7 @@ pub use self::r#gen::Schema::*;
 pub use self::r#gen::SparseTensor::*;
 pub use self::r#gen::Tensor::*;
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 impl Endianness {

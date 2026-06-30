@@ -17,9 +17,8 @@
 
 use crate::bit_iterator::BitSliceIterator;
 use crate::contains_nulls;
-use crate::data::ArrayData;
+use crate::data::{ArrayData, get_fixed_size_binary_width};
 use crate::equal::primitive::NULL_SLICES_SELECTIVITY_THRESHOLD;
-use arrow_schema::DataType;
 
 use super::utils::equal_len;
 
@@ -30,10 +29,7 @@ pub(super) fn fixed_binary_equal(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let size = match lhs.data_type() {
-        DataType::FixedSizeBinary(i) => *i as usize,
-        _ => unreachable!(),
-    };
+    let size = get_fixed_size_binary_width(lhs.data_type());
 
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * size..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * size..];

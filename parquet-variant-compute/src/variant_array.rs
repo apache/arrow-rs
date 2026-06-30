@@ -31,7 +31,7 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::Result;
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
@@ -64,7 +64,7 @@ pub(crate) fn variant_from_arrays_at<'m, 'v>(
 }
 
 /// Validates that an array has a binary-like data type.
-fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
+pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
     match array.data_type() {
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
         _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -327,7 +327,7 @@ impl VariantArray {
             builder = builder.with_field("value", value, true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+            builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -396,7 +396,7 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
-        match (self.typed_value_field(), self.value_field()) {
+        match (self.typed_value_column(), self.value_column()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
                 typed_value_to_variant(typed_value, value, index)
@@ -420,19 +420,19 @@ impl VariantArray {
         }
     }
 
-    /// Return a reference to the metadata field of the [`StructArray`]
-    pub fn metadata_field(&self) -> &ArrayRef {
+    /// Return a reference to the `metadata` column of the [`StructArray`]
+    pub fn metadata_column(&self) -> &ArrayRef {
         &self.metadata
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
     }
 
     /// Return a field to represent this VariantArray in a `Schema` with
@@ -688,14 +688,14 @@ impl ShreddedVariantFieldArray {
         &self.shredding_state
     }
 
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.value_field()
+    /// Return a reference to the `value` column of the [`StructArray`], if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.value_column()
     }
 
-    /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    /// Return a reference to the `typed_value` column of the [`StructArray`], if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_column()
     }
 
     /// Returns a reference to the underlying [`StructArray`].
@@ -713,7 +713,7 @@ impl ShreddedVariantFieldArray {
             builder = builder.with_field("value", value, true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+            builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -833,22 +833,14 @@ impl ShreddingState {
         Self { value, typed_value }
     }
 
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `value` column, if present
+    pub fn value_column(&self) -> Option<&ArrayRef> {
         self.value.as_ref()
     }
 
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+    /// Return a reference to the `typed_value` column, if present
+    pub fn typed_value_column(&self) -> Option<&ArrayRef> {
         self.typed_value.as_ref()
-    }
-
-    /// Returns a borrowed version of this shredding state
-    pub fn borrow(&self) -> BorrowedShreddingState<'_> {
-        BorrowedShreddingState {
-            value: self.value_field(),
-            typed_value: self.typed_value_field(),
-        }
     }
 
     /// Slice all the underlying arrays
@@ -860,75 +852,33 @@ impl ShreddingState {
     }
 }
 
-/// Similar to [`ShreddingState`] except it holds borrowed references of the target arrays. Useful
-/// for avoiding clone operations when the caller does not need a self-standing shredding state.
-#[derive(Clone, Debug)]
-pub struct BorrowedShreddingState<'a> {
-    value: Option<&'a ArrayRef>,
-    typed_value: Option<&'a ArrayRef>,
-}
-
-impl<'a> BorrowedShreddingState<'a> {
-    /// Create a new `BorrowedShreddingState` from the given `value` and `typed_value` fields
-    ///
-    /// Note you can create a `BorrowedShreddingState` from a &[`StructArray`] using
-    /// `BorrowedShreddingState::try_from(&struct_array)`, for example:
-    ///
-    /// ```no_run
-    /// # use arrow::array::StructArray;
-    /// # use parquet_variant_compute::BorrowedShreddingState;
-    /// # fn get_struct_array() -> StructArray {
-    /// #   unimplemented!()
-    /// # }
-    /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
-    /// ```
-    pub fn new(value: Option<&'a ArrayRef>, typed_value: Option<&'a ArrayRef>) -> Self {
-        Self { value, typed_value }
-    }
-
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&'a ArrayRef> {
-        self.value
-    }
-
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&'a ArrayRef> {
-        self.typed_value
-    }
-}
-
-impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
-    type Error = ArrowError;
-
-    fn try_from(inner_struct: &'a StructArray) -> Result<Self> {
-        // The `value` column need not exist, but if it does it must be a binary type.
-        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
-            validate_binary_array(value_col.as_ref(), "value")?;
-            Some(value_col)
-        } else {
-            None
-        };
-        let typed_value = inner_struct.column_by_name("typed_value");
-        Ok(BorrowedShreddingState::new(value, typed_value))
-    }
-}
-
 impl TryFrom<&StructArray> for ShreddingState {
     type Error = ArrowError;
 
     fn try_from(inner_struct: &StructArray) -> Result<Self> {
-        Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
+        // The `value` column need not exist, but if it does it must be a binary type.
+        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
+            validate_binary_array(value_col.as_ref(), "value")?;
+            Some(value_col.clone())
+        } else {
+            None
+        };
+        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+        Ok(ShreddingState::new(value, typed_value))
     }
 }
 
-impl From<BorrowedShreddingState<'_>> for ShreddingState {
-    fn from(state: BorrowedShreddingState<'_>) -> Self {
-        ShreddingState {
-            value: state.value_field().cloned(),
-            typed_value: state.typed_value_field().cloned(),
-        }
+/// Build the `typed_value` [`FieldRef`] for a shredded column.
+///
+/// The Variant spec maps `FixedSizeBinary(16)` exclusively to UUID, so any
+/// shredded column of that type must carry the canonical [`UuidExtension`]
+/// extension metadata on its field.
+fn typed_value_field(array: &ArrayRef) -> FieldRef {
+    let mut field = Field::new("typed_value", array.data_type().clone(), true);
+    if matches!(array.data_type(), DataType::FixedSizeBinary(16)) {
+        field = field.with_extension_type(UuidExtension);
     }
+    Arc::new(field)
 }
 
 /// Builds struct arrays from component fields
@@ -950,6 +900,16 @@ impl StructArrayBuilder {
     pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
         let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
+        self.arrays.push(array);
+        self
+    }
+
+    /// Add an array to this struct array using a caller-supplied [`FieldRef`].
+    ///
+    /// Use this when the field carries metadata (e.g. an extension type) that
+    /// would be lost if the field were synthesized from the array's data type alone.
+    pub fn with_field_ref(mut self, field: FieldRef, array: ArrayRef) -> Self {
+        self.fields.push(field);
         self.arrays.push(array);
         self
     }
@@ -1265,7 +1225,19 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
 }
 
 fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>> {
-    let Cow::Owned(new_data_type) = canonicalize_and_verify_data_type(field.data_type())? else {
+    let new_data_type = canonicalize_and_verify_data_type(field.data_type())?;
+
+    // A shredded FixedSizeBinary(16) column is always a UUID. Tag it with the UUID extension type
+    // on read, as a safety net against writers that emit the column without the extension metadata.
+    // Canonicalization never rewrites FixedSizeBinary(16), so the type is already correct here.
+    if matches!(new_data_type.as_ref(), DataType::FixedSizeBinary(16))
+        && !field.has_valid_extension_type::<UuidExtension>()
+    {
+        let new_field = field.as_ref().clone().with_extension_type(UuidExtension);
+        return Ok(Cow::Owned(Arc::new(new_field)));
+    }
+
+    let Cow::Owned(new_data_type) = new_data_type else {
         return Ok(Cow::Borrowed(field));
     };
     let new_field = field.as_ref().clone().with_data_type(new_data_type);
@@ -1279,9 +1251,9 @@ mod test {
 
     use super::*;
     use arrow::array::{
-        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        Time64MicrosecondArray,
+        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        FixedSizeBinaryArray, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
+        LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1390,6 +1362,41 @@ mod test {
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", typed_value, true)
             .build()
+    }
+
+    #[test]
+    fn try_new_tags_untagged_uuid_on_read() {
+        // Simulate a foreign writer that shredded a UUID column as bare FixedSizeBinary(16),
+        // omitting the UUID extension type.
+        let typed_value = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 2));
+        let input = make_variant_struct_with_typed_value(Arc::new(typed_value.unwrap()));
+
+        // try_new canonicalizes on the read path and attaches the extension.
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        let typed_value = variant_array.inner().field_by_name("typed_value").unwrap();
+        assert_eq!(typed_value.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(typed_value.has_valid_extension_type::<UuidExtension>());
+    }
+
+    #[test]
+    fn try_new_tags_untagged_nested_uuid_on_read() {
+        // A shredded object { id: { typed_value: FixedSizeBinary(16) } } whose inner UUID leaf
+        // carries no extension type; canonicalization must reach it recursively.
+        let leaf = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 1)).unwrap();
+        let inner = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(leaf), true)
+            .build();
+        let object = StructArrayBuilder::new()
+            .with_field("id", Arc::new(inner), false)
+            .build();
+        let input = make_variant_struct_with_typed_value(Arc::new(object));
+
+        // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        let object = variant_array.typed_value_column().unwrap().as_struct();
+        let id = object.column_by_name("id").unwrap().as_struct();
+        let uuid_leaf = id.field_by_name("typed_value").unwrap();
+        assert!(uuid_leaf.has_valid_extension_type::<UuidExtension>());
     }
 
     #[test]
@@ -1547,7 +1554,7 @@ mod test {
             let input = make_variant_struct_with_typed_value(typed_value.clone());
             let variant_array = VariantArray::try_new(&input).unwrap();
             assert_eq!(
-                variant_array.typed_value_field().unwrap().data_type(),
+                variant_array.typed_value_column().unwrap().data_type(),
                 typed_value.data_type(),
             );
         }

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
+use crate::errors::Result;
 use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
 use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -81,9 +82,9 @@ impl ValuesBuffer for ViewBuffer {
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         self.views
-            .pad_nulls(read_offset, values_read, levels_read, valid_mask);
+            .pad_nulls(read_offset, values_read, levels_read, valid_mask)
     }
 }
 
@@ -146,7 +147,9 @@ mod tests {
         let valid = [true, false, false, true, false, false, true];
         let valid_mask = Buffer::from_iter(valid.iter().copied());
 
-        buffer.pad_nulls(1, 2, valid.len() - 1, valid_mask.as_slice());
+        buffer
+            .pad_nulls(1, 2, valid.len() - 1, valid_mask.as_slice())
+            .unwrap();
 
         let array = buffer.into_array(Some(valid_mask), &ArrowType::Utf8View);
         let strings = array

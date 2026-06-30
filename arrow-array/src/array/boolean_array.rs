@@ -19,7 +19,6 @@ use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, BooleanBuilder};
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -157,16 +156,6 @@ impl BooleanArray {
         &self.values
     }
 
-    /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
-    /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
-    /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
-    const CHUNK_FOLD_BLOCK_SIZE: usize = 16;
-
-    /// Returns an [`UnalignedBitChunk`] over this array's values.
-    fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
-        UnalignedBitChunk::new(self.values().values(), self.values().offset(), self.len())
-    }
-
     /// Returns the number of non null, true values within this array.
     /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
@@ -202,16 +191,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
             }
-            None => {
-                let bit_chunks = self.unaligned_bit_chunks();
-                let chunks = bit_chunks.chunks();
-                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
-                let found = bit_chunks.prefix().unwrap_or(0) != 0
-                    || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
-                found
-                    || exact.remainder().iter().any(|&c| c != 0)
-                    || bit_chunks.suffix().unwrap_or(0) != 0
-            }
+            None => self.values().has_true(),
         }
     }
 
@@ -228,35 +208,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
             }
-            None => {
-                let bit_chunks = self.unaligned_bit_chunks();
-                // UnalignedBitChunk zeros padding bits; fill them with 1s so
-                // they don't appear as false values.
-                let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
-                let trail_mask = if bit_chunks.trailing_padding() == 0 {
-                    u64::MAX
-                } else {
-                    (1u64 << (64 - bit_chunks.trailing_padding())) - 1
-                };
-                let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
-                    (Some(_), Some(_)) => (!lead_mask, !trail_mask),
-                    (Some(_), None) => (!lead_mask | !trail_mask, 0),
-                    (None, Some(_)) => (0, !trail_mask),
-                    (None, None) => (0, 0),
-                };
-                let chunks = bit_chunks.chunks();
-                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
-                let found = bit_chunks
-                    .prefix()
-                    .is_some_and(|v| (v | prefix_fill) != u64::MAX)
-                    || exact
-                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
-                found
-                    || exact.remainder().iter().any(|&c| c != u64::MAX)
-                    || bit_chunks
-                        .suffix()
-                        .is_some_and(|v| (v | suffix_fill) != u64::MAX)
-            }
+            None => self.values().has_false(),
         }
     }
 

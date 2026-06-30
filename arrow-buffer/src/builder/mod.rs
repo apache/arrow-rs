@@ -439,4 +439,28 @@ mod tests {
         let slice = builder.as_slice_mut();
         assert_eq!(slice.len(), 222);
     }
+
+    #[test]
+    #[should_panic(expected = "buffer length overflow")]
+    fn reserve_length_overflow() {
+        let mut builder = BufferBuilder::<u8>::new(1);
+        builder.append(0);
+        builder.reserve(usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length overflow")]
+    fn append_n_zeroed_length_overflow() {
+        let mut builder = BufferBuilder::<u64>::new(1);
+        builder.append_n_zeroed(1);
+        builder.append_n_zeroed(usize::MAX / mem::size_of::<u64>());
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length overflow")]
+    fn advance_length_overflow() {
+        let mut builder = BufferBuilder::<u64>::new(1);
+        builder.advance(1);
+        builder.advance(usize::MAX / mem::size_of::<u64>());
+    }
 }

@@ -150,6 +150,14 @@ fn add_benchmark(c: &mut Criterion) {
         )
     };
 
+    let ree_run_ends = Int32Array::from_iter_values((1..=64).map(|i| i * 16));
+    let ree_i64_values = create_primitive_array::<Int64Type>(64, 0.0);
+    let ree_i64 = RunArray::<Int32Type>::try_new(&ree_run_ends, &ree_i64_values).unwrap();
+
+    let dict_str_values = create_string_array_with_len::<i32>(20, 0.0, 12);
+    let dict_for_ree = create_dict_from_values::<UInt32Type>(64, 0.0, &dict_str_values);
+    let ree_dict = RunArray::<Int32Type>::try_new(&ree_run_ends, &dict_for_ree).unwrap();
+
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
@@ -175,6 +183,8 @@ fn add_benchmark(c: &mut Criterion) {
         ("list_view<i64>(0.1,0.1,20)", &list_view_i64),
         ("list_view<i64>(0.0,0.0,20)", &list_view_i64_no_nulls),
         ("list_view_overlapping<i64>(80x,20)", &list_view_overlapping),
+        ("ree_i32<i64>(64 runs)", &ree_i64),
+        ("ree_i32<dict<u32,utf8>>(64 runs)", &ree_dict),
     ];
 
     for (prefix, base) in cases {
