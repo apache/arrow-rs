@@ -71,8 +71,11 @@ pub(crate) fn non_null_padded_length(len: usize) -> usize {
     }
 }
 
+/// Decodes a single byte from each row, where a valid value is determined via
+/// a configurable sentinel. Optionally returns `None` if there are no null values.
 pub(crate) fn decode_nulls_sentinel(rows: &[&[u8]], options: SortOptions) -> Option<NullBuffer> {
-    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| rows[x][0] != null_sentinel(options));
+    let null_sentinel = null_sentinel(options);
+    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| rows[x][0] != null_sentinel);
     let nulls = NullBuffer::new(nulls);
     (nulls.null_count() > 0).then_some(nulls)
 }
