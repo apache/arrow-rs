@@ -17,7 +17,6 @@
 
 use crate::array::PrimitiveArray;
 use crate::null_sentinel;
-use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
     BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, NullBuffer, bit_util, i256,
@@ -423,17 +422,18 @@ where
 {
     assert!(PrimitiveArray::<T>::is_compatible(&data_type));
 
-    let len = rows.len();
-
-    let mut values = BufferBuilder::<T::Native>::new(len);
+    let values = rows
+        .iter_mut()
+        .map(|row| {
+            let i = split_off(row, T::Native::ENCODED_LEN);
+            let value = <T::Native as FixedLengthEncoding>::Encoded::from_slice(
+                &i[1..],
+                options.descending,
+            );
+            T::Native::decode(value)
+        })
+        .collect::<Vec<_>>();
     let nulls = decode_nulls(rows);
-
-    for row in rows {
-        let i = split_off(row, T::Native::ENCODED_LEN);
-        let value =
-            <T::Native as FixedLengthEncoding>::Encoded::from_slice(&i[1..], options.descending);
-        values.append(T::Native::decode(value));
-    }
 
     PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
 }
