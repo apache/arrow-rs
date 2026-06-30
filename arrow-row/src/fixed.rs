@@ -422,6 +422,7 @@ where
 {
     assert!(PrimitiveArray::<T>::is_compatible(&data_type));
 
+    let nulls = decode_nulls(rows);
     let values = rows
         .iter_mut()
         .map(|row| {
@@ -433,7 +434,6 @@ where
             T::Native::decode(value)
         })
         .collect::<Vec<_>>();
-    let nulls = decode_nulls(rows);
 
     PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
 }
