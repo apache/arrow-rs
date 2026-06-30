@@ -1565,7 +1565,12 @@ impl<'a> Maker<'a> {
                                 resolution: None,
                             }
                         }
-                        Some("uuid") if size == 16 => {
+                        Some("uuid") => {
+                            if size != 16 {
+                                return Err(ArrowError::ParseError(format!(
+                                    "Invalid fixed size for UUID: {size}, must be 16"
+                                )));
+                            }
                             metadata.insert("logicalType".into(), "uuid".into());
                             AvroDataType {
                                 nullability: None,
