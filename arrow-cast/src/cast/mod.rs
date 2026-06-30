@@ -8933,6 +8933,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
+        let inner = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        );
+        let nested = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]),
+            Arc::new(inner),
+        );
+
+        let result = cast(&nested, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)])
+        );
+        assert_eq!(
+            result.values().as_string::<i32>(),
+            &StringArray::from(vec!["x", "y"])
+        );
+        let logical: Vec<Option<&str>> = result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
+    }
+
+    #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
