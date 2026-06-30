@@ -534,12 +534,6 @@ impl<'a> RecordBatchDecoder<'a> {
     /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
     /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
     /// - Null count consistency and buffer length checks
-    ///
-    /// Note this API is somewhat "funky" as it allows the caller to skip validation
-    /// without having to use `unsafe` code. If this is ever made public
-    /// it should be made clearer that this is a potentially unsafe by
-    /// using an `unsafe` function that takes a boolean flag.
-    ///
     /// # Safety
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
