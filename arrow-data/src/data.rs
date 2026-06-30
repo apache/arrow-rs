@@ -685,14 +685,17 @@ impl ArrayData {
                 ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
-                    vec![ArrayData::new_null(f.data_type(), *list_len as usize * len)],
+                    vec![ArrayData::new_default(
+                        f.data_type(),
+                        *list_len as usize * len,
+                    )],
                     true,
                 ),
                 DataType::Struct(fields) => (
                     vec![],
                     fields
                         .iter()
-                        .map(|f| Self::new_null(f.data_type(), len))
+                        .map(|f| Self::new_default(f.data_type(), len))
                         .collect(),
                     true,
                 ),
@@ -797,6 +800,179 @@ impl ArrayData {
         if has_nulls {
             builder = builder.nulls(Some(NullBuffer::new_null(len)))
         }
+
+        // SAFETY:
+        // Data valid by construction
+        unsafe { builder.build_unchecked() }
+    }
+
+    /// Returns a new [`ArrayData`] valid for `data_type` containing `len`
+    /// default (non-null) values.
+    ///
+    /// Unlike [`Self::new_null`], the returned array never has a null mask;
+    /// its values are the zero / empty representation for the type:
+    ///
+    /// * primitive types: a zeroed values buffer (e.g. `0` for ints, `0.0` for floats)
+    /// * `Boolean`: a zeroed bitmap (all `false`)
+    /// * `Binary` / `Utf8` / `LargeBinary` / `LargeUtf8` / view variants: empty
+    ///   byte slices
+    /// * `FixedSizeBinary(n)`: `n` zero bytes per element
+    /// * `List` / `LargeList` / `Map` / `ListView` / `LargeListView`: empty inner
+    ///   lists (offsets/sizes all zero, child is empty)
+    /// * `FixedSizeList`: recursively default-filled child of length `list_len * len`
+    /// * `Struct`: each child field is recursively default-filled
+    /// * `Union`: in `Sparse` mode every child is default-filled; in `Dense` mode
+    ///   only the first child is default-filled and the rest are empty
+    /// * `RunEndEncoded`: a single run of `len` default values
+    /// * `Dictionary`: keys all point to index `0`, which holds a single
+    ///   default value (or no values, if `len == 0`)
+    pub fn new_default(data_type: &DataType, len: usize) -> Self {
+        let bit_len = bit_util::ceil(len, 8);
+        let zeroed = |len: usize| Buffer::from(MutableBuffer::from_len_zeroed(len));
+
+        let (buffers, child_data) = match data_type.primitive_width() {
+            Some(width) => (vec![zeroed(width * len)], vec![]),
+            None => match data_type {
+                DataType::Null => (vec![], vec![]),
+                DataType::Boolean => (vec![zeroed(bit_len)], vec![]),
+                DataType::Binary | DataType::Utf8 => {
+                    (vec![zeroed((len + 1) * 4), zeroed(0)], vec![])
+                }
+                DataType::BinaryView | DataType::Utf8View => (vec![zeroed(len * 16)], vec![]),
+                DataType::LargeBinary | DataType::LargeUtf8 => {
+                    (vec![zeroed((len + 1) * 8), zeroed(0)], vec![])
+                }
+                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![]),
+                DataType::List(f) | DataType::Map(f, _) => (
+                    vec![zeroed((len + 1) * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                ),
+                DataType::LargeList(f) => (
+                    vec![zeroed((len + 1) * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                ),
+                DataType::ListView(f) => (
+                    vec![zeroed(len * 4), zeroed(len * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                ),
+                DataType::LargeListView(f) => (
+                    vec![zeroed(len * 8), zeroed(len * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                ),
+                DataType::FixedSizeList(f, list_len) => (
+                    vec![],
+                    vec![ArrayData::new_default(
+                        f.data_type(),
+                        *list_len as usize * len,
+                    )],
+                ),
+                DataType::Struct(fields) => (
+                    vec![],
+                    fields
+                        .iter()
+                        .map(|f| Self::new_default(f.data_type(), len))
+                        .collect(),
+                ),
+                DataType::Dictionary(k, v) => {
+                    let key_width = k
+                        .primitive_width()
+                        .expect("Dictionary key type must be a fixed-width primitive");
+                    // All keys are zero, pointing at a single default value.
+                    let values = if len == 0 {
+                        ArrayData::new_empty(v.as_ref())
+                    } else {
+                        ArrayData::new_default(v.as_ref(), 1)
+                    };
+                    (vec![zeroed(key_width * len)], vec![values])
+                }
+                DataType::Union(f, mode) => {
+                    let (id, _) = f.iter().next().unwrap();
+                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
+                    let buffers = match mode {
+                        UnionMode::Sparse => vec![ids],
+                        UnionMode::Dense => {
+                            let end_offset = i32::from_usize(len).unwrap();
+                            vec![ids, Buffer::from_iter(0_i32..end_offset)]
+                        }
+                    };
+
+                    let children = f
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (_, f))| {
+                            if idx == 0 || *mode == UnionMode::Sparse {
+                                Self::new_default(f.data_type(), len)
+                            } else {
+                                Self::new_empty(f.data_type())
+                            }
+                        })
+                        .collect();
+
+                    (buffers, children)
+                }
+                DataType::RunEndEncoded(r, v) => {
+                    if len == 0 {
+                        // For empty arrays, create zero-length child arrays.
+                        let runs = ArrayData::new_empty(r.data_type());
+                        let values = ArrayData::new_empty(v.data_type());
+                        (vec![], vec![runs, values])
+                    } else {
+                        let runs = match r.data_type() {
+                            DataType::Int16 => {
+                                let i = i16::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int32 => {
+                                let i = i32::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int64 => {
+                                let i = i64::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            dt => unreachable!("Invalid run ends data type {dt}"),
+                        };
+
+                        let builder = ArrayData::builder(r.data_type().clone())
+                            .len(1)
+                            .buffers(vec![runs]);
+
+                        // SAFETY:
+                        // Valid by construction
+                        let runs = unsafe { builder.build_unchecked() };
+                        (vec![], vec![runs, ArrayData::new_default(v.data_type(), 1)])
+                    }
+                }
+                // Handled by Some(width) branch above
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Timestamp(_, _)
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => unreachable!("{data_type}"),
+            },
+        };
+
+        let builder = ArrayDataBuilder::new(data_type.clone())
+            .len(len)
+            .buffers(buffers)
+            .child_data(child_data);
 
         // SAFETY:
         // Data valid by construction
@@ -2726,5 +2902,477 @@ mod tests {
         for i in 0..array.len() {
             assert!(array.is_null(i));
         }
+    }
+
+    #[test]
+    fn new_default_primitive_should_not_create_nulls() {
+        use arrow_schema::{IntervalUnit, TimeUnit};
+
+        let cases: &[(usize, DataType)] = &[
+            (1, DataType::Int8),
+            (1, DataType::UInt8),
+            (2, DataType::Int16),
+            (2, DataType::UInt16),
+            (2, DataType::Float16),
+            (4, DataType::Int32),
+            (4, DataType::UInt32),
+            (4, DataType::Float32),
+            (4, DataType::Date32),
+            (4, DataType::Time32(TimeUnit::Second)),
+            (4, DataType::Interval(IntervalUnit::YearMonth)),
+            (4, DataType::Decimal32(9, 2)),
+            (8, DataType::Int64),
+            (8, DataType::UInt64),
+            (8, DataType::Float64),
+            (8, DataType::Date64),
+            (8, DataType::Time64(TimeUnit::Nanosecond)),
+            (8, DataType::Timestamp(TimeUnit::Microsecond, None)),
+            (8, DataType::Duration(TimeUnit::Millisecond)),
+            (8, DataType::Interval(IntervalUnit::DayTime)),
+            (8, DataType::Decimal64(18, 2)),
+            (16, DataType::Interval(IntervalUnit::MonthDayNano)),
+            (16, DataType::Decimal128(38, 2)),
+            (32, DataType::Decimal256(76, 2)),
+        ];
+
+        let len = 3;
+        for (width, dt) in cases {
+            let data = ArrayData::new_default(dt, len);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0, "{dt} should have no nulls");
+            assert_eq!(data.nulls(), None, "{dt} should not have a null buffer");
+            assert_eq!(
+                data.buffers()[0].len(),
+                width * len,
+                "{dt} data buffer should be width * len bytes",
+            );
+
+            let null_data = ArrayData::new_null(dt, len);
+            assert_ne!(data, null_data, "{dt} default should differ from null");
+        }
+    }
+
+    #[test]
+    fn new_default_null_type() {
+        let data = ArrayData::new_default(&DataType::Null, 3);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.len(), 3);
+        assert!(data.buffers().is_empty());
+        assert!(data.child_data().is_empty());
+        // Null type has no null buffer of its own.
+        assert_eq!(data.nulls(), None);
+
+        // For DataType::Null, new_default and new_null produce identical data.
+        let null_data = ArrayData::new_null(&DataType::Null, 3);
+        assert_eq!(data, null_data);
+    }
+
+    #[test]
+    fn new_default_boolean_should_not_create_nulls() {
+        let len = 9;
+        let data = ArrayData::new_default(&DataType::Boolean, len);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        // Boolean buffer is bit-packed: ceil(len / 8) bytes.
+        assert_eq!(data.buffers()[0].len(), bit_util::ceil(len, 8));
+
+        let null_data = ArrayData::new_null(&DataType::Boolean, len);
+        assert_ne!(data, null_data);
+    }
+
+    #[test]
+    fn new_byte_array_should_create_empty_bytes_and_no_nulls() {
+        for (offset_size, dt) in &[
+            (4, DataType::Utf8),
+            (4, DataType::Binary),
+            (8, DataType::LargeUtf8),
+            (8, DataType::LargeBinary),
+        ] {
+            let data = ArrayData::new_default(dt, 1);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0);
+            assert_eq!(data.nulls(), None);
+
+            let offsets = &data.buffers()[0];
+            let bytes = &data.buffers()[1];
+
+            assert_eq!(offsets.len(), offset_size * 2);
+            assert_eq!(bytes.len(), 0);
+        }
+    }
+
+    #[test]
+    fn new_default_view_arrays_should_not_create_nulls() {
+        let len = 3;
+        for dt in &[DataType::Utf8View, DataType::BinaryView] {
+            let data = ArrayData::new_default(dt, len);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0);
+            assert_eq!(data.nulls(), None);
+            // One 16-byte view per element, no additional data buffers.
+            assert_eq!(data.buffers().len(), 1);
+            assert_eq!(data.buffers()[0].len(), len * 16);
+        }
+    }
+
+    #[test]
+    fn new_default_fixed_size_binary_should_not_create_nulls() {
+        let element_size = 7;
+        let len = 4;
+        let data = ArrayData::new_default(&DataType::FixedSizeBinary(element_size), len);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        assert_eq!(data.buffers()[0].len(), element_size as usize * len);
+    }
+
+    #[test]
+    fn new_list_array_should_create_empty_lists_and_no_nulls() {
+        for (offset_size, dt) in &[
+            (4, DataType::new_list(DataType::Int32, true)),
+            (4, DataType::new_list(DataType::Int32, false)),
+            (8, DataType::new_large_list(DataType::Int32, true)),
+            (8, DataType::new_large_list(DataType::Int32, false)),
+        ] {
+            let data = ArrayData::new_default(dt, 1);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0);
+            assert_eq!(data.nulls(), None);
+
+            let offsets = &data.buffers()[0];
+            let values = &data.child_data()[0];
+
+            assert_eq!(offsets.len(), offset_size * 2);
+            assert_eq!(values.len(), 0);
+        }
+    }
+
+    #[test]
+    fn new_default_map_should_create_empty_map_and_no_nulls() {
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("keys", DataType::Int32, false),
+                Field::new("values", DataType::Int32, true),
+            ])),
+            false,
+        ));
+        let dt = DataType::Map(entries_field, false);
+        let len = 3;
+
+        let data = ArrayData::new_default(&dt, len);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        // (len + 1) i32 offsets, all zero -> every entry is an empty map.
+        assert_eq!(data.buffers()[0].len(), (len + 1) * 4);
+        // Entries struct child is empty.
+        assert_eq!(data.child_data().len(), 1);
+        assert_eq!(data.child_data()[0].len(), 0);
+    }
+
+    #[test]
+    fn new_default_list_view_should_create_empty_views_and_no_nulls() {
+        for (offset_size, dt) in &[
+            (
+                4,
+                DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true))),
+            ),
+            (
+                8,
+                DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true))),
+            ),
+        ] {
+            let len = 3;
+            let data = ArrayData::new_default(dt, len);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0);
+            assert_eq!(data.nulls(), None);
+            // ListView has two buffers (offsets, sizes), each `len * offset_size` bytes.
+            assert_eq!(data.buffers().len(), 2);
+            assert_eq!(data.buffers()[0].len(), offset_size * len);
+            assert_eq!(data.buffers()[1].len(), offset_size * len);
+            // Values child is empty.
+            assert_eq!(data.child_data()[0].len(), 0);
+        }
+    }
+
+    #[test]
+    fn new_default_fixed_size_list_should_recurse_into_child() {
+        let list_len = 4_i32;
+        let outer_len = 3_usize;
+        let dt = DataType::new_fixed_size_list(DataType::Int32, list_len, true);
+
+        let data = ArrayData::new_default(&dt, outer_len);
+
+        data.validate_full().unwrap();
+
+        // Outer fixed-size list has no nulls and no buffers.
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        assert!(data.buffers().is_empty());
+
+        // Child is `new_default` of length `list_len * outer_len`, also without nulls.
+        let child = &data.child_data()[0];
+        assert_eq!(child.len(), list_len as usize * outer_len);
+        assert_eq!(child.null_count(), 0);
+        assert_eq!(child.nulls(), None);
+        assert_eq!(child.buffers()[0].len(), 4 * list_len as usize * outer_len);
+    }
+
+    #[test]
+    fn new_default_struct_should_not_create_nulls() {
+        let len = 3;
+        let dt = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        let data = ArrayData::new_default(&dt, len);
+
+        data.validate_full().unwrap();
+
+        // No nulls on the parent...
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+
+        // ...nor on any child (each is built via new_default recursively).
+        let a = &data.child_data()[0];
+        assert_eq!(a.data_type(), &DataType::Int32);
+        assert_eq!(a.null_count(), 0);
+        assert_eq!(a.nulls(), None);
+
+        let b = &data.child_data()[1];
+        assert_eq!(b.data_type(), &DataType::Utf8);
+        assert_eq!(b.null_count(), 0);
+        assert_eq!(b.nulls(), None);
+
+        let null_data = ArrayData::new_null(&dt, len);
+        assert_ne!(data, null_data);
+    }
+
+    #[test]
+    fn new_default_union_sparse_initializes_every_child() {
+        use arrow_schema::UnionFields;
+
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+        )
+        .unwrap();
+        let dt = DataType::Union(fields, UnionMode::Sparse);
+        let len = 3;
+
+        let data = ArrayData::new_default(&dt, len);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        // Sparse union has only the type_ids buffer (one i8 per element).
+        assert_eq!(data.buffers().len(), 1);
+        assert_eq!(data.buffers()[0].len(), len);
+
+        // Every child is `new_default(child_type, len)` in Sparse mode.
+        assert_eq!(data.child_data().len(), 2);
+        for child in data.child_data() {
+            assert_eq!(child.len(), len);
+            assert_eq!(child.null_count(), 0);
+        }
+    }
+
+    #[test]
+    fn new_default_union_dense_initializes_first_child_only() {
+        use arrow_schema::UnionFields;
+
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+        )
+        .unwrap();
+        let dt = DataType::Union(fields, UnionMode::Dense);
+        let len = 3;
+
+        let data = ArrayData::new_default(&dt, len);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        // Dense union has type_ids (i8 per element) and offsets (i32 per element).
+        assert_eq!(data.buffers().len(), 2);
+        assert_eq!(data.buffers()[0].len(), len);
+        assert_eq!(data.buffers()[1].len(), len * 4);
+
+        // First child holds the defaulted values; later children stay empty.
+        assert_eq!(data.child_data()[0].len(), len);
+        assert_eq!(data.child_data()[0].null_count(), 0);
+        assert_eq!(data.child_data()[1].len(), 0);
+    }
+
+    #[test]
+    fn new_default_run_end_encoded_empty() {
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::Int32, true));
+        let dt = DataType::RunEndEncoded(run_ends, values);
+
+        let data = ArrayData::new_default(&dt, 0);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.len(), 0);
+        assert!(data.buffers().is_empty());
+        // Children are empty.
+        let children = data.child_data();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].len(), 0);
+        assert_eq!(children[1].len(), 0);
+    }
+
+    #[test]
+    fn new_default_run_end_encoded_non_empty() {
+        for run_end_type in &[DataType::Int16, DataType::Int32, DataType::Int64] {
+            let run_ends = Arc::new(Field::new("run_ends", run_end_type.clone(), false));
+            let values = Arc::new(Field::new("values", DataType::Int32, true));
+            let dt = DataType::RunEndEncoded(run_ends, values);
+            let len = 5;
+
+            let data = ArrayData::new_default(&dt, len);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.len(), len);
+            assert!(data.buffers().is_empty());
+            // Encoded as a single run covering all `len` logical elements.
+            let children = data.child_data();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].data_type(), run_end_type);
+            assert_eq!(children[0].len(), 1);
+            assert_eq!(children[1].data_type(), &DataType::Int32);
+            assert_eq!(children[1].len(), 1);
+            // The single value is a default (no nulls), not a null.
+            assert_eq!(children[1].null_count(), 0);
+        }
+    }
+
+    #[test]
+    fn new_default_dictionary_should_not_create_nulls() {
+        let key_types = [
+            (1, DataType::Int8),
+            (1, DataType::UInt8),
+            (2, DataType::Int16),
+            (2, DataType::UInt16),
+            (4, DataType::Int32),
+            (4, DataType::UInt32),
+            (8, DataType::Int64),
+            (8, DataType::UInt64),
+        ];
+        let len = 3;
+
+        for (key_width, key_type) in &key_types {
+            let dt = DataType::Dictionary(Box::new(key_type.clone()), Box::new(DataType::Utf8));
+
+            let data = ArrayData::new_default(&dt, len);
+
+            data.validate_full().unwrap();
+
+            assert_eq!(data.null_count(), 0, "{dt} should have no nulls");
+            assert_eq!(data.nulls(), None);
+            // Keys buffer: zeroed `key_width * len` bytes.
+            assert_eq!(data.buffers().len(), 1);
+            assert_eq!(data.buffers()[0].len(), key_width * len);
+
+            // Single default value in the values child, pointed at by every key.
+            let values = &data.child_data()[0];
+            assert_eq!(values.data_type(), &DataType::Utf8);
+            assert_eq!(values.len(), 1);
+            assert_eq!(values.null_count(), 0);
+
+            let null_data = ArrayData::new_null(&dt, len);
+            assert_ne!(data, null_data, "{dt} default should differ from null");
+        }
+    }
+
+    #[test]
+    fn new_default_dictionary_empty_has_empty_values() {
+        let dt = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+
+        let data = ArrayData::new_default(&dt, 0);
+
+        data.validate_full().unwrap();
+
+        assert_eq!(data.len(), 0);
+        assert_eq!(data.null_count(), 0);
+        assert_eq!(data.nulls(), None);
+        assert_eq!(data.buffers()[0].len(), 0);
+        // No keys to reference anything, so the values child is empty too.
+        assert_eq!(data.child_data()[0].len(), 0);
+    }
+
+    #[test]
+    fn new_null_struct_does_not_create_nulls_for_non_nullable_fields() {
+        let len = 3;
+        let dt = DataType::Struct(Fields::from(vec![
+            Field::new("nullable", DataType::Int32, true),
+            Field::new("non_nullable", DataType::Int32, false),
+        ]));
+
+        let data = ArrayData::new_null(&dt, len);
+
+        data.validate_full().unwrap();
+
+        // Parent itself is fully null.
+        assert_eq!(data.null_count(), len);
+
+        // The non-nullable field must NOT carry nulls, even though the parent is
+        // all-null (the field's nullability constraint must be respected).
+        let non_nullable = &data.child_data()[1];
+        assert_eq!(non_nullable.null_count(), 0);
+        assert_eq!(non_nullable.nulls(), None);
+    }
+
+    #[test]
+    fn new_null_fixed_size_list_does_not_create_nulls_for_non_nullable_item() {
+        let len = 3;
+        let list_len = 4_i32;
+        let dt = DataType::new_fixed_size_list(DataType::Int32, list_len, false);
+
+        let data = ArrayData::new_null(&dt, len);
+
+        data.validate_full().unwrap();
+
+        // Parent itself is fully null.
+        assert_eq!(data.null_count(), len);
+
+        // The non-nullable item child must NOT carry nulls.
+        let item = &data.child_data()[0];
+        assert_eq!(item.len(), list_len as usize * len);
+        assert_eq!(item.null_count(), 0);
+        assert_eq!(item.nulls(), None);
     }
 }
