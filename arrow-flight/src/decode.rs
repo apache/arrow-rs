@@ -336,13 +336,8 @@ impl FlightDataDecoder {
                         "Unable to convert flight data header to a record batch".to_string(),
                     )
                 })?;
-                let buf = if data.data_body.as_ptr() as usize % 64 == 0 {
-                    Buffer::from(data.data_body.clone())
-                } else {
-                    Buffer::from(data.data_body.as_ref())
-                };
                 let batch = arrow_ipc::reader::RecordBatchDecoder::try_new(
-                    &buf,
+                    &Buffer::from(data.data_body.as_ref()),
                     record_batch,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
