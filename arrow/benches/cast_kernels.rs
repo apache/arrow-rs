@@ -185,6 +185,25 @@ fn build_dict_array(size: usize) -> ArrayRef {
     Arc::new(DictionaryArray::new(keys, Arc::new(values)))
 }
 
+// Dictionary<UInt32, Dictionary<UInt32, Utf8>>: an inner dictionary of 4096
+// entries over 64 moderately long distinct values, wrapped by `size` outer keys
+// that index into it. Casting to Dictionary<UInt32, Utf8> flattens the two index
+// layers; the old path unpacks (copies) the inner values, the fast path reuses
+// them and only remaps indices.
+fn build_nested_dict_array(size: usize) -> ArrayRef {
+    let distinct: Vec<String> = (0..64)
+        .map(|i| format!("a moderately long symbol name number {i:04}"))
+        .collect();
+    let inner_values = StringArray::from_iter(distinct.iter().map(|s| Some(s.as_str())));
+    let inner_len = 4096u32;
+    let distinct_len = inner_values.len() as u32;
+    let inner_keys = UInt32Array::from_iter((0..inner_len).map(|v| v % distinct_len));
+    let inner = DictionaryArray::new(inner_keys, Arc::new(inner_values));
+
+    let outer_keys = UInt32Array::from_iter((0..size as u32).map(|v| v % inner_len));
+    Arc::new(DictionaryArray::new(outer_keys, Arc::new(inner)))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -212,6 +231,7 @@ fn add_benchmark(c: &mut Criterion) {
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
     let dict_array = build_dict_array(10_000);
+    let nested_dict_array = build_nested_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
 
@@ -329,6 +349,14 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast dict to string view", |b| {
         b.iter(|| cast_array(&dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast nested dict to dict", |b| {
+        b.iter(|| {
+            cast_array(
+                &nested_dict_array,
+                DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+            )
+        })
     });
     c.bench_function("cast string view to dict", |b| {
         b.iter(|| {
