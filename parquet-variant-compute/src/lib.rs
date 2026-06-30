@@ -28,16 +28,6 @@
 //! - [`variant_get()`]: Convert `VariantArray` (or an inner path) to a strongly-typed Arrow array.
 //! - [`shred_variant()`]: Shred a `VariantArray` according to the provided shredding schema
 //! - [`unshred_variant()`]: Unshred a `VariantArray` to pure binary variant.
-//!
-//! ## 🚧 Work In Progress
-//!
-//! This crate is under active development and is not yet ready for production use.
-//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
-//!
-//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
-//! [Apache Parquet]: https://parquet.apache.org/
-//! [`VariantPath`]: parquet_variant::VariantPath
-//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
 mod arrow_to_variant;
 mod cast_to_variant;

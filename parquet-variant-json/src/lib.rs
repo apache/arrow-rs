@@ -23,13 +23,6 @@
 //!
 //! * See [`JsonToVariant`] trait for converting a JSON string to a Variant.
 //! * See [`VariantToJson`] trait for converting a Variant to a JSON string.
-//!
-//! ## 🚧 Work In Progress
-//!
-//! This crate is under active development and is not yet ready for production use.
-//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
-//!
-//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
 mod from_json;
 mod to_json;
