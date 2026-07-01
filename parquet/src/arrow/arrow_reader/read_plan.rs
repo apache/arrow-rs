@@ -238,22 +238,21 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
-            let filter = match filter.null_count() {
-                0 => filter,
-                _ => prep_null_mask_filter(&filter),
-            };
-
             processed_rows += input_rows;
 
             match limit {
-                Some(limit) if matched_rows + filter.true_count() >= limit => {
-                    let needed = limit - matched_rows;
-                    let truncated = filter.take_n_true(needed);
+                Some(limit) if limit - matched_rows <= filter.len() => {
+                    let truncated = filter.take_n_true(limit - matched_rows);
+                    matched_rows += truncated.true_count();
+                    let truncated = prep_filter_for_row_selection(truncated);
                     filters.push(truncated);
-                    break;
+                    if matched_rows >= limit {
+                        break;
+                    }
                 }
                 _ => {
                     matched_rows += filter.true_count();
+                    let filter = prep_filter_for_row_selection(filter);
                     filters.push(filter);
                 }
             }
@@ -409,6 +408,13 @@ impl LimitedReadPlanBuilder {
     }
 }
 
+fn prep_filter_for_row_selection(filter: BooleanArray) -> BooleanArray {
+    match filter.null_count() {
+        0 => filter,
+        _ => prep_null_mask_filter(&filter),
+    }
+}
+
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
@@ -522,5 +528,53 @@ mod tests {
             total, TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
+    }
+
+    #[test]
+    fn with_predicate_options_limit_handles_null_filters() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        const TOTAL_ROWS: usize = 100;
+        const LIMIT: usize = 10;
+
+        let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
+        let levels = vec![0; TOTAL_ROWS];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false);
+
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok((0..batch.num_rows())
+                .map(|i| match i % 4 {
+                    0 | 2 => Some(true),
+                    1 => None,
+                    _ => Some(false),
+                })
+                .collect::<BooleanArray>())
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_predicate_options(
+                PredicateOptions::new(Box::new(struct_reader), &mut predicate)
+                    .with_limit(LIMIT, TOTAL_ROWS),
+            )
+            .unwrap();
+
+        let selection = builder
+            .selection()
+            .expect("limit-driven early break must produce a selection");
+
+        assert_eq!(selection.row_count(), LIMIT);
+
+        let total: usize = selection.iter().map(|s| s.row_count).sum();
+        assert_eq!(total, TOTAL_ROWS);
     }
 }

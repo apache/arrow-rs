@@ -579,40 +579,23 @@ impl BooleanArray {
     /// ```
     pub fn take_n_true(self, n: usize) -> BooleanArray {
         let len = self.len();
-        if n == 0 {
-            if !self.has_true() {
-                return self;
-            }
-            return BooleanArray::new(BooleanBuffer::new_unset(len), self.nulls);
-        }
-
         // `set_indices` scans 64 bits at a time via `trailing_zeros`, so locating
-        // the n-th set bit is cheaper than visiting every bit. When a null buffer
-        // is present, skip set bits whose corresponding entry is null so only
-        // non-null trues count toward `n` (matching `true_count` semantics).
-        let (last_kept, has_more) = match self.nulls.as_ref() {
-            None => {
-                let mut iter = self.values.set_indices();
-                match iter.nth(n - 1) {
-                    Some(i) => (i, iter.next().is_some()),
-                    None => return self,
-                }
-            }
-            Some(nulls) => {
-                let mut iter = self.values.set_indices().filter(|&i| nulls.is_valid(i));
-                match iter.nth(n - 1) {
-                    Some(i) => (i, iter.next().is_some()),
-                    None => return self,
-                }
-            }
+        // the first set bit beyond the retained prefix is cheaper than visiting
+        // every bit. When a null buffer is present, skip set bits whose
+        // corresponding entry is null so only non-null trues count toward `n`
+        // (matching `true_count` semantics).
+        let mut iter = self.values.set_indices();
+        let end = match self.nulls.as_ref() {
+            Some(nulls) => iter.filter(|&i| nulls.is_valid(i)).nth(n),
+            None => iter.nth(n),
         };
-        if !has_more {
+        let Some(end) = end else {
             return self;
-        }
+        };
 
         let mut builder = BooleanBufferBuilder::new(len);
-        builder.append_buffer(&self.values.slice(0, last_kept + 1));
-        builder.append_n(len - last_kept - 1, false);
+        builder.append_buffer(&self.values.slice(0, end));
+        builder.append_n(len - end, false);
         BooleanArray::new(builder.finish(), self.nulls)
     }
 
