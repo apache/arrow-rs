@@ -97,8 +97,8 @@ impl BlockDecoder {
                         })?;
 
                         // Only reserve what the current input backs: the block size is
-                        // attacker-controlled here, so reserving it outright lets a crafted
-                        // `i64::MAX` size abort the process (#10234). The rest is reserved
+                        // input specified so could be an extreme value (e.g. i64::MAX)
+                        // in case of corrupted/malicious input. The rest is reserved
                         // lazily by `extend_from_slice` below as data arrives.
                         self.in_progress
                             .data
