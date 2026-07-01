@@ -337,6 +337,7 @@ fn print_logical_and_converted(
                     format!("GEOGRAPHY({algorithm})")
                 }
             }
+            LogicalType::File => "FILE".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
             LogicalType::_Unknown { field_id } => format!("_Unknown({field_id})"),
         },
@@ -1172,5 +1173,44 @@ mod tests {
             .unwrap();
 
         assert_print_parse_message(message);
+    }
+
+    #[test]
+    fn test_print_file_type() {
+        let mut s = String::new();
+        {
+            let mut p = Printer::new(&mut s);
+            let path_field = Arc::new(
+                Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
+                    .with_repetition(Repetition::REQUIRED)
+                    .with_logical_type(Some(LogicalType::String))
+                    .build()
+                    .unwrap(),
+            );
+            let size_field = Arc::new(
+                Type::primitive_type_builder("size", PhysicalType::INT64)
+                    .with_repetition(Repetition::OPTIONAL)
+                    .build()
+                    .unwrap(),
+            );
+            let file_field = Type::group_type_builder("f")
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::File))
+                .with_fields(vec![path_field, size_field])
+                .build()
+                .unwrap();
+            let message = Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(file_field)])
+                .build()
+                .unwrap();
+            p.print(&message);
+        }
+        let expected = "message schema {
+  REQUIRED group f (FILE) {
+    REQUIRED BYTE_ARRAY path (STRING);
+    OPTIONAL INT64 size;
+  }
+}";
+        assert_eq!(&mut s, expected);
     }
 }
