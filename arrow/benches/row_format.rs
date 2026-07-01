@@ -61,6 +61,25 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 
+    let binary_rows = rows.clone().try_into_binary().expect("reasonable size");
+    let parser = converter.parser();
+    // RowParser marks rows as requiring UTF-8 validation when they are decoded
+    // back into Arrow arrays by RowConverter::convert_rows.
+    let parsed_rows: Vec<_> = binary_rows
+        .iter()
+        .flatten()
+        .map(|row| parser.parse(row).owned())
+        .collect();
+    c.bench_function(&format!("convert_rows_validated {name}"), |b| {
+        b.iter(|| {
+            hint::black_box(
+                converter
+                    .convert_rows(parsed_rows.iter().map(|row| row.row()))
+                    .unwrap(),
+            )
+        });
+    });
+
     let mut rows = converter.empty_rows(0, 0);
     c.bench_function(&format!("append_rows {name}"), |b| {
         let cols = cols.clone();
