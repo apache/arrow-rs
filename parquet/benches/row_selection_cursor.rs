@@ -15,6 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Benchmarks the cost of applying `RowSelection` as selector queues versus
+//! boolean masks.
+//!
+//! The broad sweep varies selector length, selection density, run-length
+//! distribution, data type, projected column count, and `Utf8View` payload size.
+//! The shape-focus suite keeps the data shape narrower and varies the maximum
+//! selected-run length (`maxrun`) so the results can show where
+//! `RowSelectionPolicy::Auto` should prefer `Selectors` or `Mask`.
+
 use std::hint;
 use std::sync::Arc;
 
@@ -34,9 +43,39 @@ const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
+const SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[1, 2, 4, 8, 32];
+// At 80% selectivity, maxrun1 and maxrun2 cannot be represented without
+// zero-length skip runs, so the dense-focused cases start at maxrun4.
+const DENSE_SHAPE_FOCUS_SELECTED_RUN_LENGTHS: &[usize] = &[4, 8, 32];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
 const BENCH_MODES: &[BenchMode] = &[BenchMode::ReadSelector, BenchMode::ReadMask];
+const SHAPE_FOCUS_SCENARIOS: &[ShapeFocusScenario] = &[
+    ShapeFocusScenario {
+        name: "sparse10",
+        select_ratio: 0.1,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "sparse20",
+        select_ratio: 0.2,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "moderate40",
+        select_ratio: 0.4,
+        start_with_select: false,
+        selected_run_lengths: SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+    ShapeFocusScenario {
+        name: "dense80",
+        select_ratio: 0.8,
+        start_with_select: true,
+        selected_run_lengths: DENSE_SHAPE_FOCUS_SELECTED_RUN_LENGTHS,
+    },
+];
 
 struct DataProfile {
     name: &'static str,
@@ -203,6 +242,66 @@ fn criterion_benchmark(c: &mut Criterion) {
             BASE_SEED ^ ((offset as u64) << 40),
         );
     }
+
+    bench_shape_focus(c);
+}
+
+/// Focused selector-shape matrix for `Selectors` versus `Mask`.
+///
+/// It fixes the input profile to `int32` and `utf8view`, then varies
+/// selectivity and the requested maximum selected-run length. The benchmark
+/// suffix reports this as `maxrunNN` because the final selected run may be
+/// shorter than the requested maximum.
+fn bench_shape_focus(c: &mut Criterion) {
+    let profiles = [
+        DataProfile {
+            name: "int32",
+            build_batch: build_int32_batch,
+        },
+        DataProfile {
+            name: "utf8view",
+            build_batch: build_utf8view_batch,
+        },
+    ];
+
+    for profile in profiles {
+        let parquet_data = build_parquet_data(TOTAL_ROWS, profile.build_batch);
+        for scenario in shape_focus_scenarios() {
+            for &selected_run_len in scenario.selected_run_lengths {
+                let selectors =
+                    generate_shape_focus_selectors(selected_run_len, TOTAL_ROWS, scenario);
+                assert!(
+                    !selectors.is_empty(),
+                    "invalid shape focus case {} maxrun {}",
+                    scenario.name,
+                    selected_run_len
+                );
+
+                let suffix =
+                    shape_focus_suffix(scenario, profile.name, selected_run_len, &selectors);
+                let selection = RowSelection::from(selectors);
+
+                let bench_input = BenchInput {
+                    parquet_data: parquet_data.clone(),
+                    selection,
+                };
+
+                for &mode in BENCH_MODES {
+                    c.bench_with_input(
+                        BenchmarkId::new(mode.label(), &suffix),
+                        &bench_input,
+                        |b, input| {
+                            b.iter(|| {
+                                let total =
+                                    run_read(&input.parquet_data, &input.selection, mode.policy());
+                                hint::black_box(total);
+                            });
+                        },
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn bench_over_lengths(
@@ -349,6 +448,13 @@ struct Scenario {
     distribution: RunDistribution,
 }
 
+pub(crate) struct ShapeFocusScenario {
+    pub(crate) name: &'static str,
+    select_ratio: f64,
+    start_with_select: bool,
+    pub(crate) selected_run_lengths: &'static [usize],
+}
+
 #[derive(Clone)]
 enum RunDistribution {
     Constant,
@@ -407,6 +513,101 @@ fn generate_selectors(
 
     let selection: RowSelection = selectors.into();
     selection.into()
+}
+
+pub(crate) fn shape_focus_scenarios() -> &'static [ShapeFocusScenario] {
+    SHAPE_FOCUS_SCENARIOS
+}
+
+pub(crate) fn generate_shape_focus_selectors(
+    selected_run_len: usize,
+    total_rows: usize,
+    scenario: &ShapeFocusScenario,
+) -> Vec<RowSelector> {
+    const CYCLE_ROWS: usize = 1_000;
+
+    assert!(selected_run_len > 0);
+    assert!(
+        (0.0..=1.0).contains(&scenario.select_ratio),
+        "select_ratio must be in [0, 1]"
+    );
+
+    let mut selectors = Vec::new();
+    let mut remaining_rows = total_rows;
+
+    while remaining_rows > 0 {
+        let cycle_rows = CYCLE_ROWS.min(remaining_rows);
+        let selected_rows = (cycle_rows as f64 * scenario.select_ratio).round() as usize;
+        if selected_rows == 0 {
+            selectors.push(RowSelector::skip(cycle_rows));
+            remaining_rows -= cycle_rows;
+            continue;
+        }
+        if selected_rows >= cycle_rows {
+            selectors.push(RowSelector::select(cycle_rows));
+            remaining_rows -= cycle_rows;
+            continue;
+        }
+
+        let selected_runs = selected_rows.div_ceil(selected_run_len);
+        let skipped_rows = cycle_rows - selected_rows;
+        let is_last_cycle = remaining_rows == cycle_rows;
+        // Non-final cycles that start with selected rows need a trailing skip so
+        // the next cycle's leading select does not merge into a longer run.
+        let skip_runs = if scenario.start_with_select && is_last_cycle {
+            skipped_rows.min(selected_runs)
+        } else {
+            selected_runs
+        };
+
+        if skipped_rows
+            < selected_runs.saturating_sub(usize::from(scenario.start_with_select && is_last_cycle))
+        {
+            return Vec::new();
+        }
+
+        let base_skip_len = skipped_rows / skip_runs;
+        let extra_skip_runs = skipped_rows % skip_runs;
+        let mut remaining_selected_rows = selected_rows;
+
+        for run_idx in 0..selected_runs {
+            let select_len = selected_run_len.min(remaining_selected_rows);
+            if scenario.start_with_select {
+                selectors.push(RowSelector::select(select_len));
+                if run_idx < skip_runs {
+                    let skip_len = base_skip_len + usize::from(run_idx < extra_skip_runs);
+                    selectors.push(RowSelector::skip(skip_len));
+                }
+            } else {
+                let skip_len = base_skip_len + usize::from(run_idx < extra_skip_runs);
+                selectors.push(RowSelector::skip(skip_len));
+                selectors.push(RowSelector::select(select_len));
+            }
+            remaining_selected_rows -= select_len;
+        }
+
+        remaining_rows -= cycle_rows;
+    }
+
+    let selection: RowSelection = selectors.into();
+    selection.into()
+}
+
+pub(crate) fn shape_focus_suffix(
+    scenario: &ShapeFocusScenario,
+    profile_name: &str,
+    selected_run_len: usize,
+    selectors: &[RowSelector],
+) -> String {
+    let stats = SelectorStats::new(selectors);
+    format!(
+        "shape-focus-{}-{}-maxrun{:02}-avg{:.1}-sel{:02}",
+        scenario.name,
+        profile_name,
+        selected_run_len,
+        stats.average_selector_len,
+        (stats.select_ratio * 100.0).round() as u32
+    )
 }
 
 fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) -> usize {
