@@ -386,7 +386,7 @@ mod variable;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_row::{RowConverter, SortField};
-/// # use arrow_array::{Int32Array, StringArray, MapArray};
+/// # use arrow_array::{Array, Int32Array, StringArray, MapArray};
 ///
 /// // [{ "hello": 1, "world": 2 }, { "hey": 3, "you": 4 }]
 /// let map_1 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(vec![
