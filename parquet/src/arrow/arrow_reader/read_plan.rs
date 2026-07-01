@@ -238,13 +238,17 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
+            let filter = match filter.null_count() {
+                0 => filter,
+                _ => prep_null_mask_filter(&filter),
+            };
+
             processed_rows += input_rows;
 
             match limit {
                 Some(limit) if limit - matched_rows <= filter.len() => {
                     let truncated = filter.take_n_true(limit - matched_rows);
                     matched_rows += truncated.true_count();
-                    let truncated = prep_filter_for_row_selection(truncated);
                     filters.push(truncated);
                     if matched_rows >= limit {
                         break;
@@ -252,7 +256,6 @@ impl ReadPlanBuilder {
                 }
                 _ => {
                     matched_rows += filter.true_count();
-                    let filter = prep_filter_for_row_selection(filter);
                     filters.push(filter);
                 }
             }
@@ -405,13 +408,6 @@ impl LimitedReadPlanBuilder {
         }
 
         inner
-    }
-}
-
-fn prep_filter_for_row_selection(filter: BooleanArray) -> BooleanArray {
-    match filter.null_count() {
-        0 => filter,
-        _ => prep_null_mask_filter(&filter),
     }
 }
 
