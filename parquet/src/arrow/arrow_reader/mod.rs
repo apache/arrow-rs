@@ -22,7 +22,9 @@ use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
+pub use selection::{
+    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector,
+};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
