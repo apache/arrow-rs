@@ -240,6 +240,8 @@ impl ReadPlanBuilder {
             }
             let filter = match filter.null_count() {
                 0 => filter,
+                // RowSelection::from_filters expects non-null filters. Convert
+                // NULL predicate results to false so they are not selected.
                 _ => prep_null_mask_filter(&filter),
             };
 
