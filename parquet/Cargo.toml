@@ -54,7 +54,7 @@ object_store = { workspace = true, optional = true, features = ["tokio"] }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
-# To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
+# To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backend` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.13", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
@@ -126,13 +126,16 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
-# Explicitely enabling rust_backend and zlib-rs features for flate2
-flate2-rust_backened = ["flate2/rust_backend"]
+# Enable flate2's default Rust backend
+flate2-rust_backend = ["flate2/rust_backend"]
+# Enable flate2's zlib-rs backend
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
+# Alias for typo. TODO: Remove in future major version bump.
+flate2-rust_backened = ["flate2-rust_backend"]
 
 
 [[example]]

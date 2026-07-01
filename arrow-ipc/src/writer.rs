@@ -754,12 +754,11 @@ impl IpcDataGenerator {
         compression_context: &mut CompressionContext,
         sink: &mut IpcBodySink<'_>,
     ) -> Result<(Vec<u8>, usize, usize), ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
-
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
+            let fbb = compression_context.mut_fbb();
+            let mut c = crate::BodyCompressionBuilder::new(fbb);
             c.add_method(crate::BodyCompressionMethod::BUFFER);
             c.add_codec(batch_compression_type);
             c.finish()
@@ -797,6 +796,7 @@ impl IpcDataGenerator {
         let tail_pad = pad_to_alignment(alignment, offset as usize);
         let body_len = offset as usize + tail_pad;
 
+        let fbb = compression_context.mut_fbb();
         let buffers = fbb.create_vector(&meta.buffers);
         let nodes = fbb.create_vector(&meta.nodes);
         let variadic_buffer = if variadic_buffer_counts.is_empty() {
@@ -806,7 +806,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
             batch_builder.add_length(batch.num_rows() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -818,8 +818,7 @@ impl IpcDataGenerator {
             }
             batch_builder.finish().as_union_value()
         };
-        // create an crate::Message
-        let mut message = crate::MessageBuilder::new(&mut fbb);
+        let mut message = crate::MessageBuilder::new(fbb);
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(body_len as i64);
@@ -827,7 +826,9 @@ impl IpcDataGenerator {
         let root = message.finish();
         fbb.finish(root, None);
 
-        Ok((fbb.finished_data().to_vec(), body_len, tail_pad))
+        let ipc_message = fbb.finished_data().to_vec();
+        fbb.reset();
+        Ok((ipc_message, body_len, tail_pad))
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
@@ -840,15 +841,14 @@ impl IpcDataGenerator {
         is_delta: bool,
         compression_context: &mut CompressionContext,
     ) -> Result<EncodedData, ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
-
         let mut arrow_data: Vec<u8> = vec![];
 
         // get the type of compression
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
+            let fbb = compression_context.mut_fbb();
+            let mut c = crate::BodyCompressionBuilder::new(fbb);
             c.add_method(crate::BodyCompressionMethod::BUFFER);
             c.add_codec(batch_compression_type);
             c.finish()
@@ -885,7 +885,7 @@ impl IpcDataGenerator {
         let body_len = offset as usize + tail_pad;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
 
-        // write data
+        let fbb = compression_context.mut_fbb();
         let buffers = fbb.create_vector(&meta.buffers);
         let nodes = fbb.create_vector(&meta.nodes);
         let variadic_buffer = if variadic_buffer_counts.is_empty() {
@@ -895,7 +895,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
             batch_builder.add_length(array_data.len() as i64);
             batch_builder.add_nodes(nodes);
             batch_builder.add_buffers(buffers);
@@ -909,7 +909,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut batch_builder = crate::DictionaryBatchBuilder::new(&mut fbb);
+            let mut batch_builder = crate::DictionaryBatchBuilder::new(fbb);
             batch_builder.add_id(dict_id);
             batch_builder.add_data(root);
             batch_builder.add_isDelta(is_delta);
@@ -917,7 +917,7 @@ impl IpcDataGenerator {
         };
 
         let root = {
-            let mut message_builder = crate::MessageBuilder::new(&mut fbb);
+            let mut message_builder = crate::MessageBuilder::new(fbb);
             message_builder.add_version(write_options.metadata_version);
             message_builder.add_header_type(crate::MessageHeader::DictionaryBatch);
             message_builder.add_bodyLength(body_len as i64);
@@ -926,10 +926,11 @@ impl IpcDataGenerator {
         };
 
         fbb.finish(root, None);
-        let finished_data = fbb.finished_data();
+        let ipc_message = fbb.finished_data().to_vec();
+        fbb.reset();
 
         Ok(EncodedData {
-            ipc_message: finished_data.to_vec(),
+            ipc_message,
             arrow_data,
         })
     }
