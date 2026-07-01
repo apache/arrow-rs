@@ -421,6 +421,26 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
 ///    to the specified path.
 /// 2. `as_type: Some(<specific field>)`: an array of the specified type is returned.
 ///
+/// # Casting Semantics
+///
+/// Scalar conversion semantics intentionally follow Arrow cast behavior where applicable.
+/// Conversions in this module delegate to Arrow compute cast helpers such as
+/// `num_cast`, `cast_num_to_bool`, `single_bool_to_numeric`, and
+/// `cast_single_string_to_boolean_default`.
+///
+/// - Getting `DataType::Boolean` accepts boolean, numeric, and string variants.
+///   Numeric zero maps to `false`; non-zero maps to `true`. String parsing follows
+///   Arrow UTF8-to-boolean cast rules.
+/// - Getting numeric datatypes such as `DataType::Int8`, `DataType::Int16`, `DataType::Int32`,
+///   `DataType::Int64`, `DataType::UInt8`, `DataType::UInt16`, `DataType::UInt32`, `DataType::UInt64`,
+///   `DataType::Float16`, `DataType::Float32`, `DataType::Float64` accept
+///   boolean and numeric variants (integers, floating-point, and decimals).
+///   They return `None` when conversion is not possible.
+/// - Getting decimals such as `DataType::Decimal32`, `DataType::Decimal64`, `DataType::Decimal128`,
+///   `DataType::Decimal256` accept compatible decimal variants, integer variants,
+///   float variants and string variants.
+///   They return `None` when conversion is not possible.
+///
 /// TODO: How would a caller request a struct or list type where the fields/elements can be any
 /// variant? Caller can pass None as the requested type to fetch a specific path, but it would
 /// quickly become annoying (and inefficient) to call `variant_get` for each leaf value in a struct or
@@ -1932,7 +1952,7 @@ mod test {
             let result_variant = VariantArray::try_new(&result).unwrap();
 
             assert_eq!(result_variant.value(0), Variant::from("drama"), "{case}");
-            assert_eq!(result_variant.value(1).as_int64(), Some(123), "{case}");
+            assert_eq!(result_variant.value(1).as_int8(), Some(123), "{case}");
         }
     }
 
@@ -1988,7 +2008,7 @@ mod test {
         let result_variant = VariantArray::try_new(&result).unwrap();
 
         assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+        assert_eq!(result_variant.value(1).as_int8(), Some(123));
     }
 
     #[test]
@@ -2011,7 +2031,7 @@ mod test {
         let result = variant_get(&array, GetOptions::new_with_path(path.clone())).unwrap();
         let result_variant = VariantArray::try_new(&result).unwrap();
         assert_eq!(result_variant.value(0), Variant::from("b"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+        assert_eq!(result_variant.value(1).as_int8(), Some(123));
 
         let field = Field::new("typed_value", DataType::Int64, true);
         let casted = variant_get(

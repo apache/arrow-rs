@@ -2401,6 +2401,7 @@ dependencies = [
  "criterion",
  "half",
  "indexmap",
+ "num-traits",
  "parquet-variant",
  "parquet-variant-json",
  "rand 0.9.4",
