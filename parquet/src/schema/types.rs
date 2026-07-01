@@ -1279,12 +1279,15 @@ fn build_tree<'a>(
 
 /// Checks if the logical type is valid.
 fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
-    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type {
-        if *bit_width != 8 && *bit_width != 16 && *bit_width != 32 && *bit_width != 64 {
-            return Err(general_err!(
-                "Bit width must be 8, 16, 32, or 64 for Integer logical type"
-            ));
-        }
+    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
+        && *bit_width != 8
+        && *bit_width != 16
+        && *bit_width != 32
+        && *bit_width != 64
+    {
+        return Err(general_err!(
+            "Bit width must be 8, 16, 32, or 64 for Integer logical type"
+        ));
     }
     Ok(())
 }

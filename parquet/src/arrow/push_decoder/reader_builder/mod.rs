@@ -158,10 +158,10 @@ impl RowBudget {
             *offset = offset.saturating_sub(rows_before_budget - rows_after_budget);
         }
 
-        if rows_after_budget != 0 {
-            if let Some(limit) = &mut self.limit {
-                *limit -= rows_after_budget;
-            }
+        if rows_after_budget != 0
+            && let Some(limit) = &mut self.limit
+        {
+            *limit -= rows_after_budget;
         }
 
         self

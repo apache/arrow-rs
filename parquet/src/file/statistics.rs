@@ -155,19 +155,19 @@ pub(crate) fn from_thrift_page_stats(
             };
 
             fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
-                if let Some(min) = min {
-                    if min.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse min statistic".to_string(),
-                        ));
-                    }
+                if let Some(min) = min
+                    && min.len() < len
+                {
+                    return Err(ParquetError::General(
+                        "Insufficient bytes to parse min statistic".to_string(),
+                    ));
                 }
-                if let Some(max) = max {
-                    if max.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse max statistic".to_string(),
-                        ));
-                    }
+                if let Some(max) = max
+                    && max.len() < len
+                {
+                    return Err(ParquetError::General(
+                        "Insufficient bytes to parse max statistic".to_string(),
+                    ));
                 }
                 Ok(())
             }

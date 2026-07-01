@@ -300,13 +300,13 @@ impl Schema {
 
             // merge metadata
             for (key, value) in metadata.into_iter() {
-                if let Some(old_val) = out_meta.get(&key) {
-                    if old_val != &value {
-                        return Err(ArrowError::SchemaError(format!(
-                            "Fail to merge schema due to conflicting metadata. \
-                                         Key '{key}' has different values '{old_val}' and '{value}'"
-                        )));
-                    }
+                if let Some(old_val) = out_meta.get(&key)
+                    && old_val != &value
+                {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema due to conflicting metadata. \
+                                     Key '{key}' has different values '{old_val}' and '{value}'"
+                    )));
                 }
                 out_meta.insert(key, value);
             }

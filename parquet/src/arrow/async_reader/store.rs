@@ -225,14 +225,13 @@ impl AsyncFileReader for ParquetObjectReader {
             // When page_index_policy is Skip (default), use the reader's preload flags.
             // When page_index_policy is Optional or Required, override the preload flags
             // to ensure the specified policy takes precedence.
-            if let Some(options) = options {
-                if options.column_index_policy() != PageIndexPolicy::Skip
-                    || options.offset_index_policy() != PageIndexPolicy::Skip
-                {
-                    metadata = metadata
-                        .with_column_index_policy(options.column_index_policy())
-                        .with_offset_index_policy(options.offset_index_policy());
-                }
+            if let Some(options) = options
+                && (options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip)
+            {
+                metadata = metadata
+                    .with_column_index_policy(options.column_index_policy())
+                    .with_offset_index_policy(options.offset_index_policy());
             }
 
             let metadata = if let Some(file_size) = self.file_size {

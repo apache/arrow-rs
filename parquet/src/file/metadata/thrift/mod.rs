@@ -223,15 +223,15 @@ fn convert_stats(
             };
 
             fn check_len(min: &Option<&[u8]>, max: &Option<&[u8]>, len: usize) -> Result<()> {
-                if let Some(min) = min {
-                    if min.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse min statistic",));
-                    }
+                if let Some(min) = min
+                    && min.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse min statistic",));
                 }
-                if let Some(max) = max {
-                    if max.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse max statistic",));
-                    }
+                if let Some(max) = max
+                    && max.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse max statistic",));
                 }
                 Ok(())
             }

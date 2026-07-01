@@ -266,12 +266,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 for field_id in field_ids_iter {
                     let next_field_name = self.metadata.get(field_id)?;
 
-                    if let Some(current_name) = current_field_name {
-                        if next_field_name < current_name {
-                            return Err(ArrowError::InvalidArgumentError(
-                                "field names not sorted".to_string(),
-                            ));
-                        }
+                    if let Some(current_name) = current_field_name
+                        && next_field_name < current_name
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "field names not sorted".to_string(),
+                        ));
                     }
                     current_field_name = Some(next_field_name);
                 }
