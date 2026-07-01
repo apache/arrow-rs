@@ -115,7 +115,106 @@ impl DefinitionLevelBuffer {
             BufferInner::Mask { nulls } => nulls,
         }
     }
+
+    /// Returns the raw definition levels accumulated so far, if available.
+    /// Only available when the buffer is in Full mode (nested columns).
+    pub fn levels(&self) -> Option<&[i16]> {
+        match &self.inner {
+            BufferInner::Full { levels, .. } => Some(levels.as_slice()),
+            BufferInner::Mask { .. } => None,
+        }
+    }
 }
+
+/// Build a filtered validity bitmap from definition/repetition levels.
+///
+/// For each level entry where `d >= include_threshold` (when set) and
+/// `r <= max_rep` (when `rep_filter` is provided), appends one bit to
+/// `bitmap`: set when `d >= value_level`, unset otherwise.
+///
+/// Returns the number of bits appended.
+///
+/// This is the shared implementation behind the compact bitmap (leaf
+/// readers with selective padding) and the struct validity bitmap.
+/// Processing uses 64-level chunks with [`compress`] for word-at-a-time
+/// packing.
+pub(crate) fn build_filtered_validity_bitmap(
+    def_levels: &[i16],
+    rep_filter: Option<(&[i16], i16)>,
+    include_threshold: Option<i16>,
+    value_level: i16,
+    bitmap: &mut BooleanBufferBuilder,
+) -> usize {
+    // Fast path: no filtering — every def level produces a bit.
+    if include_threshold.is_none() && rep_filter.is_none() {
+        let chunks = def_levels.chunks_exact(u64::BITS as usize);
+        let remainder = chunks.remainder();
+        for chunk in chunks {
+            let mut word: u64 = 0;
+            for (i, &d) in chunk.iter().enumerate() {
+                word |= ((d >= value_level) as u64) << i;
+            }
+            bitmap.append_word(word, u64::BITS as usize);
+        }
+        for &d in remainder {
+            bitmap.append(d >= value_level);
+        }
+        return def_levels.len();
+    }
+
+    // Filtered path: build include mask + value mask per chunk, compress.
+    let mut item_count: usize = 0;
+    let chunks = def_levels.chunks_exact(u64::BITS as usize);
+    let remainder_offset = def_levels.len() - chunks.remainder().len();
+
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let base = chunk_idx * u64::BITS as usize;
+        let mut include_mask: u64 = 0;
+        let mut value_mask: u64 = 0;
+        for (i, &d) in chunk.iter().enumerate() {
+            let mut include = true;
+            if let Some(threshold) = include_threshold {
+                if d < threshold {
+                    include = false;
+                }
+            }
+            if include {
+                if let Some((reps, max_rep)) = rep_filter {
+                    if reps[base + i] > max_rep {
+                        include = false;
+                    }
+                }
+            }
+            include_mask |= (include as u64) << i;
+            value_mask |= ((d >= value_level) as u64) << i;
+        }
+
+        let count = include_mask.count_ones() as usize;
+        let compact = compress(value_mask, include_mask);
+        bitmap.append_word(compact, count);
+        item_count += count;
+    }
+
+    for idx in remainder_offset..def_levels.len() {
+        let d = def_levels[idx];
+        if let Some(threshold) = include_threshold {
+            if d < threshold {
+                continue;
+            }
+        }
+        if let Some((reps, max_rep)) = rep_filter {
+            if reps[idx] > max_rep {
+                continue;
+            }
+        }
+        bitmap.append(d >= value_level);
+        item_count += 1;
+    }
+
+    item_count
+}
+
+use crate::util::bit_util::compress;
 
 enum MaybePacked {
     Packed(PackedDecoder),

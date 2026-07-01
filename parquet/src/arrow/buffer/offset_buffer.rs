@@ -151,6 +151,10 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
         Self::with_capacity(capacity)
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        self.offsets.reserve_exact(additional);
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
