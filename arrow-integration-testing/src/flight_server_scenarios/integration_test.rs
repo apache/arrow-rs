@@ -356,7 +356,7 @@ async fn dictionary_from_message(
         ipc_batch,
         &schema_ref,
         dictionaries_by_id,
-        reader::DictionaryConfig::new(message.version()),
+        &message.version(),
     );
     dictionary_batch_result
         .map_err(|e| Status::internal(format!("Could not convert to Dictionary: {e:?}")))

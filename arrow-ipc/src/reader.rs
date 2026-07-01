@@ -778,51 +778,28 @@ pub fn read_record_batch(
         .read_record_batch()
 }
 
-/// Configuration for [`read_dictionary`]
-pub struct DictionaryConfig {
-    /// The IPC metadata version
-    pub metadata: MetadataVersion,
-    /// Whether to skip validation of the dictionary data
-    pub skip_validation: UnsafeFlag,
-}
-
-impl DictionaryConfig {
-    /// Create a new `DictionaryConfig` with the given metadata version and validation enabled
-    pub fn new(metadata: MetadataVersion) -> Self {
-        Self {
-            metadata,
-            skip_validation: UnsafeFlag::new(),
-        }
-    }
-
-    /// Set the skip validation flag
-    pub fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
-        self.skip_validation = skip_validation;
-        self
-    }
-}
-
-/// Read the dictionary from the buffer and provided config,
+/// Read the dictionary from the buffer and provided metadata,
 /// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
-    config: DictionaryConfig,
+    metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
     read_dictionary_impl(
         buf,
         batch,
         schema,
         dictionaries_by_id,
-        &config.metadata,
+        metadata,
         false,
-        config.skip_validation,
+        UnsafeFlag::new(),
     )
 }
 
-fn read_dictionary_impl(
+/// Low-level version of [`read_dictionary`] with alignment and validation controls
+pub fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
