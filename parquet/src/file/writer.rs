@@ -1028,10 +1028,10 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
 
-        if let Some(page_encryptor) = self.page_encryptor_mut() {
-            if page.compressed_page().is_data_page() {
-                page_encryptor.increment_page();
-            }
+        if let Some(page_encryptor) = self.page_encryptor_mut()
+            && page.compressed_page().is_data_page()
+        {
+            page_encryptor.increment_page();
         }
         Ok(spec)
     }

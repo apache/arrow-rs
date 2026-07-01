@@ -175,7 +175,7 @@ impl FixedSizeListArray {
 
             Self::try_new_with_length(field, size, values, nulls, len)
         } else {
-            if values.len() % s != 0 {
+            if !values.len().is_multiple_of(s) {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Incorrect length of values buffer for FixedSizeListArray, \
                      expected a multiple of {s} got {}",
@@ -186,15 +186,15 @@ impl FixedSizeListArray {
             let len = values.len() / s;
 
             // Check that the null buffer length is correct (if it exists).
-            if let Some(null_buffer) = &nulls {
-                if s * null_buffer.len() != values.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Incorrect length of values buffer for FixedSizeListArray, \
+            if let Some(null_buffer) = &nulls
+                && s * null_buffer.len() != values.len()
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of values buffer for FixedSizeListArray, \
                             expected {} got {}",
-                        s * null_buffer.len(),
-                        values.len(),
-                    )));
-                }
+                    s * null_buffer.len(),
+                    values.len(),
+                )));
             }
 
             Self::try_new_with_length(field, size, values, nulls, len)
@@ -227,13 +227,13 @@ impl FixedSizeListArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        if let Some(null_buffer) = &nulls {
-            if null_buffer.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
-                    null_buffer.len()
-                )));
-            }
+        if let Some(null_buffer) = &nulls
+            && null_buffer.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
+                null_buffer.len()
+            )));
         }
 
         if s == 0 && !values.is_empty() {

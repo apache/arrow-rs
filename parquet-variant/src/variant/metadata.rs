@@ -297,12 +297,12 @@ impl<'m> VariantMetadata<'m> {
                         },
                     )?;
 
-                    if let Some(prev_val) = prev_value {
-                        if current_value <= prev_val {
-                            return Err(ArrowError::InvalidArgumentError(
-                                "dictionary values are not unique and ordered".to_string(),
-                            ));
-                        }
+                    if let Some(prev_val) = prev_value
+                        && current_value <= prev_val
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "dictionary values are not unique and ordered".to_string(),
+                        ));
                     }
 
                     prev_value = Some(current_value);

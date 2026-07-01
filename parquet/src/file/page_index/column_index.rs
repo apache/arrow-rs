@@ -113,27 +113,29 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
                 max_bytes.len()
             )));
         }
-        if let Some(ref nc) = null_counts {
-            if nc.len() != len {
-                return Err(ParquetError::General(format!(
-                    "ColumnIndex null_counts length mismatch: expected {len}, got {}",
-                    nc.len()
-                )));
-            }
+        if let Some(ref nc) = null_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex null_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
         }
-        if let Some(ref rep) = repetition_level_histograms {
-            if len != 0 && rep.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid repetition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref rep) = repetition_level_histograms
+            && len != 0
+            && rep.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid repetition_level_histograms length".to_string(),
+            ));
         }
-        if let Some(ref def) = definition_level_histograms {
-            if len != 0 && def.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid definition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref def) = definition_level_histograms
+            && len != 0
+            && def.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid definition_level_histograms length".to_string(),
+            ));
         }
 
         let mut min_values = Vec::with_capacity(len);
@@ -332,27 +334,29 @@ impl ByteArrayColumnIndex {
                 max_values.len()
             )));
         }
-        if let Some(ref nc) = null_counts {
-            if nc.len() != len {
-                return Err(ParquetError::General(format!(
-                    "ColumnIndex null_counts length mismatch: expected {len}, got {}",
-                    nc.len()
-                )));
-            }
+        if let Some(ref nc) = null_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex null_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
         }
-        if let Some(ref rep) = repetition_level_histograms {
-            if len != 0 && rep.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid repetition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref rep) = repetition_level_histograms
+            && len != 0
+            && rep.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid repetition_level_histograms length".to_string(),
+            ));
         }
-        if let Some(ref def) = definition_level_histograms {
-            if len != 0 && def.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid definition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref def) = definition_level_histograms
+            && len != 0
+            && def.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid definition_level_histograms length".to_string(),
+            ));
         }
 
         let min_len = min_values.iter().map(|&v| v.len()).sum();

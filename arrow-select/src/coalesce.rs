@@ -449,30 +449,30 @@ impl BatchCoalescer {
         }
 
         // Large batch optimization: bypass coalescing for oversized batches
-        if let Some(limit) = self.biggest_coalesce_batch_size {
-            if batch_size > limit {
-                // Case 1: No buffered data - emit large batch directly
-                // Example: [] + [1200] → output [1200], buffer []
-                if self.buffered_rows == 0 {
-                    self.completed.push_back(batch);
-                    return Ok(());
-                }
-
-                // Case 2: Buffer too large - flush then emit to avoid oversized merge
-                // Example: [850] + [1200] → output [850], then output [1200]
-                // This prevents creating batches much larger than both target_batch_size
-                // and biggest_coalesce_batch_size, which could cause memory issues
-                if self.buffered_rows > limit {
-                    self.finish_buffered_batch()?;
-                    self.completed.push_back(batch);
-                    return Ok(());
-                }
-
-                // Case 3: Small buffer - proceed with normal coalescing
-                // Example: [300] + [1200] → split and merge normally
-                // This ensures small batches still get properly coalesced
-                // while allowing some controlled growth beyond the limit
+        if let Some(limit) = self.biggest_coalesce_batch_size
+            && batch_size > limit
+        {
+            // Case 1: No buffered data - emit large batch directly
+            // Example: [] + [1200] → output [1200], buffer []
+            if self.buffered_rows == 0 {
+                self.completed.push_back(batch);
+                return Ok(());
             }
+
+            // Case 2: Buffer too large - flush then emit to avoid oversized merge
+            // Example: [850] + [1200] → output [850], then output [1200]
+            // This prevents creating batches much larger than both target_batch_size
+            // and biggest_coalesce_batch_size, which could cause memory issues
+            if self.buffered_rows > limit {
+                self.finish_buffered_batch()?;
+                self.completed.push_back(batch);
+                return Ok(());
+            }
+
+            // Case 3: Small buffer - proceed with normal coalescing
+            // Example: [300] + [1200] → split and merge normally
+            // This ensures small batches still get properly coalesced
+            // while allowing some controlled growth beyond the limit
         }
 
         let (_schema, arrays, mut num_rows) = batch.into_parts();

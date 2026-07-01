@@ -1755,10 +1755,10 @@ impl ColumnProperties {
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
     /// given `default_ndv` (typically derived from `max_row_group_row_count`).
     fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
-        if !self.bloom_filter_ndv_is_set {
-            if let Some(ref mut bf) = self.bloom_filter_properties {
-                bf.ndv = default_ndv;
-            }
+        if !self.bloom_filter_ndv_is_set
+            && let Some(ref mut bf) = self.bloom_filter_properties
+        {
+            bf.ndv = default_ndv;
         }
     }
 }

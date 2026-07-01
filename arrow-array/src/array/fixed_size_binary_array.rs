@@ -150,14 +150,14 @@ impl FixedSizeBinaryArray {
 
         let len = match values.len().checked_div(value_size) {
             Some(len) => {
-                if let Some(n) = nulls.as_ref() {
-                    if n.len() != len {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                            len,
-                            n.len(),
-                        )));
-                    }
+                if let Some(n) = nulls.as_ref()
+                    && n.len() != len
+                {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                        len,
+                        n.len(),
+                    )));
                 }
 
                 len

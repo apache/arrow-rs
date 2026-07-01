@@ -79,13 +79,13 @@ impl MapArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for MapArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for MapArray, expected {len} got {}",
+                n.len(),
+            )));
         }
         if field.is_nullable() || entries.null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(
