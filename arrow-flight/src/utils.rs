@@ -92,14 +92,14 @@ pub fn batches_to_flight_data(
 
     let data_gen = writer::IpcDataGenerator::default();
     let mut dictionary_tracker = writer::DictionaryTracker::new(false);
-    let mut compression_context = IpcWriteContext::default();
+    let mut ipc_write_context = IpcWriteContext::default();
 
     for batch in batches.iter() {
         let (encoded_dictionaries, encoded_batch) = data_gen.encode(
             batch,
             &mut dictionary_tracker,
             &options,
-            &mut compression_context,
+            &mut ipc_write_context,
         )?;
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
