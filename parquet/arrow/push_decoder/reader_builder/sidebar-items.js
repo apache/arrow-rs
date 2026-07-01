@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RowGroupBuildResult","RowGroupDecoderState"],"fn":["override_selector_strategy_if_needed"],"mod":["data","filter"],"struct":["BudgetedReadPlan","NextState","RowBudget","RowGroupInfo","RowGroupReaderBuilder","RowGroupReaderBuilderParts"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["GenericByteRunBuilder"],"type":["BinaryRunBuilder","LargeBinaryRunBuilder","LargeStringRunBuilder","StringRunBuilder"]};

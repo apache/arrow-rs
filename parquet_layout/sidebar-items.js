@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["do_layout","main"],"struct":["Args","ColumnChunk","DebugSerialize","Footer","Index","ParquetFile","RowGroup"]};

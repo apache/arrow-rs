@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["empty_arc_buffers","maybe_prep_null_mask_filter","zip","zip_impl"],"static":["EMPTY_ARC"],"struct":["ByteViewScalarImpl","BytesScalarImpl","FallbackImpl","PrimitiveScalarImpl","ScalarZipper"],"trait":["ZipImpl"]};

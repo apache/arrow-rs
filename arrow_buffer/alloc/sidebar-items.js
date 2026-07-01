@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ALIGNMENT"],"enum":["Deallocation"],"mod":["alignment"],"trait":["Allocation"]};

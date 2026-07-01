@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":[["native_type_float_op",1],["native_type_op",1]],"trait":["ArrowNativeTypeOp"]};
