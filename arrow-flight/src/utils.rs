@@ -45,13 +45,36 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in flight_data[1..].iter() {
-        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        let message = root_as_message(&datum.data_header[..]).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+        })?;
+        let batch = message
+            .header_as_record_batch()
+            .ok_or_else(|| {
+                ArrowError::ParseError(
+                    "Unable to convert flight data header to a record batch".to_string(),
+                )
+            })
+            .map(|batch| {
+                reader::read_record_batch(
+                    &Buffer::from(datum.data_body.as_ref()),
+                    batch,
+                    schema.clone(),
+                    &dictionaries_by_id,
+                    None,
+                    &message.version(),
+                )
+            })??;
         batches.push(batch);
     }
     Ok(batches)
 }
 
 /// Convert `FlightData` (with supplied schema and dictionaries) to an arrow `RecordBatch`.
+#[deprecated(
+    since = "59.1.0",
+    note = "Use `arrow_ipc::reader::read_record_batch` directly instead"
+)]
 pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
