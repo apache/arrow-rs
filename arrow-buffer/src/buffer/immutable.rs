@@ -1047,7 +1047,7 @@ mod tests {
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
             // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
             // want to make sure it doesn't unnecessarily create a deep copy.
-            if offset % 8 == 0 {
+            if offset.is_multiple_of(8) {
                 assert_eq!(new_buf.ptr_offset(), offset / 8);
             } else {
                 assert_eq!(new_buf.ptr_offset(), 0);
