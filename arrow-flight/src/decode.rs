@@ -313,7 +313,8 @@ impl FlightDataDecoder {
                     dictionary_batch,
                     &state.schema,
                     &mut state.dictionaries_by_field,
-                    &message.version(),
+                    arrow_ipc::reader::DictionaryConfig::new(message.version())
+                        .with_skip_validation(self.skip_validation.clone()),
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
