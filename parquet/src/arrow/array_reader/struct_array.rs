@@ -121,7 +121,26 @@ impl ArrayReader for StructArrayReader {
             .iter()
             .all(|arr| arr.len() == children_array_len);
         if !all_children_len_eq {
-            return Err(general_err!("Not all children array length are the same!"));
+            let lengths: Vec<usize> = children_array.iter().map(|arr| arr.len()).collect();
+            let detail = match &self.data_type {
+                DataType::Struct(fields) if fields.len() == lengths.len() => fields
+                    .iter()
+                    .zip(&lengths)
+                    .map(|(field, len)| format!("{}={len}", field.name()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                _ => lengths
+                    .iter()
+                    .map(|len| len.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            return Err(general_err!(
+                "StructArrayReader children returned arrays of unequal length ({}). \
+                 This usually means the Parquet file is malformed, for example a page \
+                 that does not begin on a record boundary.",
+                detail
+            ));
         }
 
         let DataType::Struct(fields) = &self.data_type else {
@@ -267,6 +286,72 @@ mod tests {
         assert_eq!(
             Some(vec![0, 1, 1, 1, 1].as_slice()),
             struct_array_reader.get_rep_levels()
+        );
+    }
+
+    // Reader that yields a fixed-length Int32 array from `consume_batch`, used to
+    // simulate children that fall out of sync (e.g. a malformed file whose pages do
+    // not begin on a record boundary), which `read_records` does not catch.
+    struct FixedLenArrayReader {
+        len: usize,
+        data_type: ArrowType,
+    }
+
+    impl ArrayReader for FixedLenArrayReader {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn get_data_type(&self) -> &ArrowType {
+            &self.data_type
+        }
+        fn read_records(&mut self, _batch_size: usize) -> Result<usize> {
+            Ok(self.len)
+        }
+        fn consume_batch(&mut self) -> Result<ArrayRef> {
+            Ok(Arc::new(arrow_array::Int32Array::from(vec![0; self.len])))
+        }
+        fn skip_records(&mut self, _num_records: usize) -> Result<usize> {
+            Ok(0)
+        }
+        fn get_def_levels(&self) -> Option<&[i16]> {
+            None
+        }
+        fn get_rep_levels(&self) -> Option<&[i16]> {
+            None
+        }
+    }
+
+    #[test]
+    fn test_struct_array_reader_unequal_children_error() {
+        let struct_type = ArrowType::Struct(Fields::from(vec![
+            Field::new("f1", ArrowType::Int32, false),
+            Field::new("f2", ArrowType::Int32, false),
+        ]));
+        let mut reader = StructArrayReader::new(
+            struct_type,
+            vec![
+                Box::new(FixedLenArrayReader {
+                    len: 5,
+                    data_type: ArrowType::Int32,
+                }),
+                Box::new(FixedLenArrayReader {
+                    len: 3,
+                    data_type: ArrowType::Int32,
+                }),
+            ],
+            0,
+            0,
+            false,
+        );
+
+        let err = reader.consume_batch().unwrap_err().to_string();
+        // The message must name the diverging children and their lengths so the
+        // cause is diagnosable without instrumenting the reader by hand.
+        assert!(err.contains("f1=5"), "message missing child lengths: {err}");
+        assert!(err.contains("f2=3"), "message missing child lengths: {err}");
+        assert!(
+            err.contains("record boundary"),
+            "message missing malformed-file hint: {err}"
         );
     }
 
