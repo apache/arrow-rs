@@ -336,8 +336,18 @@ impl FlightDataDecoder {
                         "Unable to convert flight data header to a record batch".to_string(),
                     )
                 })?;
+                let buffer = {
+                    // Arrow spec requires 64-byte buffer alignment for SIMD;
+                    // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
+                    // reuse the allocation  if already aligned, otherwise copy into a fresh aligned buffer.
+                    if data.data_body.as_ptr() as usize % 64 == 0 {
+                        &Buffer::from(data.data_body.clone())
+                    } else {
+                        &Buffer::from(data.data_body.as_ref())
+                    }
+                };
                 let batch = arrow_ipc::reader::RecordBatchDecoder::try_new(
-                    &Buffer::from(data.data_body.as_ref()),
+                    buffer,
                     record_batch,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
