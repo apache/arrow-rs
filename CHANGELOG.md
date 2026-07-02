@@ -54,6 +54,7 @@
 **Performance improvements:**
 
 - perf: interleave\_list for List\<Primitive\> could be optimized? [\#10022](https://github.com/apache/arrow-rs/issues/10022) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- perf\(arrow-ord\): Avoid full index materialization for small-limit lexsorts [\#9990](https://github.com/apache/arrow-rs/issues/9990) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Replace conversion of binary-\>string in arrow-row from arraydata to direct construction [\#10261](https://github.com/apache/arrow-rs/pull/10261) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
 - \[arrow-flight encode path\]re-use flatbufferbuilder [\#10220](https://github.com/apache/arrow-rs/pull/10220) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Rich-T-kid](https://github.com/Rich-T-kid))
 - \[10125\] arrow-flight decode path optimizations \(add `skip_validation` to arrow-flight\) [\#10206](https://github.com/apache/arrow-rs/pull/10206) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([Rich-T-kid](https://github.com/Rich-T-kid))
@@ -70,7 +71,6 @@
 - arrow-ipc: Extend writer benchmarks to include dictionaries [\#10119](https://github.com/apache/arrow-rs/issues/10119) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - bench\(parquet\): benchmark for nested list write [\#10083](https://github.com/apache/arrow-rs/issues/10083) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support i256 implement From\<i128\> [\#10080](https://github.com/apache/arrow-rs/issues/10080) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- perf\(arrow-ord\): Avoid full index materialization for small-limit lexsorts [\#9990](https://github.com/apache/arrow-rs/issues/9990) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
