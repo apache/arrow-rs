@@ -25,29 +25,26 @@
 
 **Implemented enhancements:**
 
-- Fast path for nested dict to dict casting [\#10247](https://github.com/apache/arrow-rs/issues/10247)
-- parquet/arrow: reading multiple nested columns fails with "Not all children array length are the same!" when a list continues across DataPageV2 page boundary [\#10243](https://github.com/apache/arrow-rs/issues/10243)
-- Micro-benchmarks for parquet boolean reading [\#10195](https://github.com/apache/arrow-rs/issues/10195)
-- Add product aggregate kernel to arrow-rs [\#10150](https://github.com/apache/arrow-rs/issues/10150)
-- Stricter datatype parsing [\#10146](https://github.com/apache/arrow-rs/issues/10146)
-- Support validating CSV headers against Schema [\#10143](https://github.com/apache/arrow-rs/issues/10143)
-- arrow-ipc: Supports compression level configuration for arrow-ipc writer [\#10132](https://github.com/apache/arrow-rs/issues/10132)
-- Replace old markdown issue templates with GitHub Issue forms \(like DataFusion\) [\#10095](https://github.com/apache/arrow-rs/issues/10095)
+- Fast path for nested `DictionaryArray` casting [\#10247](https://github.com/apache/arrow-rs/issues/10247) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- parquet/arrow: reading multiple nested columns fails with "Not all children array length are the same!" when a list continues across DataPageV2 page boundary [\#10243](https://github.com/apache/arrow-rs/issues/10243) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add product aggregate kernel to arrow-rs [\#10150](https://github.com/apache/arrow-rs/issues/10150) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Stricter `DataType` parsing [\#10146](https://github.com/apache/arrow-rs/issues/10146) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support validating CSV headers against Schema [\#10143](https://github.com/apache/arrow-rs/issues/10143) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- arrow-ipc: Supports compression level configuration for arrow-ipc writer [\#10132](https://github.com/apache/arrow-rs/issues/10132) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] `VariantArray` field API naming [\#10093](https://github.com/apache/arrow-rs/issues/10093)
-- Add `StructArray::field_` APIs symmetric to `StructArray::column_` ones [\#10092](https://github.com/apache/arrow-rs/issues/10092)
-- arrow-buffer: implement Saturating, CheckedShl, Not num-traits for i256 [\#10087](https://github.com/apache/arrow-rs/issues/10087)
-- feat: native concat for map type [\#10047](https://github.com/apache/arrow-rs/issues/10047) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `StructArray::field_` APIs symmetric to `StructArray::column_` ones [\#10092](https://github.com/apache/arrow-rs/issues/10092) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- arrow-buffer: implement Saturating, CheckedShl, Not num-traits for i256 [\#10087](https://github.com/apache/arrow-rs/issues/10087) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- feat: native concat for `MapArray` [\#10047](https://github.com/apache/arrow-rs/issues/10047) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Add `variant_to_arrow` `Dictionary/REE` type support [\#10013](https://github.com/apache/arrow-rs/issues/10013)
 
 **Fixed bugs:**
 
-- casting list to 0-size fixedsizelist can cause incorrect output length [\#10227](https://github.com/apache/arrow-rs/issues/10227)
-- Buffer count mismatched with metadata when encoding records with dictionary of dictionaries [\#10213](https://github.com/apache/arrow-rs/issues/10213)
-- cargo audit fails in ci [\#10200](https://github.com/apache/arrow-rs/issues/10200)
-- `Buffer::into_mutable` is not consistent regarding sliced data and can lead to panics [\#10117](https://github.com/apache/arrow-rs/issues/10117)
+- casting list to 0-size fixedsizelist can cause incorrect output length [\#10227](https://github.com/apache/arrow-rs/issues/10227) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Buffer count mismatched with metadata when encoding records with dictionary of dictionaries [\#10213](https://github.com/apache/arrow-rs/issues/10213) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `Buffer::into_mutable` is not consistent regarding sliced data and can lead to panics [\#10117](https://github.com/apache/arrow-rs/issues/10117) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet\_derive: cannot read or write columns whose name is a Rust keyword \(raw identifiers like r\#type become column "r\#type"\) [\#10112](https://github.com/apache/arrow-rs/issues/10112)
-- parquet: fix OffsetBuffer panic on corrupt input [\#10107](https://github.com/apache/arrow-rs/issues/10107)
-- Parquet geospatial conversion uses metadata key "algorithm" instead of "edges" in geoarrow metadata [\#9929](https://github.com/apache/arrow-rs/issues/9929)
+- parquet: fix OffsetBuffer panic on corrupt input [\#10107](https://github.com/apache/arrow-rs/issues/10107) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet geospatial conversion uses metadata key "algorithm" instead of "edges" in geoarrow metadata [\#9929](https://github.com/apache/arrow-rs/issues/9929) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -68,15 +65,16 @@
 
 **Closed issues:**
 
-- Soundness: Unsound alignment contract in public `FromBytes` trait and `BitReader::get_batch` [\#10164](https://github.com/apache/arrow-rs/issues/10164)
-- ParquetPushDecoder: expose the next row-group index that try\_next\_reader will yield [\#10148](https://github.com/apache/arrow-rs/issues/10148)
-- arrow-ipc: Extend writer benchmarks to include dictionaries [\#10119](https://github.com/apache/arrow-rs/issues/10119)
+- Soundness: Unsound alignment contract in public `FromBytes` trait and `BitReader::get_batch` [\#10164](https://github.com/apache/arrow-rs/issues/10164) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- ParquetPushDecoder: expose the next row-group index that try\_next\_reader will yield [\#10148](https://github.com/apache/arrow-rs/issues/10148) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- arrow-ipc: Extend writer benchmarks to include dictionaries [\#10119](https://github.com/apache/arrow-rs/issues/10119) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - bench\(parquet\): benchmark for nested list write [\#10083](https://github.com/apache/arrow-rs/issues/10083) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- i256 doesn't implement From\<i128\> [\#10080](https://github.com/apache/arrow-rs/issues/10080)
-- perf\(arrow-ord\): Avoid full index materialization for small-limit lexsorts [\#9990](https://github.com/apache/arrow-rs/issues/9990)
+- Support i256 implement From\<i128\> [\#10080](https://github.com/apache/arrow-rs/issues/10080) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- perf\(arrow-ord\): Avoid full index materialization for small-limit lexsorts [\#9990](https://github.com/apache/arrow-rs/issues/9990) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
+- chore: Fix audit CI run by ignore quick-xml audit advisories [\#10267](https://github.com/apache/arrow-rs/pull/10267) ([alamb](https://github.com/alamb))
 - fix main: parquet test compilation failure [\#10266](https://github.com/apache/arrow-rs/pull/10266) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Jefffrey](https://github.com/Jefffrey))
 - minor: drive-by refactors for dicts in substring & filter [\#10264](https://github.com/apache/arrow-rs/pull/10264) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
 - Add validated row decode benchmark [\#10259](https://github.com/apache/arrow-rs/pull/10259) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
