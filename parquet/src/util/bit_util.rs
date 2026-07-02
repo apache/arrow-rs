@@ -921,6 +921,44 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
+/// Parallel bit extract: for each set bit in `mask`, extract the
+/// corresponding bit from `value` and pack them contiguously into the low
+/// bits of the return value.
+///
+/// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pext` instruction; otherwise it falls back
+/// to a portable scalar loop.
+///
+/// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
+/// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
+#[allow(dead_code)]
+#[inline]
+pub(crate) fn compress(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut mask = mask;
+        let mut result: u64 = 0;
+        let mut dest_bit: u64 = 1;
+        while mask != 0 {
+            let lowest = mask & mask.wrapping_neg();
+            if value & lowest != 0 {
+                result |= dest_bit;
+            }
+            dest_bit <<= 1;
+            mask ^= lowest;
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,6 +966,44 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers;
     use rand::distr::{Distribution, StandardUniform};
     use std::fmt::Debug;
+
+    #[test]
+    fn test_compress() {
+        // Reference: gather the `mask`-selected bits of `value` into
+        // contiguous low bits, least-significant first.
+        fn reference(value: u64, mut mask: u64) -> u64 {
+            let mut result = 0u64;
+            let mut dest = 0u32;
+            while mask != 0 {
+                let lowest = mask & mask.wrapping_neg();
+                result |= (((value & lowest) != 0) as u64) << dest;
+                dest += 1;
+                mask ^= lowest;
+            }
+            result
+        }
+
+        // Hand-picked edge cases.
+        assert_eq!(compress(0b1010, 0b1111), 0b1010);
+        assert_eq!(compress(0b1010, 0b1010), 0b11);
+        assert_eq!(compress(0b1010, 0b0101), 0);
+        assert_eq!(compress(u64::MAX, 0), 0);
+        assert_eq!(compress(0, u64::MAX), 0);
+        assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
+
+        // Randomised cross-check against the reference. On a `bmi2` build
+        // this validates the hardware `pext` path; otherwise it exercises
+        // the portable fallback.
+        let values = random_numbers::<u64>(1024);
+        let masks = random_numbers::<u64>(1024);
+        for (&value, &mask) in values.iter().zip(masks.iter()) {
+            assert_eq!(
+                compress(value, mask),
+                reference(value, mask),
+                "value={value:#x} mask={mask:#x}"
+            );
+        }
+    }
 
     #[test]
     fn test_ceil() {

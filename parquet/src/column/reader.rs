@@ -202,10 +202,32 @@ where
     pub fn read_records(
         &mut self,
         max_records: usize,
+        def_levels: Option<&mut D::Buffer>,
+        rep_levels: Option<&mut R::Buffer>,
+        values: &mut V::Buffer,
+    ) -> Result<(usize, usize, usize)> {
+        self.read_records_with_reservation(
+            max_records,
+            def_levels,
+            rep_levels,
+            values,
+            |_, _, _, _| Ok(()),
+        )
+    }
+
+    /// Like [`Self::read_records`], but invokes `reserve_values` after levels
+    /// are decoded and before values are read.
+    pub(crate) fn read_records_with_reservation<F>(
+        &mut self,
+        max_records: usize,
         mut def_levels: Option<&mut D::Buffer>,
         mut rep_levels: Option<&mut R::Buffer>,
         values: &mut V::Buffer,
-    ) -> Result<(usize, usize, usize)> {
+        mut reserve_values: F,
+    ) -> Result<(usize, usize, usize)>
+    where
+        F: FnMut(&mut V::Buffer, usize, usize, Option<&D::Buffer>) -> Result<()>,
+    {
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
         let mut total_values_read = 0;
@@ -261,6 +283,9 @@ where
                 }
                 None => levels_to_read,
             };
+
+            let def_levels = def_levels.as_deref();
+            reserve_values(values, values_to_read, levels_to_read, def_levels)?;
 
             let values_read = self.values_decoder.read(values, values_to_read)?;
 

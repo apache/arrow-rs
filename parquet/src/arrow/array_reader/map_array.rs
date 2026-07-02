@@ -39,11 +39,12 @@ impl MapArrayReader {
         def_level: i16,
         rep_level: i16,
         nullable: bool,
+        parent_threshold: Option<i16>,
     ) -> Self {
-        let struct_def_level = match nullable {
-            true => def_level + 2,
-            false => def_level + 1,
-        };
+        // The struct exists when the key (always required in maps) exists.
+        // Derive struct_def_level from the key's max def level rather than
+        // a fixed formula, so it matches the schema exactly.
+        let struct_def_level = key_reader.max_def_level();
         let struct_rep_level = rep_level + 1;
 
         let element = match &data_type {
@@ -66,6 +67,7 @@ impl MapArrayReader {
             struct_def_level,
             struct_rep_level,
             false,
+            Some(def_level),
         );
 
         let reader = ListArrayReader::new(
@@ -74,6 +76,7 @@ impl MapArrayReader {
             def_level,
             rep_level,
             nullable,
+            parent_threshold,
         );
 
         Self { data_type, reader }
@@ -118,6 +121,10 @@ impl ArrayReader for MapArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.reader.get_rep_levels()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.reader.max_def_level()
     }
 }
 
