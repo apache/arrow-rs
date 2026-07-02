@@ -20,6 +20,7 @@
 //! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
 
 use arrow_array::builder::BufferBuilder;
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
@@ -73,54 +74,17 @@ pub fn substring(
     start: i64,
     length: Option<u64>,
 ) -> Result<ArrayRef, ArrowError> {
-    macro_rules! substring_dict {
-        ($kt: ident, $($t: ident: $gt: ident), *) => {
-            match $kt.as_ref() {
-                $(
-                    &DataType::$t => {
-                        let dict = array
-                            .as_any()
-                            .downcast_ref::<DictionaryArray<$gt>>()
-                            .unwrap_or_else(|| {
-                                panic!("Expect 'DictionaryArray<{}>' but got array of data type {:?}",
-                                       stringify!($gt), array.data_type())
-                            });
-                        let values = substring(dict.values(), start, length)?;
-                        Ok(Arc::new(dict.with_values(values)))
-                    },
-                )*
-                    t => panic!("Unsupported dictionary key type: {}", t)
-            }
-        }
-    }
-
     match array.data_type() {
-        DataType::Dictionary(kt, _) => {
-            substring_dict!(
-                kt,
-                Int8: Int8Type,
-                Int16: Int16Type,
-                Int32: Int32Type,
-                Int64: Int64Type,
-                UInt8: UInt8Type,
-                UInt16: UInt16Type,
-                UInt32: UInt32Type,
-                UInt64: UInt64Type
-            )
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let values = substring(dictionary.values(), start, length)?;
+            Ok(Arc::new(dictionary.with_values(values)))
         }
-        DataType::LargeBinary => byte_substring(
-            array
-                .as_any()
-                .downcast_ref::<LargeBinaryArray>()
-                .expect("A large binary is expected"),
-            start,
-            length.map(|e| e as i64),
-        ),
+        DataType::LargeBinary => {
+            byte_substring(array.as_binary::<i64>(), start, length.map(|e| e as i64))
+        }
         DataType::Binary => byte_substring(
-            array
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .expect("A binary is expected"),
+            array.as_binary::<i32>(),
             start as i32,
             length.map(|e| e as i32),
         ),
@@ -128,29 +92,13 @@ pub fn substring(
             let old_len: usize = (*old_len)
                 .try_into()
                 .expect("negative FixedSizeBinary value length");
-            fixed_size_binary_substring(
-                array
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .expect("a fixed size binary is expected"),
-                old_len,
-                start,
-                length,
-            )
+            fixed_size_binary_substring(array.as_fixed_size_binary(), old_len, start, length)
         }
-        DataType::LargeUtf8 => byte_substring(
-            array
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .expect("A large string is expected"),
-            start,
-            length.map(|e| e as i64),
-        ),
+        DataType::LargeUtf8 => {
+            byte_substring(array.as_string::<i64>(), start, length.map(|e| e as i64))
+        }
         DataType::Utf8 => byte_substring(
-            array
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("A string is expected"),
+            array.as_string::<i32>(),
             start as i32,
             length.map(|e| e as i32),
         ),
@@ -654,7 +602,7 @@ mod tests {
 
     #[test]
     fn fixed_size_binary_with_non_zero_offset() {
-        let values: [u8; 15] = *b"hellotherearrow";
+        let values = b"hellotherearrow";
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
 
@@ -664,7 +612,7 @@ mod tests {
             3,
         )));
         // array is `[null, "arrow"]`
-        let array = FixedSizeBinaryArray::new(5, Buffer::from(&values), nulls).slice(1, 2);
+        let array = FixedSizeBinaryArray::new(5, Buffer::from(values), nulls).slice(1, 2);
         // result is `[null, "rrow"]`
         let result = substring(&array, 1, None).unwrap();
         let result = result

@@ -30,6 +30,7 @@ on:
       - main
   pull_request:
     paths:
+      - rust-toolchain.toml
       - arrow/**
       - arrow-array/**
       - arrow-buffer/**
@@ -117,8 +118,8 @@ jobs:
         run: cargo check -p parquet --no-default-features --features encryption --features async
       - name: Check compilation --no-default-features --features flate2, this is expected to fail
         run: if `cargo check -p parquet --no-default-features --features flate2 2>/dev/null`; then false; else true; fi
-      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backened
-        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backened
+      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backend
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backend
       - name: Check compilation --no-default-features --features flate2 --features flate2-zlib-rs
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental

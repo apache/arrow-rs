@@ -938,7 +938,9 @@ pub fn cast_with_options(
         (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
         (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
-            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+            let values = cast_with_options(array, to.data_type(), cast_options)?;
+            let list = FixedSizeListArray::try_new(to.clone(), 1, values, None)?;
+            Ok(Arc::new(list))
         }
         // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
@@ -8931,6 +8933,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
+        let inner = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        );
+        let nested = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]),
+            Arc::new(inner),
+        );
+
+        let result = cast(&nested, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)])
+        );
+        assert_eq!(
+            result.values().as_string::<i32>(),
+            &StringArray::from(vec!["x", "y"])
+        );
+        let logical: Vec<Option<&str>> = result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
+    }
+
+    #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
@@ -9640,6 +9672,41 @@ mod tests {
         assert!(can_cast_types(input.data_type(), expected.data_type()));
         let actual = cast(&input, expected.data_type()).unwrap();
         assert_eq!(actual.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_cast_list_to_zero_size_fsl() {
+        let field = Arc::new(Field::new("a", DataType::Null, true));
+        let length = 2;
+        let expected = Arc::new(
+            FixedSizeListArray::try_new_with_length(
+                field.clone(),
+                0,
+                new_empty_array(&DataType::Null),
+                None,
+                2,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+
+        let list = Arc::new(ListArray::new(
+            field.clone(),
+            OffsetBuffer::from_repeated_length(0, length),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+
+        let list = Arc::new(ListViewArray::new(
+            field.clone(),
+            vec![0; length].into(),
+            vec![0; length].into(),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
     }
 
     #[test]

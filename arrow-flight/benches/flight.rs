@@ -29,11 +29,13 @@ mod common;
 use common::{DICT_TYPES, TYPES, build_batch, start_server};
 
 const ROWS: [usize; 2] = [8 * 1024, 64 * 1024];
-const COLS: [usize; 3] = [1, 4, 8];
+const COLS: [usize; 2] = [4, 8];
 const BATCHES: usize = 4;
 
 fn bench_encode(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let mut g = c.benchmark_group("encode");
 
     for &(name, build) in TYPES {
@@ -69,7 +71,9 @@ async fn roundtrip(channel: Channel, batch: RecordBatch) {
 }
 
 fn bench_decode(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let mut g = c.benchmark_group("decode");
 
     for &(name, build) in TYPES {
@@ -131,10 +135,10 @@ fn bench_roundtrip(c: &mut Criterion) {
     }
 }
 
-/// Decode a multi-batch stream covering both plain and dictionary types.
-/// Uses [`DictionaryHandling::Resend`] to exercise the replacement-dictionary path.
 fn bench_decode_dictionary_stream(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let mut g = c.benchmark_group("decode_stream");
 
     for &(name, build) in TYPES.iter().chain(DICT_TYPES) {
@@ -178,7 +182,9 @@ fn bench_decode_dictionary_stream(c: &mut Criterion) {
 }
 
 fn bench_do_put_dictionary(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let (channel, _) = rt.block_on(start_server());
     let mut g = c.benchmark_group("do_put_dictionary");
 

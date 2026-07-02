@@ -590,13 +590,15 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
                 match &predicate.strategy {
                     IterationStrategy::Slices(slices) => {
-                        slices
-                            .iter()
-                            .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                        for (start, end) in slices {
+                            mutable.try_extend(0, *start, *end)?;
+                        }
                     }
                     _ => {
                         let iter = SlicesIterator::new(&predicate.filter);
-                        iter.for_each(|(start, end)| mutable.extend(0, start, end));
+                        for (start, end) in iter {
+                            mutable.try_extend(0, start, end)?;
+                        }
                     }
                 }
 
@@ -1055,20 +1057,14 @@ fn filter_fixed_size_binary(
 }
 
 /// `filter` implementation for dictionaries
-fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
-where
-    T: ArrowDictionaryKeyType,
-    T::Native: num_traits::Num,
-{
-    let builder = filter_primitive::<T>(array.keys(), predicate)
-        .into_data()
-        .into_builder()
-        .data_type(array.data_type().clone())
-        .child_data(vec![array.values().to_data()]);
-
+fn filter_dict<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    predicate: &FilterPredicate,
+) -> DictionaryArray<K> {
     // SAFETY:
     // Keys were valid before, filtered subset is therefore still valid
-    DictionaryArray::from(unsafe { builder.build_unchecked() })
+    let new_keys = filter_primitive(array.keys(), predicate);
+    unsafe { DictionaryArray::new_unchecked(new_keys, array.values().clone()) }
 }
 
 /// `filter` implementation for structs

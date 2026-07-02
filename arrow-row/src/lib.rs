@@ -169,7 +169,6 @@ use arrow_array::cast::*;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
@@ -1222,7 +1221,7 @@ struct RowConfig {
 /// A row-oriented representation of arrow data, that is normalized for comparison.
 ///
 /// See the [module level documentation](self) and [`RowConverter`] for more details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Rows {
     /// Underlying row bytes
     buffer: Vec<u8>,
@@ -2119,17 +2118,16 @@ unsafe fn decode_column(
             cols.into_iter().next().unwrap()
         }
         Codec::Struct(converter, _) => {
-            let (null_count, nulls) = fixed::decode_nulls(rows);
+            let nulls = fixed::decode_nulls(rows);
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = unsafe { converter.convert_raw(rows, validate_utf8) }?;
 
-            let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
             // Since RowConverter flattens certain data types (i.e. Dictionary),
             // we need to use updated data type instead of original field
             let corrected_fields: Vec<Field> = match &field.data_type {
                 DataType::Struct(struct_fields) => struct_fields
                     .iter()
-                    .zip(child_data.iter())
+                    .zip(children.iter())
                     .map(|(orig_field, child_array)| {
                         orig_field
                             .as_ref()
@@ -2139,14 +2137,15 @@ unsafe fn decode_column(
                     .collect(),
                 _ => unreachable!("Only Struct types should be corrected here"),
             };
-            let corrected_struct_type = DataType::Struct(corrected_fields.into());
-            let builder = ArrayDataBuilder::new(corrected_struct_type)
-                .len(rows.len())
-                .null_count(null_count)
-                .null_bit_buffer(Some(nulls))
-                .child_data(child_data);
 
-            Arc::new(StructArray::from(unsafe { builder.build_unchecked() }))
+            Arc::new(unsafe {
+                StructArray::new_unchecked_with_length(
+                    corrected_fields.into(),
+                    children,
+                    nulls,
+                    rows.len(),
+                )
+            })
         }
         Codec::List(converter) => match &field.data_type {
             DataType::List(_) => {

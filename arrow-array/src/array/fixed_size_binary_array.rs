@@ -830,11 +830,11 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array() {
-        let values: [u8; 15] = *b"hellotherearrow";
+        let values = b"hellotherearrow";
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values))
+            .add_buffer(Buffer::from(values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -862,7 +862,7 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(2)
             .offset(1)
-            .add_buffer(Buffer::from(&values))
+            .add_buffer(Buffer::from(values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -963,11 +963,11 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_fmt_debug() {
-        let values: [u8; 15] = *b"hellotherearrow";
+        let values = b"hellotherearrow";
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values))
+            .add_buffer(Buffer::from(values))
             .build()
             .unwrap();
         let arr = FixedSizeBinaryArray::from(array_data);

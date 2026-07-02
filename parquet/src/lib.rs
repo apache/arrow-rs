@@ -166,10 +166,10 @@ macro_rules! experimental {
 
 #[cfg(all(
     feature = "flate2",
-    not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
+    not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backend"))
 ))]
 compile_error!(
-    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backend`."
 );
 
 #[macro_use]
