@@ -921,8 +921,6 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,7 +928,6 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers;
     use rand::distr::{Distribution, StandardUniform};
     use std::fmt::Debug;
-
 
     #[test]
     fn test_ceil() {
