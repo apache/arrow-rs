@@ -359,11 +359,11 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
             let view = make_view(val, 0, start_offset as u32);
             views.append(view);
 
-            if VALIDATE_UTF8 {
-                view_utf8_validation_buffer.extend_from_slice(val);
-            }
 
             if decoded_len <= inline_str_max_len {
+                if VALIDATE_UTF8 {
+                    view_utf8_validation_buffer.extend_from_slice(val);
+                }
                 values.truncate(start_offset);
             }
         }
