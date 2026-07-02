@@ -1699,6 +1699,50 @@ mod tests {
         test_case_filter_sliced_list_view::<i64>();
     }
 
+    /// [`filter_bits_compress`] is only dispatched to when `pext` is
+    /// available in hardware, so exercise it directly to get coverage of the
+    /// word packing logic on every platform
+    #[test]
+    fn test_filter_bits_compress() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Lengths exercising partial words, exact word multiples, and the
+        // carry logic across flushed words
+        let lens = [0, 1, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
+        // Densities covering empty, sparse, balanced, dense and full masks
+        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
+        // Bit offsets of the value buffer, including non byte-aligned ones
+        let offsets = [0, 3, 8, 67];
+
+        for len in lens {
+            for density in densities {
+                for offset in offsets {
+                    let values: BooleanBuffer =
+                        (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
+                    let values = values.slice(offset, len);
+                    let filter: BooleanArray =
+                        (0..len).map(|_| Some(rng.random_bool(density))).collect();
+
+                    let predicate = FilterBuilder::new(&filter).build();
+
+                    let expected: BooleanBuffer = values
+                        .iter()
+                        .zip(filter.values().iter())
+                        .filter_map(|(value, keep)| keep.then_some(value))
+                        .collect();
+
+                    let actual = filter_bits_compress(&values, &predicate);
+                    let actual = BooleanBuffer::new(actual, 0, predicate.count);
+
+                    assert_eq!(
+                        actual, expected,
+                        "len={len} density={density} offset={offset}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_slice_iterator_bits() {
         let filter_values = (0..64).map(|i| i == 1).collect::<Vec<bool>>();
