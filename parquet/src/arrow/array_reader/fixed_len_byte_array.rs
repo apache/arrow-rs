@@ -432,8 +432,6 @@ impl ColumnValueDecoder for ValueDecoder {
             Some(x) => assert_eq!(x, self.byte_length),
             None => {
                 out.byte_length = Some(self.byte_length);
-                // TODO: collapse to a let-chain once MSRV ≥ 1.88
-                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
                 if out.buffer.is_empty()
                     && let Some(values_capacity) = out.values_capacity.take()
                 {
