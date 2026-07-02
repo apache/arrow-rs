@@ -33,6 +33,7 @@ on:
       - parquet/**
       - parquet_derive/**
       - parquet_derive_test/**
+      - rust-toolchain.toml
       - .github/**
 
 jobs:

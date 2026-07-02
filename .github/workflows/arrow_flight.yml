@@ -30,6 +30,7 @@ on:
       - main
   pull_request:
     paths:
+      - rust-toolchain.toml
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**

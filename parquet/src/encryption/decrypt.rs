@@ -507,7 +507,7 @@ impl DecryptionPropertiesBuilder {
                 keys.len()
             ));
         }
-        for (column_name, key) in column_names.into_iter().zip(keys.into_iter()) {
+        for (column_name, key) in column_names.into_iter().zip(keys) {
             self.column_keys.insert(column_name.to_string(), key);
         }
         Ok(self)
