@@ -2414,7 +2414,7 @@ mod tests {
             col.data_type().clone(),
             sort_option,
         )])
-            .unwrap();
+        .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
