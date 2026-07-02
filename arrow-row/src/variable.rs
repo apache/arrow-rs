@@ -336,8 +336,8 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         Vec::new()
     };
 
-    let mut views = BufferBuilder::<u128>::new(len);
-    for row in rows {
+    let mut views = vec![0_u128; len];
+    for (i, row) in rows.iter_mut().enumerate() {
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         // Measure string length via change in values buffer. This way we can
@@ -347,7 +347,6 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         if row[0] == null_sentinel(options) {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
-            views.append(0);
         } else {
             // Safety: we just appended the data to the end of the buffer
             let val = unsafe { values.get_unchecked_mut(start_offset..) };
@@ -356,9 +355,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
                 val.iter_mut().for_each(|o| *o = !*o);
             }
 
-            let view = make_view(val, 0, start_offset as u32);
-            views.append(view);
-
+            views[i] = make_view(val, 0, start_offset as u32);
 
             if decoded_len <= inline_str_max_len {
                 if VALIDATE_UTF8 {
