@@ -338,7 +338,7 @@ mod variable;
 ///
 /// Lists are encoded by first encoding all child elements to the row format.
 ///
-/// The Map encoding is the same with the only difference being that the child elements are key-value pairs
+/// The Map encoding is the same with the only difference being that the child elements are key-value pairs.
 ///
 /// A list/map value is then encoded as the concatenation of each of the child elements,
 /// separately encoded using the variable length encoding described above, followed
@@ -678,9 +678,9 @@ impl Codec {
                 Ok(Self::List(converter))
             }
             DataType::Map(f, _) => {
-                // The encoded contents will be inverted if descending is set to true
+                // The encoded contents will be inverted if `descending` is set to true
                 // As such we set `descending` to false and negate nulls first if it
-                // it set to true
+                // `descending` set to true.
                 let options = SortOptions {
                     descending: false,
                     nulls_first: sort_field.options.nulls_first != sort_field.options.descending,
@@ -4631,24 +4631,30 @@ mod tests {
         K::Native: Hash + Eq,
         StandardUniform: Distribution<K::Native>,
     {
+      let mut possible_number_of_values = 2i32.saturating_pow(size_of::<K::Native>() as u32 * 8);
+      
+      match null_behavior {
+        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent } if valid_percent > 0.0 => possible_number_of_values += 1,
+        _ => {}
+      }
+      assert!(len <= possible_number_of_values as usize, "len {len} is larger than the number of possible values {possible_number_of_values}");
+      
         let mut seen = std::collections::HashSet::new();
         (0..len)
             .map(|_| {
                 let mut value;
 
                 loop {
-                    match null_behavior {
-                        GenerateAllUniqueNullBehavior::AllValid => {
-                            value = Some(rng.random());
-                        }
+                    value = match null_behavior {
+                        GenerateAllUniqueNullBehavior::AllValid => Some(rng.random()),
                         GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent } => {
-                            value = if !seen.contains(&None) {
+                            if !seen.contains(&None) {
                                 rng.random_bool(valid_percent).then(|| rng.random())
                             } else {
                                 Some(rng.random())
-                            };
+                            }
                         }
-                    }
+                    };
 
                     if seen.insert(value) {
                         break;
