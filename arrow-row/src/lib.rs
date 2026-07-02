@@ -2409,6 +2409,19 @@ mod tests {
         }
     }
 
+    fn test_roundtrip(sort_option: SortOptions, col: ArrayRef) {
+        let converter = RowConverter::new(vec![SortField::new_with_options(
+            col.data_type().clone(),
+            sort_option,
+        )])
+            .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(&back[0], &col);
+        back[0].to_data().validate_full().unwrap();
+    }
+
     #[test]
     fn test_zero_width_fixed_size_binary_roundtrip() {
         for sort_option in all_sort_options() {
@@ -2424,16 +2437,7 @@ mod tests {
                     FixedSizeBinaryArray::try_new_with_len(0, Buffer::default(), nulls, 5).unwrap(),
                 );
 
-                let converter = RowConverter::new(vec![SortField::new_with_options(
-                    col.data_type().clone(),
-                    sort_option,
-                )])
-                .unwrap();
-                let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-                let back = converter.convert_rows(&rows).unwrap();
-                assert_eq!(&back[0], &col);
-
-                back[0].to_data().validate_full().unwrap();
+                test_roundtrip(sort_option, col);
             }
         }
     }
@@ -2460,16 +2464,7 @@ mod tests {
                     .unwrap(),
                 );
 
-                let converter = RowConverter::new(vec![SortField::new_with_options(
-                    col.data_type().clone(),
-                    sort_option,
-                )])
-                .unwrap();
-                let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-                let back = converter.convert_rows(&rows).unwrap();
-                assert_eq!(&back[0], &col);
-
-                back[0].to_data().validate_full().unwrap();
+                test_roundtrip(sort_option, col);
             }
         }
     }
