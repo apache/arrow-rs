@@ -32,6 +32,7 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 #[derive(Default)]
 pub struct IpcWriteContext {
     pub(crate) scratch: Vec<u8>,
+    pub(crate) reserve_scratch: bool,
     fbb: FlatBufferBuilder<'static>,
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
@@ -41,6 +42,13 @@ impl IpcWriteContext {
     /// Get a mutable reference to the [`FlatBufferBuilder`] that is reused across IPC writes.
     pub(crate) fn mut_fbb(&mut self) -> &mut FlatBufferBuilder<'static> {
         &mut self.fbb
+    }
+
+    /// Set whether the scratch buffer capacity should be reserved after each encode for reuse
+    /// on the next call. Set to `false` for the final batch in a sequence to avoid a
+    /// pointless allocation.
+    pub fn set_reserve_scratch(&mut self, reserve: bool) {
+        self.reserve_scratch = reserve;
     }
 
     #[cfg(feature = "zstd")]

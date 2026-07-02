@@ -631,7 +631,9 @@ impl IpcDataGenerator {
         )?;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
         let final_capcity = arrow_data.capacity();
-        ipc_write_context.scratch.reserve(final_capcity); // reset scratch to the same capacity as before, due to ['FlightDataEncoder::split_batch_for_grpc_response'] we know that batches are split up into roughly equal sized chunks, 
+        if ipc_write_context.reserve_scratch {
+            ipc_write_context.scratch.reserve(final_capcity);
+        }
         Ok((
             encoded_dictionaries,
             EncodedData {
