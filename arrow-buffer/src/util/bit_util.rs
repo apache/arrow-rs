@@ -868,8 +868,55 @@ mod tests {
     use super::*;
     use crate::bit_iterator::BitIterator;
     use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rng};
+
+    fn random_numbers<T>(n: usize) -> Vec<T>
+    where
+        StandardUniform: Distribution<T>,
+    {
+        let mut rng = rng();
+        StandardUniform.sample_iter(&mut rng).take(n).collect()
+    }
+
+    #[test]
+    fn test_compress() {
+        // Reference: gather the `mask`-selected bits of `value` into
+        // contiguous low bits, least-significant first.
+        fn reference(value: u64, mut mask: u64) -> u64 {
+            let mut result = 0u64;
+            let mut dest = 0u32;
+            while mask != 0 {
+                let lowest = mask & mask.wrapping_neg();
+                result |= (((value & lowest) != 0) as u64) << dest;
+                dest += 1;
+                mask ^= lowest;
+            }
+            result
+        }
+
+        // Hand-picked edge cases.
+        assert_eq!(compress(0b1010, 0b1111), 0b1010);
+        assert_eq!(compress(0b1010, 0b1010), 0b11);
+        assert_eq!(compress(0b1010, 0b0101), 0);
+        assert_eq!(compress(u64::MAX, 0), 0);
+        assert_eq!(compress(0, u64::MAX), 0);
+        assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
+
+        // Randomized cross-check against the reference. On a `bmi2` build
+        // this validates the hardware `pext` path; otherwise it exercises
+        // the portable fallback.
+        let values = random_numbers::<u64>(1024);
+        let masks = random_numbers::<u64>(1024);
+        for (&value, &mask) in values.iter().zip(masks.iter()) {
+            assert_eq!(
+                compress(value, mask),
+                reference(value, mask),
+                "value={value:#x} mask={mask:#x}"
+            );
+        }
+    }
 
     #[test]
     fn test_round_upto_multiple_of_64() {
