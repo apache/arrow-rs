@@ -1202,4 +1202,76 @@ mod tests {
             "Invalid argument error: Buffer cannot have non-zero length if the value length is zero"
         );
     }
+
+    #[test]
+    fn test_try_new_with_len() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+
+        let a = FixedSizeBinaryArray::try_new_with_len(2, buffer.clone(), None, 5).unwrap();
+        assert_eq!(a.len(), 5);
+
+        let nulls = NullBuffer::new_null(5);
+        let a = FixedSizeBinaryArray::try_new_with_len(2, buffer, Some(nulls), 5).unwrap();
+        assert_eq!(a.len(), 5);
+        assert_eq!(a.null_count(), 5);
+
+        let a = FixedSizeBinaryArray::try_new_with_len(2, Buffer::default(), None, 0).unwrap();
+        assert_eq!(a.len(), 0);
+    }
+
+    #[test]
+    fn test_try_new_with_len_zero_width() {
+        // Zero-width with no nulls: the case where the length cannot be inferred from the parts
+        let a = FixedSizeBinaryArray::try_new_with_len(0, Buffer::default(), None, 5).unwrap();
+        assert_eq!(a.len(), 5);
+        assert_eq!(a.null_count(), 0);
+        assert_eq!(a.values().len(), 0);
+
+        let nulls = NullBuffer::new_null(3);
+        let a =
+            FixedSizeBinaryArray::try_new_with_len(0, Buffer::default(), Some(nulls), 3).unwrap();
+        assert_eq!(a.len(), 3);
+        assert_eq!(a.null_count(), 3);
+    }
+
+    #[test]
+    fn test_try_new_with_len_negative_value_length() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let err = FixedSizeBinaryArray::try_new_with_len(-1, buffer, None, 5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Value length cannot be negative, got -1"
+        );
+    }
+
+    #[test]
+    fn test_try_new_with_len_incorrect_null_buffer_length() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let nulls = NullBuffer::new_null(3);
+        let err = FixedSizeBinaryArray::try_new_with_len(2, buffer, Some(nulls), 5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3"
+        );
+    }
+
+    #[test]
+    fn test_try_new_with_len_incorrect_values_buffer_length() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let err = FixedSizeBinaryArray::try_new_with_len(2, buffer, None, 3).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of values buffer for FixedSizeBinaryArray, expected 3 got 5"
+        );
+    }
+
+    #[test]
+    fn test_try_new_with_len_zero_width_non_empty_buffer() {
+        let buffer = Buffer::from_vec(vec![0_u8; 10]);
+        let err = FixedSizeBinaryArray::try_new_with_len(0, buffer, None, 5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Buffer cannot have non-zero length if the value length is zero"
+        );
+    }
 }
