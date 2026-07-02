@@ -1565,6 +1565,20 @@ impl<'a> Maker<'a> {
                                 resolution: None,
                             }
                         }
+                        Some("uuid") => {
+                            if size != 16 {
+                                return Err(ArrowError::ParseError(format!(
+                                    "Invalid fixed size for UUID: {size}, must be 16"
+                                )));
+                            }
+                            metadata.insert("logicalType".into(), "uuid".into());
+                            AvroDataType {
+                                nullability: None,
+                                metadata,
+                                codec: Codec::Fixed(size),
+                                resolution: None,
+                            }
+                        }
                         #[cfg(feature = "avro_custom_types")]
                         Some("arrow.uint64") if size == 8 => AvroDataType {
                             nullability: None,
@@ -2520,6 +2534,37 @@ mod tests {
             *c = Codec::Uuid;
         }
         assert!(matches!(codec, Codec::Uuid));
+    }
+
+    #[test]
+    fn test_fixed_uuid_logical_type_metadata() {
+        // Iceberg encodes UUID as fixed(16) + logicalType:uuid. Verify that arrow-avro
+        // preserves the logicalType in Arrow field metadata so callers can detect UUID fields.
+        // this is supported in avro starting from the 1.12.0 spec: https://avro.apache.org/docs/1.12.0/specification/#uuid
+        let schema = Schema::Complex(ComplexType::Fixed(Fixed {
+            name: "uuid_fixed",
+            namespace: None,
+            aliases: vec![],
+            size: 16,
+            attributes: Attributes {
+                logical_type: Some("uuid"),
+                additional: Default::default(),
+            },
+        }));
+
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&schema, None, None).unwrap();
+
+        assert!(
+            matches!(result.codec, Codec::Fixed(16)),
+            "codec should be Fixed(16), got {:?}",
+            result.codec
+        );
+        assert_eq!(
+            result.metadata.get("logicalType").map(|s| s.as_str()),
+            Some("uuid"),
+            "logicalType metadata should be 'uuid'"
+        );
     }
 
     #[test]

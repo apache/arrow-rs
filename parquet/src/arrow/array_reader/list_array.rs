@@ -24,10 +24,9 @@ use arrow_array::{
 };
 use arrow_buffer::Buffer;
 use arrow_buffer::ToByteSlice;
-use arrow_data::{ArrayData, transform::MutableArrayData};
+use arrow_data::ArrayData;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
-use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -41,17 +40,31 @@ pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     rep_level: i16,
     /// If this list is nullable
     nullable: bool,
+    /// When set, this list is itself a child of another list and should
+    /// exclude entries where def < threshold from its output.
+    parent_threshold: Option<i16>,
     _marker: PhantomData<OffsetSize>,
 }
 
 impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {
     /// Construct list array reader.
+    ///
+    /// The child reader must already be constructed with a padding
+    /// threshold of `def_level`, so it produces item-level padded arrays
+    /// (values + null items, no list-level padding). `consume_batch`
+    /// then computes offsets directly from def/rep levels without
+    /// MutableArrayData.
+    ///
+    /// `parent_threshold` is set when this list is itself a child of
+    /// another list — entries where `def < threshold` are excluded from
+    /// this list's output.
     pub fn new(
         item_reader: Box<dyn ArrayReader>,
         data_type: ArrowType,
         def_level: i16,
         rep_level: i16,
         nullable: bool,
+        parent_threshold: Option<i16>,
     ) -> Self {
         Self {
             item_reader,
@@ -59,12 +72,13 @@ impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {
             def_level,
             rep_level,
             nullable,
+            parent_threshold,
             _marker: PhantomData,
         }
     }
 }
 
-/// Implementation of ListArrayReader. Nested lists and lists of structs are not yet supported.
+/// Implementation of ListArrayReader.
 impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -82,10 +96,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let next_batch_array = self.item_reader.consume_batch()?;
-        if next_batch_array.is_empty() {
-            return Ok(new_empty_array(&self.data_type));
-        }
+        let child_array = self.item_reader.consume_batch()?;
 
         let def_levels = self
             .item_reader
@@ -97,125 +108,131 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .get_rep_levels()
             .ok_or_else(|| general_err!("item_reader rep levels are None."))?;
 
-        if OffsetSize::from_usize(next_batch_array.len()).is_none() {
-            return Err(general_err!(
-                "offset of {} would overflow list array",
-                next_batch_array.len()
-            ));
+        if def_levels.is_empty() {
+            return Ok(new_empty_array(&self.data_type));
         }
 
-        if !rep_levels.is_empty() && rep_levels[0] != 0 {
-            // This implies either the source data was invalid, or the leaf column
-            // reader did not correctly delimit semantic records
+        if rep_levels[0] != 0 {
             return Err(general_err!("first repetition level of batch must be 0"));
         }
 
-        // A non-nullable list has a single definition level indicating if the list is empty
+        if OffsetSize::from_usize(child_array.len()).is_none() {
+            return Err(general_err!(
+                "offset of {} would overflow list array",
+                child_array.len()
+            ));
+        }
+
+        // Definition levels identify whether each list boundary contributes a
+        // child slot. For a nullable list, the states are:
         //
-        // A nullable list has two definition levels associated with it:
+        //   d >= self.def_level     : list is present with a child item
+        //   d == self.def_level - 1 : list is present but empty
+        //   d <= self.def_level - 2 : list is null
         //
-        // The first identifies if the list is null
-        // The second identifies if the list is empty
+        // Required lists do not have the null state, but still use the same
+        // `d >= self.def_level` test to distinguish child items from empty
+        // lists. Repetition levels identify list boundaries and whether a
+        // child item belongs directly to this list or to a nested child list.
+        let levels_len = def_levels.len();
+        let mut list_offsets: Vec<OffsetSize> = Vec::with_capacity(levels_len + 1);
+        let mut validity = self.nullable.then(|| BooleanBufferBuilder::new(levels_len));
+
+        // Count direct child values of this list.
         //
-        // The child data returned above is padded with a value for each not-fully defined level.
-        // Therefore null and empty lists will correspond to a value in the child array.
+        // `d >= self.def_level` excludes null/empty parent lists: an empty
+        // list is encoded as `d == self.def_level - 1` (a null list lower
+        // still), so it carries no child value and must not advance the
+        // offset. Emptiness is handled by this definition-level guard, not
+        // by the repetition level.
         //
-        // Whilst nulls may have a non-zero slice in the offsets array, empty lists must
-        // be of zero length. As a result we MUST filter out values corresponding to empty
-        // lists, and for consistency we do the same for nulls.
+        // `r <= self.rep_level` (not `==`) keeps only direct children: the
+        // first element of each list has `r < self.rep_level` (it coincides
+        // with an outer/row boundary), so `==` would drop it; continuation
+        // entries of a nested child's own list have `r > self.rep_level` and
+        // are excluded.
+        //
+        // Split the scan by nullable/parent-threshold mode to avoid checking
+        // these options once per decoded level in the hot loop.
+        let mut cur_offset: usize = 0;
+        let def_level = self.def_level;
+        let rep_level = self.rep_level;
 
-        // The output offsets for the computed ListArray
-        let mut list_offsets: Vec<OffsetSize> = Vec::with_capacity(next_batch_array.len() + 1);
-
-        // The validity mask of the computed ListArray if nullable
-        let mut validity = self
-            .nullable
-            .then(|| BooleanBufferBuilder::new(next_batch_array.len()));
-
-        // The offset into the filtered child data of the current level being considered
-        let mut cur_offset = 0;
-
-        // Identifies the start of a run of values to copy from the source child data
-        let mut filter_start = None;
-
-        // The number of child values skipped due to empty lists or nulls
-        let mut skipped = 0;
-
-        // Builder used to construct the filtered child data, skipping empty lists and nulls
-        let data = next_batch_array.to_data();
-        let mut child_data_builder =
-            MutableArrayData::new(vec![&data], false, next_batch_array.len());
-
-        def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
-            match r.cmp(&self.rep_level) {
-                Ordering::Greater => {
-                    // Repetition level greater than current => already handled by inner array
-                    if *d < self.def_level {
-                        return Err(general_err!(
-                            "Encountered repetition level too large for definition level"
-                        ));
+        match (self.parent_threshold, validity.as_mut()) {
+            (None, Some(validity)) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                        validity.append(d + 1 >= def_level);
                     }
-                }
-                Ordering::Equal => {
-                    // New value in the current list
-                    cur_offset += 1;
-                }
-                Ordering::Less => {
-                    // Create new array slice
-                    // Already checked that this cannot overflow
-                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
-                    if *d >= self.def_level {
-                        // Fully defined value
-
-                        // Record current offset if it is None
-                        filter_start.get_or_insert(cur_offset + skipped);
-
+                    if d >= def_level && r <= rep_level {
                         cur_offset += 1;
-
-                        if let Some(validity) = validity.as_mut() {
-                            validity.append(true)
-                        }
-                    } else {
-                        // Flush the current slice of child values if any
-                        if let Some(start) = filter_start.take() {
-                            child_data_builder
-                                .try_extend(0, start, cur_offset + skipped)
-                                .map_err(|e| general_err!("{}", e))?;
-                        }
-
-                        if let Some(validity) = validity.as_mut() {
-                            // Valid if empty list
-                            validity.append(*d + 1 == self.def_level)
-                        }
-
-                        skipped += 1;
                     }
                 }
             }
-            Ok(())
-        })?;
+            (None, None) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    }
+
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
+                }
+            }
+            (Some(threshold), Some(validity)) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    // When this list is a child of another list, skip entries
+                    // belonging to null/empty parent lists.
+                    if d < threshold {
+                        continue;
+                    }
+
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                        validity.append(d + 1 >= def_level);
+                    }
+
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
+                }
+            }
+            (Some(threshold), None) => {
+                for (&d, &r) in def_levels.iter().zip(rep_levels) {
+                    // When this list is a child of another list, skip entries
+                    // belonging to null/empty parent lists.
+                    if d < threshold {
+                        continue;
+                    }
+
+                    if r < rep_level {
+                        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+                    }
+
+                    if d >= def_level && r <= rep_level {
+                        cur_offset += 1;
+                    }
+                }
+            }
+        }
 
         list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
-        let child_data = if skipped == 0 {
-            // No filtered values - can reuse original array
-            next_batch_array.to_data()
-        } else {
-            // One or more filtered values - must build new array
-            if let Some(start) = filter_start.take() {
-                child_data_builder
-                    .try_extend(0, start, cur_offset + skipped)
-                    .map_err(|e| general_err!("{}", e))?;
-            }
-
-            child_data_builder.freeze()
-        };
-
-        if cur_offset != child_data.len() {
-            return Err(general_err!("Failed to reconstruct list from level data"));
+        if cur_offset != child_array.len() {
+            return Err(general_err!(
+                "Failed to reconstruct list from level data: \
+                 expected {} child values but got {}",
+                cur_offset,
+                child_array.len()
+            ));
         }
 
+        debug_assert!(list_offsets.windows(2).all(|w| w[0] <= w[1]));
+
+        let child_data = child_array.to_data();
         let value_offsets = Buffer::from(list_offsets.to_byte_slice());
 
         let mut data_builder = ArrayData::builder(self.get_data_type().clone())
@@ -224,14 +241,19 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_child_data(child_data);
 
         if let Some(builder) = validity {
-            assert_eq!(builder.len(), list_offsets.len() - 1);
-            data_builder = data_builder.null_bit_buffer(Some(builder.into()))
+            if builder.len() != list_offsets.len() - 1 {
+                return Err(general_err!(
+                    "Failed to decode level data for list array: \
+                     expected {} validity bits but got {}",
+                    list_offsets.len() - 1,
+                    builder.len()
+                ));
+            }
+            data_builder = data_builder.null_bit_buffer(Some(builder.into()));
         }
 
         let list_data = unsafe { data_builder.build_unchecked() };
-
-        let result_array = GenericListArray::<OffsetSize>::from(list_data);
-        Ok(Arc::new(result_array))
+        Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
@@ -244,6 +266,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.item_reader.get_rep_levels()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.def_level
     }
 }
 
@@ -364,13 +390,15 @@ mod tests {
             &[0, 3, 2, 2, 2, 1, 1, 1, 1, 3, 3, 2, 3, 3, 2, 0, 0, 0],
             6,
             3,
+            Some(5),
         );
 
-        let l3 = ListArrayReader::<OffsetSize>::new(item_array_reader, l3_type, 5, 3, true);
+        let l3 =
+            ListArrayReader::<OffsetSize>::new(item_array_reader, l3_type, 5, 3, true, Some(3));
 
-        let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_type, 3, 2, false);
+        let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_type, 3, 2, false, Some(2));
 
-        let mut l1 = ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true);
+        let mut l1 = ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true, None);
 
         let expected_1 = expected.slice(0, 2);
         let expected_2 = expected.slice(2, 2);
@@ -400,6 +428,7 @@ mod tests {
             &[0, 1, 1, 0, 0, 1, 0, 0, 0, 1],
             2,
             1,
+            Some(1),
         );
 
         let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
@@ -408,6 +437,7 @@ mod tests {
             1,
             1,
             false,
+            None,
         );
 
         let actual = list_array_reader.next_batch(1024).unwrap();
@@ -437,6 +467,7 @@ mod tests {
             &[0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
             3,
             1,
+            Some(2),
         );
 
         let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
@@ -445,6 +476,7 @@ mod tests {
             2,
             1,
             true,
+            None,
         );
 
         let actual = list_array_reader.next_batch(1024).unwrap();
@@ -467,6 +499,123 @@ mod tests {
     #[test]
     fn test_large_list_array_reader() {
         test_list_array::<i64>()
+    }
+
+    #[test]
+    fn test_list_multi_row_group_selective_padding() {
+        use crate::arrow::array_reader::PrimitiveArrayReader;
+        use crate::basic::{Encoding, Type as PhysicalType};
+        use crate::data_type::Int32Type as ParquetInt32;
+        use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
+        use crate::util::InMemoryPageIterator;
+        use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
+
+        // Schema: OPTIONAL GROUP my_list (LIST) {
+        //     repeated group list { optional INT32 element; }
+        // }
+        // max_def_level = 3, max_rep_level = 1
+        let leaf_type = Type::primitive_type_builder("element", PhysicalType::INT32)
+            .build()
+            .unwrap();
+
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(leaf_type),
+            3, // max_def_level
+            1, // max_rep_level
+            ColumnPath::new(vec![]),
+        ));
+
+        // Row group 0 — 3 records:
+        //   Record 1: [10, null, 20]
+        //   Record 2: null list
+        //   Record 3: [null, 30]
+        let mut pb1 = DataPageBuilderImpl::new(desc.clone(), 6, true);
+        pb1.add_rep_levels(1, &[0, 1, 1, 0, 0, 1]);
+        pb1.add_def_levels(3, &[3, 2, 3, 0, 2, 3]);
+        pb1.add_values::<ParquetInt32>(Encoding::PLAIN, &[10, 20, 30]);
+
+        // Row group 1 — 2 records:
+        //   Record 4: [40, null]
+        //   Record 5: [null, null, 50]
+        let mut pb2 = DataPageBuilderImpl::new(desc.clone(), 5, true);
+        pb2.add_rep_levels(1, &[0, 1, 0, 1, 1]);
+        pb2.add_def_levels(3, &[3, 2, 2, 2, 3]);
+        pb2.add_values::<ParquetInt32>(Encoding::PLAIN, &[40, 50]);
+
+        // Two row groups, one page each → forces two read_one_batch calls
+        let pages = vec![vec![pb1.consume()], vec![pb2.consume()]];
+        let page_iter = InMemoryPageIterator::new(pages);
+
+        let item_reader = Box::new(
+            PrimitiveArrayReader::<ParquetInt32>::new(
+                Box::new(page_iter),
+                desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                Some(2), // padding_threshold = list's def_level
+            )
+            .unwrap(),
+        );
+
+        let list_type = ArrowType::List(Arc::new(Field::new_list_field(ArrowType::Int32, true)));
+        let mut list_reader = ListArrayReader::<i32>::new(item_reader, list_type, 2, 1, true, None);
+
+        let result = list_reader.next_batch(5).unwrap();
+        let list = result
+            .as_any()
+            .downcast_ref::<GenericListArray<i32>>()
+            .unwrap();
+
+        assert_eq!(list.len(), 5);
+
+        // Record 1: [10, null, 20]
+        assert!(list.is_valid(0));
+        let r1 = list.value(0);
+        let r1 = r1
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(r1.len(), 3);
+        assert_eq!(r1.value(0), 10);
+        assert!(r1.is_null(1));
+        assert_eq!(r1.value(2), 20);
+
+        // Record 2: null
+        assert!(list.is_null(1));
+
+        // Record 3: [null, 30]
+        assert!(list.is_valid(2));
+        let r3 = list.value(2);
+        let r3 = r3
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(r3.len(), 2);
+        assert!(r3.is_null(0));
+        assert_eq!(r3.value(1), 30);
+
+        // Record 4: [40, null]
+        assert!(list.is_valid(3));
+        let r4 = list.value(3);
+        let r4 = r4
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(r4.len(), 2);
+        assert_eq!(r4.value(0), 40);
+        assert!(r4.is_null(1));
+
+        // Record 5: [null, null, 50]
+        assert!(list.is_valid(4));
+        let r5 = list.value(4);
+        let r5 = r5
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(r5.len(), 3);
+        assert!(r5.is_null(0));
+        assert!(r5.is_null(1));
+        assert_eq!(r5.value(2), 50);
     }
 
     #[test]

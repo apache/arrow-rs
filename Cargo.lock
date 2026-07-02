@@ -388,6 +388,7 @@ version = "59.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
+ "arrow-data",
  "arrow-flight",
  "arrow-integration-test",
  "clap",

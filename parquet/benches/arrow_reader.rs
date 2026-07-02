@@ -785,12 +785,15 @@ fn create_int32_list_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            Some(2),
         )
         .unwrap(),
     ) as Box<dyn ArrayReader>;
     let field = Field::new_list_field(DataType::Int32, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 const FIXED_BYTE_LEN: usize = 32;
@@ -858,11 +861,14 @@ fn create_fixed32_list_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        Some(2),
     )
     .unwrap();
     let field = Field::new_list_field(DataType::FixedSizeBinary(FIXED_BYTE_LEN as i32), true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
@@ -912,6 +918,7 @@ fn create_primitive_array_reader(
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
             Box::new(reader)
@@ -922,6 +929,7 @@ fn create_primitive_array_reader(
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
             Box::new(reader)
@@ -932,6 +940,7 @@ fn create_primitive_array_reader(
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
             Box::new(reader)
@@ -951,6 +960,7 @@ fn create_f16_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         _ => unimplemented!(),
@@ -968,6 +978,7 @@ fn create_decimal_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         Type::FIXED_LEN_BYTE_ARRAY => make_fixed_len_byte_array_reader(
@@ -975,6 +986,7 @@ fn create_decimal_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         _ => unimplemented!(),
@@ -990,6 +1002,7 @@ fn create_fixed_len_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1003,6 +1016,7 @@ fn create_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1016,6 +1030,7 @@ fn create_byte_view_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1029,6 +1044,7 @@ fn create_string_view_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1045,6 +1061,7 @@ fn create_string_byte_array_dictionary_reader(
         column_desc,
         Some(arrow_type),
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1053,10 +1070,19 @@ fn create_string_list_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    let items = create_byte_array_reader(page_iterator, column_desc);
+    let items = make_byte_array_reader(
+        Box::new(page_iterator),
+        column_desc,
+        None,
+        DEFAULT_BATCH_SIZE,
+        Some(2),
+    )
+    .unwrap();
     let field = Field::new_list_field(DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 fn bench_byte_decimal<T>(

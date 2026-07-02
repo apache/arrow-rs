@@ -32,7 +32,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
 arrow-cast = { workspace = true }
-arrow-data = { workspace = true, optional = true }
+arrow-data = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
@@ -62,7 +62,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
 # TODO: Remove in the next release
 flight-sql-experimental = ["flight-sql"]
 tls-aws-lc= ["tonic/tls-aws-lc"]
