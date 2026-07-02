@@ -2409,20 +2409,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_zero_width_fixed_size_binary_roundtrip() {
+    fn test_round_trip_zero_width_array(make_array: impl Fn(Option<NullBuffer>) -> ArrayRef) {
         for sort_option in all_sort_options() {
-            // With a zero byte width and no nulls, the decoded length cannot be
-            // inferred from the value or null buffers and must come from the row count
             for with_null in [true, false] {
                 let nulls = if with_null {
                     Some(NullBuffer::from(vec![true, false, true, false, true]))
                 } else {
                     None
                 };
-                let col: ArrayRef = Arc::new(
-                    FixedSizeBinaryArray::try_new_with_len(0, Buffer::default(), nulls, 5).unwrap(),
-                );
+                let col = make_array(nulls);
 
                 let converter = RowConverter::new(vec![SortField::new_with_options(
                     col.data_type().clone(),
@@ -2439,39 +2434,32 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_width_fixed_size_binary_roundtrip() {
+        // With a zero byte width and no nulls, the decoded length cannot be
+        // inferred from the value or null buffers and must come from the row count
+        test_round_trip_zero_width_array(|nulls| {
+            Arc::new(
+                FixedSizeBinaryArray::try_new_with_len(0, Buffer::default(), nulls, 5).unwrap(),
+            )
+        });
+    }
+
+    #[test]
     fn test_zero_width_fixed_size_list_roundtrip() {
-        for sort_option in all_sort_options() {
-            // With a zero byte width and no nulls, the decoded length cannot be
-            // inferred from the value or null buffers and must come from the row count
-            for with_null in [true, false] {
-                let nulls = if with_null {
-                    Some(NullBuffer::from(vec![true, false, true, false, true]))
-                } else {
-                    None
-                };
-                let col: ArrayRef = Arc::new(
-                    FixedSizeListArray::try_new_with_length(
-                        Arc::new(Field::new("item", DataType::Boolean, false)),
-                        0,
-                        new_empty_array(&DataType::Boolean),
-                        nulls,
-                        5,
-                    )
-                    .unwrap(),
-                );
-
-                let converter = RowConverter::new(vec![SortField::new_with_options(
-                    col.data_type().clone(),
-                    sort_option,
-                )])
-                .unwrap();
-                let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-                let back = converter.convert_rows(&rows).unwrap();
-                assert_eq!(&back[0], &col);
-
-                back[0].to_data().validate_full().unwrap();
-            }
-        }
+        // With a zero byte width and no nulls, the decoded length cannot be
+        // inferred from the value or null buffers and must come from the row count
+        test_round_trip_zero_width_array(|nulls| {
+            Arc::new(
+                FixedSizeListArray::try_new_with_length(
+                    Arc::new(Field::new("item", DataType::Boolean, false)),
+                    0,
+                    new_empty_array(&DataType::Boolean),
+                    nulls,
+                    5,
+                )
+                .unwrap(),
+            )
+        });
     }
 
     #[test]
