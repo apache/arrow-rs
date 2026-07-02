@@ -30,6 +30,7 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - rust-toolchain.toml
 
 jobs:
   cargo-audit:

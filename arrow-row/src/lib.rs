@@ -1221,7 +1221,7 @@ struct RowConfig {
 /// A row-oriented representation of arrow data, that is normalized for comparison.
 ///
 /// See the [module level documentation](self) and [`RowConverter`] for more details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Rows {
     /// Underlying row bytes
     buffer: Vec<u8>,

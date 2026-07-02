@@ -43,7 +43,7 @@ macro_rules! make_reader {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
-        match (($k, $v)) {
+        match ($k, $v) {
             $(
                 ($key_arrow, $value_arrow) => {
                     let mut reader = GenericRecordReader::new($column_desc, $batch_size);
