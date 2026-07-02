@@ -5056,9 +5056,8 @@ mod tests {
                 rng,
                 len,
                 0.9,
+                // Need to generate all unique keys or make sure between each map every key is unique,
                 |rng, keys_len| {
-                    // Need to generate all unique keys or make sure between each map every key is unique,
-                    // so we generate up to a single null
                     Arc::new(generate_all_unique_primitive_array::<Int64Type>(
                         rng, keys_len,
                     ))
