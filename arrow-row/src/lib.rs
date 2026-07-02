@@ -4820,6 +4820,63 @@ mod tests {
     }
 
     #[test]
+    fn test_utf8_validation_doesnt_affect_values_buffer_size() {
+        fn assert_values_buffer_lens(col: ArrayRef) -> usize {
+            // 1. Convert cols into rows
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
+
+            // 2a. Convert rows into cols (validate_utf8 = false)
+            let rows = converter.convert_columns(&[col]).unwrap();
+            let converted = converter.convert_rows(&rows).unwrap();
+            let unchecked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+
+            // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
+            let rows = rows.try_into_binary().expect("reasonable size");
+            let parser = converter.parser();
+            let converted = converter
+                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                .unwrap();
+            let checked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+            // Regardless of utf8 validation flag, we should always have minimal data in buffers
+            assert_eq!(unchecked_values_len, checked_values_len);
+            checked_values_len
+        }
+
+        // Case1. StringViewArray with inline strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("hello"), // short(5)
+            None,          // null
+            Some("short"), // short(5)
+            Some("tiny"),  // short(4)
+        ])) as ArrayRef;
+
+        let values_len = assert_values_buffer_lens(col);
+        // Since there are no long (>12) strings, len of values buffer is 0
+        assert_eq!(values_len, 0);
+
+        // Case2. StringViewArray with long(>12) strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("1234567890123"),  // 13
+            Some("12345678901234"), // 14
+        ])) as ArrayRef;
+
+        let values_len = assert_values_buffer_lens(col);
+        assert_eq!(values_len, 13 + 14);
+
+        // Case3. StringViewArray with both short and long strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("tiny"),          // 4 (short)
+            Some("thisisexact13"), // 13 (long)
+            None,
+            Some("short"), // 5 (short)
+        ])) as ArrayRef;
+
+        let values_len = assert_values_buffer_lens(col);
+        // Since there is single long string, len of values buffer is 13
+        assert_eq!(values_len, 13);
+    }
+
+    #[test]
     fn test_sparse_union() {
         // create a sparse union with Int32 (type_id = 0) and Utf8 (type_id = 1)
         let int_array = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
