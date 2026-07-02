@@ -31,7 +31,6 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 /// compression. Also holds a [`FlatBufferBuilder`] that is reused across IPC writes.
 #[derive(Default)]
 pub struct IpcWriteContext {
-    #[expect(dead_code)]
     pub(crate) scratch: Vec<u8>,
     fbb: FlatBufferBuilder<'static>,
     #[cfg(feature = "zstd")]
