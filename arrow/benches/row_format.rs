@@ -69,13 +69,11 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 
-    // Benchmark parsing strings (which may need utf8 validation),
-    let no_nulls =  cols
-        .iter()
-        .all(|array| array.null_count() == 0);
-
-    if is_string_like(array.data_type()) && no_nulls
-    {
+    // Benchmark parsing strings, which may need utf8 validation.
+    fn non_null_string(array: &ArrayRef) -> bool {
+        array.null_count() == 0 && is_string_like(array.data_type())
+    }
+    if cols.iter().all(non_null_string) {
         // RowParser marks rows as requiring UTF-8 validation when they are decoded
         // back into Arrow arrays by RowConverter::convert_rows.
         let parser = converter.parser();
