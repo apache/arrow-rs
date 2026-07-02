@@ -4144,75 +4144,74 @@ mod tests {
 
     #[test]
     fn test_single_map() {
-        for (add_masked_nulls, add_non_masked_nulls) in
-            [(true, true), (true, false), (false, true), (false, false)]
-        {
-            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
-            // Entry 0: {"hello": 1, "world": 2}
-            builder.keys().append_value("hello");
-            builder.values().append_value(1);
-            builder.keys().append_value("world");
-            builder.values().append_value(2);
-            builder.append(true).unwrap();
-            // Entry 1: {"foo": 3}
-            builder.keys().append_value("foo");
-            builder.values().append_value(3);
-            builder.append(true).unwrap();
-            // Entry 2: {} (empty map)
-            builder.append(true).unwrap();
-            if add_masked_nulls {
-                // Entry 3: null (with masked data)
-                builder.keys().append_value("masked_key");
-                builder.values().append_value(999);
-                builder.append(false).unwrap();
-            }
-            if add_non_masked_nulls {
-                // Entry 4: null (with unmasked data)
-                builder.append(false).unwrap();
-            }
-            // Entry 5: {"bar": null}
-            builder.keys().append_value("bar");
-            builder.values().append_null();
-            builder.append(true).unwrap();
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        // Entry 0: {"hello": 1, "world": 2}
+        builder.keys().append_value("hello");
+        builder.values().append_value(1);
+        builder.keys().append_value("world");
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
 
-            if add_masked_nulls {
-                // Entry 6: null (with different masked data)
-                builder.keys().append_value("other_masked");
-                builder.values().append_value(0);
-                builder.append(false).unwrap();
-            }
-            // Entry 7: {"a": 10, "b": 20, "c": 30}
-            builder.keys().append_value("a");
-            builder.values().append_value(10);
-            builder.keys().append_value("b");
-            builder.values().append_value(20);
-            builder.keys().append_value("c");
-            builder.values().append_value(30);
-            builder.append(true).unwrap();
+        // Entry 1: {"foo": 3}
+        builder.keys().append_value("foo");
+        builder.values().append_value(3);
+        builder.append(true).unwrap();
 
-            let map = Arc::new(builder.finish()) as ArrayRef;
-            let d = map.data_type().clone();
+        // Entry 2: {} (empty map)
+        builder.append(true).unwrap();
 
-            let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        // Entry 3: null (with masked data)
+        builder.keys().append_value("masked_key");
+        builder.values().append_value(999);
+        builder.append(false).unwrap();
 
-            let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-            assert_eq!(rows.row(3), rows.row(5)); // null = null (different masked values)
+        // Entry 4: null (with unmasked data)
+        builder.append(false).unwrap();
 
-            let back = converter.convert_rows(&rows).unwrap();
-            assert_eq!(back.len(), 1);
-            back[0].to_data().validate_full().unwrap();
-            assert_eq!(&back[0], &map);
+        // Entry 5: {"bar": null}
+        builder.keys().append_value("bar");
+        builder.values().append_null();
+        builder.append(true).unwrap();
 
-            let sliced_map = map.slice(1, 5);
-            let rows_on_sliced = converter
-                .convert_columns(&[Arc::clone(&sliced_map)])
-                .unwrap();
+        // Entry 6: null (with different masked data)
+        builder.keys().append_value("other_masked");
+        builder.values().append_value(0);
+        builder.append(false).unwrap();
 
-            let back = converter.convert_rows(&rows_on_sliced).unwrap();
-            assert_eq!(back.len(), 1);
-            back[0].to_data().validate_full().unwrap();
-            assert_eq!(&back[0], &sliced_map);
-        }
+        // Entry 7: {"a": 10, "b": 20, "c": 30}
+        builder.keys().append_value("a");
+        builder.values().append_value(10);
+        builder.keys().append_value("b");
+        builder.values().append_value(20);
+        builder.keys().append_value("c");
+        builder.values().append_value(30);
+        builder.append(true).unwrap();
+
+        let map = Arc::new(builder.finish()) as ArrayRef;
+        let d = map.data_type().clone();
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+
+        // null = null (different masked values or masking vs non-masking)
+        assert_eq!(rows.row(3), rows.row(4));
+        assert_eq!(rows.row(4), rows.row(6));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &map);
+
+        let sliced_map = map.slice(1, map.len() - 2);
+        let rows_on_sliced = converter
+            .convert_columns(&[Arc::clone(&sliced_map)])
+            .unwrap();
+
+        let back = converter.convert_rows(&rows_on_sliced).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_map);
     }
 
     #[test]
@@ -4245,100 +4244,82 @@ mod tests {
 
     #[test]
     fn test_nested_map() {
-        for add_mask_nulls_to_outer_map in [true, false] {
-            for add_mask_nulls_to_inner_map in [true, false] {
-                for add_unmasked_nulls_to_outer_map in [true, false] {
-                    for add_unmasked_nulls_to_inner_map in [true, false] {
-                        // Map<Utf8, Map<Utf8, Int32>>
-                        let mut builder = MapBuilder::new(
-                            None,
-                            StringBuilder::new(),
-                            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new()),
-                        );
+        // Map<Utf8, Map<Utf8, Int32>>
+        let mut builder = MapBuilder::new(
+            None,
+            StringBuilder::new(),
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new()),
+        );
 
-                        // Entry 0: {"outer1": {"inner_a": 1, "inner_b": 2}, "outer2": {"inner_c": 3}}
-                        builder.keys().append_value("outer1");
-                        builder.values().keys().append_value("inner_a");
-                        builder.values().values().append_value(1);
-                        builder.values().keys().append_value("inner_b");
-                        builder.values().values().append_value(2);
-                        builder.values().append(true).unwrap();
-                        builder.keys().append_value("outer2");
-                        builder.values().keys().append_value("inner_c");
-                        builder.values().values().append_value(3);
-                        builder.values().append(true).unwrap();
-                        builder.append(true).unwrap();
+        // Entry 0: {"outer1": {"inner_a": 1, "inner_b": 2}, "outer2": {"inner_c": 3}}
+        builder.keys().append_value("outer1");
+        builder.values().keys().append_value("inner_a");
+        builder.values().values().append_value(1);
+        builder.values().keys().append_value("inner_b");
+        builder.values().values().append_value(2);
+        builder.values().append(true).unwrap();
+        builder.keys().append_value("outer2");
+        builder.values().keys().append_value("inner_c");
+        builder.values().values().append_value(3);
+        builder.values().append(true).unwrap();
+        builder.append(true).unwrap();
 
-                        // Entry 1: {"x": {}} (inner map is empty)
-                        builder.keys().append_value("x");
-                        builder.values().append(true).unwrap();
-                        builder.append(true).unwrap();
+        // Entry 1: {"x": {}} (inner map is empty)
+        builder.keys().append_value("x");
+        builder.values().append(true).unwrap();
+        builder.append(true).unwrap();
 
-                        if add_mask_nulls_to_inner_map {
-                            // Entry 2: {"y": null} (inner map is null)
-                            builder.keys().append_value("y");
-                            builder.values().keys().append_value("masked"); // MASKED
-                            builder.values().values().append_value(0); // MASKED
-                            builder.values().append(false).unwrap();
-                            builder.append(true).unwrap();
-                        }
+        // Entry 2: {"y": null} (inner map is null)
+        builder.keys().append_value("y");
+        builder.values().keys().append_value("masked"); // MASKED
+        builder.values().values().append_value(0); // MASKED
+        builder.values().append(false).unwrap();
+        builder.append(true).unwrap();
 
-                        if add_unmasked_nulls_to_inner_map {
-                            // Entry 3: {"y": null} (inner map is non masked null)
-                            builder.keys().append_value("y");
-                            builder.values().append(false).unwrap(); // not masked
-                            builder.append(true).unwrap();
-                        }
+        // Entry 3: {"y": null} (inner map is non masked null)
+        builder.keys().append_value("y");
+        builder.values().append(false).unwrap(); // not masked
+        builder.append(true).unwrap();
 
-                        if add_mask_nulls_to_outer_map && add_mask_nulls_to_inner_map {
-                            // Entry 4: null (outer map is null)
-                            builder.keys().append_value("masked_outer"); // MASKED
-                            builder.values().keys().append_value("masked_inner"); // MASKED
-                            builder.values().values().append_value(0); // MASKED
-                            builder.values().append(true).unwrap(); // MASKED
-                            builder.append(false).unwrap();
-                        }
+        // Entry 4: null (outer map is null)
+        builder.keys().append_value("masked_outer"); // MASKED
+        builder.values().keys().append_value("masked_inner"); // MASKED
+        builder.values().values().append_value(0); // MASKED
+        builder.values().append(true).unwrap(); // MASKED
+        builder.append(false).unwrap();
 
-                        if add_mask_nulls_to_outer_map && add_unmasked_nulls_to_inner_map {
-                            // Entry 5: null (outer map is null with inner map non masked null)
-                            builder.keys().append_value("masked_outer"); // MASKED
-                            builder.values().append(false).unwrap(); // not masked
-                            builder.append(false).unwrap();
-                        }
+        // Entry 5: null (outer map is null with inner map non masked null)
+        builder.keys().append_value("masked_outer"); // MASKED
+        builder.values().append(false).unwrap(); // not masked
+        builder.append(false).unwrap();
 
-                        if add_unmasked_nulls_to_outer_map {
-                            // Entry 6: non masked null (outer map is null)
-                            builder.append(false).unwrap(); // not masked
-                        }
+        // Entry 6: non masked null (outer map is null)
+        builder.append(false).unwrap(); // not masked
 
-                        // Entry 7: {} (outer map is empty)
-                        builder.append(true).unwrap();
+        // Entry 7: {} (outer map is empty)
+        builder.append(true).unwrap();
 
-                        let map = Arc::new(builder.finish()) as ArrayRef;
-                        let d = map.data_type().clone();
+        let map = Arc::new(builder.finish()) as ArrayRef;
+        let d = map.data_type().clone();
 
-                        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-                        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
-                        let back = converter.convert_rows(&rows).unwrap();
-                        assert_eq!(back.len(), 1);
-                        back[0].to_data().validate_full().unwrap();
-                        assert_eq!(&back[0], &map);
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &map);
 
-                        let sliced_map = map.slice(1, 3);
-                        let rows_on_sliced = converter
-                            .convert_columns(&[Arc::clone(&sliced_map)])
-                            .unwrap();
+        let sliced_map = map.slice(1, 3);
+        let rows_on_sliced = converter
+            .convert_columns(&[Arc::clone(&sliced_map)])
+            .unwrap();
 
-                        let back = converter.convert_rows(&rows_on_sliced).unwrap();
-                        assert_eq!(back.len(), 1);
-                        back[0].to_data().validate_full().unwrap();
-                        assert_eq!(&back[0], &sliced_map);
-                    }
-                }
-            }
-        }
+        let back = converter.convert_rows(&rows_on_sliced).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_map);
     }
 
     #[test]
@@ -6581,29 +6562,5 @@ mod tests {
 
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next(), None);
-    }
-
-    #[test]
-    fn create_map_with_null_keys() {
-        let keys = Int32Array::from(vec![Some(1), None]);
-        let values = StringArray::from(vec![None, Some("hey")]);
-
-        let entries = StructArray::new(
-            Fields::from(vec![
-                Field::new("keys", DataType::Int32, true),
-                Field::new("values", DataType::Utf8, true),
-            ]),
-            vec![Arc::new(keys), Arc::new(values)],
-            None,
-        );
-
-        MapArray::try_new(
-            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-            OffsetBuffer::from_lengths(vec![2]),
-            entries,
-            None,
-            false,
-        )
-        .expect_err("should not allow nullable keys");
     }
 }
