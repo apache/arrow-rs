@@ -537,7 +537,14 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
-            DataType::Dictionary(_key_type, _value_type) => {
+            DataType::Dictionary(_key_type, value_type) => {
+                if matches!(value_type.as_ref(), DataType::Dictionary(_, _)) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Arrow IPC field metadata cannot encode direct dictionary-of-dictionary values for field {:?}",
+                        field.name()
+                    )));
+                }
+
                 let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
@@ -926,6 +933,47 @@ impl IpcDataGenerator {
             ipc_message,
             arrow_data,
         })
+    }
+}
+
+fn ensure_supported_ipc_schema(schema: &Schema) -> Result<(), ArrowError> {
+    schema
+        .fields()
+        .iter()
+        .try_for_each(|field| ensure_supported_ipc_data_type(field.name(), field.data_type()))
+}
+
+fn ensure_supported_ipc_data_type(
+    field_name: &str,
+    data_type: &DataType,
+) -> Result<(), ArrowError> {
+    match data_type {
+        DataType::Dictionary(_, value_type)
+            if matches!(value_type.as_ref(), DataType::Dictionary(_, _)) =>
+        {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Arrow IPC field metadata cannot encode direct dictionary-of-dictionary values for field {field_name:?}"
+            )))
+        }
+        DataType::Dictionary(_, value_type) => {
+            ensure_supported_ipc_data_type(field_name, value_type)
+        }
+        DataType::Struct(fields) => fields
+            .iter()
+            .try_for_each(|field| ensure_supported_ipc_data_type(field.name(), field.data_type())),
+        DataType::RunEndEncoded(_, field)
+        | DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => {
+            ensure_supported_ipc_data_type(field.name(), field.data_type())
+        }
+        DataType::Union(fields, _) => fields.iter().try_for_each(|(_, field)| {
+            ensure_supported_ipc_data_type(field.name(), field.data_type())
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -1344,6 +1392,8 @@ impl<W: Write> FileWriter<W> {
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
+        ensure_supported_ipc_schema(schema)?;
+
         let data_gen = IpcDataGenerator::default();
         // write magic to header aligned on alignment boundary
         let pad_len = pad_to_alignment(write_options.alignment, super::ARROW_MAGIC.len());
@@ -1633,6 +1683,8 @@ impl<W: Write> StreamWriter<W> {
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
+        ensure_supported_ipc_schema(schema)?;
+
         let data_gen = IpcDataGenerator::default();
         let mut dictionary_tracker = DictionaryTracker::new(false);
 
