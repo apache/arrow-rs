@@ -37,14 +37,6 @@ use arrow_schema::{DataType, Field};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
 
-fn is_string_like(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
-        DataType::Dictionary(_, values) => is_string_like(values),
-        _ => false,
-    }
-}
-
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
         .iter()
@@ -69,11 +61,11 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 
-    // Benchmark parsing strings, which may need utf8 validation.
-    fn non_null_string(array: &ArrayRef) -> bool {
-        array.null_count() == 0 && is_string_like(array.data_type())
+    // Benchmark parsing strings which may need utf8 validation.
+    fn is_stringlike(array: &ArrayRef) -> bool {
+        matches!(array.data_type(), DataType::Utf8 | DataType::Utf8View)
     }
-    if cols.iter().all(non_null_string) {
+    if cols.iter().all(is_stringlike) {
         // RowParser marks rows as requiring UTF-8 validation when they are decoded
         // back into Arrow arrays by RowConverter::convert_rows.
         let parser = converter.parser();
