@@ -450,7 +450,8 @@ pub fn decode_fixed_size_binary(
     if size < 0 {
         panic!("cannot decode FixedSizeBinary({size})");
     }
-    let mut values = MutableBuffer::new(size as usize * rows.len());
+    let num_rows = rows.len();
+    let mut values = MutableBuffer::new(size as usize * num_rows);
     let nulls = decode_nulls(rows);
 
     let encoded_len = size as usize + 1;
@@ -466,5 +467,6 @@ pub fn decode_fixed_size_binary(
         }
     }
 
-    FixedSizeBinaryArray::new(size, values.into(), nulls)
+    // Need to set the length since when size is 0 and no nulls the length could not be determined by FixedSizeBinaryArray
+    FixedSizeBinaryArray::try_new_with_len(size, values.into(), nulls, num_rows).unwrap()
 }

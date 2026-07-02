@@ -130,6 +130,7 @@ impl FixedSizeBinaryArray {
     ///
     /// Creating an array with `value_length == 0` will try to get the length from the null
     /// buffer. If no null buffer is provided, the resulting array will have length zero.
+    /// You can use [`Self::try_new_with_len`] to provide the length
     ///
     /// # Errors
     ///
@@ -141,7 +142,6 @@ impl FixedSizeBinaryArray {
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let data_type = DataType::FixedSizeBinary(value_length);
         let value_size = value_length.to_usize().ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "Value length cannot be negative, got {value_length}"
@@ -149,30 +149,60 @@ impl FixedSizeBinaryArray {
         })?;
 
         let len = match values.len().checked_div(value_size) {
-            Some(len) => {
-                if let Some(n) = nulls.as_ref() {
-                    if n.len() != len {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                            len,
-                            n.len(),
-                        )));
-                    }
-                }
-
-                len
-            }
-            None => {
-                if !values.is_empty() {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Buffer cannot have non-zero length if the value length is zero".to_owned(),
-                    ));
-                }
-
-                // If the value length is zero, try to determine the length from the null buffer
-                nulls.as_ref().map(|n| n.len()).unwrap_or(0)
-            }
+            Some(len) => len,
+            None => nulls.as_ref().map(|n| n.len()).unwrap_or(0),
         };
+
+        Self::try_new_with_len(value_length, values, nulls, len)
+    }
+
+    /// Create a new [`FixedSizeBinaryArray`] from the provided parts and number of elements, returning an error on failure
+    ///
+    /// This is useful when the length cannot be determinated from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
+    ///
+    /// # Errors
+    ///
+    /// * `value_length < 0`
+    /// * `values.len() / value_length != len`
+    /// * `value_length == 0 && values.len() != 0`
+    /// * `nulls.len() != len`
+    /// * `value_length != 0 && values.len() / value_length != len`
+    pub fn try_new_with_len(
+        value_length: i32,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Result<Self, ArrowError> {
+        let data_type = DataType::FixedSizeBinary(value_length);
+        let value_size = value_length.to_usize().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Value length cannot be negative, got {value_length}"
+            ))
+        })?;
+
+        if let Some(nulls) = &nulls {
+            if nulls.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                    len,
+                    nulls.len(),
+                )));
+            }
+        }
+
+        if value_size != 0 && values.len() / value_size != len {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of values buffer for FixedSizeBinaryArray, expected {} got {}",
+                len,
+                values.len() / value_size,
+            )));
+        }
+
+        if value_size == 0 && !values.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Buffer cannot have non-zero length if the value length is zero".to_owned(),
+            ));
+        }
 
         Ok(Self {
             data_type,
