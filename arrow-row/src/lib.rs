@@ -4144,62 +4144,75 @@ mod tests {
 
     #[test]
     fn test_single_map() {
-        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
-        // Entry 0: {"hello": 1, "world": 2}
-        builder.keys().append_value("hello");
-        builder.values().append_value(1);
-        builder.keys().append_value("world");
-        builder.values().append_value(2);
-        builder.append(true).unwrap();
-        // Entry 1: {"foo": 3}
-        builder.keys().append_value("foo");
-        builder.values().append_value(3);
-        builder.append(true).unwrap();
-        // Entry 2: {} (empty map)
-        builder.append(true).unwrap();
-        // Entry 3: null (with masked data)
-        builder.keys().append_value("masked_key");
-        builder.values().append_value(999);
-        builder.append(false).unwrap();
-        // Entry 4: {"bar": null}
-        builder.keys().append_value("bar");
-        builder.values().append_null();
-        builder.append(true).unwrap();
-        // Entry 5: null (with different masked data)
-        builder.keys().append_value("other_masked");
-        builder.values().append_value(0);
-        builder.append(false).unwrap();
-        // Entry 6: {"a": 10, "b": 20, "c": 30}
-        builder.keys().append_value("a");
-        builder.values().append_value(10);
-        builder.keys().append_value("b");
-        builder.values().append_value(20);
-        builder.keys().append_value("c");
-        builder.values().append_value(30);
-        builder.append(true).unwrap();
+        for (add_masked_nulls, add_non_masked_nulls) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+            // Entry 0: {"hello": 1, "world": 2}
+            builder.keys().append_value("hello");
+            builder.values().append_value(1);
+            builder.keys().append_value("world");
+            builder.values().append_value(2);
+            builder.append(true).unwrap();
+            // Entry 1: {"foo": 3}
+            builder.keys().append_value("foo");
+            builder.values().append_value(3);
+            builder.append(true).unwrap();
+            // Entry 2: {} (empty map)
+            builder.append(true).unwrap();
+            if add_masked_nulls {
+                // Entry 3: null (with masked data)
+                builder.keys().append_value("masked_key");
+                builder.values().append_value(999);
+                builder.append(false).unwrap();
+            }
+            if add_non_masked_nulls {
+                // Entry 4: null (with unmasked data)
+                builder.append(false).unwrap();
+            }
+            // Entry 5: {"bar": null}
+            builder.keys().append_value("bar");
+            builder.values().append_null();
+            builder.append(true).unwrap();
 
-        let map = Arc::new(builder.finish()) as ArrayRef;
-        let d = map.data_type().clone();
+            if add_masked_nulls {
+                // Entry 6: null (with different masked data)
+                builder.keys().append_value("other_masked");
+                builder.values().append_value(0);
+                builder.append(false).unwrap();
+            }
+            // Entry 7: {"a": 10, "b": 20, "c": 30}
+            builder.keys().append_value("a");
+            builder.values().append_value(10);
+            builder.keys().append_value("b");
+            builder.values().append_value(20);
+            builder.keys().append_value("c");
+            builder.values().append_value(30);
+            builder.append(true).unwrap();
 
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+            let map = Arc::new(builder.finish()) as ArrayRef;
+            let d = map.data_type().clone();
 
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-        assert_eq!(rows.row(3), rows.row(5)); // null = null (different masked values)
+            let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
+            let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+            assert_eq!(rows.row(3), rows.row(5)); // null = null (different masked values)
 
-        let sliced_map = map.slice(1, 5);
-        let rows_on_sliced = converter
-            .convert_columns(&[Arc::clone(&sliced_map)])
-            .unwrap();
+            let back = converter.convert_rows(&rows).unwrap();
+            assert_eq!(back.len(), 1);
+            back[0].to_data().validate_full().unwrap();
+            assert_eq!(&back[0], &map);
 
-        let back = converter.convert_rows(&rows_on_sliced).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &sliced_map);
+            let sliced_map = map.slice(1, 5);
+            let rows_on_sliced = converter
+                .convert_columns(&[Arc::clone(&sliced_map)])
+                .unwrap();
+
+            let back = converter.convert_rows(&rows_on_sliced).unwrap();
+            assert_eq!(back.len(), 1);
+            back[0].to_data().validate_full().unwrap();
+            assert_eq!(&back[0], &sliced_map);
+        }
     }
 
     #[test]
@@ -4232,109 +4245,104 @@ mod tests {
 
     #[test]
     fn test_nested_map() {
-        // Map<Utf8, Map<Utf8, Int32>>
-        let mut builder = MapBuilder::new(
-            None,
-            StringBuilder::new(),
-            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new()),
-        );
+        for add_mask_nulls_to_outer_map in [true, false] {
+            for add_mask_nulls_to_inner_map in [true, false] {
+                for add_unmasked_nulls_to_outer_map in [true, false] {
+                    for add_unmasked_nulls_to_inner_map in [true, false] {
+                        // Map<Utf8, Map<Utf8, Int32>>
+                        let mut builder = MapBuilder::new(
+                            None,
+                            StringBuilder::new(),
+                            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new()),
+                        );
 
-        // Entry 0: {"outer1": {"inner_a": 1, "inner_b": 2}, "outer2": {"inner_c": 3}}
-        builder.keys().append_value("outer1");
-        builder.values().keys().append_value("inner_a");
-        builder.values().values().append_value(1);
-        builder.values().keys().append_value("inner_b");
-        builder.values().values().append_value(2);
-        builder.values().append(true).unwrap();
-        builder.keys().append_value("outer2");
-        builder.values().keys().append_value("inner_c");
-        builder.values().values().append_value(3);
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+                        // Entry 0: {"outer1": {"inner_a": 1, "inner_b": 2}, "outer2": {"inner_c": 3}}
+                        builder.keys().append_value("outer1");
+                        builder.values().keys().append_value("inner_a");
+                        builder.values().values().append_value(1);
+                        builder.values().keys().append_value("inner_b");
+                        builder.values().values().append_value(2);
+                        builder.values().append(true).unwrap();
+                        builder.keys().append_value("outer2");
+                        builder.values().keys().append_value("inner_c");
+                        builder.values().values().append_value(3);
+                        builder.values().append(true).unwrap();
+                        builder.append(true).unwrap();
 
-        // Entry 1: {"x": {}} (inner map is empty)
-        builder.keys().append_value("x");
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+                        // Entry 1: {"x": {}} (inner map is empty)
+                        builder.keys().append_value("x");
+                        builder.values().append(true).unwrap();
+                        builder.append(true).unwrap();
 
-        // Entry 2: {"y": null} (inner map is null)
-        builder.keys().append_value("y");
-        builder.values().keys().append_value("masked"); // MASKED
-        builder.values().values().append_value(0); // MASKED
-        builder.values().append(false).unwrap();
-        builder.append(true).unwrap();
+                        if add_mask_nulls_to_inner_map {
+                            // Entry 2: {"y": null} (inner map is null)
+                            builder.keys().append_value("y");
+                            builder.values().keys().append_value("masked"); // MASKED
+                            builder.values().values().append_value(0); // MASKED
+                            builder.values().append(false).unwrap();
+                            builder.append(true).unwrap();
+                        }
 
-        // Entry 3: null (outer map is null)
-        builder.keys().append_value("masked_outer"); // MASKED
-        builder.values().keys().append_value("masked_inner"); // MASKED
-        builder.values().values().append_value(0); // MASKED
-        builder.values().append(true).unwrap(); // MASKED
-        builder.append(false).unwrap();
+                        if add_unmasked_nulls_to_inner_map {
+                            // Entry 3: {"y": null} (inner map is non masked null)
+                            builder.keys().append_value("y");
+                            builder.values().append(false).unwrap(); // not masked
+                            builder.append(true).unwrap();
+                        }
 
-        // Entry 4: {} (outer map is empty)
-        builder.append(true).unwrap();
+                        if add_mask_nulls_to_outer_map && add_mask_nulls_to_inner_map {
+                            // Entry 4: null (outer map is null)
+                            builder.keys().append_value("masked_outer"); // MASKED
+                            builder.values().keys().append_value("masked_inner"); // MASKED
+                            builder.values().values().append_value(0); // MASKED
+                            builder.values().append(true).unwrap(); // MASKED
+                            builder.append(false).unwrap();
+                        }
 
-        let map = Arc::new(builder.finish()) as ArrayRef;
-        let d = map.data_type().clone();
+                        if add_mask_nulls_to_outer_map && add_unmasked_nulls_to_inner_map {
+                            // Entry 5: null (outer map is null with inner map non masked null)
+                            builder.keys().append_value("masked_outer"); // MASKED
+                            builder.values().append(false).unwrap(); // not masked
+                            builder.append(false).unwrap();
+                        }
 
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+                        if add_unmasked_nulls_to_outer_map {
+                            // Entry 6: non masked null (outer map is null)
+                            builder.append(false).unwrap(); // not masked
+                        }
 
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+                        // Entry 7: {} (outer map is empty)
+                        builder.append(true).unwrap();
 
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
+                        let map = Arc::new(builder.finish()) as ArrayRef;
+                        let d = map.data_type().clone();
 
-        let sliced_map = map.slice(1, 3);
-        let rows_on_sliced = converter
-            .convert_columns(&[Arc::clone(&sliced_map)])
-            .unwrap();
+                        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let back = converter.convert_rows(&rows_on_sliced).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &sliced_map);
+                        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+
+                        let back = converter.convert_rows(&rows).unwrap();
+                        assert_eq!(back.len(), 1);
+                        back[0].to_data().validate_full().unwrap();
+                        assert_eq!(&back[0], &map);
+
+                        let sliced_map = map.slice(1, 3);
+                        let rows_on_sliced = converter
+                            .convert_columns(&[Arc::clone(&sliced_map)])
+                            .unwrap();
+
+                        let back = converter.convert_rows(&rows_on_sliced).unwrap();
+                        assert_eq!(back.len(), 1);
+                        back[0].to_data().validate_full().unwrap();
+                        assert_eq!(&back[0], &sliced_map);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_single_map_with_non_nullable_keys() {
-        // Use `with_keys_field` on `MapBuilder` to set the keys are not nullable
-        let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
-        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-            .with_keys_field(key_field);
-        // Entry 0: {"a": 1, "b": 2}
-        builder.keys().append_value("a");
-        builder.values().append_value(1);
-        builder.keys().append_value("b");
-        builder.values().append_value(2);
-        builder.append(true).unwrap();
-        // Entry 1: {"c": null}
-        builder.keys().append_value("c");
-        builder.values().append_null();
-        builder.append(true).unwrap();
-        // Entry 2: {}
-        builder.append(true).unwrap();
-        // Entry 3: null
-        builder.keys().append_value("masked"); // MASKED
-        builder.values().append_value(0); // MASKED
-        builder.append(false).unwrap();
-
-        let map = Arc::new(builder.finish()) as ArrayRef;
-        let d = map.data_type().clone();
-
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
-
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
-    }
-
-    #[test]
-    fn test_single_with_non_nullable_values() {
+    fn test_single_map_with_non_nullable_values() {
         // Use `with_values_field` on `MapBuilder` to set the values are not nullable
         let value_field = Arc::new(Field::new("values", DataType::Int32, false));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
@@ -4345,13 +4353,15 @@ mod tests {
         builder.keys().append_value("b");
         builder.values().append_value(2);
         builder.append(true).unwrap();
-        // Entry 1: {"c": 3}
+        // Entry 1: null
+        builder.append(false).unwrap();
+        // Entry 2: {"c": 3}
         builder.keys().append_value("c");
         builder.values().append_value(3);
         builder.append(true).unwrap();
-        // Entry 2: {}
+        // Entry 3: {}
         builder.append(true).unwrap();
-        // Entry 3: null
+        // Entry 4: null
         builder.keys().append_value("masked"); // MASKED
         builder.values().append_value(0); // MASKED
         builder.append(false).unwrap();
@@ -4370,48 +4380,7 @@ mod tests {
     }
 
     #[test]
-    fn test_single_with_non_nullable_map_but_with_nullable_keys() {
-        let keys = Arc::new(StringArray::from(vec![
-            Some("a"),
-            None,
-            Some("c"),
-            Some("d"),
-            None,
-        ])) as ArrayRef;
-
-        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef;
-
-        // Entry 0 = [0..2) -> {"a": 1, null: 2}
-        // Entry 1 = [2..3) -> {"c": 3}
-        // Entry 2 = [3..5) -> {"d": 4, null: 5}
-        let offsets = OffsetBuffer::new(vec![0, 2, 3, 5].into());
-
-        let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, true)), // nullable keys
-            Arc::new(Field::new("values", DataType::Int32, true)),
-        ];
-        let struct_field = Arc::new(Field::new(
-            "entries",
-            DataType::Struct(entries_fields.clone().into()),
-            false,
-        ));
-        let entries = StructArray::new(entries_fields.into(), vec![keys, values], None);
-
-        let map = Arc::new(MapArray::new(struct_field, offsets, entries, None, false)) as ArrayRef;
-        let d = map.data_type().clone();
-
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
-
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
-    }
-
-    #[test]
-    fn test_single_with_non_nullable_map_but_with_nullable_values() {
+    fn test_single_map_with_non_nullable_map_but_with_nullable_values() {
         // Map column is non-nullable, but values are nullable
         let value_field = Arc::new(Field::new("values", DataType::Int32, true));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
@@ -4459,6 +4428,9 @@ mod tests {
         builder.keys().append_value("m2"); // MASKED
         builder.values().append_value(2); // MASKED
         builder.append(false).unwrap();
+
+        builder.append(false).unwrap(); // non masked
+
         builder.keys().append_value("m3"); // MASKED
         builder.values().append_value(3); // MASKED
         builder.append(false).unwrap();
@@ -4471,8 +4443,7 @@ mod tests {
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         // All null rows should be equal
-        assert_eq!(rows.row(0), rows.row(1));
-        assert_eq!(rows.row(1), rows.row(2));
+        rows.iter().for_each(|row| assert_eq!(row, rows.row(0)));
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4496,8 +4467,7 @@ mod tests {
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         // All empty maps should be equal
-        assert_eq!(rows.row(0), rows.row(1));
-        assert_eq!(rows.row(1), rows.row(2));
+        rows.iter().for_each(|row| assert_eq!(row, rows.row(0)));
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4510,85 +4480,6 @@ mod tests {
         // Zero-length map array
         let builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
         let map = Arc::new(builder.finish_cloned()) as ArrayRef;
-        let d = map.data_type().clone();
-
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
-
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
-    }
-
-    #[test]
-    fn test_map_nullable_keys_and_nullable_values() {
-        // Both keys and values are nullable
-        let keys = Arc::new(StringArray::from(vec![
-            Some("a"),
-            None,
-            Some("c"),
-            Some("d"),
-        ])) as ArrayRef;
-
-        let values = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, None])) as ArrayRef;
-
-        // Entry 0 = [0..2) -> {"a": 1, null: 2}
-        // Entry 1 = [2..4) -> {"c": null, "d": null}
-        let offsets = OffsetBuffer::new(vec![0, 2, 4].into());
-
-        let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, true)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
-        ];
-        let struct_field = Arc::new(Field::new(
-            "entries",
-            DataType::Struct(entries_fields.clone().into()),
-            false,
-        ));
-        let entries = StructArray::new(entries_fields.into(), vec![keys, values], None);
-
-        let map = Arc::new(MapArray::new(struct_field, offsets, entries, None, false)) as ArrayRef;
-        let d = map.data_type().clone();
-
-        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
-
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&back[0], &map);
-    }
-
-    #[test]
-    fn test_map_non_nullable_keys_and_non_nullable_values() {
-        // Both keys and values are non-nullable
-        let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
-        let value_field = Arc::new(Field::new("values", DataType::Int32, false));
-        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-            .with_keys_field(key_field)
-            .with_values_field(value_field);
-
-        // Entry 0: {"a": 1, "b": 2}
-        builder.keys().append_value("a");
-        builder.values().append_value(1);
-        builder.keys().append_value("b");
-        builder.values().append_value(2);
-        builder.append(true).unwrap();
-        // Entry 1: {} (empty)
-        builder.append(true).unwrap();
-        // Entry 2: null
-        builder.keys().append_value("m"); // MASKED
-        builder.values().append_value(0); // MASKED
-        builder.append(false).unwrap();
-        // Entry 3: {"c": 3}
-        builder.keys().append_value("c");
-        builder.values().append_value(3);
-        builder.append(true).unwrap();
-
-        let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
         let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
@@ -4615,53 +4506,34 @@ mod tests {
             .collect()
     }
 
-    #[derive(Clone, Copy)]
-    enum GenerateAllUniqueNullBehavior {
-        AllowUpToSingleNull { valid_percent: f64 },
-        AllValid,
-    }
-
     fn generate_all_unique_primitive_array<K>(
         rng: &mut impl RngCore,
         len: usize,
-        null_behavior: GenerateAllUniqueNullBehavior,
     ) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         K::Native: Hash + Eq,
         StandardUniform: Distribution<K::Native>,
     {
-      let mut possible_number_of_values = 2i32.saturating_pow(size_of::<K::Native>() as u32 * 8);
-      
-      match null_behavior {
-        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent } if valid_percent > 0.0 => possible_number_of_values += 1,
-        _ => {}
-      }
-      assert!(len <= possible_number_of_values as usize, "len {len} is larger than the number of possible values {possible_number_of_values}");
-      
+        let possible_number_of_values = 2i32.saturating_pow(size_of::<K::Native>() as u32 * 8);
+        assert!(
+            len <= possible_number_of_values as usize,
+            "len {len} is larger than the number of possible values {possible_number_of_values}"
+        );
+
         let mut seen = std::collections::HashSet::new();
         (0..len)
             .map(|_| {
                 let mut value;
-
                 loop {
-                    value = match null_behavior {
-                        GenerateAllUniqueNullBehavior::AllValid => Some(rng.random()),
-                        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent } => {
-                            if !seen.contains(&None) {
-                                rng.random_bool(valid_percent).then(|| rng.random())
-                            } else {
-                                Some(rng.random())
-                            }
-                        }
-                    };
+                    value = rng.random();
 
                     if seen.insert(value) {
                         break;
                     }
                 }
 
-                value
+                Some(value)
             })
             .collect()
     }
@@ -4892,7 +4764,7 @@ mod tests {
         let field = Arc::new(Field::new_map(
             "",
             "entries",
-            Field::new("keys", keys.data_type().clone(), true),
+            Field::new("keys", keys.data_type().clone(), false),
             Field::new("values", values.data_type().clone(), true),
             false,
             true,
@@ -5130,7 +5002,7 @@ mod tests {
     }
 
     fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
-        match rng.random_range(0..25) {
+        match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
@@ -5207,23 +5079,7 @@ mod tests {
                     // Need to generate all unique keys or make sure between each map every key is unique,
                     // so we generate up to a single null
                     Arc::new(generate_all_unique_primitive_array::<Int64Type>(
-                        rng,
-                        keys_len,
-                        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent: 0.8 },
-                    ))
-                },
-                |rng, values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.7)),
-            )),
-            24 => Arc::new(generate_map(
-                rng,
-                len,
-                0.9,
-                |rng, keys_len| {
-                    // Need to generate all unique keys or make sure between each map everything is unique
-                    Arc::new(generate_all_unique_primitive_array::<Int64Type>(
-                        rng,
-                        keys_len,
-                        GenerateAllUniqueNullBehavior::AllValid,
+                        rng, keys_len,
                     ))
                 },
                 |rng, values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.7)),
@@ -6725,5 +6581,29 @@ mod tests {
 
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next(), None);
+    }
+
+    #[test]
+    fn create_map_with_null_keys() {
+        let keys = Int32Array::from(vec![Some(1), None]);
+        let values = StringArray::from(vec![None, Some("hey")]);
+
+        let entries = StructArray::new(
+            Fields::from(vec![
+                Field::new("keys", DataType::Int32, true),
+                Field::new("values", DataType::Utf8, true),
+            ]),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+
+        MapArray::try_new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::from_lengths(vec![2]),
+            entries,
+            None,
+            false,
+        )
+        .expect_err("should not allow nullable keys");
     }
 }
