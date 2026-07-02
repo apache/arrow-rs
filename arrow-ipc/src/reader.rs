@@ -2694,6 +2694,48 @@ mod tests {
     }
 
     #[test]
+    fn test_ipc_writers_reject_dictionary_of_dictionary_schema() {
+        let values = Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef;
+        let inner = Arc::new(DictionaryArray::new(
+            UInt32Array::from_iter_values([0, 1]),
+            values,
+        )) as ArrayRef;
+        let outer = Arc::new(DictionaryArray::new(
+            UInt32Array::from_iter_values([0, 1, 0]),
+            inner,
+        )) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            outer.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![outer]).unwrap();
+
+        let mut stream = Vec::new();
+        let Err(err) = crate::writer::StreamWriter::try_new(&mut stream, batch.schema_ref()) else {
+            panic!("IPC stream writer should reject dictionary-of-dictionary schemas");
+        };
+        assert!(stream.is_empty());
+
+        assert!(
+            err.to_string().contains("dictionary-of-dictionary values"),
+            "unexpected error: {err}"
+        );
+
+        let mut file = Vec::new();
+        let Err(err) = crate::writer::FileWriter::try_new(&mut file, batch.schema_ref()) else {
+            panic!("IPC file writer should reject dictionary-of-dictionary schemas");
+        };
+        assert!(file.is_empty());
+
+        assert!(
+            err.to_string().contains("dictionary-of-dictionary values"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_roundtrip_stream_nested_dict_of_map_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("b"), Some("c")]);
         let values = Arc::new(values) as ArrayRef;
