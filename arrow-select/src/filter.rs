@@ -989,8 +989,9 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
-    // SAFETY: `dst_offsets` starts at `[0]` and only grows by the running
-    // `cur_offset`, so it is monotonically non-decreasing.
+    // SAFETY: `dst_offsets` starts at `[0]` and is monotonically non-decreasing:
+    // the index paths accumulate a non-negative `cur_offset`, and the slice path
+    // emits source offsets (themselves monotonic) shifted by a non-decreasing base.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = predicate.filter_nulls(array.nulls());
 
@@ -1399,7 +1400,9 @@ where
     filter.extend_offsets_slices(make_ranges(), child_count);
     filter.extend_slices(make_ranges());
 
-    // SAFETY: `dst_offsets` starts at `[0]` and grows monotonically.
+    // SAFETY: `dst_offsets` starts at `[0]` and is monotonically non-decreasing:
+    // each retained run emits source offsets (themselves monotonic) shifted by a
+    // non-decreasing base.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
     // SAFETY: offsets index into `dst_values`, each value copied byte-for-byte.
