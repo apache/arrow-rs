@@ -30,6 +30,7 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - rust-toolchain.toml
 
 jobs:
   cargo-audit:
@@ -40,4 +41,7 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run audit check
-        run: cargo audit
+        # Waiting on an object_store release with quick-xml >=0.41.0.
+        # https://rustsec.org/advisories/RUSTSEC-2026-0194
+        # https://rustsec.org/advisories/RUSTSEC-2026-0195
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195

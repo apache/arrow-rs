@@ -20,9 +20,11 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
-use arrow_schema::{DataType, SortOptions};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
+use arrow_data::MAX_INLINE_VIEW_LEN;
+use arrow_schema::SortOptions;
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -67,6 +69,15 @@ pub(crate) fn non_null_padded_length(len: usize) -> usize {
         // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
         MINI_BLOCK_COUNT + ceil(len, BLOCK_SIZE) * (BLOCK_SIZE + 1)
     }
+}
+
+/// Decodes a single byte from each row, where a valid value is determined via
+/// a configurable sentinel. Optionally returns `None` if there are no null values.
+pub(crate) fn decode_nulls_sentinel(rows: &[&[u8]], options: SortOptions) -> Option<NullBuffer> {
+    let null_sentinel = null_sentinel(options);
+    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| rows[x][0] != null_sentinel);
+    let nulls = NullBuffer::new(nulls);
+    (nulls.null_count() > 0).then_some(nulls)
 }
 
 /// Variable length values are encoded as
@@ -270,12 +281,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     options: SortOptions,
 ) -> GenericBinaryArray<I> {
     let len = rows.len();
-    let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel(options);
-        null_count += !valid as usize;
-        valid
-    });
+    let nulls = decode_nulls_sentinel(rows, options);
 
     let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
     let mut offsets = BufferBuilder::<I>::new(len + 1);
@@ -292,21 +298,15 @@ pub fn decode_binary<I: OffsetSizeTrait>(
         values.as_slice_mut().iter_mut().for_each(|o| *o = !*o)
     }
 
-    let d = match I::IS_LARGE {
-        true => DataType::LargeBinary,
-        false => DataType::Binary,
-    };
-
-    let builder = ArrayDataBuilder::new(d)
-        .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(offsets.finish())
-        .add_buffer(values.into());
-
     // SAFETY:
     // Valid by construction above
-    unsafe { GenericBinaryArray::from(builder.build_unchecked()) }
+    unsafe {
+        GenericBinaryArray::new_unchecked(
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            values.into(),
+            nulls,
+        )
+    }
 }
 
 fn decode_binary_view_inner(
@@ -317,13 +317,7 @@ fn decode_binary_view_inner(
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
-    let mut null_count = 0;
-
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel(options);
-        null_count += !valid as usize;
-        valid
-    });
+    let nulls = decode_nulls_sentinel(rows, options);
 
     // If we are validating UTF-8, decode all string values (including short strings)
     // into the values buffer and validate UTF-8 once. If not validating,
@@ -381,16 +375,9 @@ fn decode_binary_view_inner(
         std::str::from_utf8(values.as_slice()).unwrap();
     }
 
-    let builder = ArrayDataBuilder::new(DataType::BinaryView)
-        .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(views.finish())
-        .add_buffer(values.into());
-
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::from(builder.build_unchecked()) }
+    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()], nulls) }
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
@@ -414,14 +401,11 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
         return GenericStringArray::from(decoded);
     }
 
-    let builder = decoded
-        .into_data()
-        .into_builder()
-        .data_type(GenericStringArray::<I>::DATA_TYPE);
+    let (offsets, values, nulls) = decoded.into_parts();
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(unsafe { builder.build_unchecked() })
+    unsafe { GenericStringArray::new_unchecked(offsets, values, nulls) }
 }
 
 /// Decodes a string view array from `rows` with the provided `options`

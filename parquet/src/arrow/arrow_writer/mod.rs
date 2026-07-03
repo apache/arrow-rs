@@ -389,11 +389,13 @@ impl<W: Write + Send> ArrowWriter<W> {
                     return self.write(batch);
                 }
 
-                let avg_row_bytes = current_bytes / in_progress.buffered_rows;
-                if avg_row_bytes > 0 {
+                if let Some(avg_row_bytes) = current_bytes
+                    .checked_div(in_progress.buffered_rows)
+                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                {
                     // At this point, `current_bytes < max_bytes` (checked above)
                     let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes / avg_row_bytes;
+                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
                     if batch.num_rows() > rows_that_fit {
                         if rows_that_fit > 0 {
@@ -4356,7 +4358,7 @@ mod tests {
         // check values roundtrip through parquet
         let src = [
             u32::MIN,
-            u32::MIN + 1,
+            1,
             (i32::MAX as u32) - 1,
             i32::MAX as u32,
             (i32::MAX as u32) + 1,
@@ -4402,7 +4404,7 @@ mod tests {
         // check values roundtrip through parquet
         let src = [
             u64::MIN,
-            u64::MIN + 1,
+            1,
             (i64::MAX as u64) - 1,
             i64::MAX as u64,
             (i64::MAX as u64) + 1,

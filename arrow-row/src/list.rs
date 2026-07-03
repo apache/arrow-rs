@@ -21,9 +21,8 @@ use arrow_array::{
     new_null_array,
 };
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
-use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::{ops::Range, sync::Arc};
 
@@ -129,12 +128,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     }
     O::from_usize(offset).expect("overflow");
 
-    let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
-        let valid = rows[x][0] != null_sentinel(opts);
-        null_count += !valid as usize;
-        valid
-    });
+    let nulls = crate::variable::decode_nulls_sentinel(rows, opts);
 
     let mut values_offsets = Vec::with_capacity(offset);
     let mut values_bytes = Vec::with_capacity(values_bytes);
@@ -167,37 +161,34 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         })
         .collect();
 
-    let child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
+    let mut child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(child.len(), 1);
-
-    let child_data = child[0].to_data();
+    let child = child.pop().unwrap();
 
     // Since RowConverter flattens certain data types (i.e. Dictionary),
     // we need to use updated data type instead of original field
-    let corrected_type = match &field.data_type {
-        DataType::List(inner_field) => DataType::List(Arc::new(
+    let corrected_inner_field = match &field.data_type {
+        DataType::List(inner_field) => Arc::new(
             inner_field
                 .as_ref()
                 .clone()
-                .with_data_type(child_data.data_type().clone()),
-        )),
-        DataType::LargeList(inner_field) => DataType::LargeList(Arc::new(
+                .with_data_type(child.data_type().clone()),
+        ),
+        DataType::LargeList(inner_field) => Arc::new(
             inner_field
                 .as_ref()
                 .clone()
-                .with_data_type(child_data.data_type().clone()),
-        )),
+                .with_data_type(child.data_type().clone()),
+        ),
         _ => unreachable!(),
     };
 
-    let builder = ArrayDataBuilder::new(corrected_type)
-        .len(rows.len())
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(Buffer::from_vec(offsets))
-        .add_child_data(child_data);
-
-    Ok(GenericListArray::from(unsafe { builder.build_unchecked() }))
+    GenericListArray::try_new(
+        corrected_inner_field,
+        OffsetBuffer::new(offsets.into()),
+        child,
+        nulls,
+    )
 }
 
 pub fn compute_lengths_fixed_size_list(
@@ -267,19 +258,17 @@ pub unsafe fn decode_fixed_size_list(
     value_length: usize,
 ) -> Result<FixedSizeListArray, ArrowError> {
     let list_type = &field.data_type;
-    let element_type = match list_type {
-        DataType::FixedSizeList(element_field, _) => element_field.data_type(),
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Expected FixedSizeListArray, found: {list_type}",
-            )));
-        }
+    let DataType::FixedSizeList(element_field, size) = list_type else {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Expected FixedSizeListArray, found: {list_type}",
+        )));
     };
 
-    let len = rows.len();
-    let (null_count, nulls) = fixed::decode_nulls(rows);
+    let num_rows = rows.len();
+    let nulls = fixed::decode_nulls(rows);
 
-    let null_element_encoded = converter.convert_columns(&[new_null_array(element_type, 1)])?;
+    let null_element_encoded =
+        converter.convert_columns(&[new_null_array(element_field.data_type(), 1)])?;
     let null_element_encoded = null_element_encoded.row(0);
     let null_element_slice = null_element_encoded.as_ref();
 
@@ -304,17 +293,16 @@ pub unsafe fn decode_fixed_size_list(
         *row = &row[row_offset..]; // Update row for the next decoder
     }
 
-    let children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
-    let child_data = children.iter().map(|c| c.to_data()).collect();
-    let builder = ArrayDataBuilder::new(list_type.clone())
-        .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls))
-        .child_data(child_data);
+    let mut children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
+    assert_eq!(children.len(), 1);
 
-    Ok(FixedSizeListArray::from(unsafe {
-        builder.build_unchecked()
-    }))
+    FixedSizeListArray::try_new_with_length(
+        Arc::clone(element_field),
+        *size,
+        children.pop().unwrap(),
+        nulls,
+        num_rows,
+    )
 }
 
 /// Computes the encoded length for a single list element given its child rows.

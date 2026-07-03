@@ -67,19 +67,6 @@ pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
     Ok(Arc::new(list))
 }
 
-/// Same as [`cast_values_to_list`] but output fixed size list array with element
-/// size 1.
-pub(crate) fn cast_values_to_fixed_size_list(
-    array: &dyn Array,
-    to: &FieldRef,
-    size: i32,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let list = FixedSizeListArray::try_new(to.clone(), size, values, None)?;
-    Ok(Arc::new(list))
-}
-
 /// Cast fixed size list array to inner values type, essentially flattening the
 /// lists.
 ///
@@ -226,7 +213,14 @@ where
     // Cast the inner values if necessary
     let values = cast_with_options(values.as_ref(), field.data_type(), cast_options)?;
 
-    let array = FixedSizeListArray::try_new(field.clone(), size, values, null_builder.build())?;
+    let nulls = null_builder.build();
+    // Degenerate case where we may lose length information if there isn't a null
+    // buffer to infer length from
+    let array = if size == 0 && nulls.is_none() {
+        FixedSizeListArray::try_new_with_length(field.clone(), size, values, nulls, array.len())?
+    } else {
+        FixedSizeListArray::try_new(field.clone(), size, values, nulls)?
+    };
     Ok(Arc::new(array))
 }
 
@@ -277,7 +271,14 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
     let values = make_array(mutable.freeze());
     let values = cast_with_options(values.as_ref(), field.data_type(), cast_options)?;
 
-    let array = FixedSizeListArray::try_new(field.clone(), size, values, null_builder.build())?;
+    let nulls = null_builder.build();
+    // Degenerate case where we may lose length information if there isn't a null
+    // buffer to infer length from
+    let array = if size == 0 && nulls.is_none() {
+        FixedSizeListArray::try_new_with_length(field.clone(), size, values, nulls, array.len())?
+    } else {
+        FixedSizeListArray::try_new(field.clone(), size, values, nulls)?
+    };
     Ok(Arc::new(array))
 }
 
