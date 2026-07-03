@@ -570,13 +570,13 @@ mod tests {
 
         let data: Vec<i32> = (0..6).collect();
         let levels = vec![0; data.len()];
-        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0);
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
         let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
             "c0",
             ArrowType::Int32,
             false,
         )]));
-        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false);
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
 
         let prior = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
             true, false, true, true, false, true,
