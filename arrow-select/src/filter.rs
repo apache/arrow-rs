@@ -1435,7 +1435,9 @@ where
     // non-decreasing base.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
-    // SAFETY: offsets index into `dst_values`, each value copied byte-for-byte.
+    // SAFETY: `offsets` index into `dst_values` by construction, and each slot is a
+    // byte-for-byte copy from `child`, so UTF-8 validity (if any) is preserved.
+    // Length invariant: `offsets.len() - 1 == child_count == nulls.len()`.
     unsafe { GenericByteArray::new_unchecked(offsets, filter.dst_values.into(), nulls) }
 }
 
