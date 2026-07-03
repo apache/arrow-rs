@@ -26,7 +26,7 @@ use arrow::{
     datatypes::SchemaRef,
     ipc::{
         self, reader,
-        writer::{self, CompressionContext},
+        writer::{self, IpcWriteContext},
     },
     record_batch::RecordBatch,
 };
@@ -95,7 +95,7 @@ async fn upload_data(
 
     let mut original_data_iter = original_data.iter().enumerate();
 
-    let mut compression_context = CompressionContext::default();
+    let mut ipc_write_context = IpcWriteContext::default();
 
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
@@ -106,7 +106,7 @@ async fn upload_data(
             first_batch,
             &options,
             &mut dict_tracker,
-            &mut compression_context,
+            &mut ipc_write_context,
         )
         .await?;
 
@@ -129,7 +129,7 @@ async fn upload_data(
                 batch,
                 &options,
                 &mut dict_tracker,
-                &mut compression_context,
+                &mut ipc_write_context,
             )
             .await?;
 
@@ -159,12 +159,12 @@ async fn send_batch(
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
     dictionary_tracker: &mut writer::DictionaryTracker,
-    compression_context: &mut CompressionContext,
+    ipc_write_context: &mut IpcWriteContext,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encode(batch, dictionary_tracker, options, compression_context)
+        .encode(batch, dictionary_tracker, options, ipc_write_context)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =

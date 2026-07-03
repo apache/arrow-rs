@@ -29,6 +29,7 @@ on:
   pull_request:
     paths:
       - .github/**
+      - rust-toolchain.toml
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**

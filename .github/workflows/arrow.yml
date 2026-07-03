@@ -30,6 +30,7 @@ on:
   pull_request:
     paths:
       - .github/**
+      - rust-toolchain.toml
       - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**

@@ -6808,14 +6808,8 @@ mod test {
             .unwrap();
 
         // First row should be "ACTIVE", second row should be "PENDING"
-        assert_eq!(
-            status_values.value(status_col.key(0).unwrap() as usize),
-            "ACTIVE"
-        );
-        assert_eq!(
-            status_values.value(status_col.key(1).unwrap() as usize),
-            "PENDING"
-        );
+        assert_eq!(status_values.value(status_col.key(0).unwrap()), "ACTIVE");
+        assert_eq!(status_values.value(status_col.key(1).unwrap()), "PENDING");
 
         // Get backupStatus enum values (same as status)
         let backup_status_col = batch
@@ -6831,11 +6825,11 @@ mod test {
 
         // First row should be "INACTIVE", second row should be "ACTIVE"
         assert_eq!(
-            backup_status_values.value(backup_status_col.key(0).unwrap() as usize),
+            backup_status_values.value(backup_status_col.key(0).unwrap()),
             "INACTIVE"
         );
         assert_eq!(
-            backup_status_values.value(backup_status_col.key(1).unwrap() as usize),
+            backup_status_values.value(backup_status_col.key(1).unwrap()),
             "ACTIVE"
         );
 
@@ -6862,15 +6856,15 @@ mod test {
         // First row: ["PENDING", "ACTIVE", "INACTIVE"]
         assert_eq!(first_array_dict_array.len(), 3);
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(0).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(0).unwrap()),
             "PENDING"
         );
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(1).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(1).unwrap()),
             "ACTIVE"
         );
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(2).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(2).unwrap()),
             "INACTIVE"
         );
     }
