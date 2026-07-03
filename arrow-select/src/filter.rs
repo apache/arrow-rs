@@ -1399,8 +1399,8 @@ where
     let src = child.values();
     let mut buffer: Vec<T::Native> = Vec::with_capacity(child_count);
     for (start, end) in make_ranges() {
-        // SAFETY: ranges are derived from the child offsets, so they are in-bounds.
-        buffer.extend_from_slice(unsafe { src.get_unchecked(start..end) });
+        // Safe slice index (bounds-checked once per run); mirrors `extend_slices`.
+        buffer.extend_from_slice(&src[start..end]);
     }
     let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
     let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(buffer), nulls);
