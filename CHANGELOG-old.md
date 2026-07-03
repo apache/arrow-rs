@@ -23,7 +23,7 @@
 
 ## [59.0.0](https://github.com/apache/arrow-rs/tree/59.0.0) (2026-06-04)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.1...59.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/58.3.0...59.0.0)
 
 **Breaking changes:**
 
