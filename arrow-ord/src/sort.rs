@@ -5292,7 +5292,6 @@ mod tests {
                 let remaining = length - current_len;
                 for _ in 0..remaining {
                     result.push(rng.random_range('a'..='z'));
-                    current_len += 1;
                 }
                 break;
             }

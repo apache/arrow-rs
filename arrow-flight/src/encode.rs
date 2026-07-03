@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
@@ -701,7 +701,7 @@ struct FlightIpcEncoder {
     options: IpcWriteOptions,
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
-    compression_context: CompressionContext,
+    ipc_write_context: IpcWriteContext,
 }
 
 impl FlightIpcEncoder {
@@ -710,7 +710,7 @@ impl FlightIpcEncoder {
             options,
             data_gen: IpcDataGenerator::default(),
             dictionary_tracker: DictionaryTracker::new(error_on_replacement),
-            compression_context: CompressionContext::default(),
+            ipc_write_context: IpcWriteContext::default(),
         }
     }
 
@@ -729,7 +729,7 @@ impl FlightIpcEncoder {
             batch,
             &mut self.dictionary_tracker,
             &self.options,
-            &mut self.compression_context,
+            &mut self.ipc_write_context,
         )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
@@ -1833,14 +1833,14 @@ mod tests {
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
         let mut dictionary_tracker = DictionaryTracker::new(false);
-        let mut compression_context = CompressionContext::default();
+        let mut ipc_write_context = IpcWriteContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
             .encode(
                 batch,
                 &mut dictionary_tracker,
                 options,
-                &mut compression_context,
+                &mut ipc_write_context,
             )
             .expect("DictionaryTracker configured above to not error on replacement");
 

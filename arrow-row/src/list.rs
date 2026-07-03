@@ -389,6 +389,7 @@ pub unsafe fn decode_fixed_size_list(
         )));
     };
 
+    let num_rows = rows.len();
     let nulls = fixed::decode_nulls(rows);
 
     let null_element_encoded =
@@ -420,12 +421,13 @@ pub unsafe fn decode_fixed_size_list(
     let mut children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(children.len(), 1);
 
-    Ok(FixedSizeListArray::new(
+    FixedSizeListArray::try_new_with_length(
         Arc::clone(element_field),
         *size,
         children.pop().unwrap(),
         nulls,
-    ))
+        num_rows,
+    )
 }
 
 /// Computes the encoded length for a single list/map element given its child rows.

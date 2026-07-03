@@ -401,14 +401,11 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
         return GenericStringArray::from(decoded);
     }
 
-    let builder = decoded
-        .into_data()
-        .into_builder()
-        .data_type(GenericStringArray::<I>::DATA_TYPE);
+    let (offsets, values, nulls) = decoded.into_parts();
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(unsafe { builder.build_unchecked() })
+    unsafe { GenericStringArray::new_unchecked(offsets, values, nulls) }
 }
 
 /// Decodes a string view array from `rows` with the provided `options`

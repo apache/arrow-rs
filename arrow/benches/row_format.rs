@@ -61,6 +61,29 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 
+    // Benchmark parsing strings which may need utf8 validation.
+    fn is_stringlike(array: &ArrayRef) -> bool {
+        matches!(array.data_type(), DataType::Utf8 | DataType::Utf8View)
+    }
+    if cols.iter().all(is_stringlike) {
+        // RowParser marks rows as requiring UTF-8 validation when they are decoded
+        // back into Arrow arrays by RowConverter::convert_rows.
+        let parser = converter.parser();
+        let parsed_rows: Vec<_> = rows
+            .iter()
+            .map(|row| parser.parse(row.as_ref()).owned())
+            .collect();
+        c.bench_function(&format!("convert_rows_parsed {name}"), |b| {
+            b.iter(|| {
+                hint::black_box(
+                    converter
+                        .convert_rows(parsed_rows.iter().map(|row| row.row()))
+                        .unwrap(),
+                )
+            });
+        });
+    }
+
     let mut rows = converter.empty_rows(0, 0);
     c.bench_function(&format!("append_rows {name}"), |b| {
         let cols = cols.clone();
