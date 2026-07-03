@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [59.1.0](https://github.com/apache/arrow-rs/tree/59.1.0) (2026-07-02)
+## [59.1.0](https://github.com/apache/arrow-rs/tree/59.1.0) (2026-07-03)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.0.0...59.1.0)
 
@@ -39,6 +39,7 @@
 
 **Fixed bugs:**
 
+- arrow-row on fixed size binary/list with size 0 and no nulls return wrong length [\#10270](https://github.com/apache/arrow-rs/issues/10270)
 - casting list to 0-size fixedsizelist can cause incorrect output length [\#10227](https://github.com/apache/arrow-rs/issues/10227) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Buffer count mismatched with metadata when encoding records with dictionary of dictionaries [\#10213](https://github.com/apache/arrow-rs/issues/10213) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - `Buffer::into_mutable` is not consistent regarding sliced data and can lead to panics [\#10117](https://github.com/apache/arrow-rs/issues/10117) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -74,6 +75,7 @@
 
 **Merged pull requests:**
 
+- fix\(arrow-row\): allow to convert non empty fixed size binary/list array with size length 0 and no nulls [\#10271](https://github.com/apache/arrow-rs/pull/10271) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
 - chore: Fix audit CI run by ignore quick-xml audit advisories [\#10267](https://github.com/apache/arrow-rs/pull/10267) ([alamb](https://github.com/alamb))
 - fix main: parquet test compilation failure [\#10266](https://github.com/apache/arrow-rs/pull/10266) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Jefffrey](https://github.com/Jefffrey))
 - minor: drive-by refactors for dicts in substring & filter [\#10264](https://github.com/apache/arrow-rs/pull/10264) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
