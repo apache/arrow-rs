@@ -891,16 +891,6 @@ where
         self.src_offsets[idx].as_usize()
     }
 
-    /// Returns the start and end of the value at index `idx` along with its length
-    #[inline]
-    fn get_value_range(&self, idx: usize) -> (usize, usize, OffsetSize) {
-        // These can only fail if `array` contains invalid data
-        let start = self.get_value_offset(idx);
-        let end = self.get_value_offset(idx + 1);
-        let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
-        (start, end, len)
-    }
-
     fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
             let start = self.src_offsets[idx].as_usize();
