@@ -1364,6 +1364,22 @@ fn filter_list_child<'a>(
             make_ranges,
             child_count,
         )?),
+        // Primitive children stream native values straight into a buffer (like the
+        // byte path), avoiding the `Vec<(usize, usize)>` range collection and the
+        // `filter_array`/`FilterPredicate` re-dispatch. That overhead is what made
+        // the generic fallback win at ~50% selectivity on x86 for non-byte children,
+        // where the retained runs are short and the copy work is tiny.
+        dt if dt.is_primitive() => {
+            let arr: &dyn Array = values.as_ref();
+            downcast_primitive_array! {
+                arr => {
+                    let out: ArrayRef =
+                        Arc::new(filter_list_primitive(arr, make_ranges, child_count));
+                    out
+                }
+                _ => unreachable!("{dt} passed is_primitive()"),
+            }
+        }
         _ => {
             let ranges: Vec<(usize, usize)> = make_ranges().collect();
             let child_predicate = FilterPredicate {
@@ -1374,6 +1390,36 @@ fn filter_list_child<'a>(
             filter_array(values, &child_predicate)?
         }
     })
+}
+
+/// Filters a primitive child of a list by streaming child-element ranges directly
+/// into a values buffer, mirroring [`filter_list_bytes`]. Avoids materializing a
+/// `Vec` of ranges and re-dispatching through [`filter_array`]; at ~50% selectivity
+/// the runs are short and that per-range/dispatch overhead dominates the actual copy.
+fn filter_list_primitive<T, F, I>(
+    child: &PrimitiveArray<T>,
+    make_ranges: F,
+    child_count: usize,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    F: Fn() -> I,
+    I: Iterator<Item = (usize, usize)>,
+{
+    let src = child.values();
+    let mut buffer: Vec<T::Native> = Vec::with_capacity(child_count);
+    for (start, end) in make_ranges() {
+        // SAFETY: ranges are derived from the child offsets, so they are in-bounds.
+        buffer.extend_from_slice(unsafe { src.get_unchecked(start..end) });
+    }
+    let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
+    let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(buffer), nulls);
+    // Preserve the concrete logical type (timestamps with tz, decimals, etc.).
+    if child.data_type() == &T::DATA_TYPE {
+        arr
+    } else {
+        arr.with_data_type(child.data_type().clone())
+    }
 }
 
 /// Filters a byte child of a list by streaming child-element ranges into
