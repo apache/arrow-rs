@@ -725,6 +725,67 @@ impl IpcDataGenerator {
         })
     }
 
+    /// Encode dictionary batches and the record batch to output buffers, skipping the
+    /// intermediate body `Vec<u8>` allocations for uncompressed record batch buffers.
+    fn encode_to_buffers(
+        &self,
+        batch: &RecordBatch,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+        ipc_write_context: &mut IpcWriteContext,
+        out: &mut Vec<Buffer>,
+    ) -> Result<IpcWriteMetadata, ArrowError> {
+        let encoded_dictionaries =
+            self.encode_all_dicts(batch, dictionary_tracker, write_options, ipc_write_context)?;
+
+        let mut dictionary_block_sizes = Vec::with_capacity(encoded_dictionaries.len());
+        for dict in encoded_dictionaries {
+            dictionary_block_sizes.push(encoded_data_to_buffers(out, dict, write_options)?);
+        }
+
+        let capacity = batch
+            .columns()
+            .iter()
+            .map(|a| estimate_encoded_buffer_count(a.data_type()))
+            .sum();
+        let mut encoded_buffers: Vec<EncodedBuffer> = Vec::with_capacity(capacity);
+        let (ipc_message, body_len, tail_pad) = self.record_batch_to_bytes(
+            batch,
+            write_options,
+            ipc_write_context,
+            &mut IpcBodySink::Collect(&mut encoded_buffers),
+        )?;
+
+        let alignment = write_options.alignment;
+        let alignment_mask = usize::from(alignment - 1);
+        let prefix_size = if write_options.write_legacy_ipc_format {
+            4
+        } else {
+            8
+        };
+        let ipc_message_len = ipc_message.len();
+        let aligned_size = (ipc_message_len + prefix_size + alignment_mask) & !alignment_mask;
+        push_continuation_buffer(out, write_options, (aligned_size - prefix_size) as i32)?;
+        out.push(Buffer::from(ipc_message));
+        push_padding_buffer(out, aligned_size - ipc_message_len - prefix_size);
+        for enc in encoded_buffers {
+            let len = enc.len();
+            let buffer = match enc {
+                EncodedBuffer::Raw(buffer) => buffer,
+                EncodedBuffer::Compressed(bytes) => Buffer::from(bytes),
+            };
+            out.push(buffer);
+            push_padding_buffer(out, pad_to_alignment(alignment, len));
+        }
+        push_padding_buffer(out, tail_pad);
+
+        Ok(IpcWriteMetadata {
+            dictionary_block_sizes,
+            padded_header_len: aligned_size,
+            body_len,
+        })
+    }
+
     /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
     /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
     /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
@@ -1564,6 +1625,139 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 }
 
+/// Arrow IPC stream encoder.
+///
+/// Encodes Arrow [`RecordBatch`]es to byte buffers using the [IPC Streaming Format],
+/// without performing any IO.
+///
+/// The returned [`Buffer`]s are ordered and should be written to the destination
+/// stream in order. Uncompressed record batch body buffers can share the original
+/// Arrow buffers instead of being copied into an intermediate contiguous buffer.
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::StreamEncoder;
+/// # use arrow_schema::ArrowError;
+/// # fn main() -> Result<(), ArrowError> {
+/// let batch = record_batch!(("a", Int32, [1, 2, 3]))?;
+///
+/// let mut encoder = StreamEncoder::try_new(&batch.schema())?;
+/// let mut stream = vec![];
+/// for buffer in encoder.encode(&batch)? {
+///     stream.extend_from_slice(buffer.as_slice());
+/// }
+/// for buffer in encoder.finish()? {
+///     stream.extend_from_slice(buffer.as_slice());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+pub struct StreamEncoder {
+    schema: Schema,
+    /// IPC write options
+    write_options: IpcWriteOptions,
+    /// Whether the stream schema has been encoded
+    schema_encoded: bool,
+    /// Whether the end-of-stream marker has been encoded
+    finished: bool,
+    /// Keeps track of dictionaries that have been encoded
+    dictionary_tracker: DictionaryTracker,
+    data_gen: IpcDataGenerator,
+    ipc_write_context: IpcWriteContext,
+}
+
+impl StreamEncoder {
+    /// Try to create a new stream encoder.
+    pub fn try_new(schema: &Schema) -> Result<Self, ArrowError> {
+        let write_options = IpcWriteOptions::default();
+        Self::try_new_with_options(schema, write_options)
+    }
+
+    /// Try to create a new stream encoder with [`IpcWriteOptions`].
+    pub fn try_new_with_options(
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+    ) -> Result<Self, ArrowError> {
+        ensure_supported_ipc_schema(schema)?;
+
+        Ok(Self {
+            schema: schema.clone(),
+            write_options,
+            schema_encoded: false,
+            finished: false,
+            dictionary_tracker: DictionaryTracker::new(false),
+            data_gen: IpcDataGenerator::default(),
+            ipc_write_context: IpcWriteContext::default(),
+        })
+    }
+
+    /// Encode a [`RecordBatch`] into buffers.
+    ///
+    /// The first call also includes the IPC stream schema message before the
+    /// record batch message. Later calls only include dictionary and record
+    /// batch messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoder is already finished or encoding fails.
+    pub fn encode(&mut self, batch: &RecordBatch) -> Result<Vec<Buffer>, ArrowError> {
+        if self.finished {
+            return Err(ArrowError::IpcError(
+                "Cannot encode record batch to stream encoder as it is closed".to_string(),
+            ));
+        }
+
+        let mut out = vec![];
+        self.encode_schema(&mut out)?;
+        self.data_gen.encode_to_buffers(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.write_options,
+            &mut self.ipc_write_context,
+            &mut out,
+        )?;
+        Ok(out)
+    }
+
+    /// Encode the end-of-stream marker and mark this encoder as finished.
+    ///
+    /// If no batches have been encoded, this also emits the IPC stream schema
+    /// message so the returned buffers form a valid empty IPC stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoder is already finished.
+    pub fn finish(&mut self) -> Result<Vec<Buffer>, ArrowError> {
+        if self.finished {
+            return Err(ArrowError::IpcError(
+                "Cannot finish stream encoder as it is closed".to_string(),
+            ));
+        }
+
+        let mut out = vec![];
+        self.encode_schema(&mut out)?;
+        push_continuation_buffer(&mut out, &self.write_options, 0)?;
+        self.finished = true;
+        Ok(out)
+    }
+
+    fn encode_schema(&mut self, out: &mut Vec<Buffer>) -> Result<(), ArrowError> {
+        if !self.schema_encoded {
+            let encoded_message = self.data_gen.schema_to_bytes_with_dictionary_tracker(
+                &self.schema,
+                &mut self.dictionary_tracker,
+                &self.write_options,
+            );
+            encoded_data_to_buffers(out, encoded_message, &self.write_options)?;
+            self.schema_encoded = true;
+        }
+        Ok(())
+    }
+}
+
 /// Arrow Stream Writer
 ///
 /// Writes Arrow [`RecordBatch`]es to bytes using the [IPC Streaming Format].
@@ -1823,6 +2017,63 @@ pub struct EncodedData {
     /// Arrow buffers to be written, should be an empty vec for schema messages
     pub arrow_data: Vec<u8>,
 }
+
+fn encoded_data_to_buffers(
+    out: &mut Vec<Buffer>,
+    encoded: EncodedData,
+    write_options: &IpcWriteOptions,
+) -> Result<(usize, usize), ArrowError> {
+    let arrow_data_len = encoded.arrow_data.len();
+    if arrow_data_len % usize::from(write_options.alignment) != 0 {
+        return Err(ArrowError::MemoryError(
+            "Arrow data not aligned".to_string(),
+        ));
+    }
+
+    let alignment_mask = usize::from(write_options.alignment - 1);
+    let flatbuf_size = encoded.ipc_message.len();
+    let prefix_size = if write_options.write_legacy_ipc_format {
+        4
+    } else {
+        8
+    };
+    let aligned_size = (flatbuf_size + prefix_size + alignment_mask) & !alignment_mask;
+    let padding_bytes = aligned_size - flatbuf_size - prefix_size;
+
+    push_continuation_buffer(out, write_options, (aligned_size - prefix_size) as i32)?;
+    if flatbuf_size > 0 {
+        out.push(Buffer::from(encoded.ipc_message));
+    }
+    push_padding_buffer(out, padding_bytes);
+
+    let body_len = if arrow_data_len > 0 {
+        out.push(Buffer::from(encoded.arrow_data));
+        arrow_data_len
+    } else {
+        0
+    };
+
+    Ok((aligned_size, body_len))
+}
+
+fn push_continuation_buffer(
+    out: &mut Vec<Buffer>,
+    write_options: &IpcWriteOptions,
+    total_len: i32,
+) -> Result<(), ArrowError> {
+    // Continuation bytes are generated stream framing, so they need a small owned buffer.
+    let mut buffer = Vec::with_capacity(8);
+    write_continuation(&mut buffer, write_options, total_len)?;
+    out.push(Buffer::from(buffer));
+    Ok(())
+}
+
+fn push_padding_buffer(out: &mut Vec<Buffer>, len: usize) {
+    if len > 0 {
+        out.push(Buffer::from(&PADDING[..len]));
+    }
+}
+
 /// Write a message's IPC data and buffers, returning metadata and buffer data lengths written
 pub fn write_message<W: Write>(
     mut writer: W,
@@ -2521,6 +2772,89 @@ mod tests {
     fn deserialize_stream(bytes: Vec<u8>) -> RecordBatch {
         let mut stream_reader = StreamReader::try_new(Cursor::new(bytes), None).unwrap();
         stream_reader.next().unwrap().unwrap()
+    }
+
+    fn encode_stream(
+        schema: &Schema,
+        batches: &[RecordBatch],
+        options: IpcWriteOptions,
+    ) -> Vec<u8> {
+        let mut encoder = StreamEncoder::try_new_with_options(schema, options).unwrap();
+        let mut bytes = Vec::new();
+        for batch in batches {
+            for buffer in encoder.encode(batch).unwrap() {
+                bytes.extend_from_slice(buffer.as_slice());
+            }
+        }
+        for buffer in encoder.finish().unwrap() {
+            bytes.extend_from_slice(buffer.as_slice());
+        }
+        bytes
+    }
+
+    fn write_stream(schema: &Schema, batches: &[RecordBatch], options: IpcWriteOptions) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new_with_options(&mut bytes, schema, options).unwrap();
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+        bytes
+    }
+
+    // StreamEncoder and StreamWriter currently use separate encoding paths, so these tests
+    // verify the new sans-IO API preserves the existing IPC stream byte layout.
+    #[test]
+    fn test_stream_encoder_matches_stream_writer() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Utf8, ["x", "y", "z"])).unwrap();
+        let options = IpcWriteOptions::default();
+        let encoded = encode_stream(batch.schema_ref(), &[batch.clone()], options.clone());
+        let written = write_stream(batch.schema_ref(), &[batch.clone()], options);
+
+        assert_eq!(encoded, written);
+
+        let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
+        assert_eq!(reader.next().unwrap().unwrap(), batch);
+        assert!(reader.next().is_none());
+    }
+
+    #[test]
+    fn test_stream_encoder_empty_stream_matches_stream_writer() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let options = IpcWriteOptions::default();
+        let encoded = encode_stream(&schema, &[], options.clone());
+        let written = write_stream(&schema, &[], options);
+
+        assert_eq!(encoded, written);
+
+        let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
+        assert!(reader.next().is_none());
+    }
+
+    #[test]
+    fn test_stream_encoder_dictionary_batches_match_stream_writer() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values([0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(["a", "b"])),
+            ))],
+        )
+        .unwrap();
+        let options = IpcWriteOptions::default();
+        let encoded = encode_stream(&schema, &[batch.clone()], options.clone());
+        let written = write_stream(&schema, &[batch.clone()], options);
+
+        assert_eq!(encoded, written);
+
+        let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
+        assert_eq!(reader.next().unwrap().unwrap(), batch);
+        assert!(reader.next().is_none());
     }
 
     #[test]
