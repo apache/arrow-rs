@@ -927,12 +927,22 @@ where
     fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
         self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
-            // These can only fail if `array` contains invalid data
-            for idx in start..end {
-                let (_, _, len) = self.get_value_range(idx);
-                self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset);
-            }
+            // A retained run is contiguous in the source, so its source offsets are
+            // monotonic and the run's new offsets are just that slice shifted by a
+            // constant (`base - src_base`). Emitting them as a `map` over the
+            // contiguous source slice avoids the loop-carried `cur_offset += len`
+            // dependency of a per-element accumulation, letting the compiler
+            // vectorize the rebuild (matters at high selectivity, where the run
+            // covers most elements).
+            let base = self.cur_offset.as_usize();
+            let src_base = self.src_offsets[start].as_usize();
+            self.dst_offsets.extend(
+                self.src_offsets[start + 1..=end]
+                    .iter()
+                    .map(|&o| OffsetSize::usize_as(base + (o.as_usize() - src_base))),
+            );
+            self.cur_offset =
+                OffsetSize::usize_as(base + (self.src_offsets[end].as_usize() - src_base));
         }
     }
 
@@ -1224,10 +1234,17 @@ fn filter_list_offsets_and_child<'a, O: OffsetSizeTrait>(
     new_offsets.push(O::usize_as(0));
     let mut acc = 0usize; // running length of selected child elements
     for (start, end) in make_row_ranges() {
-        for window in offsets[start..=end].windows(2) {
-            acc += (window[1] - window[0]).as_usize();
-            new_offsets.push(O::usize_as(acc));
-        }
+        // Offsets within a retained run are contiguous and monotonic, so the new
+        // offsets are the source slice shifted by a constant (`acc - src_base`).
+        // Mapping over the contiguous slice avoids the loop-carried `acc +=`
+        // dependency of the per-window accumulation and vectorizes.
+        let src_base = offsets[start].as_usize();
+        new_offsets.extend(
+            offsets[start + 1..=end]
+                .iter()
+                .map(|&o| O::usize_as(acc + (o.as_usize() - src_base))),
+        );
+        acc += offsets[end].as_usize() - src_base;
     }
 
     // Each retained row run maps to one contiguous block of child elements.
