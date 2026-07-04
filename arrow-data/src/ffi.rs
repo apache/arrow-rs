@@ -18,14 +18,14 @@
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 use crate::bit_mask::set_bits;
-use crate::{layout, ArrayData};
+use crate::{ArrayData, layout};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
 use arrow_schema::DataType;
 use std::ffi::c_void;
 
 /// ABI-compatible struct for ArrowArray from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
+/// See <https://arrow.apache.org/docs/format/CDataInterface.html#the-arrowarray-structure>
 ///
 /// ```
 /// # use arrow_data::ArrayData;
@@ -37,21 +37,31 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
-    length: i64,
-    null_count: i64,
-    offset: i64,
-    n_buffers: i64,
-    n_children: i64,
-    buffers: *mut *const c_void,
-    children: *mut *mut FFI_ArrowArray,
-    dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
-    // When exported, this MUST contain everything that is owned by this array.
-    // for example, any buffer pointed to in `buffers` must be here, as well
-    // as the `buffers` pointer itself.
-    // In other words, everything in [FFI_ArrowArray] must be owned by
-    // `private_data` and can assume that they do not outlive `private_data`.
-    private_data: *mut c_void,
+    /// Logical length of the array
+    pub length: i64,
+    /// Number of null items in the array
+    pub null_count: i64,
+    /// logical offset inside the array
+    pub offset: i64,
+    /// Number of physical buffers backing this array
+    pub n_buffers: i64,
+    /// Number of children this array has
+    pub n_children: i64,
+    /// C array of pointers to the start of each physical buffer backing this array
+    pub buffers: *mut *const c_void,
+    /// C array of pointers to each child array of this array
+    pub children: *mut *mut FFI_ArrowArray,
+    /// Pointer to the underlying array of dictionary values
+    pub dictionary: *mut FFI_ArrowArray,
+    /// Pointer to a producer-provided release callback
+    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    /// Opaque pointer to producer-provided private data
+    /// When exported, this MUST contain everything that is owned by this array.
+    /// For example, any buffer pointed to in `buffers` must be here, as well
+    /// as the `buffers` pointer itself.
+    /// In other words, everything in [FFI_ArrowArray] must be owned by
+    /// `private_data` and can assume that they do not outlive `private_data`.
+    pub private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
@@ -71,15 +81,15 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     if array.is_null() {
         return;
     }
-    let array = &mut *array;
+    let array = unsafe { &mut *array };
 
     // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
+    let private = unsafe { Box::from_raw(array.private_data as *mut ArrayPrivateData) };
     for child in private.children.iter() {
-        let _ = Box::from_raw(*child);
+        let _ = unsafe { Box::from_raw(*child) };
     }
     if !private.dictionary.is_null() {
-        let _ = Box::from_raw(private.dictionary);
+        let _ = unsafe { Box::from_raw(private.dictionary) };
     }
 
     array.release = None;
@@ -222,7 +232,7 @@ impl FFI_ArrowArray {
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
     pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self {
-        std::ptr::replace(array, Self::empty())
+        unsafe { std::ptr::replace(array, Self::empty()) }
     }
 
     /// create an empty `FFI_ArrowArray`, which can be used to import data into

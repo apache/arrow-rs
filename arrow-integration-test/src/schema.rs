@@ -40,7 +40,7 @@ pub fn schema_from_json(json: &serde_json::Value) -> Result<Schema> {
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Schema fields should be an array".to_string(),
-                    ))
+                    ));
                 }
             };
 

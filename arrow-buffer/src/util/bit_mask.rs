@@ -32,8 +32,18 @@ pub fn set_bits(
     offset_read: usize,
     len: usize,
 ) -> usize {
-    assert!(offset_write + len <= write_data.len() * 8);
-    assert!(offset_read + len <= data.len() * 8);
+    assert!(
+        offset_write
+            .checked_add(len)
+            .expect("operation will overflow write buffer")
+            <= write_data.len() * 8
+    );
+    assert!(
+        offset_read
+            .checked_add(len)
+            .expect("operation will overflow read buffer")
+            <= data.len() * 8
+    );
     let mut null_count = 0;
     let mut acc = 0;
     while len > acc {
@@ -132,10 +142,8 @@ unsafe fn set_upto_64bits(
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
     let mut tmp: u64 = 0;
-    let src = data.as_ptr().add(offset);
-    unsafe {
-        std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
-    }
+    let src = unsafe { data.as_ptr().add(offset) };
+    unsafe { std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count) };
     tmp
 }
 
@@ -143,8 +151,8 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    let ptr = data.as_mut_ptr().add(offset) as *mut u64;
-    ptr.write_unaligned(chunk);
+    let ptr = unsafe { data.as_mut_ptr().add(offset) } as *mut u64;
+    unsafe { ptr.write_unaligned(chunk) };
 }
 
 /// Similar to `write_u64_bytes`, but this method ORs the offset addressed `data` and `chunk`
@@ -154,9 +162,9 @@ unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    let ptr = data.as_mut_ptr().add(offset);
-    let chunk = chunk | (*ptr) as u64;
-    (ptr as *mut u64).write_unaligned(chunk);
+    let ptr = unsafe { data.as_mut_ptr().add(offset) };
+    let chunk = chunk | (unsafe { *ptr }) as u64;
+    unsafe { (ptr as *mut u64).write_unaligned(chunk) };
 }
 
 #[cfg(test)]
@@ -278,7 +286,7 @@ mod tests {
     impl Display for BinaryFormatter<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             for byte in self.0 {
-                write!(f, "{:08b} ", byte)?;
+                write!(f, "{byte:08b} ")?;
             }
             write!(f, " ")?;
             Ok(())
@@ -389,8 +397,8 @@ mod tests {
                 self.len,
             );
 
-            assert_eq!(actual, self.expected_data, "self: {}", self);
-            assert_eq!(null_count, self.expected_null_count, "self: {}", self);
+            assert_eq!(actual, self.expected_data, "self: {self}");
+            assert_eq!(null_count, self.expected_null_count, "self: {self}");
         }
     }
 
@@ -428,5 +436,41 @@ mod tests {
         assert_eq!(n, 0);
         assert_eq!(len_set, 1);
         assert_eq!(write_data, &[0b00000010]);
+    }
+
+    #[test]
+    #[should_panic(expected = "operation will overflow read buffer")]
+    fn test_overflow_read_buffer_bounds() {
+        // Tiny buffers so any huge computed index is out-of-bounds.
+        let data = [0u8; 1];
+        let mut write_data = [0u8; 1];
+
+        // Choose values so (offset_read + len) wraps to a small number in release builds.
+        // offset_read = usize::MAX - 7, len = 8 => wraps to 0.
+        // This can bypass `assert!(offset_read + len <= data.len() * 8)`.
+        let offset_write: usize = 0;
+        let offset_read: usize = usize::MAX - 7;
+        let len: usize = 8;
+
+        // should panic on bounds check overflow
+        let _nulls = set_bits(&mut write_data, &data, offset_write, offset_read, len);
+    }
+
+    #[test]
+    #[should_panic(expected = "operation will overflow write buffer")]
+    fn test_overflow_write_buffer_bounds() {
+        // Tiny buffers so any huge computed index is out-of-bounds.
+        let data = [0u8; 1];
+        let mut write_data = [0u8; 1];
+
+        // Choose values so (offset_write + len) wraps to a small number in release builds.
+        // offset_write = usize::MAX - 7, len = 8 => wraps to 0.
+        // This can bypass `assert!(offset_write + len <= write_data.len() * 8)`.
+        let offset_write: usize = usize::MAX - 7;
+        let offset_read: usize = 0;
+        let len: usize = 8;
+
+        // should panic on bounds check overflow
+        let _nulls = set_bits(&mut write_data, &data, offset_write, offset_read, len);
     }
 }

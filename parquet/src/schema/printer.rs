@@ -45,7 +45,10 @@
 
 use std::{fmt, io};
 
-use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
+use crate::basic::{
+    ConvertedType, DecimalType, GeographyType, GeometryType, IntType, LogicalType, TimeUnit,
+    Type as PhysicalType, VariantType,
+};
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::schema::types::Type;
 
@@ -79,7 +82,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
             writeln!(
                 out,
                 "  {}: {}",
-                &kv.key,
+                kv.key,
                 kv.value.as_ref().unwrap_or(&"".to_owned())
             );
         }
@@ -171,21 +174,13 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
 fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChunkMetaData) {
     writeln!(out, "column type: {}", cc_metadata.column_type());
     writeln!(out, "column path: {}", cc_metadata.column_path());
-    let encoding_strs: Vec<_> = cc_metadata
-        .encodings()
-        .iter()
-        .map(|e| format!("{e}"))
-        .collect();
+    let encoding_strs: Vec<_> = cc_metadata.encodings().map(|e| format!("{e}")).collect();
     writeln!(out, "encodings: {}", encoding_strs.join(" "));
     let file_path_str = cc_metadata.file_path().unwrap_or("N/A");
     writeln!(out, "file path: {file_path_str}");
     writeln!(out, "file offset: {}", cc_metadata.file_offset());
     writeln!(out, "num of values: {}", cc_metadata.num_values());
-    writeln!(
-        out,
-        "compression: {}",
-        cc_metadata.compression().codec_to_string()
-    );
+    writeln!(out, "compression: {}", cc_metadata.compression_codec());
     writeln!(
         out,
         "total compressed size (in bytes): {}",
@@ -277,9 +272,9 @@ impl<'a> Printer<'a> {
 #[inline]
 fn print_timeunit(unit: &TimeUnit) -> &str {
     match unit {
-        TimeUnit::MILLIS(_) => "MILLIS",
-        TimeUnit::MICROS(_) => "MICROS",
-        TimeUnit::NANOS(_) => "NANOS",
+        TimeUnit::MILLIS => "MILLIS",
+        TimeUnit::MICROS => "MICROS",
+        TimeUnit::NANOS => "NANOS",
     }
 }
 
@@ -292,30 +287,28 @@ fn print_logical_and_converted(
 ) -> String {
     match logical_type {
         Some(logical_type) => match logical_type {
-            LogicalType::Integer {
+            LogicalType::Integer(IntType {
                 bit_width,
                 is_signed,
-            } => {
+            }) => {
                 format!("INTEGER({bit_width},{is_signed})")
             }
-            LogicalType::Decimal { scale, precision } => {
+            LogicalType::Decimal(DecimalType { scale, precision }) => {
                 format!("DECIMAL({precision},{scale})")
             }
-            LogicalType::Timestamp {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => {
+            LogicalType::Timestamp(timestamp) => {
                 format!(
                     "TIMESTAMP({},{})",
-                    print_timeunit(unit),
-                    is_adjusted_to_u_t_c
+                    print_timeunit(&timestamp.unit),
+                    timestamp.is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::Time {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => {
-                format!("TIME({},{})", print_timeunit(unit), is_adjusted_to_u_t_c)
+            LogicalType::Time(time) => {
+                format!(
+                    "TIME({},{})",
+                    print_timeunit(&time.unit),
+                    time.is_adjusted_to_u_t_c
+                )
             }
             LogicalType::Date => "DATE".to_string(),
             LogicalType::Bson => "BSON".to_string(),
@@ -326,7 +319,26 @@ fn print_logical_and_converted(
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
+            LogicalType::Variant(VariantType {
+                specification_version,
+            }) => format!("VARIANT({specification_version:?})"),
+            LogicalType::Geometry(GeometryType { crs }) => {
+                if let Some(crs) = crs {
+                    format!("GEOMETRY({crs})")
+                } else {
+                    "GEOMETRY".to_string()
+                }
+            }
+            LogicalType::Geography(GeographyType { crs, algorithm }) => {
+                let algorithm = algorithm.unwrap_or_default();
+                if let Some(crs) = crs {
+                    format!("GEOGRAPHY({algorithm}, {crs})")
+                } else {
+                    format!("GEOGRAPHY({algorithm})")
+                }
+            }
             LogicalType::Unknown => "UNKNOWN".to_string(),
+            LogicalType::_Unknown { field_id } => format!("_Unknown({field_id})"),
         },
         None => {
             // Also print converted type if it is available
@@ -385,13 +397,13 @@ impl Printer<'_> {
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
                 let logical_type_str = print_logical_and_converted(
-                    basic_info.logical_type().as_ref(),
+                    basic_info.logical_type_ref(),
                     basic_info.converted_type(),
                     precision,
                     scale,
                 );
                 if !logical_type_str.is_empty() {
-                    write!(self.output, " ({});", logical_type_str);
+                    write!(self.output, " ({logical_type_str});");
                 } else {
                     write!(self.output, ";");
                 }
@@ -411,7 +423,7 @@ impl Printer<'_> {
                         write!(self.output, "[{}] ", basic_info.id());
                     }
                     let logical_str = print_logical_and_converted(
-                        basic_info.logical_type().as_ref(),
+                        basic_info.logical_type_ref(),
                         basic_info.converted_type(),
                         0,
                         0,
@@ -456,7 +468,7 @@ mod tests {
             let mut p = Printer::new(&mut s);
             p.print(&message);
         }
-        println!("{}", &s);
+        println!("{s}");
         let parsed = parse_message_type(&s).unwrap();
         assert_eq!(message, parsed);
     }
@@ -532,10 +544,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::Integer {
-                        bit_width: 32,
-                        is_signed: true,
-                    }),
+                    Some(LogicalType::integer(32, true)),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -547,10 +556,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::Integer {
-                        bit_width: 8,
-                        is_signed: false,
-                    }),
+                    Some(LogicalType::integer(8, false)),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )
@@ -562,10 +568,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::Integer {
-                        bit_width: 16,
-                        is_signed: true,
-                    }),
+                    Some(LogicalType::integer(16, true)),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )
@@ -577,10 +580,7 @@ mod tests {
                     "field",
                     Some(42),
                     PhysicalType::INT32,
-                    Some(LogicalType::Integer {
-                        bit_width: 16,
-                        is_signed: true,
-                    }),
+                    Some(LogicalType::integer(16, true)),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )
@@ -640,10 +640,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT64,
-                    Some(LogicalType::Timestamp {
-                        is_adjusted_to_u_t_c: true,
-                        unit: TimeUnit::MILLIS(Default::default()),
-                    }),
+                    Some(LogicalType::timestamp(true, TimeUnit::MILLIS)),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -667,10 +664,7 @@ mod tests {
                     "field",
                     None,
                     PhysicalType::INT32,
-                    Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
-                        is_adjusted_to_u_t_c: false,
-                    }),
+                    Some(LogicalType::time(false, TimeUnit::MILLIS)),
                     ConvertedType::TIME_MILLIS,
                     Repetition::REQUIRED,
                 )
@@ -682,10 +676,7 @@ mod tests {
                     "field",
                     Some(42),
                     PhysicalType::INT32,
-                    Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
-                        is_adjusted_to_u_t_c: false,
-                    }),
+                    Some(LogicalType::time(false, TimeUnit::MILLIS)),
                     ConvertedType::TIME_MILLIS,
                     Repetition::REQUIRED,
                 )
@@ -776,6 +767,57 @@ mod tests {
                 .unwrap(),
                 "REQUIRED BYTE_ARRAY field [42] (STRING);",
             ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::geometry(None)),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOMETRY);",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::geometry(Some("non-missing CRS".to_string()))),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOMETRY(non-missing CRS));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::geography(None, Some(Default::default()))),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::geography(
+                        Some("non-missing CRS".to_string()),
+                        Some(Default::default()),
+                    )),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL, non-missing CRS));",
+            ),
         ];
 
         types_and_strings.into_iter().for_each(|(field, expected)| {
@@ -820,10 +862,7 @@ mod tests {
             ),
             (
                 Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_logical_type(Some(LogicalType::Decimal {
-                        precision: 32,
-                        scale: 20,
-                    }))
+                    .with_logical_type(Some(LogicalType::decimal(20, 32)))
                     .with_precision(32)
                     .with_scale(20)
                     .with_length(decimal_length_from_precision(32))
@@ -1111,10 +1150,7 @@ mod tests {
     fn test_print_and_parse_decimal() {
         let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::Decimal {
-                precision: 9,
-                scale: 2,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(2, 9)))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(2)
@@ -1123,10 +1159,7 @@ mod tests {
 
         let f2 = Type::primitive_type_builder("f2", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::Decimal {
-                precision: 9,
-                scale: 0,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(0, 9)))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(0)

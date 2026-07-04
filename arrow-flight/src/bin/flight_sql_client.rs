@@ -17,15 +17,16 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
-use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
+use arrow_cast::{CastOptions, cast_with_options, pretty::pretty_format_batches};
 use arrow_flight::{
-    sql::{client::FlightSqlServiceClient, CommandGetDbSchemas, CommandGetTables},
     FlightInfo,
+    flight_service_client::FlightServiceClient,
+    sql::{CommandGetDbSchemas, CommandGetTables, client::FlightSqlServiceClient},
 };
 use arrow_schema::Schema;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use core::str;
 use futures::TryStreamExt;
 use tonic::{
@@ -51,6 +52,24 @@ pub struct LoggingArgs {
         action = clap::ArgAction::Count,
     )]
     log_verbose_count: u8,
+}
+
+/// gRPC/HTTP compression algorithms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CompressionEncoding {
+    Gzip,
+    Deflate,
+    Zstd,
+}
+
+impl From<CompressionEncoding> for tonic::codec::CompressionEncoding {
+    fn from(encoding: CompressionEncoding) -> Self {
+        match encoding {
+            CompressionEncoding::Gzip => Self::Gzip,
+            CompressionEncoding::Deflate => Self::Deflate,
+            CompressionEncoding::Zstd => Self::Zstd,
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -85,6 +104,14 @@ struct ClientArgs {
     #[clap(long)]
     tls: bool,
 
+    /// Dump TLS key log.
+    ///
+    /// The target file is specified by the `SSLKEYLOGFILE` environment variable.
+    ///
+    /// Requires `--tls`.
+    #[clap(long, requires = "tls")]
+    key_log: bool,
+
     /// Server host.
     ///
     /// Required.
@@ -96,6 +123,34 @@ struct ClientArgs {
     /// Defaults to `443` if `tls` is set, otherwise defaults to `80`.
     #[clap(long)]
     port: Option<u16>,
+
+    /// Compression accepted by the client for responses sent by the server.
+    ///
+    /// The client will send this information to the server as part of the request. The server is free to pick an
+    /// algorithm from that list or use no compression (called "identity" encoding).
+    ///
+    /// You may define multiple algorithms by using a comma-separated list.
+    #[clap(long, value_delimiter = ',')]
+    accept_compression: Vec<CompressionEncoding>,
+
+    /// Compression of requests sent by the client to the server.
+    ///
+    /// Since the client needs to decide on the compression before sending the request, there is no client<->server
+    /// negotiation. If the server does NOT support the chosen compression, it will respond with an error a la:
+    ///
+    /// ```
+    /// Ipc error: Status {
+    ///     code: Unimplemented,
+    ///     message: "Content is compressed with `zstd` which isn't supported",
+    ///     metadata: MetadataMap { headers: {"grpc-accept-encoding": "identity", ...} },
+    ///     ...
+    /// }
+    /// ```
+    ///
+    /// Based on the algorithms listed in the `grpc-accept-encoding` header, you may make a more educated guess for
+    /// your next request. Note that `identity` is a synonym for "no compression".
+    #[clap(long)]
+    send_compression: Option<CompressionEncoding>,
 }
 
 #[derive(Debug, Parser)]
@@ -323,7 +378,7 @@ fn construct_record_batch_from_params(
 }
 
 fn setup_logging(args: LoggingArgs) -> Result<()> {
-    use tracing_subscriber::{util::SubscriberInitExt, EnvFilter, FmtSubscriber};
+    use tracing_subscriber::{EnvFilter, FmtSubscriber, util::SubscriberInitExt};
 
     tracing_log::LogTracer::init().context("tracing log init")?;
 
@@ -357,7 +412,11 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_while_idle(true);
 
     if args.tls {
-        let tls_config = ClientTlsConfig::new().with_enabled_roots();
+        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
+        if args.key_log {
+            tls_config = tls_config.use_key_log();
+        }
+
         endpoint = endpoint
             .tls_config(tls_config)
             .context("create TLS endpoint")?;
@@ -365,7 +424,14 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
 
     let channel = endpoint.connect().await.context("connect to endpoint")?;
 
-    let mut client = FlightSqlServiceClient::new(channel);
+    let mut client = FlightServiceClient::new(channel);
+    for encoding in args.accept_compression {
+        client = client.accept_compressed(encoding.into());
+    }
+    if let Some(encoding) = args.send_compression {
+        client = client.send_compressed(encoding.into());
+    }
+    let mut client = FlightSqlServiceClient::new_from_inner(client);
     info!("connected");
 
     for (k, v) in args.headers {

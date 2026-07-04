@@ -18,7 +18,14 @@
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, GenericByteArray, downcast_integer};
+use arrow_array::{
+    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait,
+    builder::{FixedSizeBinaryDictionaryBuilder, GenericByteDictionaryBuilder},
+    cast::AsArray,
+    make_array,
+    types::{ArrowDictionaryKeyType, ByteArrayType},
+};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -29,14 +36,6 @@ use std::sync::Arc;
 pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
     Dict { keys: Vec<K>, values: ArrayRef },
     Values { values: OffsetBuffer<V> },
-}
-
-impl<K: ArrowNativeType, V: OffsetSizeTrait> Default for DictionaryBuffer<K, V> {
-    fn default() -> Self {
-        Self::Values {
-            values: Default::default(),
-        }
-    }
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
@@ -96,7 +95,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         match self {
             Self::Values { values } => Ok(values),
             Self::Dict { keys, values } => {
-                let mut spilled = OffsetBuffer::default();
+                let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
                 let dict_buffers = data.buffers();
                 let dict_offsets = dict_buffers[0].typed_data::<V>();
@@ -154,6 +153,20 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
+                let ArrowType::Dictionary(_, value_type) = data_type else {
+                    unreachable!()
+                };
+                let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                    let binary = values.as_binary::<i32>();
+                    Arc::new(FixedSizeBinaryArray::new(
+                        size,
+                        binary.values().clone(),
+                        binary.nulls().cloned(),
+                    )) as _
+                } else {
+                    values
+                };
+
                 let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
                     .add_buffer(Buffer::from_vec(keys))
@@ -168,30 +181,39 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 Ok(make_array(data))
             }
             Self::Values { values } => {
-                let value_type = match data_type {
-                    ArrowType::Dictionary(_, v) => v.as_ref().clone(),
+                let (key_type, value_type) = match data_type {
+                    ArrowType::Dictionary(k, v) => (k, v.as_ref().clone()),
                     _ => unreachable!(),
                 };
 
-                // This will compute a new dictionary
-                let array =
-                    arrow_cast::cast(&values.into_array(null_buffer, value_type), data_type)
-                        .expect("cast should be infallible");
-
-                Ok(array)
+                let array = values.into_array(null_buffer, value_type);
+                pack_values(key_type, &array)
             }
         }
     }
 }
 
 impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::Values {
+            values: OffsetBuffer::with_capacity(capacity),
+        }
+    }
+
+    fn reserve_exact(&mut self, additional: usize) {
+        match self {
+            Self::Dict { keys, .. } => keys.reserve_exact(additional),
+            Self::Values { values, .. } => values.reserve_exact(additional),
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         match self {
             Self::Dict { keys, .. } => {
                 keys.resize(read_offset + levels_read, K::default());
@@ -202,6 +224,60 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
             }
         }
     }
+}
+
+macro_rules! dict_helper {
+    ($k:ty, $array:ident) => {
+        match $array.data_type() {
+            ArrowType::Utf8 => pack_values_impl::<$k, _>($array.as_string::<i32>()),
+            ArrowType::LargeUtf8 => pack_values_impl::<$k, _>($array.as_string::<i64>()),
+            ArrowType::Binary => pack_values_impl::<$k, _>($array.as_binary::<i32>()),
+            ArrowType::LargeBinary => pack_values_impl::<$k, _>($array.as_binary::<i64>()),
+            ArrowType::FixedSizeBinary(_) => {
+                pack_fixed_values_impl::<$k>($array.as_fixed_size_binary())
+            }
+            _ => unreachable!(),
+        }
+    };
+}
+
+fn pack_values(key_type: &ArrowType, values: &ArrayRef) -> Result<ArrayRef> {
+    downcast_integer! {
+        key_type => (dict_helper, values),
+            _ => unreachable!(),
+    }
+}
+
+fn pack_values_impl<K: ArrowDictionaryKeyType, T: ByteArrayType>(
+    array: &GenericByteArray<T>,
+) -> Result<ArrayRef> {
+    let mut builder = GenericByteDictionaryBuilder::<K, T>::with_capacity(array.len(), 1024, 1024);
+    for x in array {
+        match x {
+            Some(x) => builder.append_value(x),
+            None => builder.append_null(),
+        }
+    }
+    let raw = builder.finish();
+    Ok(Arc::new(raw))
+}
+
+fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
+    array: &FixedSizeBinaryArray,
+) -> Result<ArrayRef> {
+    let mut builder = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(
+        array.len(),
+        1024,
+        array.value_length(),
+    );
+    for x in array {
+        match x {
+            Some(x) => builder.append_value(x),
+            None => builder.append_null(),
+        }
+    }
+    let raw = builder.finish();
+    Ok(Arc::new(raw))
 }
 
 #[cfg(test)]
@@ -217,7 +293,7 @@ mod tests {
 
         let d1: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
 
         // Read some data preserving the dictionary
         let values = &[1, 0, 3, 2, 4];
@@ -225,7 +301,9 @@ mod tests {
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        buffer.pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice());
+        buffer
+            .pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice())
+            .unwrap();
 
         // Read some data not preserving the dictionary
 
@@ -236,10 +314,12 @@ mod tests {
 
         valid.extend_from_slice(&[false, false, true, false, true]);
         let null_buffer = Buffer::from_iter(valid.iter().cloned());
-        buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
+        buffer
+            .pad_nulls(read_offset, 2, 5, null_buffer.as_slice())
+            .unwrap();
 
         assert_eq!(buffer.len(), 13);
-        let split = std::mem::take(&mut buffer);
+        let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
         let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -274,7 +354,7 @@ mod tests {
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
-        let array = std::mem::take(&mut buffer)
+        let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
             .into_array(None, &dict_type)
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -302,7 +382,7 @@ mod tests {
         let dict_type =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
@@ -313,7 +393,7 @@ mod tests {
             err
         );
 
-        let mut buffer = DictionaryBuffer::<i32, i32>::default();
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec![""])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 1, 0]);
 

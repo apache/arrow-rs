@@ -50,7 +50,9 @@ fn test_shrink_to_fit_after_concat() {
         });
     let expected_len = num_concats * array_len;
     assert_eq!(bytes_used(concatenated.clone()), expected_len);
-    eprintln!("The concatenated array is {expected_len} B long. Amount of memory used by this thread: {bytes_allocated_by_this_thread} B");
+    eprintln!(
+        "The concatenated array is {expected_len} B long. Amount of memory used by this thread: {bytes_allocated_by_this_thread} B"
+    );
 
     assert!(
         expected_len <= bytes_allocated_by_this_thread,
@@ -91,8 +93,8 @@ fn bytes_used(array: ArrayRef) -> usize {
 use std::{
     alloc::Layout,
     sync::{
-        atomic::{AtomicUsize, Ordering::Relaxed},
         Arc,
+        atomic::{AtomicUsize, Ordering::Relaxed},
     },
 };
 

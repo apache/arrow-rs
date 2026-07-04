@@ -28,6 +28,7 @@ use arrow::array::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::i256;
 use rand::Rng;
+use std::hint;
 
 // Build arrays with 512k elements.
 const BATCH_SIZE: usize = 8 << 10;
@@ -46,7 +47,7 @@ fn bench_primitive(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -60,7 +61,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_null();
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -83,7 +84,7 @@ fn bench_bool(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -101,10 +102,46 @@ fn bench_string(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_value(SAMPLE_STRING);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
+}
+
+fn bench_decimal32(c: &mut Criterion) {
+    c.bench_function("bench_decimal32_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+            let mut decimal_builder = Decimal32Builder::with_capacity(BATCH_SIZE);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder.append_value(rng.random_range::<i32, _>(0..999999999));
+            }
+            hint::black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(9, 0)
+                    .unwrap(),
+            );
+        })
+    });
+}
+
+fn bench_decimal64(c: &mut Criterion) {
+    c.bench_function("bench_decimal64_builder", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+            let mut decimal_builder = Decimal64Builder::with_capacity(BATCH_SIZE);
+            for _ in 0..BATCH_SIZE {
+                decimal_builder.append_value(rng.random_range::<i64, _>(0..9999999999));
+            }
+            hint::black_box(
+                decimal_builder
+                    .finish()
+                    .with_precision_and_scale(18, 0)
+                    .unwrap(),
+            );
+        })
+    });
 }
 
 fn bench_decimal128(c: &mut Criterion) {
@@ -115,7 +152,7 @@ fn bench_decimal128(c: &mut Criterion) {
             for _ in 0..BATCH_SIZE {
                 decimal_builder.append_value(rng.random_range::<i128, _>(0..9999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(38, 0)
@@ -134,7 +171,7 @@ fn bench_decimal256(c: &mut Criterion) {
                 decimal_builder
                     .append_value(i256::from_i128(rng.random_range::<i128, _>(0..99999999999)));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(76, 10)
@@ -150,6 +187,8 @@ criterion_group!(
     bench_primitive_nulls,
     bench_bool,
     bench_string,
+    bench_decimal32,
+    bench_decimal64,
     bench_decimal128,
     bench_decimal256,
 );

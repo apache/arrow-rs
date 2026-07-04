@@ -20,6 +20,7 @@ use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::compression::create_codec;
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
+use std::hint;
 
 fn do_bench(c: &mut Criterion, name: &str, uncompressed: &[u8]) {
     let codecs = [
@@ -57,7 +58,11 @@ fn do_bench(c: &mut Criterion, name: &str, uncompressed: &[u8]) {
             b.iter(|| {
                 let mut out = Vec::new();
                 codec
-                    .decompress(black_box(&compressed), &mut out, Some(uncompressed.len()))
+                    .decompress(
+                        hint::black_box(&compressed),
+                        &mut out,
+                        Some(uncompressed.len()),
+                    )
                     .unwrap();
                 out
             });

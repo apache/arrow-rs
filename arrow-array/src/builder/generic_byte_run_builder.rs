@@ -19,8 +19,8 @@ use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
     ArrayRef, ArrowPrimitiveType, RunArray,
+    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
 };
 
 use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
@@ -375,11 +375,11 @@ pub type LargeBinaryRunBuilder<K> = GenericByteRunBuilder<K, LargeBinaryType>;
 mod tests {
     use super::*;
 
+    use crate::GenericByteArray;
+    use crate::Int16RunArray;
     use crate::array::Array;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type};
-    use crate::GenericByteArray;
-    use crate::Int16RunArray;
 
     fn test_bytes_run_builder<T>(values: Vec<&T::Native>)
     where

@@ -48,7 +48,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<&'a str>> {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        indexes.map(|opt_index| opt_index.map(|index| unsafe { self.value_unchecked(index) }))
     }
 
     /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
@@ -156,9 +156,9 @@ pub type LargeStringArray = GenericStringArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Array;
     use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
     use crate::types::UInt8Type;
-    use crate::Array;
     use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
@@ -257,9 +257,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a StringArray of length 3"
     )]
     fn test_string_array_get_value_index_out_of_bound() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
         let array_data = ArrayData::builder(DataType::Utf8)
             .len(3)
@@ -550,5 +548,13 @@ mod tests {
 
         let err_return = array.into_builder().unwrap_err();
         assert_eq!(&err_return, &shared_array);
+    }
+
+    #[test]
+    fn test_non_null_string_array_equal() {
+        let a = StringArray::from(vec![Some("ab"), Some("c")]);
+        let b = StringArray::from(vec![Some("a"), Some("bc")]);
+
+        assert_ne!(a, b);
     }
 }

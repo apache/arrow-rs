@@ -273,8 +273,8 @@ mod union_builder;
 
 pub use union_builder::*;
 
-use crate::types::{Int16Type, Int32Type, Int64Type, Int8Type};
 use crate::ArrayRef;
+use crate::types::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
 
@@ -341,6 +341,18 @@ pub trait ArrayBuilder: Any + Send + Sync {
     /// Builds the array without resetting the underlying builder.
     fn finish_cloned(&self) -> ArrayRef;
 
+    /// Builds the array without resetting the values builder.
+    ///
+    /// This is relevant for dictionary builders but also for composite builders.
+    /// Those are not affected directly, but will call the corresponding method
+    /// on their constituent builders.
+    ///
+    /// The default implementation just calls [`finish`][Self::finish] which is sufficient
+    /// for all but the above mentioned builders.
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        self.finish()
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -374,6 +386,10 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
 
     fn finish_cloned(&self) -> ArrayRef {
         (**self).finish_cloned()
+    }
+
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        (**self).finish_preserve_values()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -447,9 +463,16 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
         DataType::LargeBinary => Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024)),
+        DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(capacity)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
+        DataType::Decimal32(p, s) => Box::new(
+            Decimal32Builder::with_capacity(capacity).with_data_type(DataType::Decimal32(*p, *s)),
+        ),
+        DataType::Decimal64(p, s) => Box::new(
+            Decimal64Builder::with_capacity(capacity).with_data_type(DataType::Decimal64(*p, *s)),
+        ),
         DataType::Decimal128(p, s) => Box::new(
             Decimal128Builder::with_capacity(capacity).with_data_type(DataType::Decimal128(*p, *s)),
         ),
@@ -458,6 +481,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
         DataType::LargeUtf8 => Box::new(LargeStringBuilder::with_capacity(capacity, 1024)),
+        DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(capacity)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
@@ -559,7 +583,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                     .with_values_field(fields[1].clone()),
                 )
             }
-            t => panic!("The field of Map data type {t:?} should have a child Struct field"),
+            t => panic!("The field of Map data type {t} should have a child Struct field"),
         },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t @ DataType::Dictionary(key_type, value_type) => {
@@ -586,7 +610,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                                 LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
                             Box::new(dict_builder)
                         }
-                        t => panic!("Dictionary value type {t:?} is not currently supported"),
+                        t => unimplemented!("Dictionary value type {t} is not currently supported"),
                     }
                 };
             }
@@ -596,10 +620,54 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 DataType::Int32 => dict_builder!(Int32Type),
                 DataType::Int64 => dict_builder!(Int64Type),
                 _ => {
-                    panic!("Data type {t:?} with key type {key_type:?} is not currently supported")
+                    unimplemented!(
+                        "Data type {t} with key type {key_type} is not currently supported"
+                    )
                 }
             }
         }
-        t => panic!("Data type {t:?} is not currently supported"),
+        t => unimplemented!("Data type {t} is not currently supported"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct PreserveValuesMock {
+        pub called: usize,
+        pub inner: Int32Builder,
+    }
+
+    impl ArrayBuilder for PreserveValuesMock {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+            self
+        }
+
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+
+        fn finish(&mut self) -> ArrayRef {
+            panic!("finish should never be called on PreserveValuesMock")
+        }
+
+        fn finish_cloned(&self) -> ArrayRef {
+            panic!("finish_cloned should never be called on PreserveValuesMock")
+        }
+
+        fn finish_preserve_values(&mut self) -> ArrayRef {
+            self.called += 1;
+            self.inner.finish_preserve_values()
+        }
     }
 }

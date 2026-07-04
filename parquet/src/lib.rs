@@ -55,25 +55,50 @@
 //! ## Reading and Writing Arrow (`arrow` feature)
 //!
 //! The [`arrow`] module supports reading and writing Parquet data to/from
-//! Arrow `RecordBatch`es. Using Arrow is simple and performant, and allows workloads
+//! Arrow [`RecordBatch`]es. Using Arrow is simple and performant, and allows workloads
 //! to leverage the wide range of data transforms provided by the [arrow] crate, and by the
 //! ecosystem of [Arrow] compatible systems.
 //!
 //! Most users will use [`ArrowWriter`] for writing and [`ParquetRecordBatchReaderBuilder`] for
-//! reading.
+//! reading from synchronous IO sources such as files or in-memory buffers.
 //!
-//! Lower level APIs include [`ArrowColumnWriter`] for writing using multiple
-//! threads, and [`RowFilter`] to apply filters during decode.
+//! Lower level APIs include
+//! * [`ParquetPushDecoder`] for file grained control over interleaving of IO and CPU.
+//! * [`ArrowColumnWriter`] for writing using multiple threads,
+//! * [`RowFilter`] to apply filters during decode
+//!
+//! ### EXPERIMENTAL: Content-Defined Chunking
+//!
+//! [`ArrowWriter`] supports content-defined chunking (CDC), which creates data page
+//! boundaries based on content rather than fixed sizes. CDC enables efficient
+//! deduplication in content-addressable storage (CAS) systems: when the same data
+//! appears in successive file versions, it will produce identical byte sequences that
+//! CAS backends can deduplicate.
+//!
+//! Enable CDC via [`WriterProperties`]:
+//!
+//! ```rust
+//! # use parquet::file::properties::{WriterProperties, CdcOptions};
+//! let props = WriterProperties::builder()
+//!     .set_content_defined_chunking(Some(CdcOptions::default()))
+//!     .build();
+//! ```
+//!
+//! See [`CdcOptions`] for chunk size and normalization parameters.
+//!
+//! [`WriterProperties`]: file::properties::WriterProperties
+//! [`CdcOptions`]: file::properties::CdcOptions
 //!
 //! [`ArrowWriter`]: arrow::arrow_writer::ArrowWriter
 //! [`ParquetRecordBatchReaderBuilder`]: arrow::arrow_reader::ParquetRecordBatchReaderBuilder
+//! [`ParquetPushDecoder`]: arrow::push_decoder::ParquetPushDecoder
 //! [`ArrowColumnWriter`]: arrow::arrow_writer::ArrowColumnWriter
 //! [`RowFilter`]: arrow::arrow_reader::RowFilter
 //!
-//! ## `async` Reading and Writing Arrow (`async` feature)
+//! ## `async` Reading and Writing Arrow (`arrow` feature + `async` feature)
 //!
 //! The [`async_reader`] and [`async_writer`] modules provide async APIs to
-//! read and write `RecordBatch`es  asynchronously.
+//! read and write [`RecordBatch`]es  asynchronously.
 //!
 //! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
 //! for reading. When the `object_store` feature is enabled, [`ParquetObjectReader`]
@@ -86,6 +111,14 @@
 //! [`ParquetRecordBatchStreamBuilder`]: arrow::async_reader::ParquetRecordBatchStreamBuilder
 //! [`ParquetObjectReader`]: arrow::async_reader::ParquetObjectReader
 //!
+//! ## Variant Logical Type (`variant_experimental` feature)
+//!
+//! The [`variant`] module supports reading and writing Parquet files
+//! with the [Variant Binary Encoding] logical type, which can represent
+//! semi-structured data such as JSON efficiently.
+//!
+//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+//!
 //! ## Read/Write Parquet Directly
 //!
 //! Workloads needing finer-grained control, or to avoid a dependence on arrow,
@@ -96,6 +129,7 @@
 //!
 //! [arrow]: https://docs.rs/arrow/latest/arrow/index.html
 //! [Arrow]: https://arrow.apache.org/
+//! [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/array/struct.RecordBatch.html
 //! [CSV]: https://en.wikipedia.org/wiki/Comma-separated_values
 //! [Dremel]: https://research.google/pubs/pub36632/
 //! [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
@@ -105,7 +139,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 /// Defines a an item with an experimental public API
 ///
@@ -130,25 +164,23 @@ macro_rules! experimental {
     }
 }
 
+#[cfg(all(
+    feature = "flate2",
+    not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backend"))
+))]
+compile_error!(
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backend`."
+);
+
 #[macro_use]
 pub mod errors;
 pub mod basic;
 
-/// Automatically generated code from the Parquet thrift definition.
-///
-/// This module code generated from [parquet.thrift]. See [crate::file] for
-/// more information on reading Parquet encoded data.
-///
-/// [parquet.thrift]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
-// see parquet/CONTRIBUTING.md for instructions on regenerating
-// Don't try clippy and format auto generated code
-#[allow(clippy::all, missing_docs)]
-#[rustfmt::skip]
-pub mod format;
-
 #[macro_use]
 pub mod data_type;
 
+use std::fmt::Debug;
+use std::ops::Range;
 // Exported for external use, such as benchmarks
 #[cfg(feature = "experimental")]
 #[doc(hidden)]
@@ -172,4 +204,24 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
-pub mod thrift;
+mod parquet_macros;
+mod parquet_thrift;
+
+/// What data is needed to read the next item from a decoder.
+///
+/// This is used to communicate between the decoder and the caller
+/// to indicate what data is needed next, or what the result of decoding is.
+#[derive(Debug)]
+pub enum DecodeResult<T: Debug> {
+    /// The ranges of data necessary to proceed
+    // TODO: distinguish between minimim needed to make progress and what could be used?
+    NeedsData(Vec<Range<u64>>),
+    /// The decoder produced an output item
+    Data(T),
+    /// The decoder finished processing
+    Finished,
+}
+
+#[cfg(feature = "variant_experimental")]
+pub mod variant;
+experimental!(pub mod geospatial);

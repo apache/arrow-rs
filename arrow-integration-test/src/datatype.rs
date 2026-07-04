@@ -29,6 +29,8 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "bool" => Ok(DataType::Boolean),
             Some(s) if s == "binary" => Ok(DataType::Binary),
             Some(s) if s == "largebinary" => Ok(DataType::LargeBinary),
+            Some(s) if s == "binaryview" => Ok(DataType::BinaryView),
+            Some(s) if s == "utf8view" => Ok(DataType::Utf8View),
             Some(s) if s == "utf8" => Ok(DataType::Utf8),
             Some(s) if s == "largeutf8" => Ok(DataType::LargeUtf8),
             Some(s) if s == "fixedsizebinary" => {
@@ -61,6 +63,8 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 };
 
                 match bit_width {
+                    32 => Ok(DataType::Decimal32(precision, scale)),
+                    64 => Ok(DataType::Decimal64(precision, scale)),
                     128 => Ok(DataType::Decimal128(precision, scale)),
                     256 => Ok(DataType::Decimal256(precision, scale)),
                     _ => Err(ArrowError::ParseError(
@@ -180,6 +184,14 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 // return a largelist with any type as its child isn't defined in the map
                 Ok(DataType::LargeList(default_field))
             }
+            Some(s) if s == "listview" => {
+                // return a listview with any type as its child isn't defined in the map
+                Ok(DataType::ListView(default_field))
+            }
+            Some(s) if s == "largelistview" => {
+                // return a large listview with any type as its child isn't defined in the map
+                Ok(DataType::LargeListView(default_field))
+            }
             Some(s) if s == "fixedsizelist" => {
                 // return a list with any type as its child isn't defined in the map
                 if let Some(Value::Number(size)) = map.get("listSize") {
@@ -196,6 +208,13 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "struct" => {
                 // return an empty `struct` type as its children aren't defined in the map
                 Ok(DataType::Struct(Fields::empty()))
+            }
+            Some(s) if s == "runendencoded" => {
+                // return a run end encoded with placeholder types as children aren't defined in the map
+                Ok(DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    default_field,
+                ))
             }
             Some(s) if s == "map" => {
                 if let Some(Value::Bool(keys_sorted)) = map.get("keysSorted") {
@@ -269,9 +288,8 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::LargeUtf8 => json!({"name": "largeutf8"}),
         DataType::Binary => json!({"name": "binary"}),
         DataType::LargeBinary => json!({"name": "largebinary"}),
-        DataType::BinaryView | DataType::Utf8View => {
-            unimplemented!("BinaryView/Utf8View not implemented")
-        }
+        DataType::BinaryView => json!({"name": "binaryview"}),
+        DataType::Utf8View => json!({"name": "utf8view"}),
         DataType::FixedSizeBinary(byte_width) => {
             json!({"name": "fixedsizebinary", "byteWidth": byte_width})
         }
@@ -279,9 +297,8 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Union(_, _) => json!({"name": "union"}),
         DataType::List(_) => json!({ "name": "list"}),
         DataType::LargeList(_) => json!({ "name": "largelist"}),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
+        DataType::ListView(_) => json!({ "name": "listview"}),
+        DataType::LargeListView(_) => json!({ "name": "largelistview"}),
         DataType::FixedSizeList(_, length) => {
             json!({"name":"fixedsizelist", "listSize": length})
         }
@@ -335,6 +352,12 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
             TimeUnit::Nanosecond => "NANOSECOND",
         }}),
         DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
+        DataType::Decimal32(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 32})
+        }
+        DataType::Decimal64(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 64})
+        }
         DataType::Decimal128(precision, scale) => {
             json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
         }
@@ -344,7 +367,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Map(_, keys_sorted) => {
             json!({"name": "map", "keysSorted": keys_sorted})
         }
-        DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => json!({"name": "runendencoded"}),
     }
 }
 

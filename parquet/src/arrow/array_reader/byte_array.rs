@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
@@ -42,6 +42,8 @@ pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -56,13 +58,19 @@ pub fn make_byte_array_reader(
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
         | ArrowType::Decimal256(_, _) => {
-            let reader = GenericRecordReader::new(column_desc);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            if let Some(threshold) = padding_threshold {
+                reader.set_padding_threshold(threshold);
+            }
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
         }
         ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader = GenericRecordReader::new(column_desc);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            if let Some(threshold) = padding_threshold {
+                reader.set_padding_threshold(threshold);
+            }
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -114,7 +122,7 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
-        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        let null_buffer = self.record_reader.consume_compact_bitmap();
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
@@ -164,6 +172,10 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
+    }
 }
 
 /// A [`ColumnValueDecoder`] for variable length byte arrays
@@ -202,7 +214,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             ));
         }
 
-        let mut buffer = OffsetBuffer::default();
+        let mut buffer = OffsetBuffer::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
             buf,
             num_values as usize,
@@ -274,7 +286,7 @@ impl ByteArrayDecoder {
                 validate_utf8,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
-                ByteArrayDecoderDictionary::new(data, num_levels, num_values),
+                ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
                 ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -286,7 +298,7 @@ impl ByteArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -481,24 +493,28 @@ impl ByteArrayDecoderDeltaLength {
         let initial_values_length = output.values.len();
 
         let to_read = len.min(self.lengths.len() - self.length_offset);
-        output.offsets.reserve(to_read);
-
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
-
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        // Reserve capacity for both offsets and values upfront
+        output.offsets.reserve(to_read);
         output.values.reserve(total_bytes);
 
-        let mut current_offset = self.data_offset;
-        for length in src_lengths {
-            let end_offset = current_offset + *length as usize;
-            output.try_push(
-                &self.data.as_ref()[current_offset..end_offset],
-                self.validate_utf8,
-            )?;
-            current_offset = end_offset;
-        }
+        // Delta length data is contiguous — copy all value bytes at once
+        let data_end = self.data_offset + total_bytes;
+        output
+            .values
+            .extend_from_slice(&self.data.as_ref()[self.data_offset..data_end]);
 
-        self.data_offset = current_offset;
+        // Compute and extend offsets in batch using extend
+        let base_offset = initial_values_length;
+        let mut running = base_offset;
+        output.offsets.extend(src_lengths.iter().map(|length| {
+            running += *length as usize;
+            I::from_usize(running).expect("index overflow decoding byte array")
+        }));
+
+        self.data_offset = data_end;
         self.length_offset += to_read;
 
         if self.validate_utf8 {
@@ -563,10 +579,10 @@ pub struct ByteArrayDecoderDictionary {
 }
 
 impl ByteArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
-        Self {
-            decoder: DictIndexDecoder::new(data, num_levels, num_values),
-        }
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+        })
     }
 
     fn read<I: OffsetSizeTrait>(
@@ -579,6 +595,9 @@ impl ByteArrayDecoderDictionary {
         if dict.is_empty() {
             return Ok(0);
         }
+
+        // Pre-reserve offsets capacity to avoid per-chunk reallocation
+        output.offsets.reserve(len);
 
         self.decoder.read(len, |keys| {
             output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
@@ -620,7 +639,7 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = OffsetBuffer::<i32>::with_capacity(0);
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
@@ -641,7 +660,9 @@ mod tests {
             let valid = [false, false, true, true, false, true, true, false, false];
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
-            output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
+            output
+                .pad_nulls(0, 4, valid.len(), valid_buffer.as_slice())
+                .unwrap();
             let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
             let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -675,7 +696,7 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = OffsetBuffer::<i32>::with_capacity(0);
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
@@ -695,7 +716,9 @@ mod tests {
             let valid = [false, false, true, true, false, false];
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
-            output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
+            output
+                .pad_nulls(0, 2, valid.len(), valid_buffer.as_slice())
+                .unwrap();
             let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
             let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -719,7 +742,7 @@ mod tests {
 
         // test nulls read
         for (encoding, page) in pages.clone() {
-            let mut output = OffsetBuffer::<i32>::default();
+            let mut output = OffsetBuffer::<i32>::with_capacity(0);
             decoder.set_data(encoding, page, 4, None).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 0);
         }

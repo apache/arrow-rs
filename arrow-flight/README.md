@@ -43,10 +43,16 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 
 ## Feature Flags
 
-- `flight-sql-experimental`: Enables experimental support for
-  [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+- `flight-sql`: Support for [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
 
-- `tls`: Enables `tls` on `tonic`
+You can enable TLS using the following features (not enabled by default)
+
+- `tls-aws-lc`: enables [tonic feature] `tls-aws-lc`
+- `tls-native-roots`: enables [tonic feature] `tls-native-roots`
+- `tls-ring`: enables [tonic feature] `tls-ring`
+- `tls-webpki`: enables [tonic feature] `tls-webpki-roots`
+
+[tonic feature]: https://docs.rs/tonic/latest/tonic/#feature-flags
 
 ## CLI
 
@@ -55,7 +61,7 @@ This crates offers a basic [Apache Arrow FlightSQL] command line interface.
 The client can be installed from the repository:
 
 ```console
-$ cargo install --features=cli,flight-sql-experimental,tls --bin=flight_sql_client --path=. --locked
+$ cargo install --features=cli,flight-sql,tls --bin=flight_sql_client --path=. --locked
 ```
 
 The client comes with extensive help text:
@@ -75,4 +81,9 @@ $ flight_sql_client --host example.com statement-query "SELECT 1;"
 +----------+
 ```
 
+## Security
+
+See the [Security Policy] for information on the security model and how to report vulnerabilities.
+
 [apache arrow flightsql]: https://arrow.apache.org/docs/format/FlightSql.html
+[security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md

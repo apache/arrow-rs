@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -90,13 +90,23 @@ impl DefinitionLevelBuffer {
         }
     }
 
-    /// Returns the built null bitmask
-    pub fn consume_bitmask(&mut self) -> Buffer {
+    /// Returns the built null bitmask, or None if all values are valid
+    pub fn consume_bitmask(&mut self) -> Option<Buffer> {
         self.len = 0;
-        match &mut self.inner {
-            BufferInner::Full { nulls, .. } => nulls.finish().into_inner(),
-            BufferInner::Mask { nulls } => nulls.finish().into_inner(),
+        let nulls = match &mut self.inner {
+            BufferInner::Full { nulls, .. } => nulls,
+            BufferInner::Mask { nulls } => nulls,
+        };
+
+        // Always call finish() to reset the builder state for the next batch.
+        let buffer = nulls.finish().into_inner();
+
+        // If no bitmap was constructed, return None
+        if buffer.is_empty() {
+            return None;
         }
+
+        Some(buffer)
     }
 
     pub fn nulls(&self) -> &BooleanBufferBuilder {
@@ -105,7 +115,106 @@ impl DefinitionLevelBuffer {
             BufferInner::Mask { nulls } => nulls,
         }
     }
+
+    /// Returns the raw definition levels accumulated so far, if available.
+    /// Only available when the buffer is in Full mode (nested columns).
+    pub fn levels(&self) -> Option<&[i16]> {
+        match &self.inner {
+            BufferInner::Full { levels, .. } => Some(levels.as_slice()),
+            BufferInner::Mask { .. } => None,
+        }
+    }
 }
+
+/// Build a filtered validity bitmap from definition/repetition levels.
+///
+/// For each level entry where `d >= include_threshold` (when set) and
+/// `r <= max_rep` (when `rep_filter` is provided), appends one bit to
+/// `bitmap`: set when `d >= value_level`, unset otherwise.
+///
+/// Returns the number of bits appended.
+///
+/// This is the shared implementation behind the compact bitmap (leaf
+/// readers with selective padding) and the struct validity bitmap.
+/// Processing uses 64-level chunks with [`compress`] for word-at-a-time
+/// packing.
+pub(crate) fn build_filtered_validity_bitmap(
+    def_levels: &[i16],
+    rep_filter: Option<(&[i16], i16)>,
+    include_threshold: Option<i16>,
+    value_level: i16,
+    bitmap: &mut BooleanBufferBuilder,
+) -> usize {
+    // Fast path: no filtering — every def level produces a bit.
+    if include_threshold.is_none() && rep_filter.is_none() {
+        let chunks = def_levels.chunks_exact(u64::BITS as usize);
+        let remainder = chunks.remainder();
+        for chunk in chunks {
+            let mut word: u64 = 0;
+            for (i, &d) in chunk.iter().enumerate() {
+                word |= ((d >= value_level) as u64) << i;
+            }
+            bitmap.append_word(word, u64::BITS as usize);
+        }
+        for &d in remainder {
+            bitmap.append(d >= value_level);
+        }
+        return def_levels.len();
+    }
+
+    // Filtered path: build include mask + value mask per chunk, compress.
+    let mut item_count: usize = 0;
+    let chunks = def_levels.chunks_exact(u64::BITS as usize);
+    let remainder_offset = def_levels.len() - chunks.remainder().len();
+
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let base = chunk_idx * u64::BITS as usize;
+        let mut include_mask: u64 = 0;
+        let mut value_mask: u64 = 0;
+        for (i, &d) in chunk.iter().enumerate() {
+            let mut include = true;
+            if let Some(threshold) = include_threshold {
+                if d < threshold {
+                    include = false;
+                }
+            }
+            if include {
+                if let Some((reps, max_rep)) = rep_filter {
+                    if reps[base + i] > max_rep {
+                        include = false;
+                    }
+                }
+            }
+            include_mask |= (include as u64) << i;
+            value_mask |= ((d >= value_level) as u64) << i;
+        }
+
+        let count = include_mask.count_ones() as usize;
+        let compact = compress(value_mask, include_mask);
+        bitmap.append_word(compact, count);
+        item_count += count;
+    }
+
+    for idx in remainder_offset..def_levels.len() {
+        let d = def_levels[idx];
+        if let Some(threshold) = include_threshold {
+            if d < threshold {
+                continue;
+            }
+        }
+        if let Some((reps, max_rep)) = rep_filter {
+            if reps[idx] > max_rep {
+                continue;
+            }
+        }
+        bitmap.append(d >= value_level);
+        item_count += 1;
+    }
+
+    item_count
+}
+
+use crate::util::bit_util::compress;
 
 enum MaybePacked {
     Packed(PackedDecoder),
@@ -131,11 +240,12 @@ impl DefinitionLevelBufferDecoder {
 impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Buffer = DefinitionLevelBuffer;
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         match &mut self.decoder {
             MaybePacked::Packed(d) => d.set_data(encoding, data),
-            MaybePacked::Fallback(d) => d.set_data(encoding, data),
-        }
+            MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
+        };
+        Ok(())
     }
 }
 
@@ -159,9 +269,10 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let start = levels.len();
                 let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
-                nulls.reserve(levels_read);
-                for i in &levels[start..] {
-                    nulls.append(i == max_level);
+                // Safety: slice iterator has a trusted length
+                unsafe {
+                    nulls
+                        .extend_trusted_len(levels[start..].iter().map(|level| level == max_level));
                 }
 
                 Ok((values_read, levels_read))
@@ -169,6 +280,15 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
+                // Fast path: if all requested levels are valid (max definition level),
+                // we can skip RLE decoding and just append all-ones to the bitmap.
+                // This is faster than decoding RLE data.
+                if let Some(count) = decoder.try_consume_all_valid(num_levels)? {
+                    nulls.append_n(count, true);
+                    return Ok((count, count)); // values_read == levels_read when all valid
+                }
+
+                // Normal path: decode RLE data into the bitmap
                 let start = nulls.len();
                 let levels_read = decoder.read(nulls, num_levels)?;
 
@@ -284,6 +404,37 @@ impl PackedDecoder {
         self.data_offset = 0;
     }
 
+    /// Try to consume `len` levels if all are valid (max definition level).
+    ///
+    /// Returns `Ok(Some(count))` if successfully consumed `count` all-valid levels.
+    /// Returns `Ok(None)` if there are any nulls or packed data that prevents fast path.
+    ///
+    /// Note: On `None`, the decoder state may have advanced to the next RLE block,
+    /// but only if `rle_left` was zero (i.e., the block would have been loaded
+    /// on the next read anyway).
+    fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
+        // If no active run and no packed data pending, try to parse the next RLE block
+        if self.rle_left == 0 && self.packed_count == self.packed_offset {
+            if self.data_offset < self.data.len() {
+                self.next_rle_block()?;
+            } else {
+                // No more data available
+                return Ok(None);
+            }
+        }
+
+        // Fast path only works when we have an active RLE run of true values
+        // that covers the entire requested length.
+        if self.rle_left >= len && self.rle_value {
+            self.rle_left -= len;
+            return Ok(Some(len));
+        }
+
+        // Any other case (null run, packed data, or insufficient length)
+        // falls back to normal path
+        Ok(None)
+    }
+
     fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<usize> {
         let mut read = 0;
         while read != len {
@@ -351,7 +502,7 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_packed_decoder() {
@@ -444,5 +595,75 @@ mod tests {
         }
         assert_eq!(read_level + skip_level, len);
         assert_eq!(read_value + skip_value, total_value);
+    }
+
+    #[test]
+    fn test_try_consume_all_valid() {
+        // Test with all-valid data (all 1s) - single RLE run
+        let len = 100;
+        let mut encoder = RleEncoder::new(1, 1024);
+        for _ in 0..len {
+            encoder.put(1); // all valid
+        }
+        let encoded = encoder.consume();
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, encoded.into());
+
+        // try_consume_all_valid now parses the RLE block itself, no need to read first
+        let result = decoder.try_consume_all_valid(len).unwrap();
+        assert_eq!(result, Some(len));
+
+        // Test with all-null data (all 0s)
+        let mut encoder = RleEncoder::new(1, 1024);
+        for _ in 0..len {
+            encoder.put(0); // all null
+        }
+        let encoded = encoder.consume();
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, encoded.into());
+
+        // Should return None because rle_value is false (all nulls)
+        let result = decoder.try_consume_all_valid(len).unwrap();
+        assert_eq!(result, None);
+
+        // Test when requesting more than available in current RLE run
+        let mut encoder = RleEncoder::new(1, 1024);
+        for _ in 0..10 {
+            encoder.put(1); // small run of valid
+        }
+        for _ in 0..10 {
+            encoder.put(0); // followed by nulls
+        }
+        let encoded = encoder.consume();
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, encoded.into());
+
+        // Request more than the valid run - should return None
+        // (because we don't look ahead to next block)
+        let result = decoder.try_consume_all_valid(20).unwrap();
+        assert_eq!(result, None);
+
+        // Reset decoder and try requesting within the run
+        decoder.set_data(Encoding::RLE, {
+            let mut encoder = RleEncoder::new(1, 1024);
+            for _ in 0..10 {
+                encoder.put(1);
+            }
+            for _ in 0..10 {
+                encoder.put(0);
+            }
+            encoder.consume().into()
+        });
+
+        let result = decoder.try_consume_all_valid(5).unwrap();
+        assert_eq!(result, Some(5));
+
+        // After skipping 5, we should have 5 left in the valid RLE run
+        let result = decoder.try_consume_all_valid(5).unwrap();
+        assert_eq!(result, Some(5));
+
+        // Now the valid run is exhausted, next call should parse the null run and return None
+        let result = decoder.try_consume_all_valid(5).unwrap();
+        assert_eq!(result, None);
     }
 }

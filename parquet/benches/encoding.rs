@@ -21,7 +21,7 @@ use parquet::basic::{Encoding, Type as ParquetType};
 use parquet::data_type::{
     DataType, DoubleType, FixedLenByteArray, FixedLenByteArrayType, FloatType,
 };
-use parquet::decoding::{get_decoder, Decoder};
+use parquet::decoding::{Decoder, get_decoder};
 use parquet::encoding::get_encoder;
 use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 use rand::prelude::*;
@@ -52,7 +52,7 @@ fn bench_typed<T: DataType>(
         0,
         ColumnPath::new(vec![]),
     ));
-    c.bench_function(&format!("encoding: {}", name), |b| {
+    c.bench_function(&format!("encoding: {name}"), |b| {
         b.iter(|| {
             let mut encoder = get_encoder::<T>(encoding, &column_desc_ptr).unwrap();
             encoder.put(values).unwrap();
@@ -66,7 +66,7 @@ fn bench_typed<T: DataType>(
     println!("{} encoded as {} bytes", name, encoded.len(),);
 
     let mut buffer = vec![T::T::default(); values.len()];
-    c.bench_function(&format!("decoding: {}", name), |b| {
+    c.bench_function(&format!("decoding: {name}"), |b| {
         b.iter(|| {
             let mut decoder: Box<dyn Decoder<T>> =
                 get_decoder(column_desc_ptr.clone(), encoding).unwrap();

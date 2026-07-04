@@ -18,8 +18,8 @@
 use arrow_array::{Array, FixedSizeListArray, Int32Array};
 use arrow_schema::Field;
 use criterion::*;
-use rand::{rng, Rng};
-use std::sync::Arc;
+use rand::{Rng, rng};
+use std::{hint, sync::Arc};
 
 fn gen_fsl(len: usize, value_len: usize) -> FixedSizeListArray {
     let mut rng = rng();
@@ -39,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     for i in 0..len / value_len {
-                        black_box(fsl.value(i));
+                        hint::black_box(fsl.value(i));
                     }
                 });
             },

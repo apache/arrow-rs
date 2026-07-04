@@ -21,8 +21,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_cast::pretty::pretty_format_batches;
-use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::FlightDescriptor;
+use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
     encode::FlightDataEncoderBuilder,

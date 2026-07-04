@@ -19,7 +19,7 @@
 ///               int32_to_int32_list_map: map<key: int32, value: list<$data$: int32>>
 /// >
 /// where there is one row per requested piece of metadata information.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetSqlInfo {
     ///
     /// Values are modelled after ODBC's SQLGetInfo() function. This information is intended to provide
@@ -99,7 +99,7 @@ pub struct CommandGetSqlInfo {
 ///                               is only relevant to be used by ODBC).
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
     ///
     /// Specifies the data type to search for the info.
@@ -118,7 +118,7 @@ pub struct CommandGetXdbcTypeInfo {
 ///   catalog_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetCatalogs {}
 ///
 /// Represents a request to retrieve the list of database schemas on a Flight SQL enabled backend.
@@ -133,7 +133,7 @@ pub struct CommandGetCatalogs {}
 ///   db_schema_name: utf8 not null
 /// >
 /// The returned data should be ordered by catalog_name, then db_schema_name.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetDbSchemas {
     ///
     /// Specifies the Catalog to search for the tables.
@@ -177,7 +177,7 @@ pub struct CommandGetDbSchemas {
 ///   - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, then table_type, followed by table_schema if requested.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetTables {
     ///
     /// Specifies the Catalog to search for the tables.
@@ -226,7 +226,7 @@ pub struct CommandGetTables {
 ///   table_type: utf8 not null
 /// >
 /// The returned data should be ordered by table_type.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetTableTypes {}
 ///
 /// Represents a request to retrieve the primary keys of a table on a Flight SQL enabled backend.
@@ -244,7 +244,7 @@ pub struct CommandGetTableTypes {}
 ///   key_sequence: int32 not null
 /// >
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, key_name, then key_sequence.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetPrimaryKeys {
     ///
     /// Specifies the catalog to search for the table.
@@ -287,7 +287,7 @@ pub struct CommandGetPrimaryKeys {
 /// >
 /// The returned data should be ordered by fk_catalog_name, fk_db_schema_name, fk_table_name, fk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions declared on UpdateDeleteRules enum.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetExportedKeys {
     ///
     /// Specifies the catalog to search for the foreign key table.
@@ -334,7 +334,7 @@ pub struct CommandGetExportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetImportedKeys {
     ///
     /// Specifies the catalog to search for the primary key table.
@@ -383,7 +383,7 @@ pub struct CommandGetImportedKeys {
 ///     - 2 = SET NULL
 ///     - 3 = NO ACTION
 ///     - 4 = SET DEFAULT
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetCrossReference {
     /// *
     /// The catalog name where the parent table is.
@@ -420,7 +420,7 @@ pub struct CommandGetCrossReference {
 }
 ///
 /// Request message for the "CreatePreparedStatement" action on a Flight SQL enabled backend.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionCreatePreparedStatementRequest {
     /// The valid SQL string to create a prepared statement for.
     #[prost(string, tag = "1")]
@@ -432,7 +432,7 @@ pub struct ActionCreatePreparedStatementRequest {
 }
 ///
 /// An embedded message describing a Substrait plan to execute.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SubstraitPlan {
     /// The serialized substrait.Plan to create a prepared statement for.
     /// XXX(ARROW-16902): this is bytes instead of an embedded message
@@ -448,7 +448,7 @@ pub struct SubstraitPlan {
 }
 ///
 /// Request message for the "CreatePreparedSubstraitPlan" action on a Flight SQL enabled backend.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionCreatePreparedSubstraitPlanRequest {
     /// The serialized substrait.Plan to create a prepared statement for.
     #[prost(message, optional, tag = "1")]
@@ -466,7 +466,7 @@ pub struct ActionCreatePreparedSubstraitPlanRequest {
 /// - Automatically, by a server timeout.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
     /// Opaque handle for the prepared statement on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -486,7 +486,7 @@ pub struct ActionCreatePreparedStatementResult {
 ///
 /// Request message for the "ClosePreparedStatement" action on a Flight SQL enabled backend.
 /// Closes server resources associated with the prepared statement handle.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionClosePreparedStatementRequest {
     /// Opaque handle for the prepared statement on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -495,7 +495,7 @@ pub struct ActionClosePreparedStatementRequest {
 ///
 /// Request message for the "BeginTransaction" action.
 /// Begins a transaction.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionBeginTransactionRequest {}
 ///
 /// Request message for the "BeginSavepoint" action.
@@ -503,7 +503,7 @@ pub struct ActionBeginTransactionRequest {}
 ///
 /// Only supported if FLIGHT_SQL_TRANSACTION is
 /// FLIGHT_SQL_TRANSACTION_SUPPORT_SAVEPOINT.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionBeginSavepointRequest {
     /// The transaction to which a savepoint belongs.
     #[prost(bytes = "bytes", tag = "1")]
@@ -520,7 +520,7 @@ pub struct ActionBeginSavepointRequest {
 /// automatically rolled back.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionBeginTransactionResult {
     /// Opaque handle for the transaction on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -534,7 +534,7 @@ pub struct ActionBeginTransactionResult {
 /// out, then the savepoint is also invalidated.
 ///
 /// The result should be wrapped in a google.protobuf.Any message.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionBeginSavepointResult {
     /// Opaque handle for the savepoint on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -547,7 +547,7 @@ pub struct ActionBeginSavepointResult {
 ///
 /// If the action completes successfully, the transaction handle is
 /// invalidated, as are all associated savepoints.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionEndTransactionRequest {
     /// Opaque handle for the transaction on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -609,7 +609,7 @@ pub mod action_end_transaction_request {
 /// Releasing a savepoint invalidates that savepoint.  Rolling back to
 /// a savepoint does not invalidate the savepoint, but invalidates all
 /// savepoints created after the current savepoint.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionEndSavepointRequest {
     /// Opaque handle for the savepoint on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -678,7 +678,7 @@ pub mod action_end_savepoint_request {
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandStatementQuery {
     /// The SQL syntax.
     #[prost(string, tag = "1")]
@@ -704,7 +704,7 @@ pub struct CommandStatementQuery {
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
 ///   - GetFlightInfo: execute the query.
 ///   - DoPut: execute the query.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandStatementSubstraitPlan {
     /// A serialized substrait.Plan
     #[prost(message, optional, tag = "1")]
@@ -716,7 +716,7 @@ pub struct CommandStatementSubstraitPlan {
 /// *
 /// Represents a ticket resulting from GetFlightInfo with a CommandStatementQuery.
 /// This should be used only once and treated as an opaque value, that is, clients should not attempt to parse this.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TicketStatementQuery {
     /// Unique identifier for the instance of the statement to execute.
     #[prost(bytes = "bytes", tag = "1")]
@@ -742,7 +742,7 @@ pub struct TicketStatementQuery {
 ///     for the parameters when determining the schema.
 ///   - DoPut: bind parameter values. All of the bound parameter sets will be executed as a single atomic execution.
 ///   - GetFlightInfo: execute the prepared statement instance.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandPreparedStatementQuery {
     /// Opaque handle for the prepared statement on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -751,7 +751,7 @@ pub struct CommandPreparedStatementQuery {
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the RPC call DoPut to cause the server to execute the included SQL update.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandStatementUpdate {
     /// The SQL syntax.
     #[prost(string, tag = "1")]
@@ -764,7 +764,7 @@ pub struct CommandStatementUpdate {
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
 /// for the RPC call DoPut to cause the server to execute the included
 /// prepared statement handle as an update.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandPreparedStatementUpdate {
     /// Opaque handle for the prepared statement on the server.
     #[prost(bytes = "bytes", tag = "1")]
@@ -810,7 +810,7 @@ pub struct CommandStatementIngest {
 /// Nested message and enum types in `CommandStatementIngest`.
 pub mod command_statement_ingest {
     /// Options for table definition behavior
-    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TableDefinitionOptions {
         #[prost(
             enumeration = "table_definition_options::TableNotExistOption",
@@ -918,7 +918,7 @@ pub mod command_statement_ingest {
 /// Returned from the RPC call DoPut when a CommandStatementUpdate,
 /// CommandPreparedStatementUpdate, or CommandStatementIngest was
 /// in the request, containing results from the update.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DoPutUpdateResult {
     /// The number of records updated. A return value of -1 represents
     /// an unknown updated record count.
@@ -930,7 +930,7 @@ pub struct DoPutUpdateResult {
 /// *Note on legacy behavior*: previous versions of the protocol did not return any result for
 /// this command, and that behavior should still be supported by clients. In that case, the client
 /// can continue as though the fields in this message were not provided or set to sensible default values.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DoPutPreparedStatementResult {
     /// Represents a (potentially updated) opaque handle for the prepared statement on the server.
     /// Because the handle could potentially be updated, any previous handles for this prepared
@@ -959,7 +959,7 @@ pub struct DoPutPreparedStatementResult {
 ///
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionCancelQueryRequest {
     /// The result of the GetFlightInfo RPC that initiated the query.
     /// XXX(ARROW-16902): this must be a serialized FlightInfo, but is
@@ -975,7 +975,7 @@ pub struct ActionCancelQueryRequest {
 ///
 /// This command is deprecated since 13.0.0. Use the "CancelFlightInfo"
 /// action with DoAction instead.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionCancelQueryResult {
     #[prost(enumeration = "action_cancel_query_result::CancelResult", tag = "1")]
     pub result: i32,

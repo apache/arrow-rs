@@ -114,43 +114,50 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 
             // if data_type is a struct or list, get its children
             let data_type = match data_type {
-                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
-                    match map.get("children") {
-                        Some(Value::Array(values)) => {
-                            if values.len() != 1 {
-                                return Err(ArrowError::ParseError(
-                                    "Field 'children' must have one element for a list data type"
-                                        .to_string(),
-                                ));
-                            }
-                            match data_type {
-                                DataType::List(_) => {
-                                    DataType::List(Arc::new(field_from_json(&values[0])?))
-                                }
-                                DataType::LargeList(_) => {
-                                    DataType::LargeList(Arc::new(field_from_json(&values[0])?))
-                                }
-                                DataType::FixedSizeList(_, int) => DataType::FixedSizeList(
-                                    Arc::new(field_from_json(&values[0])?),
-                                    int,
-                                ),
-                                _ => unreachable!(
-                                    "Data type should be a list, largelist or fixedsizelist"
-                                ),
-                            }
-                        }
-                        Some(_) => {
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::FixedSizeList(_, _) => match map.get("children") {
+                    Some(Value::Array(values)) => {
+                        if values.len() != 1 {
                             return Err(ArrowError::ParseError(
-                                "Field 'children' must be an array".to_string(),
-                            ))
-                        }
-                        None => {
-                            return Err(ArrowError::ParseError(
-                                "Field missing 'children' attribute".to_string(),
+                                "Field 'children' must have one element for a list data type"
+                                    .to_string(),
                             ));
                         }
+                        match data_type {
+                            DataType::List(_) => {
+                                DataType::List(Arc::new(field_from_json(&values[0])?))
+                            }
+                            DataType::LargeList(_) => {
+                                DataType::LargeList(Arc::new(field_from_json(&values[0])?))
+                            }
+                            DataType::ListView(_) => {
+                                DataType::ListView(Arc::new(field_from_json(&values[0])?))
+                            }
+                            DataType::LargeListView(_) => {
+                                DataType::LargeListView(Arc::new(field_from_json(&values[0])?))
+                            }
+                            DataType::FixedSizeList(_, int) => {
+                                DataType::FixedSizeList(Arc::new(field_from_json(&values[0])?), int)
+                            }
+                            _ => unreachable!(
+                                "Data type should be a list, largelist, listview, largelistview or fixedsizelist"
+                            ),
+                        }
                     }
-                }
+                    Some(_) => {
+                        return Err(ArrowError::ParseError(
+                            "Field 'children' must be an array".to_string(),
+                        ));
+                    }
+                    None => {
+                        return Err(ArrowError::ParseError(
+                            "Field missing 'children' attribute".to_string(),
+                        ));
+                    }
+                },
                 DataType::Struct(_) => match map.get("children") {
                     Some(Value::Array(values)) => {
                         DataType::Struct(values.iter().map(field_from_json).collect::<Result<_>>()?)
@@ -158,7 +165,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
-                        ))
+                        ));
                     }
                     None => {
                         return Err(ArrowError::ParseError(
@@ -177,15 +184,15 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                                 }
                                 t => {
                                     return Err(ArrowError::ParseError(format!(
-                                    "Map children should be a struct with 2 fields, found {t:?}"
-                                )))
+                                        "Map children should be a struct with 2 fields, found {t:?}"
+                                    )));
                                 }
                             }
                         }
                         Some(_) => {
                             return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array with 1 element".to_string(),
-                            ))
+                            ));
                         }
                         None => {
                             return Err(ArrowError::ParseError(
@@ -207,7 +214,30 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
-                        ))
+                        ));
+                    }
+                    None => {
+                        return Err(ArrowError::ParseError(
+                            "Field missing 'children' attribute".to_string(),
+                        ));
+                    }
+                },
+                DataType::RunEndEncoded(_, _) => match map.get("children") {
+                    Some(Value::Array(values)) => {
+                        if values.len() != 2 {
+                            return Err(ArrowError::ParseError(
+                                "Field 'children' must have exactly 2 elements for RunEndEncoded"
+                                    .to_string(),
+                            ));
+                        }
+                        let run_ends = Arc::new(field_from_json(&values[0])?);
+                        let values_field = Arc::new(field_from_json(&values[1])?);
+                        DataType::RunEndEncoded(run_ends, values_field)
+                    }
+                    Some(_) => {
+                        return Err(ArrowError::ParseError(
+                            "Field 'children' must be an array".to_string(),
+                        ));
                     }
                     None => {
                         return Err(ArrowError::ParseError(
@@ -269,13 +299,18 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
         DataType::Struct(fields) => fields.iter().map(|x| field_to_json(x.as_ref())).collect(),
         DataType::List(field)
         | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
         | DataType::FixedSizeList(field, _)
         | DataType::Map(field, _) => vec![field_to_json(field)],
+        DataType::RunEndEncoded(run_ends, values) => {
+            vec![field_to_json(run_ends), field_to_json(values)]
+        }
         _ => vec![],
     };
 
     match field.data_type() {
-        DataType::Dictionary(ref index_type, ref value_type) => {
+        DataType::Dictionary(index_type, value_type) => {
             #[allow(deprecated)]
             let dict_id = field.dict_id().unwrap();
             serde_json::json!({

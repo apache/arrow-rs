@@ -17,6 +17,7 @@
 
 use arrow_cast::parse::string_to_timestamp_nanos;
 use criterion::*;
+use std::hint;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let timestamps = [
@@ -33,7 +34,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     ];
 
     for timestamp in timestamps {
-        let t = black_box(timestamp);
+        let t = hint::black_box(timestamp);
         c.bench_function(t, |b| {
             b.iter(|| string_to_timestamp_nanos(t).unwrap());
         });

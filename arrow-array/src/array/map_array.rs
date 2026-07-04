@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets_from_buffer, print_long_array};
+use crate::builder::MapFieldNames;
 use crate::iterator::MapArrayIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -31,7 +32,9 @@ use std::sync::Arc;
 /// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
 /// [`StructArray`] with 2 child fields.
 ///
-/// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
+/// # See also
+/// * [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
+/// * [`Self::from_vec_of_maps`] for ergonomically creating maps for testing
 #[derive(Clone)]
 pub struct MapArray {
     data_type: DataType,
@@ -173,6 +176,14 @@ impl MapArray {
         &self.entries
     }
 
+    /// Returns a reference to the fields of the [`StructArray`] that backs this map.
+    pub fn entries_fields(&self) -> (&Field, &Field) {
+        (
+            self.entries.field(0).as_ref(),
+            self.entries.field(1).as_ref(),
+        )
+    }
+
     /// Returns the data type of the map's keys.
     pub fn key_type(&self) -> &DataType {
         self.keys().data_type()
@@ -185,11 +196,14 @@ impl MapArray {
 
     /// Returns ith value of this map array.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
+        let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
@@ -197,6 +211,12 @@ impl MapArray {
     /// Returns ith value of this map array.
     ///
     /// This is a [`StructArray`] containing two fields
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> StructArray {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;
@@ -252,30 +272,33 @@ impl From<MapArray> for ArrayData {
     }
 }
 
+type Entries<Key, Value> = Vec<(Key, Value)>;
+
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        if !matches!(data.data_type(), DataType::Map(_, _)) {
+        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
+
+        if !matches!(data_type, DataType::Map(_, _)) {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "MapArray expected ArrayData with DataType::Map got {}",
-                data.data_type()
+                "MapArray expected ArrayData with DataType::Map got {data_type}",
             )));
         }
 
-        if data.buffers().len() != 1 {
+        if buffers.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "MapArray data should contain a single buffer only (value offsets), had {}",
-                data.len()
+                buffers.len(),
             )));
         }
+        let buffer = buffers.pop().expect("checked above");
 
-        if data.child_data().len() != 1 {
+        if child_data.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "MapArray should contain a single child array (values array), had {}",
-                data.child_data().len()
+                child_data.len()
             )));
         }
-
-        let entries = data.child_data()[0].clone();
+        let entries = child_data.pop().expect("checked above");
 
         if let DataType::Struct(fields) = entries.data_type() {
             if fields.len() != 2 {
@@ -294,11 +317,11 @@ impl MapArray {
 
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(&data) };
+        let value_offsets = unsafe { get_offsets_from_buffer(buffer, offset, len) };
 
         Ok(Self {
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
             entries,
             value_offsets,
         })
@@ -341,9 +364,95 @@ impl MapArray {
 
         Ok(MapArray::from(map_data))
     }
+
+    /// Helper to create [`MapArray`] from [`Vec`]s of entries so the code will look clean and straightforward
+    ///
+    /// the input is: `Vec<Option<Map>>` where each `Map` is `Vec<(Key, Option<Value>)>`
+    ///
+    /// Useful for tests, this should not be used for performance sensitive operations
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// # use arrow_array::{MapArray, Int32Array, StringArray};
+    ///
+    /// let map = vec![
+    ///    // {}
+    ///    Some(vec![]),
+    ///    // null
+    ///    None,
+    ///    // { "a": 1, "b": null, "cd": 4 }
+    ///    Some(vec![
+    ///        ("a", Some(1)),
+    ///        ("b", None),
+    ///        ("cd", Some(4)),
+    ///    ]),
+    ///    // { "e": 0 }
+    ///    Some(vec![("e", Some(0))]),
+    /// ];
+    /// let ordered = true;
+    ///
+    /// // created map: [{}, null, {"a": 1, "b": null, "cd": 4}, {"e": 0}]
+    /// let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map, ordered);
+    /// // Or you could fill the last 2 generics manually for the key array item and value array item
+    /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map, ordered);
+    ///```
+    #[allow(clippy::type_complexity)]
+    pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
+        input: Vec<Option<Entries<K, Option<V>>>>,
+        ordered: bool,
+    ) -> Self
+    where
+        KeyArray: Array + 'static,
+        ValueArray: Array + 'static,
+        Vec<K>: Into<KeyArray>,
+        Vec<Option<V>>: Into<ValueArray>,
+    {
+        let offsets = OffsetBuffer::<i32>::from_lengths(
+            input.iter().map(|v| v.as_ref().map_or(0, |m| m.len())),
+        );
+        let nulls = NullBuffer::from_iter(input.iter().map(|v| v.is_some()));
+        let nulls = Some(nulls).filter(|b| b.null_count() > 0);
+
+        let (keys, values): (Vec<K>, Vec<Option<V>>) = input
+            .into_iter()
+            .flatten()
+            .flat_map(|m| m.into_iter())
+            .unzip();
+
+        let keys_array: ArrayRef = Arc::new(<Vec<K> as Into<KeyArray>>::into(keys));
+        let values_array: ArrayRef = Arc::new(<Vec<Option<V>> as Into<ValueArray>>::into(values));
+
+        let field_names = MapFieldNames::default();
+
+        let entries = StructArray::new(
+            Fields::from(vec![
+                Field::new(field_names.key, keys_array.data_type().clone(), false),
+                Field::new(
+                    field_names.value,
+                    values_array.data_type().clone(),
+                    values_array.is_nullable(),
+                ),
+            ]),
+            vec![keys_array, values_array],
+            None,
+        );
+
+        MapArray::new(
+            Arc::new(Field::new(
+                field_names.entry,
+                entries.data_type().clone(),
+                false,
+            )),
+            offsets,
+            entries,
+            nulls,
+            ordered,
+        )
+    }
 }
 
-impl Array for MapArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for MapArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -410,6 +519,15 @@ impl Array for MapArray {
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.entries.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
 }
 
 impl ArrayAccessor for &MapArray {
@@ -450,6 +568,7 @@ impl From<MapArray> for ListArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::builder::{Int32Builder, MapBuilder, StringBuilder};
     use crate::cast::AsArray;
     use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
@@ -810,5 +929,47 @@ mod tests {
             err.to_string(),
             "Invalid argument error: MapArray entries must contain two children, got 3"
         );
+    }
+
+    #[test]
+    fn test_from_vec_of_maps() {
+        for ordered in [true, false] {
+            let map = vec![
+                Some(vec![]),
+                None,
+                Some(vec![("a", Some(1)), ("b", None), ("cd", Some(4))]),
+                Some(vec![("e", Some(0))]),
+            ];
+
+            let map_array =
+                MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(map, ordered);
+            assert_eq!(map_array.len(), 4);
+
+            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::default());
+
+            // {}
+            builder.append(true).unwrap();
+
+            // null
+            builder.append_nulls(1).unwrap();
+
+            // {"a": 1, "b": null, "cd": 4}
+            builder.keys().extend(["a", "b", "cd"].map(Some));
+            builder.values().extend([Some(1), None, Some(4)]);
+
+            builder.append(true).unwrap();
+
+            // {"e": 0}
+            builder.keys().append_value("e");
+            builder.values().append_value(0);
+
+            builder.append(true).unwrap();
+
+            let (field, offsets, entries, null_buffer, _) = builder.finish().into_parts();
+
+            let expected_map = MapArray::new(field, offsets, entries, null_buffer, ordered);
+
+            assert_eq!(map_array, expected_map);
+        }
     }
 }

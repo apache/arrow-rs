@@ -15,22 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
+//! Partial support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
+//!
+//! <div class="warning">
+//!
+//! This crate is **only intended for integration testing the
+//! [Arrow project](https://github.com/apache/arrow-rs)**. It is not [intended for usage outside of
+//! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
+//!
+//! </div>
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
-use num::BigInt;
-use num::Signed;
+use num_bigint::BigInt;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
@@ -195,6 +203,15 @@ pub struct ArrowJsonColumn {
     /// The type id for union types
     #[serde(rename = "TYPE_ID")]
     pub type_id: Option<Vec<i8>>,
+    /// The sizes for ListView/LargeListView types
+    #[serde(rename = "SIZE")]
+    pub size: Option<Vec<Value>>,
+    /// The views for BinaryView/Utf8View types
+    #[serde(rename = "VIEWS")]
+    pub views: Option<Vec<Value>>,
+    /// The variadic data buffers for BinaryView/Utf8View types
+    #[serde(rename = "VARIADIC_DATA_BUFFERS")]
+    pub variadic_data_buffers: Option<Vec<String>>,
     /// The children columns for nested types
     pub children: Option<Vec<ArrowJsonColumn>>,
 }
@@ -764,6 +781,66 @@ pub fn array_from_json(
                 .unwrap();
             Ok(Arc::new(LargeListArray::from(list_data)))
         }
+        DataType::ListView(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let sizes: Vec<i32> = json_col
+                .size
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(offsets.to_byte_slice()))
+                .add_buffer(Buffer::from(sizes.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(ListViewArray::from(list_data)))
+        }
+        DataType::LargeListView(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let offsets: Vec<i64> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => n.as_i64().unwrap(),
+                    Value::String(s) => s.parse::<i64>().unwrap(),
+                    _ => panic!("64-bit offset must be either string or number"),
+                })
+                .collect();
+            let sizes: Vec<i64> = json_col
+                .size
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => n.as_i64().unwrap(),
+                    Value::String(s) => s.parse::<i64>().unwrap(),
+                    _ => panic!("64-bit size must be either string or number"),
+                })
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(offsets.to_byte_slice()))
+                .add_buffer(Buffer::from(sizes.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(LargeListViewArray::from(list_data)))
+        }
         DataType::FixedSizeList(child_field, _) => {
             let children = json_col.children.clone().unwrap();
             let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
@@ -794,13 +871,13 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {field:?}"
+                        "Unable to find any dictionaries for field {field}"
                     ))
                 })?
                 .get(&dict_id);
@@ -814,9 +891,45 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {field:?}"
+                    "Unable to find dictionary for field {field}"
                 ))),
             }
+        }
+        DataType::Decimal32(precision, scale) => {
+            let mut b = Decimal32Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let mut b = Decimal64Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);
@@ -909,8 +1022,88 @@ pub fn array_from_json(
                 UnionArray::try_new(fields.clone(), type_ids.into(), offset, children).unwrap();
             Ok(Arc::new(array))
         }
+        DataType::Utf8View => {
+            let views = json_col.views.ok_or_else(|| {
+                ArrowError::JsonError("Utf8View requires VIEWS field".to_string())
+            })?;
+            let variadic_buffers = json_col.variadic_data_buffers.unwrap_or_default();
+            let validity = json_col.validity.as_ref();
+
+            let mut builder = StringViewBuilder::new();
+            for (i, view) in views.iter().enumerate() {
+                let is_valid = validity.map_or(1, |v| v[i]);
+                if is_valid == 0 {
+                    builder.append_null();
+                } else {
+                    let view_obj = view.as_object().unwrap();
+                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    // Check for INLINED key presence - inlined if SIZE <= 12
+                    if let Some(inlined) = view_obj.get("INLINED") {
+                        builder.append_value(inlined.as_str().unwrap());
+                    } else {
+                        // Reference to variadic buffer
+                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
+                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
+                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
+                        let s = std::str::from_utf8(&buffer_data[offset..offset + size]).unwrap();
+                        builder.append_value(s);
+                    }
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::BinaryView => {
+            let views = json_col.views.ok_or_else(|| {
+                ArrowError::JsonError("BinaryView requires VIEWS field".to_string())
+            })?;
+            let variadic_buffers = json_col.variadic_data_buffers.unwrap_or_default();
+            let validity = json_col.validity.as_ref();
+
+            let mut builder = BinaryViewBuilder::new();
+            for (i, view) in views.iter().enumerate() {
+                let is_valid = validity.map_or(1, |v| v[i]);
+                if is_valid == 0 {
+                    builder.append_null();
+                } else {
+                    let view_obj = view.as_object().unwrap();
+                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    // Check for INLINED key presence - inlined if SIZE <= 12
+                    if let Some(inlined) = view_obj.get("INLINED") {
+                        let data = hex::decode(inlined.as_str().unwrap()).unwrap();
+                        builder.append_value(&data);
+                    } else {
+                        // Reference to variadic buffer
+                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
+                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
+                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
+                        builder.append_value(&buffer_data[offset..offset + size]);
+                    }
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::RunEndEncoded(run_ends_field, values_field) => {
+            let children = json_col.children.clone().unwrap();
+            if children.len() != 2 {
+                return Err(ArrowError::JsonError(
+                    "RunEndEncoded requires exactly 2 children".to_string(),
+                ));
+            }
+            let run_ends_array =
+                array_from_json(run_ends_field, children[0].clone(), dictionaries)?;
+            let values_array = array_from_json(values_field, children[1].clone(), dictionaries)?;
+
+            let run_array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_child_data(run_ends_array.into_data())
+                .add_child_data(values_array.into_data())
+                .build()
+                .unwrap();
+
+            Ok(make_array(run_array_data))
+        }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }
@@ -1007,6 +1200,16 @@ fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
 
 impl ArrowJsonBatch {
     /// Convert a [`RecordBatch`] to an [`ArrowJsonBatch`]
+    ///
+    /// <div class="warning">
+    ///
+    /// This function is **deliberately incomplete**! As noted in the crate-level documentation,
+    /// this crate is only intended for use within the Arrow project itself.
+    ///
+    /// Right now, this function only supports `DataType::Int8` columns. Other data types will lead
+    /// to an empty `ArrowJsonColumn`.
+    ///
+    /// </div>
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),
@@ -1038,6 +1241,9 @@ impl ArrowJsonBatch {
                         data: Some(data),
                         offset: None,
                         type_id: None,
+                        size: None,
+                        views: None,
+                        variadic_data_buffers: None,
                         children: None,
                     }
                 }
@@ -1048,6 +1254,9 @@ impl ArrowJsonBatch {
                     data: None,
                     offset: None,
                     type_id: None,
+                    size: None,
+                    views: None,
+                    variadic_data_buffers: None,
                     children: None,
                 },
             };
@@ -1211,6 +1420,26 @@ mod tests {
                 ])),
                 true,
             ),
+            Field::new("utf8views", DataType::Utf8View, true),
+            Field::new("binaryviews", DataType::BinaryView, true),
+            Field::new(
+                "listviews",
+                DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "largelistviews",
+                DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "runendencoded",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
+                    Arc::new(Field::new("values", DataType::Int32, true)),
+                ),
+                true,
+            ),
         ]);
 
         let bools_with_metadata_map = BooleanArray::from(vec![Some(true), None, Some(false)]);
@@ -1282,6 +1511,58 @@ mod tests {
             .unwrap();
         let structs = StructArray::from(struct_data);
 
+        let utf8views =
+            StringViewArray::from(vec![Some("hello"), None, Some("this is not inlined")]);
+        let binaryviews = BinaryViewArray::from_iter(vec![
+            Some(b"\xf3\x4d".as_slice()),
+            Some(b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f".as_slice()),
+            None,
+        ]);
+
+        let listview_value_data = Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(5)]);
+        let listview_offsets = Buffer::from_slice_ref([0i32, 2, 2]);
+        let listview_sizes = Buffer::from_slice_ref([2i32, 0, 3]);
+        let listview_data_type =
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let listview_data = ArrayData::builder(listview_data_type)
+            .len(3)
+            .add_buffer(listview_offsets)
+            .add_buffer(listview_sizes)
+            .add_child_data(listview_value_data.into_data())
+            .null_bit_buffer(Some(Buffer::from([0b00000101])))
+            .build()
+            .unwrap();
+        let listviews = ListViewArray::from(listview_data);
+
+        let largelistview_value_data = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let largelistview_offsets = Buffer::from_slice_ref([0i64, 2, 3]);
+        let largelistview_sizes = Buffer::from_slice_ref([2i64, 1, 0]);
+        let largelistview_data_type =
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let largelistview_data = ArrayData::builder(largelistview_data_type)
+            .len(3)
+            .add_buffer(largelistview_offsets)
+            .add_buffer(largelistview_sizes)
+            .add_child_data(largelistview_value_data.into_data())
+            .null_bit_buffer(Some(Buffer::from([0b00000011])))
+            .build()
+            .unwrap();
+        let largelistviews = LargeListViewArray::from(largelistview_data);
+
+        let ree_run_ends = Int16Array::from(vec![2, 3]);
+        let ree_values = Int32Array::from(vec![Some(100), None]);
+        let ree_data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let ree_data = ArrayData::builder(ree_data_type)
+            .len(3)
+            .add_child_data(ree_run_ends.into_data())
+            .add_child_data(ree_values.into_data())
+            .build()
+            .unwrap();
+        let runendencoded = RunArray::<Int16Type>::from(ree_data);
+
         let record_batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
@@ -1315,6 +1596,11 @@ mod tests {
                 Arc::new(utf8s),
                 Arc::new(lists),
                 Arc::new(structs),
+                Arc::new(utf8views),
+                Arc::new(binaryviews),
+                Arc::new(listviews),
+                Arc::new(largelistviews),
+                Arc::new(runendencoded),
             ],
         )
         .unwrap();

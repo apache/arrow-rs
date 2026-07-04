@@ -17,11 +17,8 @@
 
 //! Helper trait [`FlightSqlService`] for implementing a [`FlightService`] that implements FlightSQL.
 
+use std::fmt::{Display, Formatter};
 use std::pin::Pin;
-
-use futures::{stream::Peekable, Stream, StreamExt};
-use prost::Message;
-use tonic::{Request, Response, Status, Streaming};
 
 use super::{
     ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
@@ -37,10 +34,13 @@ use super::{
     SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    flight_service_server::FlightService, gen::PollInfo, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult,
-    SchemaResult, Ticket,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, r#gen::PollInfo,
 };
+use futures::{Stream, StreamExt, stream::Peekable};
+use prost::Message;
+use tonic::{Request, Response, Status, Streaming};
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
 pub(crate) static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
@@ -386,6 +386,15 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         )))
     }
 
+    /// Implementors may override to handle do_put errors
+    async fn do_put_error_callback(
+        &self,
+        _request: Request<PeekableFlightDataStream>,
+        error: DoPutError,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        Err(Status::unimplemented(format!("Unhandled Error: {error}")))
+    }
+
     /// Execute an update SQL statement.
     async fn do_put_statement_update(
         &self,
@@ -619,7 +628,7 @@ where
                 self.get_flight_info_catalogs(token, request).await
             }
             Command::CommandGetDbSchemas(token) => {
-                return self.get_flight_info_schemas(token, request).await
+                return self.get_flight_info_schemas(token, request).await;
             }
             Command::CommandGetTables(token) => self.get_flight_info_tables(token, request).await,
             Command::CommandGetTableTypes(token) => {
@@ -710,10 +719,21 @@ where
         // we wrap this stream in a `Peekable` one, which allows us to peek at
         // the first message without discarding it.
         let mut request = request.map(PeekableFlightDataStream::new);
-        let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
+        let mut stream = Pin::new(request.get_mut());
 
-        let message =
-            Any::decode(&*cmd.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
+        let peeked_item = stream.peek().await.cloned();
+        let Some(cmd) = peeked_item else {
+            return self
+                .do_put_error_callback(request, DoPutError::MissingCommand)
+                .await;
+        };
+
+        let Some(flight_descriptor) = cmd?.flight_descriptor else {
+            return self
+                .do_put_error_callback(request, DoPutError::MissingFlightDescriptor)
+                .await;
+        };
+        let message = Any::decode(flight_descriptor.cmd).map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementUpdate(command) => {
                 let record_count = self.do_put_statement_update(command, request).await?;
@@ -859,7 +879,7 @@ where
             let stmt = self
                 .do_action_create_prepared_statement(cmd, request)
                 .await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -901,7 +921,7 @@ where
                 Status::invalid_argument("Unable to unpack ActionBeginTransactionRequest.")
             })?;
             let stmt = self.do_action_begin_transaction(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -926,7 +946,7 @@ where
                     Status::invalid_argument("Unable to unpack ActionBeginSavepointRequest.")
                 })?;
             let stmt = self.do_action_begin_savepoint(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -951,7 +971,7 @@ where
                     Status::invalid_argument("Unable to unpack ActionCancelQueryRequest.")
                 })?;
             let stmt = self.do_action_cancel_query(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -965,6 +985,26 @@ where
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
         self.do_exchange_fallback(request).await
+    }
+}
+
+/// Unrecoverable errors associated with `do_put` requests
+pub enum DoPutError {
+    /// The first element in the request stream is missing the command
+    MissingCommand,
+    /// The first element in the request stream is missing the flight descriptor
+    MissingFlightDescriptor,
+}
+impl Display for DoPutError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DoPutError::MissingCommand => {
+                write!(f, "Command is missing.")
+            }
+            DoPutError::MissingFlightDescriptor => {
+                write!(f, "Flight descriptor is missing.")
+            }
+        }
     }
 }
 

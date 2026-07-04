@@ -22,19 +22,19 @@ use std::{pin::Pin, sync::Arc};
 use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow_flight::{
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
     decode::FlightRecordBatchStream,
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
-        server::{FlightSqlService, PeekableFlightDataStream},
         ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
         CommandGetCatalogs, CommandGetDbSchemas, CommandGetTableTypes, CommandGetTables,
         CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
         ProstMessageExt, SqlInfo,
+        server::{FlightSqlService, PeekableFlightDataStream},
     },
     utils::batches_to_flight_data,
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
@@ -46,6 +46,11 @@ use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
 
+/// Return a Command instance for running the `flight_sql_client` CLI
+fn flight_sql_client_cmd() -> Command {
+    Command::new(assert_cmd::cargo::cargo_bin!("flight_sql_client"))
+}
+
 #[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl::default();
@@ -53,8 +58,7 @@ async fn test_simple() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -94,8 +98,7 @@ async fn test_get_catalogs() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -133,8 +136,7 @@ async fn test_get_db_schemas() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -173,8 +175,7 @@ async fn test_get_tables() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -212,8 +213,7 @@ async fn test_get_tables_db_filter() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -253,8 +253,7 @@ async fn test_get_tables_types() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -295,8 +294,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")

@@ -32,19 +32,19 @@ on:
 jobs:
   process:
     name: Process
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Assign GitHub labels
         if: |
           github.event_name == 'pull_request_target' &&
             (github.event.action == 'opened' ||
              github.event.action == 'synchronize')
-        uses: actions/labeler@v5.0.0
+        uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213  # v6.1.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/workflows/dev_pr/labeler.yml

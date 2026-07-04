@@ -15,11 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Extend, _MutableArrayData};
+use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
 
-pub(super) fn build_extend(_: &ArrayData) -> Extend {
-    Box::new(move |_, _, _, _| {})
+pub(super) fn build_extend(_: &ArrayData) -> Extend<'_> {
+    Box::new(move |_, _, _, _| Ok(()))
 }
 
-pub(super) fn extend_nulls(_: &mut _MutableArrayData, _: usize) {}
+pub(super) fn extend_nulls(
+    _: &mut _MutableArrayData,
+    _: usize,
+) -> Result<(), arrow_schema::ArrowError> {
+    Ok(())
+}

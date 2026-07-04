@@ -42,31 +42,35 @@ pub struct DictIndexDecoder {
 impl DictIndexDecoder {
     /// Create a new [`DictIndexDecoder`] with the provided data page, the number of levels
     /// associated with this data page, and the number of non-null values (if known)
-    pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
+    pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(data.slice(1..));
+        decoder.set_data(data.slice(1..))?;
 
-        Self {
+        Ok(Self {
             decoder,
             index_buf: Box::new([0; 1024]),
             index_buf_len: 0,
             index_offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
-        }
+        })
     }
 
     /// Read up to `len` values, returning the number of values read
     /// and calling `f` with each decoded dictionary index
     ///
     /// Will short-circuit and return on error
+    #[inline(always)]
     pub fn read<F: FnMut(&[i32]) -> Result<()>>(&mut self, len: usize, mut f: F) -> Result<usize> {
+        let total_to_read = len.min(self.max_remaining_values);
+
         let mut values_read = 0;
 
-        while values_read != len && self.max_remaining_values != 0 {
+        let index_buf = self.index_buf.as_mut();
+        while values_read < total_to_read {
             if self.index_offset == self.index_buf_len {
                 // We've consumed the entire index buffer so we need to reload it before proceeding
-                let read = self.decoder.get_batch(self.index_buf.as_mut())?;
+                let read = self.decoder.get_batch(index_buf)?;
                 if read == 0 {
                     break;
                 }
@@ -74,16 +78,16 @@ impl DictIndexDecoder {
                 self.index_offset = 0;
             }
 
-            let to_read = (len - values_read)
-                .min(self.index_buf_len - self.index_offset)
-                .min(self.max_remaining_values);
+            let available = self.index_buf_len - self.index_offset;
+            let n = available.min(total_to_read - values_read);
 
-            f(&self.index_buf[self.index_offset..self.index_offset + to_read])?;
+            f(&index_buf[self.index_offset..self.index_offset + n])?;
 
-            self.index_offset += to_read;
-            values_read += to_read;
-            self.max_remaining_values -= to_read;
+            self.index_offset += n;
+            values_read += n;
         }
+        self.max_remaining_values -= values_read;
+
         Ok(values_read)
     }
 

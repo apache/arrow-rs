@@ -15,16 +15,81 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Dictionary utilities for Arrow arrays
+
+use std::sync::Arc;
+
+use crate::filter::filter;
 use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, LargeBinaryType,
+    LargeUtf8Type, Utf8Type,
 };
-use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer};
+use arrow_array::{
+    AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, BooleanArray, DictionaryArray,
+    GenericByteArray, PrimitiveArray, downcast_dictionary_array,
+};
+use arrow_array::{cast::AsArray, downcast_primitive};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
+
+/// Garbage collects a [DictionaryArray] by removing unreferenced values.
+///
+/// Returns a new [DictionaryArray] such that there are no values
+/// that are not referenced by at least one key. There may still be duplicate
+/// values.
+///
+/// See also [`garbage_collect_any_dictionary`] if you need to handle multiple dictionary types
+pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
+    dictionary: &DictionaryArray<K>,
+) -> Result<DictionaryArray<K>, ArrowError> {
+    let keys = dictionary.keys();
+    let values = dictionary.values();
+
+    let mask = dictionary.occupancy();
+
+    // If no work to do, return the original dictionary
+    if mask.count_set_bits() == values.len() {
+        return Ok(dictionary.clone());
+    }
+
+    // Create a mapping from the old keys to the new keys, use a Vec for easy indexing
+    let mut key_remap = vec![K::Native::ZERO; values.len()];
+    for (new_idx, old_idx) in mask.set_indices().enumerate() {
+        key_remap[old_idx] = K::Native::from_usize(new_idx)
+            .expect("new index should fit in K::Native, as old index was in range");
+    }
+
+    // ... and then build the new keys array
+    let new_keys = keys.unary(|key| {
+        key_remap
+            .get(key.as_usize())
+            .copied()
+            // nulls may be present in the keys, and they will have arbitrary value; we don't care
+            // and can safely return zero
+            .unwrap_or(K::Native::ZERO)
+    });
+
+    // Create a new values array by filtering using the mask
+    let values = filter(dictionary.values(), &BooleanArray::new(mask, None))?;
+
+    DictionaryArray::try_new(new_keys, values)
+}
+
+/// Equivalent to [`garbage_collect_dictionary`] but without requiring casting to a specific key type.
+pub fn garbage_collect_any_dictionary(
+    dictionary: &dyn AnyDictionaryArray,
+) -> Result<ArrayRef, ArrowError> {
+    // FIXME: this is a workaround for MSRV Rust versions below 1.86 where trait upcasting is not stable.
+    // From 1.86 onward, `&dyn AnyDictionaryArray` can be directly passed to `downcast_dictionary_array!`.
+    let dictionary = &*dictionary.slice(0, dictionary.len());
+    downcast_dictionary_array!(
+        dictionary => garbage_collect_dictionary(dictionary).map(|dict| Arc::new(dict) as ArrayRef),
+        _ => unreachable!("have a dictionary array")
+    )
+}
 
 /// A best effort interner that maintains a fixed number of buckets
 /// and interns keys based on their hash value
@@ -77,7 +142,7 @@ impl<'a, V> Interner<'a, V> {
     }
 }
 
-pub struct MergedDictionaries<K: ArrowDictionaryKeyType> {
+pub(crate) struct MergedDictionaries<K: ArrowDictionaryKeyType> {
     /// Provides `key_mappings[`array_idx`][`old_key`] -> new_key`
     pub key_mappings: Vec<Vec<K::Native>>,
     /// The new values
@@ -102,25 +167,38 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
 }
 
 /// A type-erased function that compares two array for pointer equality
-type PtrEq = dyn Fn(&dyn Array, &dyn Array) -> bool;
+type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
 /// some return over the naive approach used by MutableArrayData
 ///
 /// `len` is the total length of the merged output
-pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
+///
+/// Returns `(should_merge, has_overflow)` where:
+/// - `should_merge`: whether dictionary values should be merged
+/// - `has_overflow`: whether the combined dictionary values would overflow the key type
+pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     len: usize,
-) -> bool {
+) -> (bool, bool) {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
-    let ptr_eq: Box<PtrEq> = match first_values.data_type() {
-        Utf8 => Box::new(bytes_ptr_eq::<Utf8Type>),
-        LargeUtf8 => Box::new(bytes_ptr_eq::<LargeUtf8Type>),
-        Binary => Box::new(bytes_ptr_eq::<BinaryType>),
-        LargeBinary => Box::new(bytes_ptr_eq::<LargeBinaryType>),
-        _ => return false,
+    let ptr_eq: PtrEq = match first_values.data_type() {
+        Utf8 => bytes_ptr_eq::<Utf8Type>,
+        LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
+        Binary => bytes_ptr_eq::<BinaryType>,
+        LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
+        dt => {
+            if !dt.is_primitive() {
+                return (
+                    false,
+                    K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum())
+                        .is_none(),
+                );
+            }
+            |a, b| a.to_data().ptr_eq(&b.to_data())
+        }
     };
 
     let mut single_dictionary = true;
@@ -136,7 +214,10 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     let overflow = K::Native::from_usize(total_values).is_none();
     let values_exceed_length = total_values >= len;
 
-    !single_dictionary && (overflow || values_exceed_length)
+    (
+        !single_dictionary && (overflow || values_exceed_length),
+        overflow,
+    )
 }
 
 /// Given an array of dictionaries and an optional key mask compute a values array
@@ -147,7 +228,7 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 /// This method is meant to be very fast and the output dictionary values
 /// may not be unique, unlike `GenericByteDictionaryBuilder` which is slower
 /// but produces unique values
-pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
+pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     masks: Option<&[BooleanBuffer]>,
 ) -> Result<MergedDictionaries<K>, ArrowError> {
@@ -233,17 +314,43 @@ fn compute_values_mask<K: ArrowNativeType>(
     builder.finish()
 }
 
+/// Process primitive array values to bytes
+fn masked_primitives_to_bytes<'a, T: ArrowPrimitiveType>(
+    array: &'a PrimitiveArray<T>,
+    mask: &BooleanBuffer,
+) -> Vec<(usize, Option<&'a [u8]>)>
+where
+    T::Native: ToByteSlice,
+{
+    let mut out = Vec::with_capacity(mask.count_set_bits());
+    let values = array.values();
+    for idx in mask.set_indices() {
+        out.push((
+            idx,
+            array.is_valid(idx).then_some(values[idx].to_byte_slice()),
+        ))
+    }
+    out
+}
+
+macro_rules! masked_primitive_to_bytes_helper {
+    ($t:ty, $array:expr, $mask:expr) => {
+        masked_primitives_to_bytes::<$t>($array.as_primitive(), $mask)
+    };
+}
+
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
 fn get_masked_values<'a>(
     array: &'a dyn Array,
     mask: &BooleanBuffer,
 ) -> Vec<(usize, Option<&'a [u8]>)> {
-    match array.data_type() {
+    downcast_primitive! {
+        array.data_type() => (masked_primitive_to_bytes_helper, array, mask),
         DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
         DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
         DataType::Binary => masked_bytes(array.as_binary::<i32>(), mask),
         DataType::LargeBinary => masked_bytes(array.as_binary::<i64>(), mask),
-        _ => unimplemented!(),
+        _ => unimplemented!("Dictionary merging for type {} is not implemented", array.data_type()),
     }
 }
 
@@ -266,12 +373,87 @@ fn masked_bytes<'a, T: ByteArrayType>(
 
 #[cfg(test)]
 mod tests {
-    use crate::dictionary::merge_dictionary_values;
+    use super::*;
+
     use arrow_array::cast::as_string_array;
+    use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int32Array, StringArray};
+    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
+
+    #[test]
+    fn test_garbage_collect_i32_dictionary() {
+        let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let keys = Int32Array::from_iter_values([0, 1, 1, 3, 0, 0, 1]);
+        let dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+
+        // Only "a", "b", "d" are referenced, "c" is not
+        let gc = garbage_collect_dictionary(&dict).unwrap();
+
+        let expected_values = StringArray::from_iter_values(["a", "b", "d"]);
+        let expected_keys = Int32Array::from_iter_values([0, 1, 1, 2, 0, 0, 1]);
+        let expected = DictionaryArray::<Int32Type>::new(expected_keys, Arc::new(expected_values));
+
+        assert_eq!(gc, expected);
+    }
+
+    #[test]
+    fn test_garbage_collect_any_dictionary() {
+        let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let keys = Int32Array::from_iter_values([0, 1, 1, 3, 0, 0, 1]);
+        let dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+
+        let gc = garbage_collect_any_dictionary(&dict).unwrap();
+
+        let expected_values = StringArray::from_iter_values(["a", "b", "d"]);
+        let expected_keys = Int32Array::from_iter_values([0, 1, 1, 2, 0, 0, 1]);
+        let expected = DictionaryArray::<Int32Type>::new(expected_keys, Arc::new(expected_values));
+
+        assert_eq!(gc.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_garbage_collect_with_nulls() {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from(vec![Some(2), None, Some(0)]);
+        let dict = DictionaryArray::<Int8Type>::new(keys, Arc::new(values));
+
+        let gc = garbage_collect_dictionary(&dict).unwrap();
+
+        let expected_values = StringArray::from_iter_values(["a", "c"]);
+        let expected_keys = Int8Array::from(vec![Some(1), None, Some(0)]);
+        let expected = DictionaryArray::<Int8Type>::new(expected_keys, Arc::new(expected_values));
+
+        assert_eq!(gc, expected);
+    }
+
+    #[test]
+    fn test_garbage_collect_empty_dictionary() {
+        let values = StringArray::from_iter_values::<&str, _>([]);
+        let keys = Int32Array::from_iter_values([]);
+        let dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+
+        let gc = garbage_collect_dictionary(&dict).unwrap();
+
+        assert_eq!(gc, dict);
+    }
+
+    #[test]
+    fn test_garbage_collect_dictionary_all_unreferenced() {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int32Array::from(vec![None, None, None]);
+        let dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+
+        let gc = garbage_collect_dictionary(&dict).unwrap();
+
+        // All keys are null, so dictionary values can be empty
+        let expected_values = StringArray::from_iter_values::<&str, _>([]);
+        let expected_keys = Int32Array::from(vec![None, None, None]);
+        let expected = DictionaryArray::<Int32Type>::new(expected_keys, Arc::new(expected_values));
+
+        assert_eq!(gc, expected);
+    }
 
     #[test]
     fn test_merge_strings() {

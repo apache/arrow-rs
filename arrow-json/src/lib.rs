@@ -20,18 +20,28 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data
+//! # Binary Data uses `Base16` Encoding
 //!
-//! As per [RFC7159] JSON cannot encode arbitrary binary data. A common approach to workaround
-//! this is to use a [binary-to-text encoding] scheme, such as base64, to encode the
-//! input data and then decode it on output.
+//! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
+//! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
+//! [`Base16` encoding]).
+//!
+//! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
+//! as the original). If that is an issue, we recommend to convert binary data to/from a different
+//! encoding format such as `Base64` instead. See the following example for details.
+//!
+//! ## `Base64` Encoding Example
+//!
+//! [`Base64`] is a common [binary-to-text encoding] scheme with a space efficiency of 75%. The
+//! following example shows how to use the [`arrow_cast`] crate to encode binary data to `Base64`
+//! before converting it to JSON and how to decode it back.
 //!
 //! ```
 //! # use std::io::Cursor;
 //! # use std::sync::Arc;
 //! # use arrow_array::{BinaryArray, RecordBatch, StringArray};
 //! # use arrow_array::cast::AsArray;
-//! # use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
+//! use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
 //! # use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 //! #
 //! // The data we want to write
@@ -61,13 +71,15 @@
 //!
 //! [RFC7159]: https://datatracker.ietf.org/doc/html/rfc7159#section-8.1
 //! [binary-to-text encoding]: https://en.wikipedia.org/wiki/Binary-to-text_encoding
-//!
+//! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
+//! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
+//! [`Base64`]: https://en.wikipedia.org/wiki/Base64
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -87,7 +99,7 @@ use serde_json::{Number, Value};
 ///
 /// This enum controls which form(s) the Reader will accept and which form the
 /// Writer will produce. For example, if the RecordBatch Schema is
-/// `[("a", Int32), ("r", Struct([("b", Boolean), ("c", Utf8)]))]`
+/// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
 /// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
@@ -168,8 +180,16 @@ impl JsonSerializable for f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::writer::JsonArray;
+    use crate::writer::LineDelimited;
+    use arrow_array::{
+        ArrayRef, GenericBinaryArray, GenericByteViewArray, GenericListViewArray, RecordBatch,
+        RecordBatchWriter, builder::FixedSizeBinaryBuilder, types::BinaryViewType,
+    };
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
+    use std::io::Cursor;
+    use std::sync::Arc;
 
     #[test]
     fn test_arrow_native_type_to_json() {
@@ -196,13 +216,6 @@ mod tests {
 
     #[test]
     fn test_json_roundtrip_structs() {
-        use crate::writer::LineDelimited;
-        use arrow_schema::DataType;
-        use arrow_schema::Field;
-        use arrow_schema::Fields;
-        use arrow_schema::Schema;
-        use std::sync::Arc;
-
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "c1",
@@ -260,5 +273,159 @@ mod tests {
             }
             assert_eq!(list_input, &list_output);
         }
+    }
+
+    #[test]
+    #[allow(invalid_from_utf8)]
+    fn test_json_roundtrip_binary() {
+        let not_utf8: &[u8] = b"Not UTF8 \xa0\xa1!";
+        assert!(str::from_utf8(not_utf8).is_err());
+
+        let values: &[Option<&[u8]>] = &[
+            Some(b"Ned Flanders" as &[u8]),
+            None,
+            Some(b"Troy McClure" as &[u8]),
+            Some(not_utf8),
+        ];
+        // Binary:
+        assert_binary_json(Arc::new(GenericBinaryArray::<i32>::from_iter(values)));
+
+        // LargeBinary:
+        assert_binary_json(Arc::new(GenericBinaryArray::<i64>::from_iter(values)));
+
+        // FixedSizeBinary:
+        assert_binary_json(build_array_fixed_size_binary(12, values));
+
+        // BinaryView:
+        assert_binary_json(Arc::new(GenericByteViewArray::<BinaryViewType>::from_iter(
+            values,
+        )));
+    }
+
+    fn build_array_fixed_size_binary(byte_width: i32, values: &[Option<&[u8]>]) -> ArrayRef {
+        let mut builder = FixedSizeBinaryBuilder::new(byte_width);
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v).unwrap(),
+                None => builder.append_null(),
+            }
+        }
+        Arc::new(builder.finish())
+    }
+
+    fn assert_binary_json(array: ArrayRef) {
+        // encode and check JSON with and without explicit nulls
+        assert_binary_json_with_writer(
+            array.clone(),
+            WriterBuilder::new().with_explicit_nulls(true),
+        );
+        assert_binary_json_with_writer(array, WriterBuilder::new().with_explicit_nulls(false));
+    }
+
+    fn assert_binary_json_with_writer(array: ArrayRef, builder: WriterBuilder) {
+        let batch = RecordBatch::try_from_iter([("bytes", array)]).unwrap();
+
+        let mut buf = Vec::new();
+        let json_value: Value = {
+            let mut writer = builder.build::<_, JsonArray>(&mut buf);
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
+
+        let json_array = json_value.as_array().unwrap();
+
+        let decoded = {
+            let mut decoder = ReaderBuilder::new(batch.schema().clone())
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(json_array).unwrap();
+            decoder.flush().unwrap().unwrap()
+        };
+
+        assert_eq!(batch, decoded);
+    }
+
+    fn assert_list_view_roundtrip<O: arrow_array::OffsetSizeTrait>() {
+        let flat_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let flat_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(flat_field);
+
+        let nested_inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let nested_inner_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(nested_inner);
+        let nested_outer = Arc::new(Field::new("item", nested_inner_dt, true));
+        let nested_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(nested_outer);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("flat", flat_dt, true),
+            Field::new("nested", nested_dt, true),
+        ]));
+
+        let input = r#"{"flat":[1,2,3],"nested":[[1,2],[3]]}
+{"flat":[4,null]}
+{}
+{"flat":[6],"nested":[[4,5,6]]}
+{"flat":[]}
+"#
+        .as_bytes();
+
+        let batches: Vec<RecordBatch> = ReaderBuilder::new(schema.clone())
+            .with_batch_size(1024)
+            .build(Cursor::new(input))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let mut output = Vec::new();
+        let mut writer = WriterBuilder::new().build::<_, LineDelimited>(&mut output);
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(input, &output);
+    }
+
+    #[test]
+    fn test_json_roundtrip_list_view() {
+        assert_list_view_roundtrip::<i32>();
+        assert_list_view_roundtrip::<i64>();
+    }
+
+    #[test]
+    fn test_json_roundtrip_fixed_size_list() {
+        let inner = Arc::new(Field::new("item", DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("flat", DataType::FixedSizeList(inner.clone(), 3), true),
+            Field::new(
+                "nested",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::FixedSizeList(inner, 2), true)),
+                    2,
+                ),
+                true,
+            ),
+        ]));
+
+        let input = r#"{"flat":[1,2,3],"nested":[[1,2],[3,4]]}
+{"flat":[4,null,5]}
+{"flat":[6,7,8],"nested":[[null,5],[6,null]]}
+"#
+        .as_bytes();
+
+        let batches: Vec<RecordBatch> = ReaderBuilder::new(schema.clone())
+            .with_batch_size(1024)
+            .build(Cursor::new(input))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let mut output = Vec::new();
+        let mut writer = WriterBuilder::new().build::<_, LineDelimited>(&mut output);
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(input, &output);
     }
 }

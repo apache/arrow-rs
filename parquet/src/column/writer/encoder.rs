@@ -23,11 +23,13 @@ use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
-use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
-use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
+use crate::data_type::private::ParquetValueType;
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
+use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
@@ -88,6 +90,42 @@ pub trait ColumnValueEncoder {
     /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
+    /// Returns the largest `k` such that the first `k` values in
+    /// `values[offset..offset + len]` encode to at most `byte_budget`
+    /// bytes — i.e. how many values fit in a single page byte budget.
+    ///
+    /// Returns `len` if every value fits. Returns at least 1 if a single
+    /// value alone exceeds the budget, matching parquet's "at least one
+    /// value per data page" rule.
+    ///
+    /// `None` means "no cheap estimate available"; the caller stays on
+    /// the batched fast path and lets the post-write
+    /// `should_add_data_page` check handle bounding.
+    ///
+    /// Implementations should short-circuit aggressively: the typical
+    /// case is "everything fits, return `len`", and the next-most-common
+    /// case is "one wide value, return 1." The variable-width walk only
+    /// needs to be precise when the chunk is genuinely near the budget.
+    fn count_values_within_byte_budget(
+        _values: &Self::Values,
+        _offset: usize,
+        _len: usize,
+        _byte_budget: usize,
+    ) -> Option<usize> {
+        None
+    }
+
+    /// As [`Self::count_values_within_byte_budget`] but using gather
+    /// `indices` rather than a contiguous range. Returns the number of
+    /// `indices` that fit, not the maximum index value.
+    fn count_values_within_byte_budget_gather(
+        _values: &Self::Values,
+        _indices: &[usize],
+        _byte_budget: usize,
+    ) -> Option<usize> {
+        None
+    }
+
     /// Returns the number of buffered values
     fn num_values(&self) -> usize;
 
@@ -121,6 +159,10 @@ pub trait ColumnValueEncoder {
     /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
     /// near the end of encoding.
     fn flush_bloom_filter(&mut self) -> Option<Sbbf>;
+
+    /// Computes [`GeospatialStatistics`], if any, and resets internal state such that any internal
+    /// accumulator is prepared to accumulate statistics for the next column chunk.
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
 pub struct ColumnValueEncoderImpl<T: DataType> {
@@ -132,7 +174,9 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    bloom_filter_target_fpp: f64,
     variable_length_bytes: Option<i64>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -145,10 +189,12 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
 
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
-            // INTERVAL has undefined sort order, so don't write min/max stats for it
+            // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
-            if let Some((min, max)) = self.min_max(slice, None) {
+            if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
+                update_geo_stats_accumulator(accumulator, slice.iter());
+            } else if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
             }
@@ -178,7 +224,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     type Values = [T::T];
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
-        self.bloom_filter.take()
+        let mut sbbf = self.bloom_filter.take()?;
+        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
+        Some(sbbf)
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
@@ -196,10 +244,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let bloom_filter = props
-            .bloom_filter_properties(descr.path())
-            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
-            .transpose()?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
+
+        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
         Ok(Self {
             encoder,
@@ -208,9 +255,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: 0,
             statistics_enabled,
             bloom_filter,
+            bloom_filter_target_fpp,
             min_value: None,
             max_value: None,
             variable_length_bytes: None,
+            geo_stats_accumulator,
         })
     }
 
@@ -232,6 +281,39 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
         self.write_slice(&slice)
+    }
+
+    fn count_values_within_byte_budget(
+        values: &[T::T],
+        offset: usize,
+        len: usize,
+        byte_budget: usize,
+    ) -> Option<usize> {
+        // Clamp so that a caller-supplied `len` that overruns the input
+        // (e.g. a level/value mismatch the encoder will reject later)
+        // returns an estimate instead of panicking here.
+        let end = (offset + len).min(values.len());
+        let start = offset.min(end);
+        count_within_budget::<T>(
+            end - start,
+            byte_budget,
+            values[start..end].iter().map(Some),
+        )
+    }
+
+    fn count_values_within_byte_budget_gather(
+        values: &[T::T],
+        indices: &[usize],
+        byte_budget: usize,
+    ) -> Option<usize> {
+        // `values.get` yields `None` for an out-of-range index (defensive
+        // against a level/value mismatch the encoder rejects later); such a
+        // position is counted but contributes no bytes.
+        count_within_budget::<T>(
+            indices.len(),
+            byte_budget,
+            indices.iter().map(|&i| values.get(i)),
+        )
     }
 
     fn num_values(&self) -> usize {
@@ -307,6 +389,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             variable_length_bytes: self.variable_length_bytes.take(),
         })
     }
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
+        self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
+    }
 }
 
 fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
@@ -359,11 +445,110 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
             T::try_from_le_slice(&f64::to_le_bytes(replace as f64)).unwrap()
         }
         Type::FIXED_LEN_BYTE_ARRAY
-            if descr.logical_type() == Some(LogicalType::Float16)
+            if descr.logical_type_ref() == Some(LogicalType::Float16).as_ref()
                 && f16::from_le_bytes(val.as_bytes().try_into().unwrap()) == f16::NEG_ZERO =>
         {
             T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
         }
         _ => val.clone(),
     }
+}
+
+/// Creates a bloom filter sized for the column's configured NDV, returning the filter
+/// and the target FPP for folding.
+pub(crate) fn create_bloom_filter(
+    props: &WriterProperties,
+    descr: &ColumnDescPtr,
+) -> Result<(Option<Sbbf>, f64)> {
+    match props.bloom_filter_properties(descr.path()) {
+        Some(bf_props) => Ok((
+            Some(Sbbf::new_with_ndv_fpp(bf_props.ndv(), bf_props.fpp())?),
+            bf_props.fpp(),
+        )),
+        None => Ok((None, 0.0)),
+    }
+}
+
+fn update_geo_stats_accumulator<'a, T, I>(bounder: &mut dyn GeoStatsAccumulator, iter: I)
+where
+    T: ParquetValueType + 'a,
+    I: Iterator<Item = &'a T>,
+{
+    if bounder.is_valid() {
+        for val in iter {
+            bounder.update_wkb(val.as_bytes());
+        }
+    }
+}
+
+/// Plain-encoded byte cost of a single value of type `T::T`.
+///
+/// Derived from [`ParquetValueType::dict_encoding_size`] (which returns
+/// `(per-value overhead, value-bytes)`) so we don't add a parallel
+/// per-value-size hook to the trait. Mirrors the dispatch in
+/// `KeyStorage::push` (`encodings/encoding/dict_encoder.rs`).
+///
+/// Placed at the end of the module deliberately. Inserting it above the
+/// `ColumnValueEncoder` trait shifts the trait and `ColumnValueEncoderImpl`
+/// within the compiled module enough to perturb downstream code placement,
+/// which measurably regresses unrelated arrow-writer string benchmarks
+/// (~5-9% on `string` / `string_and_binary_view`). Defining it last keeps
+/// the hot encoder code at the offsets it has on `main`.
+#[inline]
+fn plain_encoded_byte_size<T: DataType>(value: &T::T) -> usize {
+    let (overhead, bytes) = value.dict_encoding_size();
+    match <T::T as ParquetValueType>::PHYSICAL_TYPE {
+        // Plain BYTE_ARRAY = 4-byte length prefix + payload.
+        Type::BYTE_ARRAY => overhead + bytes,
+        // Plain FLBA = raw bytes only; `dict_encoding_size`'s length prefix
+        // is irrelevant here, so the encoder passes `type_length` directly.
+        Type::FIXED_LEN_BYTE_ARRAY => bytes,
+        // Numeric/bool are short-circuited by the caller via
+        // `mem::size_of`, so this is unreachable in practice; fall back to
+        // `overhead` defensively.
+        _ => overhead,
+    }
+}
+
+/// How many leading values fit in `byte_budget` bytes, shared by the two
+/// `ColumnValueEncoder::count_values_within_byte_budget*` methods (one walks a
+/// contiguous slice, the other gathers by index).
+///
+/// `n` is the answer when everything fits; `vals` yields each candidate value,
+/// or `None` for a position that should still be counted but contributes no
+/// bytes (an out-of-range gather index). The boundary value that crosses the
+/// budget is included in the count so the caller's page-flush check trips on
+/// this mini-batch rather than leaving a sliver for the next page; this also
+/// catches a lone outlier wherever it lands among small values.
+///
+/// Defined at the end of the module alongside `plain_encoded_byte_size` for
+/// the same reason — see that function's note on code placement and the
+/// `string` / `string_and_binary_view` benchmarks.
+#[inline]
+fn count_within_budget<'a, T: DataType>(
+    n: usize,
+    byte_budget: usize,
+    vals: impl Iterator<Item = Option<&'a T::T>>,
+) -> Option<usize>
+where
+    T::T: 'a,
+{
+    // Fixed-size physical types have a constant per-value byte cost, so the
+    // answer is one division — no walk needed.
+    let phys = <T::T as ParquetValueType>::PHYSICAL_TYPE;
+    if phys != Type::BYTE_ARRAY && phys != Type::FIXED_LEN_BYTE_ARRAY {
+        let per = std::mem::size_of::<T::T>().max(1);
+        return Some((byte_budget / per).max(1).min(n));
+    }
+    // Variable-width: accumulate, exit at the first value past the budget.
+    let mut cum: usize = 0;
+    for (i, v) in vals.enumerate() {
+        if let Some(v) = v {
+            cum = cum.saturating_add(plain_encoded_byte_size::<T>(v));
+        }
+        if cum > byte_budget {
+            return Some(i + 1);
+        }
+    }
+    Some(n)
 }

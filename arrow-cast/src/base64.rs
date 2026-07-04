@@ -79,18 +79,14 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     // Safety: offsets monotonically increasing by construction
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
 
-    Ok(GenericBinaryArray::new(
-        offsets,
-        Buffer::from_vec(buffer),
-        array.nulls().cloned(),
-    ))
+    GenericBinaryArray::try_new(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
         let encoded = b64_encode(e, a);
@@ -110,7 +106,7 @@ mod tests {
         let data: BinaryArray = (0..len)
             .map(|_| {
                 let len = rng.random_range(0..16);
-                Some((0..len).map(|_| rng.random()).collect::<Vec<u8>>())
+                Some((0..len).map(|_| rng.random::<u8>()).collect::<Vec<u8>>())
             })
             .collect();
 

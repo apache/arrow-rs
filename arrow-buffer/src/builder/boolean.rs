@@ -15,16 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
+use crate::bit_util::apply_bitwise_binary_op;
+use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
 ///
+/// Builds a packed buffer of bits representing boolean values. Each bit in the
+/// buffer corresponds to a boolean value,
+///
 /// # See Also
 ///
-/// * [`NullBuffer`] for building [`BooleanBuffer`]s for representing nulls
+/// * [`NullBufferBuilder`] for building [`BooleanBuffer`]s for representing nulls
+/// * [`BufferBuilder`] for building [`Buffer`]s
 ///
-/// [`NullBuffer`]: crate::NullBuffer
+/// # Example
+/// ```
+/// # use arrow_buffer::builder::BooleanBufferBuilder;
+/// let mut builder = BooleanBufferBuilder::new(10);
+/// builder.append(true);
+/// builder.append(false);
+/// builder.append_n(3, true); // append 3 trues
+/// let buffer = builder.build();
+/// assert_eq!(buffer.len(), 5); // 5 bits appended
+/// assert_eq!(buffer.values(), &[0b00011101_u8]); // packed bits
+///```
+///
+/// [`BufferBuilder`]: crate::builder::BufferBuilder
+/// [`NullBufferBuilder`]: crate::builder::NullBufferBuilder
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
@@ -139,7 +157,6 @@ impl BooleanBufferBuilder {
 
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
-    /// New bytes are uninitialized and reading them is undefined behavior.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         let capacity = self.len + additional;
@@ -167,6 +184,46 @@ impl BooleanBufferBuilder {
         if v {
             unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), self.len - 1) };
         }
+    }
+
+    /// Appends the low `count` bits from `word` into the buffer.
+    ///
+    /// `word` is treated as a packed LSB-first bitmap. Only the lowest
+    /// `count` bits are appended; higher bits are ignored.
+    ///
+    /// This is significantly faster than calling [`Self::append`] in a
+    /// loop when the caller already has bits packed into a `u64`.
+    #[inline]
+    pub fn append_word(&mut self, word: u64, count: usize) {
+        debug_assert!(count <= 64);
+        let mask = (u64::MAX >> ((64 - count) & 63)) * ((count != 0) as u64);
+        let word = word & mask;
+
+        let new_len = self.len + count;
+        let new_len_bytes = bit_util::ceil(new_len, 8);
+        if new_len_bytes > self.buffer.len() {
+            self.buffer.resize(new_len_bytes, 0);
+        }
+
+        let bit_offset = self.len & 7;
+        let byte_start = self.len / 8;
+        let buf = self.buffer.as_slice_mut();
+
+        // Shift the word to align with the bit offset within the
+        // current byte, then OR it into the buffer. The shift merges
+        // correctly with any existing bits in the partial trailing byte.
+        let shifted = word << bit_offset;
+        let shifted_bytes = shifted.to_le_bytes();
+        let bytes_to_write = bit_util::ceil(count + bit_offset, 8).min(8);
+        for i in 0..bytes_to_write {
+            buf[byte_start + i] |= shifted_bytes[i];
+        }
+        // When bit_offset > 0 the shift can overflow into a 9th byte.
+        if bit_offset > 0 && count + bit_offset > 64 {
+            buf[byte_start + 8] |= (word >> (64 - bit_offset)) as u8;
+        }
+
+        self.len = new_len;
     }
 
     /// Appends n `additional` bits of value `v` into the buffer
@@ -218,13 +275,16 @@ impl BooleanBufferBuilder {
     pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
         let offset_write = self.len;
         let len = range.end - range.start;
+        // allocate new bits as 0
         self.advance(len);
-        bit_mask::set_bits(
+        // copy bits from to_set into self.buffer a word at a time
+        apply_bitwise_binary_op(
             self.buffer.as_slice_mut(),
-            to_set,
             offset_write,
+            to_set,
             range.start,
             len,
+            |_a, b| b, // copy bits from to_set
         );
     }
 
@@ -244,7 +304,9 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
-    /// Creates a [`BooleanBuffer`]
+    /// Resets this builder and returns a [`BooleanBuffer`].
+    ///
+    /// Use [`Self::build`] when you don't need to reuse this builder.
     #[inline]
     pub fn finish(&mut self) -> BooleanBuffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
@@ -252,9 +314,31 @@ impl BooleanBufferBuilder {
         BooleanBuffer::new(buf.into(), 0, len)
     }
 
+    /// Builds a [`BooleanBuffer`] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    #[inline]
+    pub fn build(self) -> BooleanBuffer {
+        BooleanBuffer::new(self.buffer.into(), 0, self.len)
+    }
+
     /// Builds the [BooleanBuffer] without resetting the builder.
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
+    }
+
+    /// Extends the builder from a trusted length iterator of booleans.
+    /// # Safety
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    ///
+    #[inline]
+    pub unsafe fn extend_trusted_len<I>(&mut self, iterator: I)
+    where
+        I: Iterator<Item = bool>,
+    {
+        let len = iterator.size_hint().0;
+        unsafe { self.buffer.extend_bool_trusted_len(iterator, self.len) };
+        self.len += len;
     }
 }
 
@@ -268,7 +352,15 @@ impl From<BooleanBufferBuilder> for Buffer {
 impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
-        BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+        builder.build()
+    }
+}
+
+impl From<BooleanBufferBuilder> for NullBuffer {
+    #[inline]
+    fn from(builder: BooleanBufferBuilder) -> Self {
+        let boolean_buffer = BooleanBuffer::from(builder);
+        NullBuffer::new(boolean_buffer)
     }
 }
 
@@ -522,5 +614,162 @@ mod tests {
 
         assert_eq!(buf.len(), buf2.inner().len());
         assert_eq!(buf.as_slice(), buf2.values());
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools = vec![true, false, true, true, false, true, true, true, false];
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        assert_eq!(builder.len(), 9);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v);
+        }
+
+        // Test > 64 bits
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        assert_eq!(builder.len(), 100);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v, "at index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_extend_misaligned() {
+        // Test misaligned start
+        for offset in 1..65 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            builder.append_n(offset, false);
+
+            let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            assert_eq!(builder.len(), offset + 100);
+
+            let finished = builder.finish();
+            for i in 0..offset {
+                assert!(!finished.value(i));
+            }
+            for (i, v) in bools.into_iter().enumerate() {
+                assert_eq!(finished.value(offset + i), v, "at index {}", offset + i);
+            }
+        }
+    }
+
+    /// Helper: build via append_word and verify against bit-by-bit append.
+    fn check_append_word(initial_bits: usize, word: u64, count: usize) {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        got.append_n(initial_bits, true);
+        expected.append_n(initial_bits, true);
+        got.append_word(word, count);
+        for i in 0..count {
+            expected.append(word & (1 << i) != 0);
+        }
+        assert_eq!(got.len(), expected.len());
+        assert_eq!(got.finish(), expected.finish());
+    }
+
+    #[test]
+    fn test_append_word_zero_count() {
+        check_append_word(0, u64::MAX, 0);
+        check_append_word(3, u64::MAX, 0);
+    }
+
+    #[test]
+    fn test_append_word_aligned() {
+        for count in [1, 5, 8, 17, 64] {
+            check_append_word(0, 0xDEAD_BEEF_CAFE_BABE, count);
+        }
+    }
+
+    #[test]
+    fn test_append_word_unaligned() {
+        for offset in 1..=7 {
+            check_append_word(offset, 0xDEAD_BEEF_CAFE_BABE, 13);
+        }
+    }
+
+    #[test]
+    fn test_append_word_overflow_9th_byte() {
+        check_append_word(3, u64::MAX, 64);
+        check_append_word(7, 0xA5A5_A5A5_A5A5_A5A5, 64);
+    }
+
+    #[test]
+    fn test_append_word_small_counts() {
+        check_append_word(0, 0b1, 1);
+        check_append_word(0, 0b1010101, 7);
+        check_append_word(3, 0b1, 1);
+        check_append_word(3, 0b1010101, 7);
+    }
+
+    #[test]
+    fn test_append_word_ignores_high_bits_before_later_appends() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_word(0b10, 1);
+        builder.append(false);
+
+        let finished = builder.finish();
+        assert_eq!(finished.len(), 2);
+        assert!(!finished.value(0));
+        assert!(!finished.value(1));
+    }
+
+    #[test]
+    fn test_append_word_full_word() {
+        check_append_word(0, u64::MAX, 64);
+        check_append_word(0, 0, 64);
+    }
+
+    #[test]
+    fn test_append_word_sequential() {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        for (word, count) in [(0b1010u64, 4), (0b111u64, 3), (0u64, 5), (u64::MAX, 64)] {
+            got.append_word(word, count);
+            for i in 0..count {
+                expected.append(word & (1 << i) != 0);
+            }
+        }
+        assert_eq!(got.finish(), expected.finish());
+    }
+
+    #[test]
+    fn test_append_word_mixed_with_append() {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        got.append(true);
+        expected.append(true);
+        got.append_word(0b1100, 4);
+        for i in 0..4 {
+            expected.append(0b1100u64 & (1 << i) != 0);
+        }
+        got.append(false);
+        expected.append(false);
+        got.append_word(0xFF, 8);
+        expected.append_n(8, true);
+        assert_eq!(got.finish(), expected.finish());
+    }
+
+    #[test]
+    fn test_extend_misaligned_end() {
+        for len in 1..130 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            let mut bools: Vec<_> = (0..len).map(|i| i % 2 == 0).collect();
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            let copy = bools.clone();
+            bools.extend(copy);
+            assert_eq!(builder.len(), 2 * len);
+
+            let finished = builder.finish();
+            for (i, &v) in bools.iter().enumerate() {
+                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+            }
+        }
     }
 }

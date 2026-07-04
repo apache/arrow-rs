@@ -25,7 +25,8 @@ pub use arrow_array::cast::*;
 pub use arrow_array::iterator::*;
 pub use arrow_array::*;
 pub use arrow_data::{
-    layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, ByteView, DataTypeLayout,
+    ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, ByteView, DataTypeLayout,
+    MAX_INLINE_VIEW_LEN, layout,
 };
 
 pub use arrow_data::transform::{Capacities, MutableArrayData};
@@ -35,6 +36,4 @@ pub use arrow_data::transform::{Capacities, MutableArrayData};
 pub use arrow_array::ffi::export_array_into_raw;
 
 // --------------------- Array's values comparison ---------------------
-
-#[allow(deprecated)]
-pub use arrow_ord::ord::{build_compare, make_comparator, DynComparator};
+pub use arrow_ord::ord::{DynComparator, make_comparator};

@@ -25,8 +25,8 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary_impl, RecordBatchDecoder};
-use crate::{MessageHeader, CONTINUATION_MARKER};
+use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
 ///
@@ -45,9 +45,8 @@ pub struct StreamDecoder {
     require_alignment: bool,
     /// Should validation be skipped when reading data? Defaults to false.
     ///
-    /// See [`FileDecoder::with_skip_validation`] for details.
+    /// See [`StreamDecoder::with_skip_validation`] for details.
     ///
-    /// [`FileDecoder::with_skip_validation`]: crate::reader::FileDecoder::with_skip_validation
     skip_validation: UnsafeFlag,
 }
 
@@ -102,10 +101,29 @@ impl StreamDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Return the schema if decoded, else None.
+    pub fn schema(&self) -> Option<SchemaRef> {
+        self.schema.as_ref().map(|schema| schema.clone())
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust the input data and are
+    /// sure the data you are reading is valid Arrow IPC stream data, otherwise
+    /// undefined behavior may result.
+    ///
+    /// For example, DataFusion uses this when reading spill files it wrote itself.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        unsafe { self.skip_validation.set(skip_validation) };
         self
     }
 
@@ -128,6 +146,9 @@ impl StreamDecoder {
     ///         while !x.is_empty() {
     ///             if let Some(x) = decoder.decode(&mut x)? {
     ///                 println!("{x:?}");
+    ///             }
+    ///             if let Some(schema) = decoder.schema() {
+    ///                 println!("Schema: {schema:?}");
     ///             }
     ///         }
     ///     }
@@ -252,12 +273,12 @@ impl StreamDecoder {
                         t => {
                             return Err(ArrowError::IpcError(format!(
                                 "Message type unsupported by StreamDecoder: {t:?}"
-                            )))
+                            )));
                         }
                     }
                 }
                 DecoderState::Finished => {
-                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()))
+                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()));
                 }
             }
         }
@@ -285,7 +306,7 @@ mod tests {
     use super::*;
     use crate::writer::{IpcWriteOptions, StreamWriter};
     use arrow_array::{
-        types::Int32Type, DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray,
+        DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, types::Int32Type,
     };
     use arrow_schema::{DataType, Field, Schema};
 
@@ -327,6 +348,31 @@ mod tests {
     }
 
     #[test]
+    fn test_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut s = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        s.finish().unwrap();
+        drop(s);
+
+        let buffer = Buffer::from_vec(buf);
+
+        let mut b = buffer.slice_with_length(0, buffer.len() - 1);
+        let mut decoder = StreamDecoder::new();
+        let output = decoder.decode(&mut b).unwrap();
+        assert!(output.is_none());
+        let decoded_schema = decoder.schema().unwrap();
+        assert_eq!(schema, decoded_schema);
+
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Ipc error: Unexpected End of Stream");
+    }
+
+    #[test]
     fn test_read_ree_dict_record_batches_from_buffer() {
         let schema = Schema::new(vec![Field::new(
             "test1",
@@ -362,8 +408,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
-                #[allow(deprecated)]
-                IpcWriteOptions::default().with_preserve_dict_id(false),
+                IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");
@@ -375,7 +420,7 @@ mod tests {
         while let Some(batch) = decoder
             .decode(buf)
             .map_err(|e| {
-                ArrowError::ExternalError(format!("Failed to decode record batch: {}", e).into())
+                ArrowError::ExternalError(format!("Failed to decode record batch: {e}").into())
             })
             .expect("Failed to decode record batch")
         {

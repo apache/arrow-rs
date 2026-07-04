@@ -20,21 +20,23 @@
 //! Provides utilities for creating, manipulating, and converting Arrow arrays
 //! made of primitive types, strings, and nested types.
 
-use super::{data::new_buffers, ArrayData, ArrayDataBuilder, ByteView};
+use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, IntervalMonthDayNano, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
-use num::Integer;
+use num_integer::Integer;
 use std::mem;
 
 mod boolean;
 mod fixed_binary;
 mod fixed_size_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
+mod run;
 mod structure;
 mod union;
 mod utils;
@@ -43,9 +45,10 @@ mod variable_size;
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
 // this is dynamic because different data_types influence how buffers and children are extended.
-type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
+type Extend<'a> =
+    Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) -> Result<(), ArrowError> + 'a>;
 
-type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize)>;
+type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize) -> Result<(), ArrowError>>;
 
 /// A mutable [ArrayData] that knows how to freeze itself into an [ArrayData].
 /// This is just a data container.
@@ -72,7 +75,7 @@ impl _MutableArrayData<'_> {
     }
 }
 
-fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
+fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
@@ -189,7 +192,7 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max.try_into().ok()?;
@@ -214,7 +217,7 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
 }
 
 /// Builds an extend that adds `buffer_offset` to any buffer indices encountered
-fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
+fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -228,12 +231,13 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
                     let mut view = ByteView::from(*v);
                     view.buffer_index += buffer_offset;
                     view.into()
-                }))
+                }));
+            Ok(())
         },
     )
 }
 
-fn build_extend(array: &ArrayData) -> Extend {
+fn build_extend(array: &ArrayData) -> Extend<'_> {
     match array.data_type() {
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),
@@ -255,17 +259,20 @@ fn build_extend(array: &ArrayData) -> Extend {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::build_extend::<IntervalMonthDayNano>(array)
+        }
+        DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
+        DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
         DataType::BinaryView | DataType::Utf8View => unreachable!("should use build_extend_view"),
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
         DataType::LargeList(_) => list::build_extend::<i64>(array),
+        DataType::ListView(_) => list_view::build_extend::<i32>(array),
+        DataType::LargeListView(_) => list_view::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
@@ -275,7 +282,7 @@ fn build_extend(array: &ArrayData) -> Extend {
             UnionMode::Sparse => union::build_extend_sparse(array),
             UnionMode::Dense => union::build_extend_dense(array),
         },
-        DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => run::build_extend(array),
     }
 }
 
@@ -301,17 +308,20 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::extend_nulls::<IntervalMonthDayNano>
+        }
+        DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
+        DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
         DataType::BinaryView | DataType::Utf8View => primitive::extend_nulls::<u128>,
         DataType::Map(_, _) | DataType::List(_) => list::extend_nulls::<i32>,
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
         DataType::LargeList(_) => list::extend_nulls::<i64>,
+        DataType::ListView(_) => list_view::extend_nulls::<i32>,
+        DataType::LargeListView(_) => list_view::extend_nulls::<i64>,
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
             DataType::UInt8 => primitive::extend_nulls::<u8>,
             DataType::UInt16 => primitive::extend_nulls::<u16>,
@@ -331,7 +341,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             UnionMode::Sparse => union::extend_nulls_sparse,
             UnionMode::Dense => union::extend_nulls_dense,
         },
-        DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => run::extend_nulls,
     })
 }
 
@@ -445,7 +455,11 @@ impl<'a> MutableArrayData<'a> {
                 new_buffers(data_type, *capacity)
             }
             (
-                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _),
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::FixedSizeList(_, _),
                 Capacities::List(capacity, _),
             ) => {
                 array_capacity = *capacity;
@@ -455,7 +469,9 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Decimal128(_, _)
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean
@@ -484,10 +500,11 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Utf8View
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_) => vec![],
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                unimplemented!("ListView/LargeListView not implemented")
-            }
-            DataType::Map(_, _) | DataType::List(_) | DataType::LargeList(_) => {
+            DataType::Map(_, _)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
@@ -617,7 +634,10 @@ impl<'a> MutableArrayData<'a> {
                         let mut mutable = MutableArrayData::new(dictionaries, false, capacity);
 
                         for (i, len) in lengths.iter().enumerate() {
-                            mutable.extend(i, 0, *len)
+                            mutable.try_extend(i, 0, *len).expect(
+                                "extend failed while building dictionary; \
+                                 this is a bug in MutableArrayData",
+                            )
                         }
 
                         (Some(mutable.freeze()), true)
@@ -705,36 +725,87 @@ impl<'a> MutableArrayData<'a> {
         }
     }
 
-    /// Extends the in progress array with a region of the input arrays
+    /// Extends the in progress array with a region of the input arrays, returning an error on
+    /// overflow.
     ///
     /// # Arguments
-    /// * `index` - the index of array that you what to copy values from
+    /// * `index` - the index of array that you want to copy values from
     /// * `start` - the start index of the chunk (inclusive)
     /// * `end` - the end index of the chunk (exclusive)
+    ///
+    /// # Errors
+    /// Returns an error if offset arithmetic overflows the underlying integer type.
     ///
     /// # Panic
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
-    pub fn extend(&mut self, index: usize, start: usize, end: usize) {
+    pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
-        (self.extend_values[index])(&mut self.data, index, start, len);
+        // Snapshot buffer lengths before attempting the extend so we can roll
+        // back to a consistent state if it fails.
+        let buf1_len = self.data.buffer1.len();
+        let buf2_len = self.data.buffer2.len();
+        if let Err(e) = (self.extend_values[index])(&mut self.data, index, start, len) {
+            // Restore buffers to their pre-call lengths so the array remains
+            // in a valid state for the caller to inspect or retry.
+            self.data.buffer1.truncate(buf1_len);
+            self.data.buffer2.truncate(buf2_len);
+            return Err(e);
+        }
         self.data.len += len;
+        Ok(())
+    }
+
+    /// Extends the in progress array with a region of the input arrays.
+    ///
+    /// # Panic
+    /// This function panics if there is an invalid index,
+    /// i.e. `index` >= the number of source arrays,
+    /// `end` > the length of the `index`th array,
+    /// or the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
+    #[deprecated(
+        since = "59.0.0",
+        note = "Use `try_extend` which returns an error on overflow instead of panicking"
+    )]
+    pub fn extend(&mut self, index: usize, start: usize, end: usize) {
+        self.try_extend(index, start, end)
+            .expect("extend failed due to offset overflow")
+    }
+
+    /// Extends the in progress array with null elements, ignoring the input arrays, returning an
+    /// error on overflow.
+    ///
+    /// Prefer this over [`extend_nulls`](Self::extend_nulls) to handle cases where the run-end
+    /// counter overflows (relevant for `RunEndEncoded` arrays).
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
+        self.data.len += len;
+        let bit_len = bit_util::ceil(self.data.len, 8);
+        let nulls = self.data.null_buffer();
+        nulls.resize(bit_len, 0);
+        self.data.null_count += len;
+        (self.extend_nulls)(&mut self.data, len)?;
+        Ok(())
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
     ///
     /// # Panics
     ///
-    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays,
+    /// or if the run-end counter overflows for `RunEndEncoded` arrays.
+    #[deprecated(
+        since = "59.0.0",
+        note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
+    )]
     pub fn extend_nulls(&mut self, len: usize) {
-        self.data.len += len;
-        let bit_len = bit_util::ceil(self.data.len, 8);
-        let nulls = self.data.null_buffer();
-        nulls.resize(bit_len, 0);
-        self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len);
+        self.try_extend_nulls(len)
+            .expect("extend_nulls failed due to overflow")
     }
 
     /// Returns the current length
@@ -767,7 +838,10 @@ impl<'a> MutableArrayData<'a> {
         let data = self.data;
 
         let buffers = match data.data_type {
-            DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => {
+            DataType::Null
+            | DataType::Struct(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::RunEndEncoded(_, _) => {
                 vec![]
             }
             DataType::BinaryView | DataType::Utf8View => {
@@ -775,7 +849,12 @@ impl<'a> MutableArrayData<'a> {
                 b.insert(0, data.buffer1.into());
                 b
             }
-            DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
+            DataType::Utf8
+            | DataType::Binary
+            | DataType::LargeUtf8
+            | DataType::LargeBinary
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 vec![data.buffer1.into(), data.buffer2.into()]
             }
             DataType::Union(_, mode) => {
@@ -793,13 +872,17 @@ impl<'a> MutableArrayData<'a> {
             _ => data.child_data.into_iter().map(|x| x.freeze()).collect(),
         };
 
-        let nulls = data
-            .null_buffer
-            .map(|nulls| {
-                let bools = BooleanBuffer::new(nulls.into(), 0, data.len);
-                unsafe { NullBuffer::new_unchecked(bools, data.null_count) }
-            })
-            .filter(|n| n.null_count() > 0);
+        let nulls = match data.data_type {
+            // RunEndEncoded, Null, and Union arrays cannot have top-level null bitmasks
+            DataType::RunEndEncoded(_, _) | DataType::Null | DataType::Union(_, _) => None,
+            _ => data
+                .null_buffer
+                .map(|nulls| {
+                    let bools = BooleanBuffer::new(nulls.into(), 0, data.len);
+                    unsafe { NullBuffer::new_unchecked(bools, data.null_count) }
+                })
+                .filter(|n| n.null_count() > 0),
+        };
 
         ArrayDataBuilder::new(data.data_type)
             .offset(0)

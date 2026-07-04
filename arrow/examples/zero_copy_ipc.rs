@@ -20,14 +20,14 @@
 //! Zero copy in this case means the Arrow arrays refer directly to a user
 //! provided buffer or memory region.
 
-use arrow::array::{record_batch, RecordBatch};
+use arrow::array::{RecordBatch, record_batch};
 use arrow::error::Result;
 use arrow_buffer::Buffer;
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_ipc::convert::fb_to_schema;
-use arrow_ipc::reader::{read_footer_length, FileDecoder};
+use arrow_ipc::reader::{FileDecoder, read_footer_length};
 use arrow_ipc::writer::FileWriter;
-use arrow_ipc::{root_as_footer, Block};
+use arrow_ipc::{Block, root_as_footer};
 use std::path::PathBuf;
 use std::sync::Arc;
 

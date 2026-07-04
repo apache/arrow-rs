@@ -51,12 +51,12 @@ impl FlightError {
 impl std::fmt::Display for FlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlightError::Arrow(source) => write!(f, "Arrow error: {}", source),
-            FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {}", desc),
-            FlightError::Tonic(source) => write!(f, "Tonic error: {}", source),
-            FlightError::ProtocolError(desc) => write!(f, "Protocol error: {}", desc),
-            FlightError::DecodeError(desc) => write!(f, "Decode error: {}", desc),
-            FlightError::ExternalError(source) => write!(f, "External error: {}", source),
+            FlightError::Arrow(source) => write!(f, "Arrow error: {source}"),
+            FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {desc}"),
+            FlightError::Tonic(source) => write!(f, "Tonic error: {source}"),
+            FlightError::ProtocolError(desc) => write!(f, "Protocol error: {desc}"),
+            FlightError::DecodeError(desc) => write!(f, "Decode error: {desc}"),
+            FlightError::ExternalError(source) => write!(f, "External error: {source}"),
         }
     }
 }
@@ -75,6 +75,12 @@ impl Error for FlightError {
 impl From<tonic::Status> for FlightError {
     fn from(status: tonic::Status) -> Self {
         Self::Tonic(Box::new(status))
+    }
+}
+
+impl From<prost::DecodeError> for FlightError {
+    fn from(error: prost::DecodeError) -> Self {
+        Self::DecodeError(error.to_string())
     }
 }
 

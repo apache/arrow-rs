@@ -18,28 +18,46 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
+    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
     builder::StringRunBuilder,
     make_array,
     run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
-/// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+/// Recursively applies a function to the values of a RunEndEncoded array, preserving the run structure.
 ///
-/// This encoding is variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
-/// and is good for representing data containing same values repeated consecutively.
+/// # Example
 ///
-/// [`RunArray`] contains `run_ends` array and `values` array of same length.
-/// The `run_ends` array stores the indexes at which the run ends. The `values` array
-/// stores the value of each run. Below example illustrates how a logical array is represented in
-/// [`RunArray`]
+/// ```ignore
+/// let result = ree_recurse!(array, Int32Type, my_function)?;
+/// ```
 ///
+/// This macro is useful for implementing functions that should work on the logical values
+/// of a REE array while preserving the run-end encoding structure.
+#[macro_export]
+macro_rules! ree_map {
+    ($array:expr, $run_type:ty, $func:expr) => {{
+        let ree = $array.as_run_opt::<$run_type>().unwrap();
+        let inner_values = $func(ree.values().as_ref())?;
+        Ok(std::sync::Arc::new(ree.with_values(inner_values)))
+    }};
+}
+
+/// An array of [run-end encoded values].
+///
+/// This encoding is variation on [run-length encoding (RLE)] and is good for representing
+/// data containing the same values repeated consecutively.
+///
+/// A [`RunArray`] consists of a `run_ends` buffer and a `values` array of equivalent
+/// lengths. The `run_ends` buffer stores the indexes at which the run ends. The
+/// `values` array stores the corresponding value of each run. The below example
+/// illustrates how a logical array is represented by a [`RunArray`]:
 ///
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
@@ -60,6 +78,9 @@ use crate::{
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
+/// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
 pub struct RunArray<R: RunEndIndexType> {
     data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
@@ -77,8 +98,8 @@ impl<R: RunEndIndexType> Clone for RunArray<R> {
 }
 
 impl<R: RunEndIndexType> RunArray<R> {
-    /// Calculates the logical length of the array encoded
-    /// by the given run_ends array.
+    /// Calculates the logical length of the array encoded by treating the `run_ends`
+    /// array as if it were a [`RunEndBuffer`].
     pub fn logical_len(run_ends: &PrimitiveArray<R>) -> usize {
         let len = run_ends.len();
         if len == 0 {
@@ -87,9 +108,13 @@ impl<R: RunEndIndexType> RunArray<R> {
         run_ends.value(len - 1).as_usize()
     }
 
-    /// Attempts to create RunArray using given run_ends (index where a run ends)
-    /// and the values (value of the run). Returns an error if the given data is not compatible
-    /// with RunEndEncoded specification.
+    /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
+    ///
+    /// # Errors
+    ///
+    /// - If `run_ends` and `values` have different lengths
+    /// - If `run_ends` has any null values
+    /// - If `run_ends` doesn't consist of strictly increasing positive integers
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
@@ -117,25 +142,153 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
-    /// Returns a reference to [`RunEndBuffer`]
+    /// Create a new [`RunArray`] from the provided parts, without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::try_new`] would not error
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        run_ends: RunEndBuffer<R::Native>,
+        values: ArrayRef,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            match &data_type {
+                DataType::RunEndEncoded(run_ends, values_field) => {
+                    assert!(!run_ends.is_nullable(), "run_ends should not be nullable");
+                    assert_eq!(
+                        run_ends.data_type(),
+                        &R::DATA_TYPE,
+                        "Incorrect run ends type"
+                    );
+                    assert_eq!(
+                        values_field.data_type(),
+                        values.data_type(),
+                        "Incorrect values type"
+                    );
+                }
+                _ => {
+                    panic!(
+                        "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
+                    );
+                }
+            }
+
+            let run_array = Self {
+                data_type,
+                run_ends,
+                values,
+            };
+
+            // Safety: `validate_data` checks below
+            //    1. The given array data has exactly two child arrays.
+            //    2. The first child array (run_ends) has valid data type.
+            //    3. run_ends array does not have null values
+            //    4. run_ends array has non-zero and strictly increasing values.
+            //    5. The length of run_ends array and values array are the same.
+            run_array
+                .to_data()
+                .validate_data()
+                .expect("RunArray data should be valid");
+
+            return run_array;
+        }
+
+        Self {
+            data_type,
+            run_ends,
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
+        (self.data_type, self.run_ends, self.values)
+    }
+
+    /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
     }
 
-    /// Returns a reference to values array
+    /// Returns a reference to the values array.
     ///
-    /// Note: any slicing of this [`RunArray`] array is not applied to the returned array
-    /// and must be handled separately
+    /// Any slicing of this [`RunArray`] array is **not** applied to the returned
+    /// values here and must be handled separately.
     pub fn values(&self) -> &ArrayRef {
         &self.values
     }
 
+    /// Returns a new [`RunArray`] with the same `run_ends` and the supplied `values`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values.len()` does not equal `self.values().len()`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{RunArray, Int32Array, StringArray, ArrayRef,Array};
+    /// # use arrow_array::types::Int32Type;
+    /// // A RunArray logically representing ["a", "a", "b", "c", "c"]
+    /// let run_ends = Int32Array::from(vec![2, 3, 5]);
+    /// let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+    /// let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+    ///
+    /// // Swap in new values while keeping the same run pattern.
+    /// // The result logically represents ["x", "x", "y", "z", "z"].
+    /// let new_values: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z"]));
+    /// let new_run_array = run_array.with_values(new_values);
+    ///
+    /// assert_eq!(new_run_array.len(), 5);
+    /// assert_eq!(new_run_array.run_ends().values(), &[2, 3, 5]);
+    /// ```
+    pub fn with_values(&self, values: ArrayRef) -> Self {
+        assert_eq!(values.len(), self.values.len());
+        let (run_ends_field, values_field) = match &self.data_type {
+            DataType::RunEndEncoded(r, v) => {
+                let new_v = Arc::new(Field::new(
+                    v.name(),
+                    values.data_type().clone(),
+                    v.is_nullable(),
+                ));
+                (r, new_v)
+            }
+            _ => unreachable!("RunArray should have type RunEndEncoded"),
+        };
+        let data_type = DataType::RunEndEncoded(Arc::clone(run_ends_field), values_field);
+
+        Self {
+            data_type,
+            run_ends: self.run_ends.clone(),
+            values,
+        }
+    }
+
+    /// Similar to [`values`] but accounts for logical slicing, returning only the values
+    /// that are part of the logical slice of this array.
+    ///
+    /// [`values`]: Self::values
+    pub fn values_slice(&self) -> ArrayRef {
+        if self.is_empty() {
+            return self.values.slice(0, 0);
+        }
+        let start = self.get_start_physical_index();
+        let end = self.get_end_physical_index();
+        self.values.slice(start, end - start + 1)
+    }
+
     /// Returns the physical index at which the array slice starts.
+    ///
+    /// See [`RunEndBuffer::get_start_physical_index`].
     pub fn get_start_physical_index(&self) -> usize {
         self.run_ends.get_start_physical_index()
     }
 
     /// Returns the physical index at which the array slice ends.
+    ///
+    /// See [`RunEndBuffer::get_end_physical_index`].
     pub fn get_end_physical_index(&self) -> usize {
         self.run_ends.get_end_physical_index()
     }
@@ -152,7 +305,6 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// assert_eq!(typed.value(1), "b");
     /// assert!(typed.values().is_null(2));
     /// ```
-    ///
     pub fn downcast<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
         let values = self.values.as_any().downcast_ref()?;
         Some(TypedRunArray {
@@ -161,89 +313,37 @@ impl<R: RunEndIndexType> RunArray<R> {
         })
     }
 
-    /// Returns index to the physical array for the given index to the logical array.
-    /// This function adjusts the input logical index based on `ArrayData::offset`
-    /// Performs a binary search on the run_ends array for the input index.
+    /// Calls [`RunEndBuffer::get_physical_index`].
     ///
     /// The result is arbitrary if `logical_index >= self.len()`
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
         self.run_ends.get_physical_index(logical_index)
     }
 
-    /// Returns the physical indices of the input logical indices. Returns error if any of the logical
-    /// index cannot be converted to physical index. The logical indices are sorted and iterated along
-    /// with run_ends array to find matching physical index. The approach used here was chosen over
-    /// finding physical index for each logical index using binary search using the function
-    /// `get_physical_index`. Running benchmarks on both approaches showed that the approach used here
-    /// scaled well for larger inputs.
-    /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
+    /// Returns the physical indices corresponding to the provided logical indices.
+    ///
+    /// See [`RunEndBuffer::get_physical_indices`] for more details.
     #[inline]
     pub fn get_physical_indices<I>(&self, logical_indices: &[I]) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
-        let len = self.run_ends().len();
-        let offset = self.run_ends().offset();
-
-        let indices_len = logical_indices.len();
-
-        if indices_len == 0 {
-            return Ok(vec![]);
-        }
-
-        // `ordered_indices` store index into `logical_indices` and can be used
-        // to iterate `logical_indices` in sorted order.
-        let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
-
-        // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
-        // whose values are index of `logical_indices`
-        ordered_indices.sort_unstable_by(|lhs, rhs| {
-            logical_indices[*lhs]
-                .partial_cmp(&logical_indices[*rhs])
-                .unwrap()
-        });
-
-        // Return early if all the logical indices cannot be converted to physical indices.
-        let largest_logical_index = logical_indices[*ordered_indices.last().unwrap()].as_usize();
-        if largest_logical_index >= len {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {largest_logical_index}.",
-            )));
-        }
-
-        // Skip some physical indices based on offset.
-        let skip_value = self.get_start_physical_index();
-
-        let mut physical_indices = vec![0; indices_len];
-
-        let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in self.run_ends.values().iter().enumerate().skip(skip_value)
-        {
-            // Get the run end index (relative to offset) of current physical index
-            let run_end_value = run_end.as_usize() - offset;
-
-            // All the `logical_indices` that are less than current run end index
-            // belongs to current physical index.
-            while ordered_index < indices_len
-                && logical_indices[ordered_indices[ordered_index]].as_usize() < run_end_value
-            {
-                physical_indices[ordered_indices[ordered_index]] = physical_index;
-                ordered_index += 1;
-            }
-        }
-
-        // If there are input values >= run_ends.last_value then we'll not be able to convert
-        // all logical indices to physical indices.
-        if ordered_index < logical_indices.len() {
-            let logical_index = logical_indices[ordered_indices[ordered_index]].as_usize();
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
-            )));
-        }
-        Ok(physical_indices)
+        self.run_ends()
+            .get_physical_indices(logical_indices)
+            .map_err(|index| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Logical index {} is out of bounds for RunArray of length {}",
+                    index.as_usize(),
+                    self.len()
+                ))
+            })
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    ///
+    /// - Specified slice (`offset` + `length`) exceeds existing length
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -256,25 +356,41 @@ impl<R: RunEndIndexType> RunArray<R> {
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
-        match data.data_type() {
+        let (data_type, len, _nulls, offset, _buffers, child_data) = data.into_parts();
+
+        match &data_type {
             DataType::RunEndEncoded(_, _) => {}
             _ => {
-                panic!("Invalid data type for RunArray. The data type should be DataType::RunEndEncoded");
+                panic!(
+                    "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
+                );
             }
         }
 
-        // Safety
-        // ArrayData is valid
-        let child = &data.child_data()[0];
-        assert_eq!(child.data_type(), &R::DATA_TYPE, "Incorrect run ends type");
-        let run_ends = unsafe {
-            let scalar = child.buffers()[0].clone().into();
-            RunEndBuffer::new_unchecked(scalar, data.offset(), data.len())
-        };
+        let [run_end_child, values_child]: [ArrayData; 2] = child_data
+            .try_into()
+            .expect("RunArray data should have exactly two child arrays");
 
-        let values = make_array(data.child_data()[1].clone());
+        // deconstruct the run ends child array
+        let (
+            run_end_data_type,
+            _run_end_len,
+            _run_end_nulls,
+            _run_end_offset,
+            run_end_buffers,
+            _run_end_child_data,
+        ) = run_end_child.into_parts();
+        assert_eq!(run_end_data_type, R::DATA_TYPE, "Incorrect run ends type");
+        let [run_end_buffer]: [arrow_buffer::Buffer; 1] = run_end_buffers
+            .try_into()
+            .expect("Run ends should have exactly one buffer");
+        let scalar = ScalarBuffer::from(run_end_buffer);
+        let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
+
+        let values = make_array(values_child);
+
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             run_ends,
             values,
         }
@@ -301,7 +417,8 @@ impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
     }
 }
 
-impl<T: RunEndIndexType> Array for RunArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -388,6 +505,12 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         std::mem::size_of::<Self>()
             + self.run_ends.inner().inner().capacity()
             + self.values.get_array_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_ends.claim(pool);
+        self.values.claim(pool);
     }
 }
 
@@ -560,7 +683,8 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     }
 }
 
-impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
     }
@@ -616,6 +740,11 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn get_array_memory_size(&self) -> usize {
         self.run_array.get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_array.claim(pool);
+    }
 }
 
 // Array accessor converts the index of logical array to the index of the physical array
@@ -641,7 +770,7 @@ where
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
         let physical_index = self.run_array.get_physical_index(logical_index);
-        self.values().value_unchecked(physical_index)
+        unsafe { self.values().value_unchecked(physical_index) }
     }
 }
 
@@ -659,18 +788,42 @@ where
         RunArrayIter::new(self)
     }
 }
+/// An array that can be downcast to a [`RunArray`] of any run end type and any value type.
+///
+/// This can be used to efficiently implement kernels for all possible run end
+/// types without needing to create specialized implementations for each key type.
+pub trait AnyRunEndArray: Array {
+    /// Returns the values of this array.
+    fn values(&self) -> &Arc<dyn Array>;
+
+    /// Returns a new run-end encoded array with the given values, preserving the
+    /// existing run ends.
+    fn with_values(&self, values: ArrayRef) -> ArrayRef;
+}
+
+impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
+    fn values(&self) -> &Arc<dyn Array> {
+        &self.values
+    }
+
+    fn with_values(&self, values: ArrayRef) -> ArrayRef {
+        Arc::new(RunArray::<R>::with_values(self, values))
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
     use rand::rng;
     use rand::seq::SliceRandom;
-    use rand::Rng;
 
     use super::*;
+    use crate::Int64Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
+    use crate::new_empty_array;
     use crate::types::{Int8Type, UInt32Type};
-    use crate::{Int32Array, StringArray};
+    use crate::{Int16Array, Int32Array, StringArray};
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {
         // The input array is created by shuffling and repeating
@@ -764,6 +917,26 @@ mod tests {
 
         let run_ends = ree_array.run_ends();
         assert_eq!(run_ends.values(), &run_ends_values);
+    }
+
+    #[test]
+    fn test_run_array_empty() {
+        let runs = new_empty_array(&DataType::Int16);
+        let runs = runs.as_primitive::<Int16Type>();
+        let values = new_empty_array(&DataType::Int64);
+        let array = RunArray::try_new(runs, &values).unwrap();
+
+        fn assertions(array: &RunArray<Int16Type>) {
+            assert!(array.is_empty());
+            assert_eq!(array.get_start_physical_index(), 0);
+            assert_eq!(array.get_end_physical_index(), 0);
+            assert!(array.get_physical_indices::<i16>(&[]).unwrap().is_empty());
+            assert!(array.run_ends().is_empty());
+            assert_eq!(array.run_ends().sliced_values().count(), 0);
+        }
+
+        assertions(&array);
+        assertions(&array.slice(0, 0));
     }
 
     #[test]
@@ -912,6 +1085,25 @@ mod tests {
         let expected = ArrowError::InvalidArgumentError("The run_ends array length should be the same as values array length. Run_ends array length is 3, values array length is 4".to_string());
         assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
+    #[test]
+    fn test_run_array_with_values_changes_value_type() {
+        let values = StringArray::from(vec!["foo", "bar", "baz"]);
+        let run_ends: Int32Array = [Some(1), Some(2), Some(3)].into_iter().collect();
+        let ree = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let new_values = Int64Array::from(vec![10, 20, 30]);
+        let result = ree.with_values(Arc::new(new_values));
+
+        match result.data_type() {
+            DataType::RunEndEncoded(_, v) => {
+                assert_eq!(v.data_type(), &DataType::Int64);
+            }
+            other => panic!("expected RunEndEncoded, got {other:?}"),
+        }
+
+        assert_eq!(result.values().data_type(), &DataType::Int64);
+        assert_eq!(result.values().len(), 3);
+    }
 
     #[test]
     fn test_run_array_run_ends_with_null() {
@@ -991,7 +1183,7 @@ mod tests {
 
             // create run array using input_array
             let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-            builder.extend(input_array.clone().into_iter());
+            builder.extend(input_array.clone());
 
             let run_array = builder.finish();
             let physical_values_array = run_array.values().as_primitive::<Int32Type>();
@@ -1103,5 +1295,228 @@ mod tests {
             let n = n.into_iter().collect::<Vec<_>>();
             assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
+    }
+
+    #[test]
+    fn test_run_array_eq_identical() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_ne_different_run_ends() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![1, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_ne!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_ne_different_values() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "d"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_ne!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_with_nulls() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_different_run_end_types() {
+        let run_ends_i16_1 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values_i16_1 = StringArray::from(vec!["a", "b", "c"]);
+        let array_i16_1 = RunArray::<Int16Type>::try_new(&run_ends_i16_1, &values_i16_1).unwrap();
+
+        let run_ends_i16_2 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values_i16_2 = StringArray::from(vec!["a", "b", "c"]);
+        let array_i16_2 = RunArray::<Int16Type>::try_new(&run_ends_i16_2, &values_i16_2).unwrap();
+
+        assert_eq!(array_i16_1, array_i16_2);
+    }
+
+    #[test]
+    fn test_run_array_values_slice() {
+        // 0, 0, 1, 1, 1, 2...2 (15 2s)
+        let run_ends: PrimitiveArray<Int32Type> = vec![2, 5, 20].into();
+        let values: PrimitiveArray<Int32Type> = vec![0, 1, 2].into();
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice = array.slice(1, 4); // 0 | 1, 1, 1 |
+        // logical indices: 1, 2, 3, 4
+        // physical indices: 0, 1, 1, 1
+        // values at 0 is 0
+        // values at 1 is 1
+        // values slice should be [0, 1]
+        assert_eq!(slice.get_start_physical_index(), 0);
+        assert_eq!(slice.get_end_physical_index(), 1);
+
+        let values_slice = slice.values_slice();
+        let values_slice = values_slice.as_primitive::<Int32Type>();
+        assert_eq!(values_slice.values(), &[0, 1]);
+
+        let slice2 = array.slice(2, 3); // 1, 1, 1
+        // logical indices: 2, 3, 4
+        // physical indices: 1, 1, 1
+        assert_eq!(slice2.get_start_physical_index(), 1);
+        assert_eq!(slice2.get_end_physical_index(), 1);
+
+        let values_slice2 = slice2.values_slice();
+        let values_slice2 = values_slice2.as_primitive::<Int32Type>();
+        assert_eq!(values_slice2.values(), &[1]);
+    }
+
+    #[test]
+    fn test_run_array_values_slice_empty() {
+        let run_ends = Int32Array::from(vec![2, 5, 10]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice = array.slice(0, 0);
+        assert_eq!(slice.len(), 0);
+
+        let values_slice = slice.values_slice();
+        assert_eq!(values_slice.len(), 0);
+        assert_eq!(values_slice.data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_run_array_eq_empty() {
+        let run_ends = Int32Array::from(vec![2, 5, 10]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice1 = array.slice(0, 0);
+        let slice2 = array.slice(1, 0);
+        let slice3 = array.slice(10, 0);
+
+        assert_eq!(slice1, slice2);
+        assert_eq!(slice2, slice3);
+
+        let empty_array = new_empty_array(array.data_type());
+        let empty_array = crate::cast::as_run_array::<Int32Type>(empty_array.as_ref());
+
+        assert_eq!(&slice1, empty_array);
+    }
+
+    #[test]
+    fn test_run_array_eq_diff_physical_same_logical() {
+        let run_ends1 = Int32Array::from(vec![1, 3, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "b", "c", "c", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_sliced() {
+        let run_ends1 = Int32Array::from(vec![2, 5, 10]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+        // Logical: a, a, b, b, b, c, c, c, c, c
+
+        let slice1 = array1.slice(1, 6);
+        // Logical: a, b, b, b, c, c
+
+        let run_ends2 = Int32Array::from(vec![1, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+        // Logical: a, b, b, b, c, c
+
+        assert_eq!(slice1, array2);
+
+        let slice2 = array1.slice(2, 3);
+        // Logical: b, b, b
+        let run_ends3 = Int32Array::from(vec![3]);
+        let values3 = StringArray::from(vec!["b"]);
+        let array3 = RunArray::<Int32Type>::try_new(&run_ends3, &values3).unwrap();
+        assert_eq!(slice2, array3);
+    }
+
+    #[test]
+    fn test_run_array_eq_sliced_different_offsets() {
+        let run_ends1 = Int32Array::from(vec![2, 5, 10]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+        let array2 = array1.clone();
+        assert_eq!(array1, array2);
+
+        let slice1 = array1.slice(1, 4); // a, b, b, b
+        let slice2 = array1.slice(1, 4);
+        assert_eq!(slice1, slice2);
+
+        let slice3 = array1.slice(0, 4); // a, a, b, b
+        assert_ne!(slice1, slice3);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn allow_to_create_invalid_array_using_new_unchecked() {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Invalid data type Int64 for RunArray. Should be DataType::RunEndEncoded"
+    )]
+    #[cfg(feature = "force_validate")]
+    fn should_not_be_able_to_create_invalid_array_using_new_unchecked_when_force_validate_is_enabled()
+     {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    fn test_run_array_roundtrip() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let (dt, buffer, values) = array.clone().into_parts();
+        let created_from_parts =
+            unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
+        assert_eq!(array, created_from_parts);
     }
 }

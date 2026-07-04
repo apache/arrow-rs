@@ -26,7 +26,7 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use half::f16;
 use lexical_core::FormattedSize;
-use serde::Serializer;
+use serde_core::Serializer;
 
 /// Configuration options for the JSON encoder.
 #[derive(Debug, Clone, Default)]
@@ -37,6 +37,16 @@ pub struct EncoderOptions {
     struct_mode: StructMode,
     /// An optional hook for customizing encoding behavior.
     encoder_factory: Option<Arc<dyn EncoderFactory>>,
+    /// Optional date format for date arrays
+    date_format: Option<String>,
+    /// Optional datetime format for datetime arrays
+    datetime_format: Option<String>,
+    /// Optional timestamp format for timestamp arrays
+    timestamp_format: Option<String>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    timestamp_tz_format: Option<String>,
+    /// Optional time format for time arrays
+    time_format: Option<String>,
 }
 
 impl EncoderOptions {
@@ -71,6 +81,61 @@ impl EncoderOptions {
     /// Get the optional hook for customizing encoding behavior.
     pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
         self.encoder_factory.as_ref()
+    }
+
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.date_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's date format if set, defaults to RFC3339
+    pub fn date_format(&self) -> Option<&str> {
+        self.date_format.as_deref()
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.datetime_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime format if set, defaults to RFC3339
+    pub fn datetime_format(&self) -> Option<&str> {
+        self.datetime_format.as_deref()
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.time_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime time if set, defaults to RFC3339
+    pub fn time_format(&self) -> Option<&str> {
+        self.time_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.timestamp_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's timestamp format if set, defaults to RFC3339
+    pub fn timestamp_format(&self) -> Option<&str> {
+        self.timestamp_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.timestamp_tz_format = Some(tz_format);
+        self
+    }
+
+    /// Get the JSON file's timestamp tz format if set, defaults to RFC3339
+    pub fn timestamp_tz_format(&self) -> Option<&str> {
+        self.timestamp_tz_format.as_deref()
     }
 }
 
@@ -281,22 +346,44 @@ pub fn make_encoder<'a>(
             let array = array.as_string_view();
             NullableEncoder::new(Box::new(StringViewEncoder(array)), array.nulls().cloned())
         }
+        DataType::BinaryView => {
+            let array = array.as_binary_view();
+            NullableEncoder::new(Box::new(BinaryViewEncoder(array)), array.nulls().cloned())
+        }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
-            NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::LargeList(_) => {
             let array = array.as_list::<i64>();
-            NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
+        }
+        DataType::ListView(_) => {
+            let array = array.as_list_view::<i32>();
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
+        }
+        DataType::LargeListView(_) => {
+            let array = array.as_list_view::<i64>();
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::FixedSizeList(_, _) => {
             let array = array.as_fixed_size_list();
-            NullableEncoder::new(Box::new(FixedSizeListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => {
                 NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            },
+            _ => unreachable!()
+        }
+
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => {
+                NullableEncoder::new(
+                    Box::new(RunEndEncodedEncoder::try_new(field, array, options)?),
+                    array.logical_nulls(),
+                )
             },
             _ => unreachable!()
         }
@@ -339,7 +426,7 @@ pub fn make_encoder<'a>(
             let nulls = array.nulls().cloned();
             NullableEncoder::new(Box::new(encoder) as Box<dyn Encoder + 'a>, nulls)
         }
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+        DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
             let options = FormatOptions::new().with_display_error(true);
             let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?);
             NullableEncoder::new(Box::new(RawArrayFormatter(formatter)) as Box<dyn Encoder + 'a>, nulls)
@@ -350,14 +437,19 @@ pub fn make_encoder<'a>(
                 // characters that would need to be escaped within a JSON string, e.g. `'"'`.
                 // If support for user-provided format specifications is added, this assumption
                 // may need to be revisited
-                let options = FormatOptions::new().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(array, &options)?;
+                let fops = FormatOptions::new().with_display_error(true)
+                .with_date_format(options.date_format.as_deref())
+                .with_datetime_format(options.datetime_format.as_deref())
+                .with_timestamp_format(options.timestamp_format.as_deref())
+                .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+                .with_time_format(options.time_format.as_deref());
+
+                let formatter = ArrayFormatter::try_new(array, &fops)?;
                 let formatter = JsonArrayFormatter::new(formatter);
                 NullableEncoder::new(Box::new(formatter) as Box<dyn Encoder + 'a>, nulls)
             }
             false => return Err(ArrowError::JsonError(format!(
-                "Unsupported data type for JSON encoding: {:?}",
-                d
+                "Unsupported data type for JSON encoding: {d:?}",
             )))
         }
     };
@@ -368,6 +460,14 @@ pub fn make_encoder<'a>(
 fn encode_string(s: &str, out: &mut Vec<u8>) {
     let mut serializer = serde_json::Serializer::new(out);
     serializer.serialize_str(s).unwrap();
+}
+
+fn encode_binary(bytes: &[u8], out: &mut Vec<u8>) {
+    out.push(b'"');
+    for byte in bytes {
+        write!(out, "{byte:02x}").unwrap();
+    }
+    out.push(b'"');
 }
 
 struct FieldEncoder<'a> {
@@ -539,77 +639,38 @@ impl Encoder for StringViewEncoder<'_> {
     }
 }
 
-struct ListEncoder<'a, O: OffsetSizeTrait> {
-    offsets: OffsetBuffer<O>,
+struct BinaryViewEncoder<'a>(&'a BinaryViewArray);
+
+impl Encoder for BinaryViewEncoder<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        encode_binary(self.0.value(idx), out);
+    }
+}
+
+struct ListLikeEncoder<'a, L: ListLikeArray> {
+    list_array: &'a L,
     encoder: NullableEncoder<'a>,
 }
 
-impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
+impl<'a, L: ListLikeArray> ListLikeEncoder<'a, L> {
     fn try_new(
         field: &'a FieldRef,
-        array: &'a GenericListArray<O>,
+        array: &'a L,
         options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
-            offsets: array.offsets().clone(),
+            list_array: array,
             encoder,
         })
     }
 }
 
-impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
+impl<L: ListLikeArray> Encoder for ListLikeEncoder<'_, L> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let end = self.offsets[idx + 1].as_usize();
-        let start = self.offsets[idx].as_usize();
-        out.push(b'[');
-
-        if self.encoder.has_nulls() {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                if self.encoder.is_null(idx) {
-                    out.extend_from_slice(b"null");
-                } else {
-                    self.encoder.encode(idx, out);
-                }
-            }
-        } else {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                self.encoder.encode(idx, out);
-            }
-        }
-        out.push(b']');
-    }
-}
-
-struct FixedSizeListEncoder<'a> {
-    value_length: usize,
-    encoder: NullableEncoder<'a>,
-}
-
-impl<'a> FixedSizeListEncoder<'a> {
-    fn try_new(
-        field: &'a FieldRef,
-        array: &'a FixedSizeListArray,
-        options: &'a EncoderOptions,
-    ) -> Result<Self, ArrowError> {
-        let encoder = make_encoder(field, array.values().as_ref(), options)?;
-        Ok(Self {
-            encoder,
-            value_length: array.value_length().as_usize(),
-        })
-    }
-}
-
-impl Encoder for FixedSizeListEncoder<'_> {
-    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let start = idx * self.value_length;
-        let end = start + self.value_length;
+        let range = self.list_array.element_range(idx);
+        let start = range.start;
+        let end = range.end;
         out.push(b'[');
         if self.encoder.has_nulls() {
             for idx in start..end {
@@ -657,6 +718,32 @@ impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
 impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(self.keys[idx].as_usize(), out)
+    }
+}
+
+struct RunEndEncodedEncoder<'a, R: RunEndIndexType> {
+    run_array: &'a RunArray<R>,
+    encoder: NullableEncoder<'a>,
+}
+
+impl<'a, R: RunEndIndexType> RunEndEncodedEncoder<'a, R> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a RunArray<R>,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
+        Ok(Self {
+            run_array: array,
+            encoder,
+        })
+    }
+}
+
+impl<R: RunEndIndexType> Encoder for RunEndEncodedEncoder<'_, R> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let physical_idx = self.run_array.get_physical_index(idx);
+        self.encoder.encode(physical_idx, out)
     }
 }
 
@@ -714,7 +801,10 @@ impl<'a> MapEncoder<'a> {
         let values = array.values();
         let keys = array.keys();
 
-        if !matches!(keys.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+        if !matches!(
+            keys.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
             return Err(ArrowError::JsonError(format!(
                 "Only UTF8 keys supported by JSON MapArray Writer: got {:?}",
                 keys.data_type()

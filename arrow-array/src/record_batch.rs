@@ -19,7 +19,7 @@
 //! [schema](arrow_schema::Schema).
 
 use crate::cast::AsArray;
-use crate::{new_empty_array, Array, ArrayRef, StructArray};
+use crate::{Array, ArrayRef, StructArray, new_empty_array};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use std::ops::Index;
 use std::sync::Arc;
@@ -65,7 +65,7 @@ pub trait RecordBatchWriter {
 /// Support for limited data types is available. The macro will return a compile error if an unsupported data type is used.
 /// Presently supported data types are:
 /// - `Boolean`, `Null`
-/// - `Decimal128`, `Decimal256`
+/// - `Decimal32`, `Decimal64`, `Decimal128`, `Decimal256`
 /// - `Float16`, `Float32`, `Float64`
 /// - `Int8`, `Int16`, `Int32`, `Int64`
 /// - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -107,6 +107,8 @@ macro_rules! create_array {
     (@from DurationMillisecond) => { $crate::DurationMillisecondArray };
     (@from DurationMicrosecond) => { $crate::DurationMicrosecondArray };
     (@from DurationNanosecond) => { $crate::DurationNanosecondArray };
+    (@from Decimal32) => { $crate::Decimal32Array };
+    (@from Decimal64) => { $crate::Decimal64Array };
     (@from Decimal128) => { $crate::Decimal128Array };
     (@from Decimal256) => { $crate::Decimal256Array };
     (@from TimestampSecond) => { $crate::TimestampSecondArray };
@@ -133,6 +135,18 @@ macro_rules! create_array {
     ($ty: tt, [$($values: expr),*]) => {
         std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from(vec![$($values),*]))
     };
+
+    (Binary, $values: expr) => {
+        std::sync::Arc::new($crate::BinaryArray::from_vec($values))
+    };
+
+    (LargeBinary, $values: expr) => {
+        std::sync::Arc::new($crate::LargeBinaryArray::from_vec($values))
+    };
+
+    ($ty: tt, $values: expr) => {
+        std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from($values))
+    };
 }
 
 /// Creates a record batch from literal slice of values, suitable for rapid
@@ -150,10 +164,22 @@ macro_rules! create_array {
 ///     ("c", Utf8, ["alpha", "beta", "gamma"])
 /// );
 /// ```
+///
+/// Variables and expressions are also supported:
+///
+/// ```rust
+/// use arrow_array::record_batch;
+///
+/// let values = vec![1, 2, 3];
+/// let batch = record_batch!(
+///     ("a", Int32, values),
+///     ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+/// );
+/// ```
 /// Due to limitation of [`create_array!`] macro, support for limited data types is available.
 #[macro_export]
 macro_rules! record_batch {
-    ($(($name: expr, $type: ident, [$($values: expr),*])),*) => {
+    ($(($name: expr, $type: ident, $($values: tt)+)),*) => {
         {
             let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
                 $(
@@ -161,16 +187,14 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = $crate::RecordBatch::try_new(
+            $crate::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    $crate::create_array!($type, [$($values),*]),
+                    $crate::create_array!($type, $($values)+),
                 )*]
-            );
-
-            batch
+            )
         }
-    }
+    };
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
@@ -358,7 +382,8 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
+                "column types must match schema types, expected {field_type} but found {col_type} at column index {i}"
+            )));
         }
 
         Ok(RecordBatch {
@@ -377,6 +402,8 @@ impl RecordBatch {
     ///
     /// Returns an error if `schema` is not a superset of the current schema
     /// as determined by [`Schema::contains`]
+    ///
+    /// See also [`Self::schema_metadata_mut`].
     pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         if !schema.contains(self.schema.as_ref()) {
             return Err(ArrowError::SchemaError(format!(
@@ -402,6 +429,28 @@ impl RecordBatch {
         &self.schema
     }
 
+    /// Mutable access to the metadata of the schema.
+    ///
+    /// This allows you to modify [`Schema::metadata`] of [`Self::schema`] in a convenient and fast way.
+    ///
+    /// Note this will clone the entire underlying `Schema` object if it is currently shared
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{record_batch, RecordBatch};
+    /// let mut batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// // Initially, the metadata is empty
+    /// assert!(batch.schema().metadata().get("key").is_none());
+    /// // Insert a key-value pair into the metadata
+    /// batch.schema_metadata_mut().insert("key".into(), "value".into());
+    /// assert_eq!(batch.schema().metadata().get("key"), Some(&String::from("value")));
+    /// ```
+    pub fn schema_metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
+        let schema = Arc::make_mut(&mut self.schema);
+        &mut schema.metadata
+    }
+
     /// Projects the schema onto the specified columns
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch, ArrowError> {
         let projected_schema = self.schema.project(indices)?;
@@ -418,14 +467,16 @@ impl RecordBatch {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        RecordBatch::try_new_with_options(
-            SchemaRef::new(projected_schema),
-            batch_fields,
-            &RecordBatchOptions {
-                match_field_names: true,
-                row_count: Some(self.row_count),
-            },
-        )
+        unsafe {
+            // Since we're starting from a valid RecordBatch and project
+            // creates a strict subset of the original, there's no need to
+            // redo the validation checks in `try_new_with_options`.
+            Ok(RecordBatch::new_unchecked(
+                SchemaRef::new(projected_schema),
+                batch_fields,
+                self.row_count,
+            ))
+        }
     }
 
     /// Normalize a semi-structured [`RecordBatch`] into a flat table.
@@ -492,37 +543,29 @@ impl RecordBatch {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = self
+        let mut stack: Vec<(usize, ArrayRef, String, FieldRef)> = self
             .columns
             .iter()
             .zip(self.schema.fields())
             .rev()
-            .map(|(c, f)| {
-                let name_vec: Vec<&str> = vec![f.name()];
-                (0, c, name_vec, f)
-            })
+            .map(|(c, f)| (0, c.clone(), f.name().clone(), Arc::clone(f)))
             .collect();
         let mut columns: Vec<ArrayRef> = Vec::new();
         let mut fields: Vec<FieldRef> = Vec::new();
 
         while let Some((depth, c, name, field_ref)) = stack.pop() {
             match field_ref.data_type() {
-                DataType::Struct(ff) if depth < max_level => {
-                    // Need to zip these in reverse to maintain original order
-                    for (cff, fff) in c.as_struct().columns().iter().zip(ff.into_iter()).rev() {
-                        let mut name = name.clone();
-                        name.push(separator);
-                        name.push(fff.name());
-                        stack.push((depth + 1, cff, name, fff))
+                DataType::Struct(_) if depth < max_level => {
+                    let (flat_fields, flat_cols) = c.as_struct().flatten();
+                    for (cff, fff) in flat_cols.into_iter().zip(flat_fields.iter()).rev() {
+                        let child_name = format!("{name}{separator}{}", fff.name());
+                        stack.push((depth + 1, cff, child_name, Arc::clone(fff)))
                     }
                 }
                 _ => {
-                    let updated_field = Field::new(
-                        name.concat(),
-                        field_ref.data_type().clone(),
-                        field_ref.is_nullable(),
-                    );
-                    columns.push(c.clone());
+                    let updated_field =
+                        Field::new(name, field_ref.data_type().clone(), field_ref.is_nullable());
+                    columns.push(c);
                     fields.push(Arc::new(updated_field));
                 }
             }
@@ -744,6 +787,20 @@ impl RecordBatch {
         RecordBatch::try_new(schema, columns)
     }
 
+    /// Registers all buffers in this record batch with the provided [`MemoryPool`].
+    ///
+    /// This claims memory for all columns in the batch by calling [`Array::claim`]
+    /// on each column.
+    ///
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Array::claim`]: crate::Array::claim
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for column in self.columns() {
+            column.claim(pool);
+        }
+    }
+
     /// Returns the total number of bytes of memory occupied physically by this batch.
     ///
     /// Note that this does not always correspond to the exact memory usage of a
@@ -906,9 +963,9 @@ where
 mod tests {
     use super::*;
     use crate::{
-        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
+        BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
     };
-    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
     use std::collections::HashMap;
@@ -950,6 +1007,35 @@ mod tests {
         );
         assert_eq!(5, record_batch.column(0).len());
         assert_eq!(5, record_batch.column(1).len());
+    }
+
+    #[test]
+    fn create_binary_record_batch_from_variables() {
+        let binary_values = vec![b"a".as_slice()];
+        let large_binary_values = vec![b"xxx".as_slice()];
+
+        let record_batch = record_batch!(
+            ("a", Binary, binary_values),
+            ("b", LargeBinary, large_binary_values)
+        )
+        .unwrap();
+
+        assert_eq!(1, record_batch.num_rows());
+        assert_eq!(2, record_batch.num_columns());
+        assert_eq!(
+            &DataType::Binary,
+            record_batch.schema().field(0).data_type()
+        );
+        assert_eq!(
+            &DataType::LargeBinary,
+            record_batch.schema().field(1).data_type()
+        );
+
+        let binary = record_batch.column(0).as_binary::<i32>();
+        assert_eq!(b"a", binary.value(0));
+
+        let large_binary = record_batch.column(1).as_binary::<i64>();
+        assert_eq!(b"xxx", large_binary.value(0));
     }
 
     #[test]
@@ -1073,8 +1159,11 @@ mod tests {
 
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(batch.is_err());
+        let err = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: column types must match schema types, expected Int32 but found Int64 at column index 0"
+        );
     }
 
     #[test]
@@ -1548,9 +1637,10 @@ mod tests {
         let schema = Arc::new(Schema::empty());
 
         let err = RecordBatch::try_new(schema.clone(), vec![]).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("must either specify a row count or at least one column"));
+        assert!(
+            err.to_string()
+                .contains("must either specify a row count or at least one column")
+        );
 
         let options = RecordBatchOptions::new().with_row_count(Some(10));
 
@@ -1574,7 +1664,10 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
         );
-        assert_eq!("Invalid argument error: Column 'a' is declared as non-nullable but contains null values", format!("{}", maybe_batch.err().unwrap()));
+        assert_eq!(
+            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+            format!("{}", maybe_batch.err().unwrap())
+        );
     }
     #[test]
     fn test_record_batch_options() {
@@ -1669,5 +1762,34 @@ mod tests {
             batch.schema().metadata().get("foo").unwrap().as_str(),
             "bar"
         );
+    }
+
+    #[test]
+    fn test_normalize_nullable_struct() {
+        let child = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let struct_nulls =
+            NullBuffer::new(arrow_buffer::BooleanBuffer::from(vec![true, false, true]));
+        let struct_array = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, false)]),
+            vec![child],
+            Some(struct_nulls),
+        )) as ArrayRef;
+
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)])),
+            true,
+        )]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![struct_array]).unwrap();
+
+        let normalized = batch.normalize(".", None).unwrap();
+
+        assert_eq!(normalized.num_columns(), 1);
+        assert_eq!(normalized.schema().field(0).name(), "s.x");
+        assert!(normalized.schema().field(0).is_nullable());
+        let col = normalized.column(0);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1));
+        assert!(col.is_valid(2));
     }
 }

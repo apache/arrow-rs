@@ -234,9 +234,12 @@ impl ArrayBuilder for BooleanBuilder {
 impl Extend<Option<bool>> for BooleanBuilder {
     #[inline]
     fn extend<T: IntoIterator<Item = Option<bool>>>(&mut self, iter: T) {
-        for v in iter {
-            self.append_option(v)
-        }
+        let buffered = iter.into_iter().collect::<Vec<_>>();
+        let array = unsafe {
+            // SAFETY: std::vec::IntoIter implements TrustedLen
+            BooleanArray::from_trusted_len_iter(buffered.into_iter())
+        };
+        self.append_array(&array)
     }
 }
 

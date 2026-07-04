@@ -21,8 +21,8 @@ use std::fmt;
 
 use chrono::{TimeZone, Utc};
 use half::f16;
-use num::traits::Float;
 use num_bigint::{BigInt, Sign};
+use num_traits::Float;
 
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::data_type::{ByteArray, Decimal, Int96};
@@ -98,7 +98,7 @@ impl Row {
     ///     println!("column index: {}, column name: {}, column value: {}", idx, name, field);
     /// }
     /// ```
-    pub fn get_column_iter(&self) -> RowColumnIter {
+    pub fn get_column_iter(&self) -> RowColumnIter<'_> {
         RowColumnIter {
             fields: &self.fields,
             curr: 0,
@@ -140,6 +140,8 @@ impl<'a> Iterator for RowColumnIter<'a> {
 
 /// Trait for type-safe convenient access to fields within a Row.
 pub trait RowAccessor {
+    /// Check if the field at the index is null.
+    fn is_null(&self, i: usize) -> Result<bool>;
     /// Try to get a boolean value at the given index.
     fn get_bool(&self, i: usize) -> Result<bool>;
     /// Try to get a byte value at the given index.
@@ -210,11 +212,12 @@ pub trait RowFormatter {
 macro_rules! row_primitive_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<$TY> {
-            match self.fields[i].1 {
-                Field::$VARIANT(v) => Ok(v),
+            match self.fields.get(i) {
+                Some((_, Field::$VARIANT(v))) => Ok(*v),
+                None => Err(ParquetError::IndexOutOfBound(i, self.fields.len())),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
-                    self.fields[i].1.get_type_name(),
+                    self.fields[i].1.get_type_name(), // Safe access as None is
                     stringify!($VARIANT)
                 )),
             }
@@ -227,11 +230,13 @@ macro_rules! row_primitive_accessor {
 macro_rules! row_complex_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<&$TY> {
-            match self.fields[i].1 {
-                Field::$VARIANT(ref v) => Ok(v),
+            match self.fields.get(i) {
+                Some((_, Field::$VARIANT(v))) => Ok(v),
+                None => Err(ParquetError::IndexOutOfBound(i, self.fields.len())),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
-                    self.fields[i].1.get_type_name(),
+                    self.fields[i].1.get_type_name(), // Safe access as None is
+                    // just checked.
                     stringify!($VARIANT)
                 )),
             }
@@ -242,11 +247,23 @@ macro_rules! row_complex_accessor {
 impl RowFormatter for Row {
     /// Get Display reference for a given field.
     fn fmt(&self, i: usize) -> &dyn fmt::Display {
-        &self.fields[i].1
+        if let Some((_, v)) = self.fields.get(i) {
+            v
+        } else {
+            &"<IndexOutOfBound>"
+        }
     }
 }
 
 impl RowAccessor for Row {
+    fn is_null(&self, i: usize) -> Result<bool> {
+        match self.fields.get(i) {
+            Some((_, Field::Null)) => Ok(true),
+            None => Err(ParquetError::IndexOutOfBound(i, self.len())),
+            _ => Ok(false),
+        }
+    }
+
     row_primitive_accessor!(get_bool, Bool, bool);
 
     row_primitive_accessor!(get_byte, Byte, i8);
@@ -397,8 +414,8 @@ macro_rules! list_primitive_accessor {
 macro_rules! list_complex_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<&$TY> {
-            match self.elements[i] {
-                Field::$VARIANT(ref v) => Ok(v),
+            match &self.elements[i] {
+                Field::$VARIANT(v) => Ok(&v),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
                     self.elements[i].get_type_name(),
@@ -602,6 +619,12 @@ pub enum Field {
     /// Date without a time of day, stores the number of days from the
     /// Unix epoch, 1 January 1970.
     Date(i32),
+
+    /// The total number of milliseconds since midnight.
+    TimeMillis(i32),
+    /// The total number of microseconds since midnight.
+    TimeMicros(i64),
+
     /// Milliseconds from the Unix epoch, 1 January 1970.
     TimestampMillis(i64),
     /// Microseconds from the Unix epoch, 1 January 1970.
@@ -638,6 +661,8 @@ impl Field {
             Field::Date(_) => "Date",
             Field::Str(_) => "Str",
             Field::Bytes(_) => "Bytes",
+            Field::TimeMillis(_) => "TimeMillis",
+            Field::TimeMicros(_) => "TimeMicros",
             Field::TimestampMillis(_) => "TimestampMillis",
             Field::TimestampMicros(_) => "TimestampMicros",
             Field::Group(_) => "Group",
@@ -671,6 +696,7 @@ impl Field {
             ConvertedType::UINT_16 => Field::UShort(value as u16),
             ConvertedType::UINT_32 => Field::UInt(value as u32),
             ConvertedType::DATE => Field::Date(value),
+            ConvertedType::TIME_MILLIS => Field::TimeMillis(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i32(
                 value,
                 descr.type_precision(),
@@ -686,6 +712,7 @@ impl Field {
         match descr.converted_type() {
             ConvertedType::INT_64 | ConvertedType::NONE => Field::Long(value),
             ConvertedType::UINT_64 => Field::ULong(value as u64),
+            ConvertedType::TIME_MICROS => Field::TimeMicros(value),
             ConvertedType::TIMESTAMP_MILLIS => Field::TimestampMillis(value),
             ConvertedType::TIMESTAMP_MICROS => Field::TimestampMicros(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i64(
@@ -746,7 +773,7 @@ impl Field {
                     descr.type_precision(),
                     descr.type_scale(),
                 )),
-                ConvertedType::NONE if descr.logical_type() == Some(LogicalType::Float16) => {
+                ConvertedType::NONE if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
                     if value.len() != 2 {
                         return Err(general_err!(
                             "Error reading FIXED_LEN_BYTE_ARRAY as FLOAT16. Length must be 2, got {}",
@@ -767,8 +794,8 @@ impl Field {
     /// Converts the Parquet field into a JSON [`Value`].
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
-        use base64::prelude::BASE64_STANDARD;
         use base64::Engine;
+        use base64::prelude::BASE64_STANDARD;
 
         match &self {
             Field::Null => Value::Null,
@@ -794,6 +821,8 @@ impl Field {
             Field::Str(s) => Value::String(s.to_owned()),
             Field::Bytes(b) => Value::String(BASE64_STANDARD.encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
+            Field::TimeMillis(t) => Value::String(convert_time_millis_to_string(*t)),
+            Field::TimeMicros(t) => Value::String(convert_time_micros_to_string(*t)),
             Field::TimestampMillis(ts) => Value::String(convert_timestamp_millis_to_string(*ts)),
             Field::TimestampMicros(ts) => Value::String(convert_timestamp_micros_to_string(*ts)),
             Field::Group(row) => row.to_json_value(),
@@ -863,6 +892,12 @@ impl fmt::Display for Field {
             Field::Str(ref value) => write!(f, "\"{value}\""),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
+            Field::TimeMillis(value) => {
+                write!(f, "{}", convert_time_millis_to_string(value))
+            }
+            Field::TimeMicros(value) => {
+                write!(f, "{}", convert_time_micros_to_string(value))
+            }
             Field::TimestampMillis(value) => {
                 write!(f, "{}", convert_timestamp_millis_to_string(value))
             }
@@ -911,28 +946,47 @@ fn convert_date_to_string(value: i32) -> String {
 }
 
 /// Helper method to convert Parquet timestamp into a string.
-/// Input `value` is a number of seconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
-#[inline]
-fn convert_timestamp_secs_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_opt(value, 0).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
-}
-
-/// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of milliseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000)
+    let dt = Utc.timestamp_millis_opt(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f %:z"))
 }
 
 /// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of microseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000000)
+    let dt = Utc.timestamp_micros(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
+}
+
+/// Helper method to convert Parquet time (milliseconds since midnight) into a string.
+/// Input `value` is a number of milliseconds since midnight.
+/// Time is displayed in HH:MM:SS.sss format.
+#[inline]
+fn convert_time_millis_to_string(value: i32) -> String {
+    let total_ms = value as u64;
+    let hours = total_ms / (60 * 60 * 1000);
+    let minutes = (total_ms % (60 * 60 * 1000)) / (60 * 1000);
+    let seconds = (total_ms % (60 * 1000)) / 1000;
+    let millis = total_ms % 1000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Helper method to convert Parquet time (microseconds since midnight) into a string.
+/// Input `value` is a number of microseconds since midnight.
+/// Time is displayed in HH:MM:SS.ssssss format.
+#[inline]
+fn convert_time_micros_to_string(value: i64) -> String {
+    let total_us = value as u64;
+    let hours = total_us / (60 * 60 * 1000 * 1000);
+    let minutes = (total_us % (60 * 60 * 1000 * 1000)) / (60 * 1000 * 1000);
+    let seconds = (total_us % (60 * 1000 * 1000)) / (1000 * 1000);
+    let micros = total_us % (1000 * 1000);
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{micros:06}")
 }
 
 /// Helper method to convert Parquet decimal into a string.
@@ -1054,6 +1108,10 @@ mod tests {
         let row = Field::convert_int32(&descr, 14611);
         assert_eq!(row, Field::Date(14611));
 
+        let descr = make_column_descr![PhysicalType::INT32, ConvertedType::TIME_MILLIS];
+        let row = Field::convert_int32(&descr, 14611);
+        assert_eq!(row, Field::TimeMillis(14611));
+
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
         assert_eq!(row, Field::Decimal(Decimal::from_i32(444, 8, 2)));
@@ -1076,6 +1134,10 @@ mod tests {
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIMESTAMP_MICROS];
         let row = Field::convert_int64(&descr, 1541186529153123);
         assert_eq!(row, Field::TimestampMicros(1541186529153123));
+
+        let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIME_MICROS];
+        let row = Field::convert_int64(&descr, 47445123456);
+        assert_eq!(row, Field::TimeMicros(47445123456));
 
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::NONE];
         let row = Field::convert_int64(&descr, 2222);
@@ -1226,44 +1288,75 @@ mod tests {
 
     #[test]
     fn test_convert_timestamp_millis_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, milli): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_milli_opt(h, mi, s, milli)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_millis_to_string(dt.timestamp_millis());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion((1969, 9, 10, 1, 2, 3, 4), "1969-09-10 01:02:03.004 +00:00");
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.042 +00:00",
+        );
+        check_datetime_conversion((2011, 1, 3, 8, 23, 1, 27), "2011-01-03 08:23:01.027 +00:00");
+        check_datetime_conversion((2012, 4, 5, 11, 6, 32, 0), "2012-04-05 11:06:32.000 +00:00");
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.059 +00:00",
+        );
     }
 
     #[test]
     fn test_convert_timestamp_micros_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, micro): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_micro_opt(h, mi, s, micro)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_micros_to_string(dt.timestamp_micros());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion(
+            (1969, 9, 10, 1, 2, 3, 4),
+            "1969-09-10 01:02:03.000004 +00:00",
+        );
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.000042 +00:00",
+        );
+        check_datetime_conversion(
+            (2011, 1, 3, 8, 23, 1, 27),
+            "2011-01-03 08:23:01.000027 +00:00",
+        );
+        check_datetime_conversion(
+            (2012, 4, 5, 11, 6, 32, 0),
+            "2012-04-05 11:06:32.000000 +00:00",
+        );
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.000015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.000059 +00:00",
+        );
     }
 
     #[test]
@@ -1430,28 +1523,34 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert!(!Field::Group(Row::new(vec![
-            ("x".to_string(), Field::Null),
-            ("Y".to_string(), Field::Int(2)),
-            ("z".to_string(), Field::Float(3.1)),
-            ("a".to_string(), Field::Str("abc".to_string()))
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::Group(Row::new(vec![
+                ("x".to_string(), Field::Null),
+                ("Y".to_string(), Field::Int(2)),
+                ("z".to_string(), Field::Float(3.1)),
+                ("a".to_string(), Field::Str("abc".to_string()))
+            ]))
+            .is_primitive()
+        );
 
-        assert!(!Field::ListInternal(make_list(vec![
-            Field::Int(2),
-            Field::Int(1),
-            Field::Null,
-            Field::Int(12)
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::ListInternal(make_list(vec![
+                Field::Int(2),
+                Field::Int(1),
+                Field::Null,
+                Field::Int(12)
+            ]))
+            .is_primitive()
+        );
 
-        assert!(!Field::MapInternal(make_map(vec![
-            (Field::Int(1), Field::Float(1.2)),
-            (Field::Int(2), Field::Float(4.5)),
-            (Field::Int(3), Field::Float(2.3))
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::MapInternal(make_map(vec![
+                (Field::Int(1), Field::Float(1.2)),
+                (Field::Int(2), Field::Float(4.5)),
+                (Field::Int(3), Field::Float(2.3))
+            ]))
+            .is_primitive()
+        );
     }
 
     #[test]
@@ -1569,6 +1668,8 @@ mod tests {
             ("p".to_string(), Field::Float16(f16::from_f32(9.1))),
         ]);
 
+        assert!(row.is_null(0).unwrap());
+        assert!(!row.is_null(1).unwrap());
         assert!(!row.get_bool(1).unwrap());
         assert_eq!(3, row.get_byte(2).unwrap());
         assert_eq!(4, row.get_short(3).unwrap());
@@ -1584,6 +1685,71 @@ mod tests {
         assert_eq!(5, row.get_bytes(13).unwrap().len());
         assert_eq!(7, row.get_decimal(14).unwrap().precision());
         assert!((f16::from_f32(9.1) - row.get_float16(15).unwrap()).abs() < f16::EPSILON);
+
+        assert!(matches!(
+            row.is_null(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_bool(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_byte(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_short(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_int(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_long(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ubyte(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ushort(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_uint(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_ulong(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_float(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_double(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_string(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_bytes(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_decimal(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
+        assert!(matches!(
+            row.get_float16(16).unwrap_err(),
+            ParquetError::IndexOutOfBound(16, 16),
+        ));
     }
 
     #[test]
@@ -1948,11 +2114,19 @@ mod tests {
         );
         assert_eq!(
             Field::TimestampMillis(12345678).to_json_value(),
-            Value::String("1970-01-01 03:25:45 +00:00".to_string())
+            Value::String("1970-01-01 03:25:45.678 +00:00".to_string())
         );
         assert_eq!(
             Field::TimestampMicros(12345678901).to_json_value(),
-            Value::String(convert_timestamp_micros_to_string(12345678901))
+            Value::String("1970-01-01 03:25:45.678901 +00:00".to_string())
+        );
+        assert_eq!(
+            Field::TimeMillis(47445123).to_json_value(),
+            Value::String(String::from("13:10:45.123"))
+        );
+        assert_eq!(
+            Field::TimeMicros(47445123456).to_json_value(),
+            Value::String(String::from("13:10:45.123456"))
         );
 
         let fields = vec![
@@ -1989,7 +2163,7 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use super::{make_list, make_map, Row};
+    use super::{Row, make_list, make_map};
     use crate::record::Field;
 
     #[test]

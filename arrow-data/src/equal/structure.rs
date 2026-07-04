@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::{contains_nulls, ArrayData};
+use crate::data::{ArrayData, contains_nulls};
 
 use super::equal_range;
 

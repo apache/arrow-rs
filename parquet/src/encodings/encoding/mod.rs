@@ -25,7 +25,7 @@ use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{num_required_bits, BitWriter};
+use crate::util::bit_util::{BitWriter, num_required_bits};
 
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
@@ -522,20 +522,18 @@ trait DeltaBitPackEncoderConversion<T: DataType> {
     fn subtract_u64(&self, left: i64, right: i64) -> u64;
 }
 
+const DELTA_BIT_PACK_TYPE_ERROR: &str =
+    "DeltaBitPackDecoder only supports Int32Type, UInt32Type, Int64Type, and UInt64Type";
+
 impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
     #[inline]
     fn assert_supported_type() {
-        ensure_phys_ty!(
-            Type::INT32 | Type::INT64,
-            "DeltaBitPackDecoder only supports Int32Type and Int64Type"
-        );
+        ensure_phys_ty!(Type::INT32 | Type::INT64, "{}", DELTA_BIT_PACK_TYPE_ERROR);
     }
 
     #[inline]
     fn as_i64(&self, values: &[T::T], index: usize) -> i64 {
-        values[index]
-            .as_i64()
-            .expect("DeltaBitPackDecoder only supports Int32Type and Int64Type")
+        values[index].as_i64().expect(DELTA_BIT_PACK_TYPE_ERROR)
     }
 
     #[inline]
@@ -544,7 +542,7 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
         match T::get_physical_type() {
             Type::INT32 => (left as i32).wrapping_sub(right as i32) as i64,
             Type::INT64 => left.wrapping_sub(right),
-            _ => panic!("DeltaBitPackDecoder only supports Int32Type and Int64Type"),
+            _ => panic!("{}", DELTA_BIT_PACK_TYPE_ERROR),
         }
     }
 
@@ -554,7 +552,7 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
             // Conversion of i32 -> u32 -> u64 is to avoid non-zero left most bytes in int repr
             Type::INT32 => (left as i32).wrapping_sub(right as i32) as u32 as u64,
             Type::INT64 => left.wrapping_sub(right) as u64,
-            _ => panic!("DeltaBitPackDecoder only supports Int32Type and Int64Type"),
+            _ => panic!("{}", DELTA_BIT_PACK_TYPE_ERROR),
         }
     }
 }
@@ -768,10 +766,10 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::encodings::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
+    use crate::encodings::decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder};
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::bit_util;
-    use crate::util::test_common::rand_gen::{random_bytes, RandGen};
+    use crate::util::test_common::rand_gen::{RandGen, random_bytes};
 
     const TEST_SET_SIZE: usize = 1024;
 

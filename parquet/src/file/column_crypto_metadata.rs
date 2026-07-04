@@ -17,60 +17,49 @@
 
 //! Column chunk encryption metadata
 
-use crate::errors::Result;
-use crate::format::{
-    ColumnCryptoMetaData as TColumnCryptoMetaData,
-    EncryptionWithColumnKey as TEncryptionWithColumnKey,
-    EncryptionWithFooterKey as TEncryptionWithFooterKey,
+use std::io::Write;
+
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::HeapSize;
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField, read_thrift_vec,
 };
+use crate::{thrift_struct, thrift_union};
 
-/// ColumnCryptoMetadata for a column chunk
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ColumnCryptoMetaData {
-    /// The column is encrypted with the footer key
-    EncryptionWithFooterKey,
-    /// The column is encrypted with a column-specific key
-    EncryptionWithColumnKey(EncryptionWithColumnKey),
-}
+// define this and ColumnCryptoMetadata here so they're only defined when
+// the encryption feature is enabled
 
+thrift_struct!(
 /// Encryption metadata for a column chunk encrypted with a column-specific key
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncryptionWithColumnKey {
-    /// Path to the column in the Parquet schema
-    pub path_in_schema: Vec<String>,
-    /// Metadata required to retrieve the column encryption key
-    pub key_metadata: Option<Vec<u8>>,
+  /// Path to the column in the Parquet schema
+  1: required list<string> path_in_schema
+
+  /// Path to the column in the Parquet schema
+  2: optional binary key_metadata
+}
+);
+
+impl HeapSize for EncryptionWithColumnKey {
+    fn heap_size(&self) -> usize {
+        self.path_in_schema.heap_size() + self.key_metadata.heap_size()
+    }
 }
 
-/// Converts Thrift definition into `ColumnCryptoMetadata`.
-pub fn try_from_thrift(
-    thrift_column_crypto_metadata: &TColumnCryptoMetaData,
-) -> Result<ColumnCryptoMetaData> {
-    let crypto_metadata = match thrift_column_crypto_metadata {
-        TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_) => {
-            ColumnCryptoMetaData::EncryptionWithFooterKey
-        }
-        TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(encryption_with_column_key) => {
-            ColumnCryptoMetaData::EncryptionWithColumnKey(EncryptionWithColumnKey {
-                path_in_schema: encryption_with_column_key.path_in_schema.clone(),
-                key_metadata: encryption_with_column_key.key_metadata.clone(),
-            })
-        }
-    };
-    Ok(crypto_metadata)
+thrift_union!(
+/// ColumnCryptoMetadata for a column chunk
+union ColumnCryptoMetaData {
+  1: ENCRYPTION_WITH_FOOTER_KEY
+  2: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
 }
+);
 
-/// Converts `ColumnCryptoMetadata` into Thrift definition.
-pub fn to_thrift(column_crypto_metadata: &ColumnCryptoMetaData) -> TColumnCryptoMetaData {
-    match column_crypto_metadata {
-        ColumnCryptoMetaData::EncryptionWithFooterKey => {
-            TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(TEncryptionWithFooterKey {})
-        }
-        ColumnCryptoMetaData::EncryptionWithColumnKey(encryption_with_column_key) => {
-            TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(TEncryptionWithColumnKey {
-                path_in_schema: encryption_with_column_key.path_in_schema.clone(),
-                key_metadata: encryption_with_column_key.key_metadata.clone(),
-            })
+impl HeapSize for ColumnCryptoMetaData {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::ENCRYPTION_WITH_FOOTER_KEY => 0,
+            Self::ENCRYPTION_WITH_COLUMN_KEY(path) => path.heap_size(),
         }
     }
 }
@@ -78,21 +67,25 @@ pub fn to_thrift(column_crypto_metadata: &ColumnCryptoMetaData) -> TColumnCrypto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
-    fn test_encryption_with_footer_key_from_thrift() {
-        let metadata = ColumnCryptoMetaData::EncryptionWithFooterKey;
+    fn test_column_crypto_roundtrip() {
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY);
 
-        assert_eq!(try_from_thrift(&to_thrift(&metadata)).unwrap(), metadata);
-    }
-
-    #[test]
-    fn test_encryption_with_column_key_from_thrift() {
-        let metadata = ColumnCryptoMetaData::EncryptionWithColumnKey(EncryptionWithColumnKey {
-            path_in_schema: vec!["abc".to_owned(), "def".to_owned()],
-            key_metadata: Some(vec![0, 1, 2, 3, 4, 5]),
-        });
-
-        assert_eq!(try_from_thrift(&to_thrift(&metadata)).unwrap(), metadata);
+        let path_in_schema = vec!["foo".to_owned(), "bar".to_owned(), "really".to_owned()];
+        let key_metadata = vec![1u8; 32];
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema: path_in_schema.clone(),
+                key_metadata: None,
+            },
+        ));
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema,
+                key_metadata: Some(key_metadata),
+            },
+        ));
     }
 }

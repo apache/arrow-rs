@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::{contains_nulls, ArrayData};
-use arrow_buffer::ArrowNativeType;
-use num::Integer;
-
 use super::utils::equal_len;
+use crate::data::{ArrayData, contains_nulls};
+use crate::equal::list::lengths_equal;
+use arrow_buffer::ArrowNativeType;
+use num_integer::Integer;
 
 fn offset_value_equal<T: ArrowNativeType + Integer>(
     lhs_values: &[u8],
@@ -63,15 +63,18 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
     // Only checking one null mask here because by the time the control flow reaches
     // this point, the equality of the two masks would have already been verified.
     if !contains_nulls(lhs.nulls(), lhs_start, len) {
-        offset_value_equal(
-            lhs_values,
-            rhs_values,
-            lhs_offsets,
-            rhs_offsets,
-            lhs_start,
-            rhs_start,
-            len,
-        )
+        let lhs_offsets_slice = &lhs_offsets[lhs_start..lhs_start + len + 1];
+        let rhs_offsets_slice = &rhs_offsets[rhs_start..rhs_start + len + 1];
+        lengths_equal(lhs_offsets_slice, rhs_offsets_slice)
+            && offset_value_equal(
+                lhs_values,
+                rhs_values,
+                lhs_offsets,
+                rhs_offsets,
+                lhs_start,
+                rhs_start,
+                len,
+            )
     } else {
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
@@ -93,5 +96,37 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
                         1,
                     )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ArrayData;
+    use crate::equal::variable_size::variable_sized_equal;
+    use arrow_buffer::Buffer;
+    use arrow_schema::DataType;
+
+    #[test]
+    fn test_variable_sized_equal_diff_offsets() {
+        let a = ArrayData::builder(DataType::Utf8)
+            .buffers(vec![
+                Buffer::from_vec(vec![0_i32, 3, 6]),
+                Buffer::from_slice_ref(b"foobar"),
+            ])
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b01_u8])))
+            .len(2)
+            .build()
+            .unwrap();
+        let b = ArrayData::builder(DataType::Utf8)
+            .buffers(vec![
+                Buffer::from_vec(vec![0_i32, 2, 6]),
+                Buffer::from_slice_ref(b"foobar"),
+            ])
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b01_u8])))
+            .len(2)
+            .build()
+            .unwrap();
+
+        assert!(!variable_sized_equal::<i32>(&a, &b, 0, 0, 2));
     }
 }

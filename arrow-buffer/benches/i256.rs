@@ -17,9 +17,10 @@
 
 use arrow_buffer::i256;
 use criterion::*;
+use num_traits::cast::ToPrimitive;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::str::FromStr;
+use std::{hint, str::FromStr};
 
 const SIZE: usize = 1024;
 
@@ -36,10 +37,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         i256::MAX,
     ];
 
-    for number in numbers {
-        let t = black_box(number.to_string());
+    for number in numbers.iter() {
+        let t = hint::black_box(number.to_string());
         c.bench_function(&format!("i256_parse({t})"), |b| {
             b.iter(|| i256::from_str(&t).unwrap());
+        });
+    }
+
+    for number in numbers.iter() {
+        c.bench_function(&format!("i256_to_f64({number})"), |b| {
+            b.iter(|| (*number).to_f64().unwrap())
         });
     }
 
@@ -64,7 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("i256_div_rem small quotient", |b| {
         b.iter(|| {
             for (n, d) in numerators.iter().zip(&divisors) {
-                black_box(n.wrapping_div(*d));
+                hint::black_box(n.wrapping_div(*d));
             }
         });
     });
@@ -76,7 +83,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("i256_div_rem small divisor", |b| {
         b.iter(|| {
             for (n, d) in numerators.iter().zip(&divisors) {
-                black_box(n.wrapping_div(*d));
+                hint::black_box(n.wrapping_div(*d));
             }
         });
     });

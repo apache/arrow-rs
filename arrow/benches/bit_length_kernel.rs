@@ -22,9 +22,10 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::{array::*, compute::kernels::length::bit_length};
+use std::hint;
 
 fn bench_bit_length(array: &StringArray) {
-    criterion::black_box(bit_length(array).unwrap());
+    hint::black_box(bit_length(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

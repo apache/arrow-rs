@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid>
 
-use crate::{extension::ExtensionType, ArrowError, DataType};
+use crate::{ArrowError, DataType, extension::ExtensionType};
 
 /// The extension type for `UUID`.
 ///
@@ -53,10 +53,14 @@ impl ExtensionType for Uuid {
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
         metadata.map_or_else(
             || Ok(()),
-            |_| {
-                Err(ArrowError::InvalidArgumentError(
-                    "Uuid extension type expects no metadata".to_owned(),
-                ))
+            |v| {
+                if !v.is_empty() {
+                    Err(ArrowError::InvalidArgumentError(
+                        "Uuid extension type expects no metadata".to_owned(),
+                    ))
+                } else {
+                    Ok(())
+                }
             },
         )
     }
@@ -73,6 +77,10 @@ impl ExtensionType for Uuid {
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type).map(|_| Self)
     }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self.supports_data_type(data_type)
+    }
 }
 
 #[cfg(test)]
@@ -80,8 +88,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
     };
 
     use super::*;
@@ -100,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new("", DataType::FixedSizeBinary(16), false);
         field.extension_type::<Uuid>();
@@ -118,11 +126,28 @@ mod tests {
         let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
             [
                 (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    "unexpected".to_owned(),
+                ),
             ]
             .into_iter()
             .collect(),
         );
         field.extension_type::<Uuid>();
+    }
+
+    #[test]
+    fn empty_metadata_string_is_treated_as_none() -> Result<(), ArrowError> {
+        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
+            [
+                (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
+                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        field.try_extension_type::<Uuid>()?;
+        Ok(())
     }
 }

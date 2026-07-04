@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array,
-    StringArray, StructBuilder, UInt64Array,
+    Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array, StringArray,
+    StructBuilder, UInt64Array, make_array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -561,7 +561,7 @@ fn test_validate_large_utf8_char_boundary() {
 
 /// Test that the array of type `data_type` that has invalid indexes (out of bounds)
 fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref(b"abcd");
     // First two offsets are fine, then 5 is out of bounds
     let offsets: Vec<T> = [0, 1, 2, 5, 2]
         .iter()
@@ -606,7 +606,7 @@ fn test_validate_large_binary_out_of_bounds() {
 
 // validate that indexes don't go bacwards check indexes that go backwards
 fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
-    let data_buffer = Buffer::from_slice_ref([b'a', b'b', b'c', b'd']);
+    let data_buffer = Buffer::from_slice_ref(b"abcd");
     // First three offsets are fine, then 1 goes backwards
     let offsets: Vec<T> = [0, 1, 2, 2, 1]
         .iter()
@@ -825,13 +825,14 @@ fn test_validate_union_different_types() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true), // data is int32
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -858,13 +859,14 @@ fn test_validate_union_sparse_different_child_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -887,13 +889,14 @@ fn test_validate_union_dense_without_offsets() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,
@@ -917,13 +920,14 @@ fn test_validate_union_dense_with_bad_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,
@@ -1056,10 +1060,19 @@ fn test_string_data_from_foreign() {
 
 #[test]
 fn test_decimal_full_validation() {
+    let array = Decimal128Array::from(vec![123456_i128])
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+    let error = array.validate_decimal_precision(5).unwrap_err();
+    assert_eq!(
+        "Invalid argument error: 1234.56 is too large to store in a Decimal128 of precision 5. Max is 999.99",
+        error.to_string()
+    );
+
     let array = Decimal128Array::from(vec![123456_i128]);
     let error = array.validate_decimal_precision(5).unwrap_err();
     assert_eq!(
-        "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
+        "Invalid argument error: Decimal precision 5 is less than scale 10",
         error.to_string()
     );
 }
@@ -1097,5 +1110,8 @@ fn test_sliced_array_child() {
     };
 
     let err = data.validate_values().unwrap_err();
-    assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    assert_eq!(
+        err.to_string(),
+        "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2"
+    );
 }

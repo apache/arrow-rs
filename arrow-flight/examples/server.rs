@@ -20,9 +20,9 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
-    ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
 };
 
 #[derive(Clone)]

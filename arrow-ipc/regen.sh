@@ -88,9 +88,9 @@ use flatbuffers::EndianScalar;
 HEREDOC
 )
 
-SCHEMA_IMPORT="\nuse crate::gen::Schema::*;"
-SPARSE_TENSOR_IMPORT="\nuse crate::gen::SparseTensor::*;"
-TENSOR_IMPORT="\nuse crate::gen::Tensor::*;"
+SCHEMA_IMPORT="\nuse crate::r#gen::Schema::*;"
+SPARSE_TENSOR_IMPORT="\nuse crate::r#gen::SparseTensor::*;"
+TENSOR_IMPORT="\nuse crate::r#gen::Tensor::*;"
 
 # For flatbuffer(1.12.0+), remove: use crate::${name}::\*;
 names=("File" "Message" "Schema" "SparseTensor" "Tensor")
@@ -129,7 +129,7 @@ for f in `ls *.rs`; do
     sed --in-place='' 's/TYPE__/TYPE_/g' $f
 
     # Some files need prefixes
-    if [[ $f == "File.rs" ]]; then 
+    if [[ $f == "File.rs" ]]; then
         # Now prefix the file with the static contents
         echo -e "${PREFIX}" "${SCHEMA_IMPORT}" | cat - $f > temp && mv temp $f
     elif [[ $f == "Message.rs" ]]; then

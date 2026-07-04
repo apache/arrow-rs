@@ -17,8 +17,8 @@
 
 //! Conversion methods for dates and times.
 
-use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
+use crate::timezone::Tz;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 
@@ -215,16 +215,16 @@ pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
     (v.div_euclid(base), v.rem_euclid(base) as u32)
 }
 
-/// converts a `i64` representing a `duration(s)` to [`Duration`]
+/// converts a `i64` representing a `duration(s)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_s_to_duration(v: i64) -> Duration {
-    Duration::try_seconds(v).unwrap()
+pub fn try_duration_s_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_seconds(v)
 }
 
-/// converts a `i64` representing a `duration(ms)` to [`Duration`]
+/// converts a `i64` representing a `duration(ms)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_ms_to_duration(v: i64) -> Duration {
-    Duration::try_milliseconds(v).unwrap()
+pub fn try_duration_ms_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_milliseconds(v)
 }
 
 /// converts a `i64` representing a `duration(us)` to [`Duration`]
@@ -296,8 +296,8 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
 pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
     match T::DATA_TYPE {
         DataType::Duration(unit) => match unit {
-            TimeUnit::Second => Some(duration_s_to_duration(v)),
-            TimeUnit::Millisecond => Some(duration_ms_to_duration(v)),
+            TimeUnit::Second => try_duration_s_to_duration(v),
+            TimeUnit::Millisecond => try_duration_ms_to_duration(v),
             TimeUnit::Microsecond => Some(duration_us_to_duration(v)),
             TimeUnit::Nanosecond => Some(duration_ns_to_duration(v)),
         },
@@ -308,9 +308,9 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use crate::temporal_conversions::{
-        date64_to_datetime, split_second, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
-        timestamp_s_to_date, timestamp_s_to_datetime, timestamp_s_to_time,
-        timestamp_us_to_datetime, NANOSECONDS,
+        NANOSECONDS, date64_to_datetime, split_second, timestamp_ms_to_datetime,
+        timestamp_ns_to_datetime, timestamp_s_to_date, timestamp_s_to_datetime,
+        timestamp_s_to_time, timestamp_us_to_datetime,
     };
     use chrono::DateTime;
 

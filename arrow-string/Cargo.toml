@@ -43,5 +43,5 @@ arrow-array = { workspace = true }
 arrow-select = { workspace = true }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 regex-syntax = { version = "0.8.0", default-features = false, features = ["unicode"] }
-num = { version = "0.4", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 memchr = "2.7.4"

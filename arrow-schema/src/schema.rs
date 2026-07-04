@@ -187,7 +187,7 @@ pub type SchemaRef = Arc<Schema>;
 pub struct Schema {
     /// A sequence of fields that describe the schema.
     pub fields: Fields,
-    /// A map of key-value pairs containing additional meta data.
+    /// A map of key-value pairs containing additional metadata.
     pub metadata: HashMap<String, String>,
 }
 
@@ -363,13 +363,6 @@ impl Schema {
     #[inline]
     pub fn flattened_fields(&self) -> Vec<&Field> {
         self.fields.iter().flat_map(|f| f.fields()).collect()
-    }
-
-    /// Returns a vector with references to all fields (including nested fields)
-    #[deprecated(since = "52.2.0", note = "Use `flattened_fields` instead")]
-    #[inline]
-    pub fn all_fields(&self) -> Vec<&Field> {
-        self.flattened_fields()
     }
 
     /// Returns an immutable reference of a specific [`Field`] instance selected using an
@@ -553,12 +546,37 @@ impl Hash for Schema {
     }
 }
 
+impl AsRef<Schema> for Schema {
+    fn as_ref(&self) -> &Schema {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::datatype::DataType;
     use crate::{TimeUnit, UnionMode};
 
     use super::*;
+
+    #[test]
+    #[expect(clippy::needless_borrows_for_generic_args)] // intentional to exercise various references
+    fn test_schema_as_ref() {
+        fn accept_ref(_: impl AsRef<Schema>) {}
+
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ]);
+
+        accept_ref(schema.clone());
+        accept_ref(&schema.clone());
+        accept_ref(&&schema.clone());
+        accept_ref(Arc::new(schema.clone()));
+        accept_ref(&Arc::new(schema.clone()));
+        accept_ref(&&Arc::new(schema.clone()));
+    }
 
     #[test]
     #[cfg(feature = "serde")]
@@ -704,14 +722,13 @@ mod tests {
     #[test]
     fn create_schema_string() {
         let schema = person_schema();
-        assert_eq!(schema.to_string(),
-                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"k\": \"v\"} }, \
-        Field { name: \"last_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"address\", data_type: Struct([\
-            Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-            Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
-        ]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: {} }")
+        assert_eq!(
+            schema.to_string(),
+            "Field { \"first_name\": Utf8, metadata: {\"k\": \"v\"} }, \
+             Field { \"last_name\": Utf8 }, \
+             Field { \"address\": Struct(\"street\": non-null Utf8, \"zip\": non-null UInt16) }, \
+             Field { \"interests\": nullable Dictionary(Int32, Utf8), dict_id: 123, dict_is_ordered }"
+        )
     }
 
     #[test]
@@ -1405,14 +1422,16 @@ mod tests {
         );
 
         // incompatible field should throw error
-        assert!(Schema::try_merge(vec![
-            Schema::new(vec![
-                Field::new("first_name", DataType::Utf8, false),
-                Field::new("last_name", DataType::Utf8, false),
-            ]),
-            Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
-        ])
-        .is_err());
+        assert!(
+            Schema::try_merge(vec![
+                Schema::new(vec![
+                    Field::new("first_name", DataType::Utf8, false),
+                    Field::new("last_name", DataType::Utf8, false),
+                ]),
+                Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
+            ])
+            .is_err()
+        );
 
         // incompatible metadata should throw error
         let res = Schema::try_merge(vec![

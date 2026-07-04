@@ -20,7 +20,7 @@ use crate::{Array, GenericByteArray, GenericListArray, GenericStringArray, Offse
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
-/// A [`GenericBinaryArray`] for storing `[u8]`
+/// A [`GenericByteArray`] for storing `[u8]`
 pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
@@ -90,7 +90,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<&'a [u8]>> {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
     }
 }
 
@@ -219,9 +219,7 @@ mod tests {
 
     #[test]
     fn test_binary_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -257,9 +255,7 @@ mod tests {
 
     #[test]
     fn test_binary_array_with_offsets() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
@@ -283,9 +279,7 @@ mod tests {
 
     #[test]
     fn test_large_binary_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -321,9 +315,7 @@ mod tests {
 
     #[test]
     fn test_large_binary_array_with_offsets() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset

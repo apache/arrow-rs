@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
@@ -27,10 +27,10 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime};
+use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -44,6 +44,8 @@ pub fn make_fixed_len_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -59,11 +61,27 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
                 t
-            ))
+            ));
         }
     };
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
+        ArrowType::Decimal32(_, _) => {
+            if byte_length > 4 {
+                return Err(general_err!(
+                    "decimal 32 type too large, must be less then 4 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Decimal64(_, _) => {
+            if byte_length > 8 {
+                return Err(general_err!(
+                    "decimal 64 type too large, must be less then 8 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
@@ -101,7 +119,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
                 data_type
-            ))
+            ));
         }
     }
 
@@ -110,6 +128,8 @@ pub fn make_fixed_len_byte_array_reader(
         column_desc,
         data_type,
         byte_length,
+        batch_size,
+        padding_threshold,
     )))
 }
 
@@ -128,14 +148,20 @@ impl FixedLenByteArrayReader {
         column_desc: ColumnDescPtr,
         data_type: ArrowType,
         byte_length: usize,
+        batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Self {
+        let mut record_reader = GenericRecordReader::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
         Self {
             data_type,
             byte_length,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            record_reader: GenericRecordReader::new(column_desc),
+            record_reader,
         }
     }
 }
@@ -154,12 +180,23 @@ impl ArrayReader for FixedLenByteArrayReader {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let len = self.record_reader.values_written();
+
         let record_data = self.record_reader.consume_record_data();
+        debug_assert_eq!(
+            record_data.buffer.len(),
+            len * self.byte_length,
+            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+            record_data.buffer.len(),
+            len,
+            self.byte_length,
+        );
+        let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
-            .len(self.record_reader.num_values())
+            .len(len)
             .add_buffer(Buffer::from_vec(record_data.buffer))
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+            .null_bit_buffer(null_bit_buffer);
 
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
@@ -168,6 +205,16 @@ impl ArrayReader for FixedLenByteArrayReader {
         // conversion lambdas are all infallible. This improves performance by avoiding a branch in
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
+            ArrowType::Decimal32(p, s) => {
+                let f = |b: &[u8]| i32::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal32Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
+            ArrowType::Decimal64(p, s) => {
+                let f = |b: &[u8]| i64::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal64Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
                 Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
@@ -225,6 +272,10 @@ impl ArrayReader for FixedLenByteArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
+    }
 }
 
 #[derive(Default)]
@@ -232,6 +283,9 @@ struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
+    /// Preserved value-count hint used to allocate `buffer` once `byte_length`
+    /// becomes known on the first decode.
+    values_capacity: Option<usize>,
 }
 
 #[inline]
@@ -258,16 +312,44 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        // `byte_length` is not known initially, so preserve the value-count
+        // hint so the first decode can allocate the initial byte capacity.
+        Self {
+            buffer: Vec::new(),
+            byte_length: None,
+            values_capacity: Some(capacity),
+        }
+    }
+
+    fn reserve_exact(&mut self, additional: usize) {
+        match self.byte_length {
+            Some(byte_length) => self
+                .buffer
+                .reserve_exact(additional.saturating_mul(byte_length)),
+            None => {
+                let capacity = self.values_capacity.get_or_insert(0);
+                *capacity = (*capacity).max(additional);
+            }
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         let byte_length = self.byte_length.unwrap_or_default();
 
-        assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
+        if self.buffer.len() != (read_offset + values_read) * byte_length {
+            return Err(general_err!(
+                "found inconsistent buffer length while padding nulls: expected {} bytes, got {}",
+                (read_offset + values_read) * byte_length,
+                self.buffer.len()
+            ));
+        }
         self.buffer
             .resize((read_offset + levels_read) * byte_length, 0);
 
@@ -293,6 +375,7 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             };
             move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         }
+        Ok(())
     }
 }
 
@@ -355,7 +438,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 offset: 0,
             },
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Decoder::Dict {
-                decoder: DictIndexDecoder::new(data, num_levels, num_values),
+                decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
@@ -368,7 +451,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
                     encoding
-                ))
+                ));
             }
         });
         Ok(())
@@ -377,7 +460,19 @@ impl ColumnValueDecoder for ValueDecoder {
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match out.byte_length {
             Some(x) => assert_eq!(x, self.byte_length),
-            None => out.byte_length = Some(self.byte_length),
+            None => {
+                out.byte_length = Some(self.byte_length);
+                // TODO: collapse to a let-chain once MSRV ≥ 1.88
+                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
+                if out.buffer.is_empty() {
+                    if let Some(values_capacity) = out.values_capacity.take() {
+                        // now that the byte length per output element is known,
+                        // allocate the actual needed space.
+                        let byte_capacity = values_capacity.saturating_mul(self.byte_length);
+                        out.buffer = Vec::with_capacity(byte_capacity);
+                    }
+                }
+            }
         }
 
         match self.decoder.as_mut().unwrap() {
@@ -492,14 +587,26 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn test_pending_reservation_tracks_max_capacity() {
+        let mut buffer = FixedLenByteArrayBuffer::with_capacity(0);
+
+        buffer.reserve_exact(8);
+        buffer.reserve_exact(4);
+        assert_eq!(buffer.values_capacity, Some(8));
+
+        buffer.reserve_exact(12);
+        assert_eq!(buffer.values_capacity, Some(12));
+    }
 
     #[test]
     fn test_decimal_list() {

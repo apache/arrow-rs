@@ -255,7 +255,9 @@
 //! * CSV: [`Reader`](csv::reader::Reader) and [`Writer`](csv::writer::Writer)
 //! * IPC: [`Reader`](ipc::reader::StreamReader) and [`Writer`](ipc::writer::FileWriter)
 //!
-//! Parquet is published as a [separate crate](https://crates.io/crates/parquet)
+//! Support for [Apache Parquet] is published as a [separate parquet crate](https://crates.io/crates/parquet)
+//!
+//! Support for [Apache Avro] is published as a [separate arrow-avro crate](https://crates.io/crates/arrow-avro)
 //!
 //! # Serde Compatibility
 //!
@@ -330,17 +332,37 @@
 //! Some functionality is also distributed independently of this crate:
 //!
 //! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
-//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
+//! * [`parquet`](https://docs.rs/parquet) - support for [Apache Parquet]
+//! * [`arrow-avro`](https://docs.rs/arrow-avro) - support for [Apache Avro]
 //!
-//! # Safety and Security
+//! # Security
 //!
-//! Like many crates, this crate makes use of unsafe where prudent. However, it endeavours to be
-//! sound. Specifically, **it should not be possible to trigger undefined behaviour using safe APIs.**
+//! This project follows the [Apache Arrow Security Model].
 //!
-//! If you think you have found an instance where this is possible, please file
-//! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
+//! Unexpected behavior (e.g., panics, crashes, or infinite loops) triggered by
+//! malformed input is considered a **bug**, not a security vulnerability,
+//! unless it is **exploitable** by an attacker to
+//!
+//! * Execute arbitrary code (Remote Code Execution);
+//! * Exfiltrate sensitive information from process memory (Information Disclosure);
+//!
+//! If you think you have found a security vulnerability, please follow the
+//! reporting instructions in the [security policy].
+//!
+//! [security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
+//!
+//! # Safety
+//!
+//! Like many crates, this crate makes use of `unsafe` where prudent. However, it endeavors to be
+//! sound. Specifically, **it should not be possible to trigger undefined behavior using safe APIs.**
+//!
+//! Undefined behavior using safe APIs is considered a bug, not a security
+//! vulnerability, unless it can be exploited. Please see the [security policy]
+//! for details.
+//!
+//! For more information on the use of `unsafe`, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
+//!
+//! [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
 //!
 //! # Higher-level Processing
 //!
@@ -358,11 +380,11 @@
 //! [`Buffer`]: buffer::Buffer
 //! [`RecordBatch`]: record_batch::RecordBatch
 //! [`arrow-flight`]: https://docs.rs/arrow-flight/latest/arrow_flight/
-//! [`arrow-integration-test`]: https://docs.rs/arrow-integration-test/latest/arrow_integration_test/
 //! [`parquet`]: https://docs.rs/parquet/latest/parquet/
 //! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
 //! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format
 //! [Apache Parquet]: https://parquet.apache.org/
+//! [Apache Avro]: https://avro.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 
@@ -370,7 +392,7 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
@@ -397,7 +419,7 @@ pub use arrow_ipc as ipc;
 #[cfg(feature = "json")]
 pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
-pub mod pyarrow;
+pub use arrow_pyarrow as pyarrow;
 
 /// Contains the `RecordBatch` type and associated traits
 pub mod record_batch {

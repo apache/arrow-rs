@@ -30,6 +30,7 @@ on:
       - main
   pull_request:
     paths:
+      - rust-toolchain.toml
       - arrow/**
       - arrow-array/**
       - arrow-buffer/**
@@ -42,6 +43,9 @@ on:
       - arrow-json/**
       - arrow-avro/**
       - parquet/**
+      - parquet-variant/**
+      - parquet-variant-compute/**
+      - parquet-variant-json/**
       - .github/**
 
 jobs:
@@ -52,7 +56,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -65,7 +69,6 @@ jobs:
         run: |
           # Test parquet examples
           cargo run -p parquet --example read_parquet
-          cargo run -p parquet --example async_read_parquet --features="async"
           cargo run -p parquet --example read_with_rowgroup --features="async"
 
   # test compilation
@@ -75,7 +78,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -113,6 +116,15 @@ jobs:
         run: cargo check -p parquet --all-targets --no-default-features --features json
       - name: Check compilation --no-default-features --features encryption --features async
         run: cargo check -p parquet --no-default-features --features encryption --features async
+      - name: Check compilation --no-default-features --features flate2, this is expected to fail
+        run: if `cargo check -p parquet --no-default-features --features flate2 2>/dev/null`; then false; else true; fi
+      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backend
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backend
+      - name: Check compilation --no-default-features --features flate2 --features flate2-zlib-rs
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
+      - name: Check compilation --no-default-features --features variant_experimental
+        run: cargo check -p parquet --no-default-features --features variant_experimental
+
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:
@@ -121,13 +133,15 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          target: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Install wasm32 targets
+        run: |
+            rustup target add wasm32-unknown-unknown
+            rustup target add wasm32-wasip1
       - name: Install clang # Needed for zlib compilation
         run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown
@@ -142,9 +156,9 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.10"
           cache: "pip"
@@ -175,7 +189,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

@@ -44,75 +44,76 @@ use paste::paste;
 use prost::Message;
 
 #[allow(clippy::all)]
-mod gen {
-    #![allow(rustdoc::unportable_markdown)]
+mod r#gen {
     // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.sql.rs");
 }
 
-pub use gen::action_end_transaction_request::EndTransaction;
-pub use gen::command_statement_ingest::table_definition_options::{
+pub use r#gen::ActionBeginSavepointRequest;
+pub use r#gen::ActionBeginSavepointResult;
+pub use r#gen::ActionBeginTransactionRequest;
+pub use r#gen::ActionBeginTransactionResult;
+pub use r#gen::ActionCancelQueryRequest;
+pub use r#gen::ActionCancelQueryResult;
+pub use r#gen::ActionClosePreparedStatementRequest;
+pub use r#gen::ActionCreatePreparedStatementRequest;
+pub use r#gen::ActionCreatePreparedStatementResult;
+pub use r#gen::ActionCreatePreparedSubstraitPlanRequest;
+pub use r#gen::ActionEndSavepointRequest;
+pub use r#gen::ActionEndTransactionRequest;
+pub use r#gen::CommandGetCatalogs;
+pub use r#gen::CommandGetCrossReference;
+pub use r#gen::CommandGetDbSchemas;
+pub use r#gen::CommandGetExportedKeys;
+pub use r#gen::CommandGetImportedKeys;
+pub use r#gen::CommandGetPrimaryKeys;
+pub use r#gen::CommandGetSqlInfo;
+pub use r#gen::CommandGetTableTypes;
+pub use r#gen::CommandGetTables;
+pub use r#gen::CommandGetXdbcTypeInfo;
+pub use r#gen::CommandPreparedStatementQuery;
+pub use r#gen::CommandPreparedStatementUpdate;
+pub use r#gen::CommandStatementIngest;
+pub use r#gen::CommandStatementQuery;
+pub use r#gen::CommandStatementSubstraitPlan;
+pub use r#gen::CommandStatementUpdate;
+pub use r#gen::DoPutPreparedStatementResult;
+pub use r#gen::DoPutUpdateResult;
+pub use r#gen::Nullable;
+pub use r#gen::Searchable;
+pub use r#gen::SqlInfo;
+pub use r#gen::SqlNullOrdering;
+pub use r#gen::SqlOuterJoinsSupportLevel;
+pub use r#gen::SqlSupportedCaseSensitivity;
+pub use r#gen::SqlSupportedElementActions;
+pub use r#gen::SqlSupportedGroupBy;
+pub use r#gen::SqlSupportedPositionedCommands;
+pub use r#gen::SqlSupportedResultSetConcurrency;
+pub use r#gen::SqlSupportedResultSetType;
+pub use r#gen::SqlSupportedSubqueries;
+pub use r#gen::SqlSupportedTransaction;
+pub use r#gen::SqlSupportedTransactions;
+pub use r#gen::SqlSupportedUnions;
+pub use r#gen::SqlSupportsConvert;
+pub use r#gen::SqlTransactionIsolationLevel;
+pub use r#gen::SubstraitPlan;
+pub use r#gen::SupportedSqlGrammar;
+pub use r#gen::TicketStatementQuery;
+pub use r#gen::UpdateDeleteRules;
+pub use r#gen::XdbcDataType;
+pub use r#gen::XdbcDatetimeSubcode;
+pub use r#gen::action_end_transaction_request::EndTransaction;
+pub use r#gen::command_statement_ingest::TableDefinitionOptions;
+pub use r#gen::command_statement_ingest::table_definition_options::{
     TableExistsOption, TableNotExistOption,
 };
-pub use gen::command_statement_ingest::TableDefinitionOptions;
-pub use gen::ActionBeginSavepointRequest;
-pub use gen::ActionBeginSavepointResult;
-pub use gen::ActionBeginTransactionRequest;
-pub use gen::ActionBeginTransactionResult;
-pub use gen::ActionCancelQueryRequest;
-pub use gen::ActionCancelQueryResult;
-pub use gen::ActionClosePreparedStatementRequest;
-pub use gen::ActionCreatePreparedStatementRequest;
-pub use gen::ActionCreatePreparedStatementResult;
-pub use gen::ActionCreatePreparedSubstraitPlanRequest;
-pub use gen::ActionEndSavepointRequest;
-pub use gen::ActionEndTransactionRequest;
-pub use gen::CommandGetCatalogs;
-pub use gen::CommandGetCrossReference;
-pub use gen::CommandGetDbSchemas;
-pub use gen::CommandGetExportedKeys;
-pub use gen::CommandGetImportedKeys;
-pub use gen::CommandGetPrimaryKeys;
-pub use gen::CommandGetSqlInfo;
-pub use gen::CommandGetTableTypes;
-pub use gen::CommandGetTables;
-pub use gen::CommandGetXdbcTypeInfo;
-pub use gen::CommandPreparedStatementQuery;
-pub use gen::CommandPreparedStatementUpdate;
-pub use gen::CommandStatementIngest;
-pub use gen::CommandStatementQuery;
-pub use gen::CommandStatementSubstraitPlan;
-pub use gen::CommandStatementUpdate;
-pub use gen::DoPutPreparedStatementResult;
-pub use gen::DoPutUpdateResult;
-pub use gen::Nullable;
-pub use gen::Searchable;
-pub use gen::SqlInfo;
-pub use gen::SqlNullOrdering;
-pub use gen::SqlOuterJoinsSupportLevel;
-pub use gen::SqlSupportedCaseSensitivity;
-pub use gen::SqlSupportedElementActions;
-pub use gen::SqlSupportedGroupBy;
-pub use gen::SqlSupportedPositionedCommands;
-pub use gen::SqlSupportedResultSetConcurrency;
-pub use gen::SqlSupportedResultSetType;
-pub use gen::SqlSupportedSubqueries;
-pub use gen::SqlSupportedTransaction;
-pub use gen::SqlSupportedTransactions;
-pub use gen::SqlSupportedUnions;
-pub use gen::SqlSupportsConvert;
-pub use gen::SqlTransactionIsolationLevel;
-pub use gen::SubstraitPlan;
-pub use gen::SupportedSqlGrammar;
-pub use gen::TicketStatementQuery;
-pub use gen::UpdateDeleteRules;
-pub use gen::XdbcDataType;
-pub use gen::XdbcDatetimeSubcode;
 
 pub mod client;
 pub mod metadata;
 pub mod server;
+
+pub use crate::streams::FallibleRequestStream;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {

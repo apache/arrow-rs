@@ -17,15 +17,14 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -35,19 +34,22 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::encodings::rle::RleDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::FromBytes;
+use crate::util::bit_util::FromBitpacked;
 
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
-        match (($k, $v)) {
+        match ($k, $v) {
             $(
                 ($key_arrow, $value_arrow) => {
-                    let reader = GenericRecordReader::new($column_desc);
+                    let mut reader = GenericRecordReader::new($column_desc, $batch_size);
+                    if let Some(threshold) = $padding_threshold {
+                        reader.set_padding_threshold(threshold);
+                    }
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::new(
                         $pages, $data_type, reader,
                     )))
@@ -72,11 +74,12 @@ macro_rules! make_reader {
 ///
 /// It is therefore recommended that if `pages` contains data from multiple column chunks,
 /// that the read batch size used is a divisor of the row group size
-///
 pub fn make_byte_array_dictionary_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -89,22 +92,22 @@ pub fn make_byte_array_dictionary_reader(
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type) => match (key_type.as_ref(), value_type.as_ref()) {
-                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8) => (u8, i32),
+                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
+                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
-                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8) => (i8, i32),
+                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i8, i32),
                     (ArrowType::Int8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i8, i64),
-                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8) => (u16, i32),
+                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u16, i32),
                     (ArrowType::UInt16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u16, i64),
-                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8) => (i16, i32),
+                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i16, i32),
                     (ArrowType::Int16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i16, i64),
-                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8) => (u32, i32),
+                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u32, i32),
                     (ArrowType::UInt32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u32, i64),
-                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8) => (i32, i32),
+                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i32, i32),
                     (ArrowType::Int32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i32, i64),
-                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8) => (u64, i32),
+                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u64, i32),
                     (ArrowType::UInt64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u64, i64),
-                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8) => (i64, i32),
+                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i64, i32),
                     (ArrowType::Int64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i64, i64),
                 }
             }
@@ -129,7 +132,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     fn new(
@@ -149,7 +152,7 @@ where
 
 impl<K, V> ArrayReader for ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     fn as_any(&self) -> &dyn Any {
@@ -165,12 +168,20 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let buffer = self.record_reader.consume_record_data();
-        let null_buffer = self.record_reader.consume_bitmap_buffer();
-        let array = buffer.into_array(null_buffer, &self.data_type)?;
-
+        // advance the def & rep level buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
+
+        if self.record_reader.num_values() == 0 {
+            // once the record_reader has been consumed, we've replaced its values with the default
+            // variant of DictionaryBuffer (Offset). If `consume_batch` then gets called again, we
+            // avoid using the wrong variant of the buffer by returning empty array.
+            return Ok(new_empty_array(&self.data_type));
+        }
+
+        let buffer = self.record_reader.consume_record_data();
+        let null_buffer = self.record_reader.consume_compact_bitmap();
+        let array = buffer.into_array(null_buffer, &self.data_type)?;
         self.record_reader.reset();
 
         Ok(array)
@@ -186,6 +197,10 @@ where
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 
@@ -219,7 +234,7 @@ struct DictionaryDecoder<K, V> {
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     type Buffer = DictionaryBuffer<K, V>;
@@ -265,12 +280,12 @@ where
         }
 
         let len = num_values as usize;
-        let mut buffer = OffsetBuffer::<V>::default();
+        let mut buffer = OffsetBuffer::<V>::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
-        self.dict = Some(Arc::new(array));
+        self.dict = Some(array);
         Ok(())
     }
 
@@ -285,7 +300,7 @@ where
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 let bit_width = data[0];
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data.slice(1..));
+                decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),
@@ -418,12 +433,14 @@ mod tests {
             .set_data(Encoding::RLE_DICTIONARY, encoded, 14, Some(data.len()))
             .unwrap();
 
-        let mut output = DictionaryBuffer::<i32, i32>::default();
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
         assert_eq!(decoder.read(&mut output, 3).unwrap(), 3);
 
         let mut valid = vec![false, false, true, true, false, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(0, 3, valid.len(), valid_buffer.as_slice());
+        output
+            .pad_nulls(0, 3, valid.len(), valid_buffer.as_slice())
+            .unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -431,7 +448,7 @@ mod tests {
 
         valid.extend_from_slice(&[false, false, true, true, false, true, true, false]);
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(6, 4, 8, valid_buffer.as_slice());
+        output.pad_nulls(6, 4, 8, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -484,7 +501,7 @@ mod tests {
             .set_data(Encoding::RLE_DICTIONARY, encoded, 7, Some(data.len()))
             .unwrap();
 
-        let mut output = DictionaryBuffer::<i32, i32>::default();
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
 
         // read two skip one
         assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
@@ -502,7 +519,7 @@ mod tests {
 
         let valid = [true, true, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
-        output.pad_nulls(0, 5, 5, valid_buffer.as_slice());
+        output.pad_nulls(0, 5, 5, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
@@ -535,7 +552,7 @@ mod tests {
             .unwrap();
 
         // Read all pages into single buffer
-        let mut output = DictionaryBuffer::<i32, i32>::default();
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
 
         for (encoding, page) in pages {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
@@ -578,7 +595,7 @@ mod tests {
             .unwrap();
 
         // Read all pages into single buffer
-        let mut output = DictionaryBuffer::<i32, i32>::default();
+        let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
 
         for (encoding, page) in pages {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
@@ -642,11 +659,11 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages.clone() {
-            let mut output = DictionaryBuffer::<i32, i32>::default();
+            let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
             decoder.set_data(encoding, page, 8, None).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 0);
 
-            output.pad_nulls(0, 0, 8, &[0]);
+            output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
                 .into_array(Some(Buffer::from(&[0])), &data_type)
                 .unwrap();
@@ -657,11 +674,11 @@ mod tests {
         }
 
         for (encoding, page) in pages {
-            let mut output = DictionaryBuffer::<i32, i32>::default();
+            let mut output = DictionaryBuffer::<i32, i32>::with_capacity(0);
             decoder.set_data(encoding, page, 8, None).unwrap();
             assert_eq!(decoder.skip_values(1024).unwrap(), 0);
 
-            output.pad_nulls(0, 0, 8, &[0]);
+            output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
                 .into_array(Some(Buffer::from(&[0])), &data_type)
                 .unwrap();

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::*;
 use crate::StructArray;
+use crate::builder::*;
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{Fields, SchemaBuilder};
 use std::sync::Arc;
@@ -62,7 +62,7 @@ use std::sync::Arc;
 ///
 ///   // We can't obtain the ListBuilder<StructBuilder> with the expected generic types, because under the hood
 ///   // the StructBuilder was returned as a Box<dyn ArrayBuilder> and passed as such to the ListBuilder constructor
-///   
+///
 ///   // This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
 ///   // let sb = col_struct_builder
 ///   //     .field_builder::<ListBuilder<StructBuilder>>(0)
@@ -135,6 +135,10 @@ impl ArrayBuilder for StructBuilder {
         Arc::new(self.finish_cloned())
     }
 
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -201,6 +205,11 @@ impl StructBuilder {
         self.field_builders.len()
     }
 
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
@@ -208,10 +217,22 @@ impl StructBuilder {
         self.null_buffer_builder.append(is_valid);
     }
 
+    /// Appends `n` non-null entries into the builder.
+    #[inline]
+    pub fn append_non_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
+
     /// Appends a null element to the struct.
     #[inline]
     pub fn append_null(&mut self) {
         self.append(false)
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Builds the `StructArray` and reset this builder.
@@ -248,6 +269,23 @@ impl StructBuilder {
         StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
+    fn finish_preserve_values(&mut self) -> StructArray {
+        self.validate_content();
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(self.len(), self.null_buffer_builder.finish());
+        }
+
+        let arrays = self
+            .field_builders
+            .iter_mut()
+            .map(|f| f.finish_preserve_values())
+            .collect();
+
+        let nulls = self.null_buffer_builder.finish();
+
+        StructArray::new(self.fields.clone(), arrays, nulls)
+    }
+
     /// Constructs and validates contents in the builder to ensure that
     /// - fields and field_builders are of equal length
     /// - the number of items in individual field_builders are equal to self.len()
@@ -261,7 +299,7 @@ impl StructBuilder {
                 let schema = builder.finish();
 
                 panic!("{}", format!(
-                    "StructBuilder ({:?}) and field_builder with index {} ({:?}) are of unequal lengths: ({} != {}).",
+                    "StructBuilder ({}) and field_builder with index {} ({}) are of unequal lengths: ({} != {}).",
                     schema,
                     idx,
                     self.fields[idx].data_type(),
@@ -287,7 +325,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::Field;
 
-    use crate::{array::Array, types::ArrowDictionaryKeyType};
+    use crate::{array::Array, builder::tests::PreserveValuesMock, types::ArrowDictionaryKeyType};
 
     #[test]
     fn test_struct_array_builder() {
@@ -313,6 +351,8 @@ mod tests {
         string_builder.append_null();
         string_builder.append_null();
         string_builder.append_value("mark");
+        string_builder.append_nulls(2);
+        string_builder.append_value("terry");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
@@ -321,35 +361,43 @@ mod tests {
         int_builder.append_value(2);
         int_builder.append_null();
         int_builder.append_value(4);
+        int_builder.append_nulls(2);
+        int_builder.append_value(3);
 
         builder.append(true);
         builder.append(true);
         builder.append_null();
         builder.append(true);
 
+        builder.append_nulls(2);
+        builder.append(true);
+
         let struct_data = builder.finish().into_data();
 
-        assert_eq!(4, struct_data.len());
-        assert_eq!(1, struct_data.null_count());
-        assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
+        assert_eq!(7, struct_data.len());
+        assert_eq!(3, struct_data.null_count());
+        assert_eq!(&[75_u8], struct_data.nulls().unwrap().validity());
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
-            .add_buffer(Buffer::from_slice_ref(b"joemark"))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from(&[73_u8])))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7, 7, 7, 12]))
+            .add_buffer(Buffer::from_slice_ref(b"joemarkterry"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
-            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from_slice_ref([75_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4, 4, 4, 3]))
             .build()
             .unwrap();
 
         assert_eq!(expected_string_data, struct_data.child_data()[0]);
         assert_eq!(expected_int_data, struct_data.child_data()[1]);
+
+        assert!(struct_data.is_null(4));
+        assert!(struct_data.is_null(5));
     }
 
     #[test]
@@ -424,11 +472,13 @@ mod tests {
         match builder {
             Some(builder) => {
                 assert_eq!(builder.value_length(), LIST_LENGTH);
-                assert!(builder
-                    .values()
-                    .as_any_mut()
-                    .downcast_mut::<Int32Builder>()
-                    .is_some());
+                assert!(
+                    builder
+                        .values()
+                        .as_any_mut()
+                        .downcast_mut::<Int32Builder>()
+                        .is_some()
+                );
             }
             None => panic!("expected FixedSizeListBuilder, got a different builder type"),
         }
@@ -492,6 +542,33 @@ mod tests {
 
         assert_eq!(15, arr.len());
         assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_struct_array_builder_finish_preserve_values() {
+        let fields = vec![Field::new("mock", DataType::Int32, false)];
+        let field_builders = vec![Box::new(PreserveValuesMock::default()) as Box<dyn ArrayBuilder>];
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<PreserveValuesMock>(0)
+            .unwrap()
+            .inner
+            .append_value(1);
+        builder.append(true);
+
+        assert_eq!(1, builder.len());
+
+        let arr = builder.finish_preserve_values();
+
+        assert_eq!(1, arr.len());
+        assert_eq!(
+            1,
+            builder
+                .field_builder::<PreserveValuesMock>(0)
+                .unwrap()
+                .called
+        );
     }
 
     #[test]
@@ -632,7 +709,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StructBuilder (Schema { fields: [Field { name: \"f1\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"f2\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
+        expected = "StructBuilder (Field { \"f1\": Int32 }, Field { \"f2\": Boolean }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
     )]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
@@ -674,7 +751,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(ns, \\\"UTC\\\") got Timestamp(ns)"
     )]
     fn test_struct_array_mismatch_builder() {
         let fields = vec![Field::new(
@@ -703,5 +780,61 @@ mod tests {
         assert_eq!(a1.null_count(), 1);
         assert!(a1.is_valid(0));
         assert!(a1.is_null(1));
+    }
+
+    #[test]
+    fn test_append_non_nulls() {
+        let int_builder = Int32Builder::new();
+        let fields = vec![Field::new("f1", DataType::Int32, false)];
+        let field_builders = vec![Box::new(int_builder) as Box<dyn ArrayBuilder>];
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_slice(&[1, 2, 3, 4, 5]);
+        builder.append_non_nulls(5);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.null_count(), 0);
+        for i in 0..5 {
+            assert!(arr.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_append_non_nulls_with_nulls() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append_null();
+        builder.append_non_nulls(3);
+        builder.append_nulls(2);
+        builder.append_non_nulls(1);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 7);
+        assert_eq!(arr.null_count(), 3);
+        assert!(arr.is_null(0));
+        assert!(arr.is_valid(1));
+        assert!(arr.is_valid(2));
+        assert!(arr.is_valid(3));
+        assert!(arr.is_null(4));
+        assert!(arr.is_null(5));
+        assert!(arr.is_valid(6));
+    }
+
+    #[test]
+    fn test_append_non_nulls_zero() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append_non_nulls(0);
+        assert_eq!(builder.len(), 0);
+
+        builder.append(true);
+        builder.append_non_nulls(0);
+        assert_eq!(builder.len(), 1);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.null_count(), 0);
     }
 }

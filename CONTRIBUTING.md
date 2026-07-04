@@ -89,8 +89,7 @@ You can also use rust's official docker image:
 docker run --rm -v $(pwd):/arrow-rs -it rust /bin/bash -c "cd /arrow-rs && rustup component add rustfmt && cargo build"
 ```
 
-The command above assumes that are in the root directory of the project, not in the same
-directory as this README.md.
+The command above assumes that are in the root directory of the project.
 
 You can also compile specific workspaces:
 
@@ -199,9 +198,11 @@ Search for `allow(clippy::` in the codebase to identify lints that are ignored/a
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
-## Running Benchmarks
+## Performance Improvements
 
-Running benchmarks are a good way to test the performance of a change. As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
+Pull requests that improve performance, especially those that add non-trivial complexity or use `unsafe`, should include evidence of the improvement, such as benchmarks.
+
+As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
 
 ```bash
 # run all benchmarks
@@ -225,6 +226,11 @@ git checkout feature
 
 cargo bench --bench parse_time -- --baseline main
 ```
+
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
+If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
+
+[#9729]: https://github.com/apache/arrow-rs/pull/9729
 
 ## Git Pre-Commit Hook
 
@@ -250,3 +256,21 @@ If sometimes you want to commit without checking, just run `git commit` with `--
 ```bash
 git commit --no-verify -m "... commit message ..."
 ```
+
+## AI Generated Submissions
+
+This project follows the guidance for AI generated submissions used by the
+[Arrow Project](https://arrow.apache.org/docs/dev/developers/overview.html#ai-generated-code).
+As such, it is expected that you will:
+
+- Only submit a PR if you are able to debug and own the changes yourself - review all generated
+  code to understand every detail
+- Match the style and conventions used in the rest of the codebase, including PR titles and descriptions
+- Be upfront about AI usage and summarise what was AI-generated
+- If there are parts you don’t fully understand, leave comments on your own PR explaining what steps you took to verify correctness
+- Watch for AI’s tendency to generate overly verbose comments, unnecessary test cases, and incorrect fixes
+- Break down large PRs into smaller ones to make review easier
+
+It is also important for submitters to be aware of potential copyright issues. See the ASF's
+[guidance](https://www.apache.org/legal/generative-tooling.html) on AI-generated code for further
+information on licensing considerations.

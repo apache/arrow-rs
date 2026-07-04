@@ -34,6 +34,9 @@
 //! ```
 
 use clap::Parser;
+use parquet::basic::Type;
+use parquet::bloom_filter::Sbbf;
+use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::file::{
     properties::ReaderProperties,
     reader::{FileReader, SerializedFileReader},
@@ -46,11 +49,13 @@ use std::{fs::File, path::Path};
 struct Args {
     #[clap(help("Path to the parquet file"))]
     file_name: String,
-    #[clap(help("Check the bloom filter indexes for the given column"))]
+    #[clap(help(
+        "Check the bloom filter indexes for the given column. Only string typed columns or columns with an Int32 or Int64 physical type are supported"
+    ))]
     column: String,
     #[clap(
         help(
-            "Check if the given values match bloom filter, the values will be evaluated as strings"
+            "Check if the given values match bloom filter, the values will be parsed to the physical type of the column"
         ),
         required = true
     )]
@@ -78,7 +83,7 @@ fn main() {
     for (ri, row_group) in metadata.row_groups().iter().enumerate() {
         println!("Row group #{ri}");
         println!("{}", "=".repeat(80));
-        if let Some((column_index, _)) = row_group
+        if let Some((column_index, column)) = row_group
             .columns()
             .iter()
             .enumerate()
@@ -89,15 +94,18 @@ fn main() {
                 .expect("Unable to read row group");
             if let Some(sbbf) = row_group_reader.get_column_bloom_filter(column_index) {
                 args.values.iter().for_each(|value| {
-                    println!(
-                        "Value {} is {} in bloom filter",
-                        value,
-                        if sbbf.check(&value.as_str()) {
-                            "present"
-                        } else {
-                            "absent"
+                    match check_filter(sbbf, value, column) {
+                        Ok(present) => {
+                            println!(
+                                "Value {} is {} in bloom filter",
+                                value,
+                                if present { "present" } else { "absent" }
+                            )
                         }
-                    )
+                        Err(err) => {
+                            println!("{err}");
+                        }
+                    };
                 });
             } else {
                 println!("No bloom filter found for column {}", args.column);
@@ -114,5 +122,27 @@ fn main() {
                     .join(", ")
             );
         }
+    }
+}
+
+fn check_filter(sbbf: &Sbbf, value: &String, column: &ColumnChunkMetaData) -> Result<bool, String> {
+    match column.column_type() {
+        Type::INT32 => {
+            let value: i32 = value
+                .parse()
+                .map_err(|e| format!("Unable to parse value '{value}' to i32: {e}"))?;
+            Ok(sbbf.check(&value))
+        }
+        Type::INT64 => {
+            let value: i64 = value
+                .parse()
+                .map_err(|e| format!("Unable to parse value '{value}' to i64: {e}"))?;
+            Ok(sbbf.check(&value))
+        }
+        Type::BYTE_ARRAY => Ok(sbbf.check(&value.as_str())),
+        _ => Err(format!(
+            "Unsupported column type for checking bloom filter: {}",
+            column.column_type()
+        )),
     }
 }

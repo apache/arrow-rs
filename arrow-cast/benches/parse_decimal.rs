@@ -18,6 +18,7 @@
 use arrow_array::types::Decimal256Type;
 use arrow_cast::parse::parse_decimal;
 use criterion::*;
+use std::hint;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let decimals = [
@@ -45,7 +46,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     ];
 
     for decimal in decimals {
-        let d = black_box(decimal);
+        let d = hint::black_box(decimal);
         c.bench_function(d, |b| {
             b.iter(|| parse_decimal::<Decimal256Type>(d, 20, 3).unwrap());
         });

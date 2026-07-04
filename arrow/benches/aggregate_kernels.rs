@@ -25,7 +25,7 @@ extern crate arrow;
 use arrow::compute::kernels::aggregate::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
-use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, Int8Type};
+use arrow_array::types::{Float64Type, Int8Type, Int16Type, Int32Type, Int64Type};
 
 const BATCH_SIZE: usize = 64 * 1024;
 

@@ -33,6 +33,8 @@ mod json;
 pub use json::{Json, JsonMetadata};
 mod opaque;
 pub use opaque::{Opaque, OpaqueMetadata};
+mod timestamp_with_offset;
+pub use timestamp_with_offset::TimestampWithOffset;
 mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
@@ -77,6 +79,11 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
     Bool8(Bool8),
+
+    /// The extension type for `TimestampWithOffset`.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#timestamp-with-offset>
+    TimestampWithOffset(TimestampWithOffset),
 }
 
 impl TryFrom<&Field> for CanonicalExtensionType {
@@ -87,20 +94,31 @@ impl TryFrom<&Field> for CanonicalExtensionType {
         match value.extension_type_name() {
             // An extension type name with an `arrow.` prefix
             Some(name) if name.starts_with("arrow.") => match name {
-                FixedShapeTensor::NAME => value.try_extension_type::<FixedShapeTensor>().map(Into::into),
-                VariableShapeTensor::NAME => value.try_extension_type::<VariableShapeTensor>().map(Into::into),
+                FixedShapeTensor::NAME => value
+                    .try_extension_type::<FixedShapeTensor>()
+                    .map(Into::into),
+                VariableShapeTensor::NAME => value
+                    .try_extension_type::<VariableShapeTensor>()
+                    .map(Into::into),
                 Json::NAME => value.try_extension_type::<Json>().map(Into::into),
                 Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
                 Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
                 Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
-                _ => Err(ArrowError::InvalidArgumentError(format!("Unsupported canonical extension type: {name}"))),
+                TimestampWithOffset::NAME => value
+                    .try_extension_type::<TimestampWithOffset>()
+                    .map(Into::into),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "Unsupported canonical extension type: {name}"
+                ))),
             },
             // Name missing the expected prefix
             Some(name) => Err(ArrowError::InvalidArgumentError(format!(
                 "Field extension type name mismatch, expected a name with an `arrow.` prefix, found {name}"
             ))),
             // Name missing
-            None => Err(ArrowError::InvalidArgumentError("Field extension type name missing".to_owned())),
+            None => Err(ArrowError::InvalidArgumentError(
+                "Field extension type name missing".to_owned(),
+            )),
         }
     }
 }
@@ -138,5 +156,11 @@ impl From<Opaque> for CanonicalExtensionType {
 impl From<Bool8> for CanonicalExtensionType {
     fn from(value: Bool8) -> Self {
         CanonicalExtensionType::Bool8(value)
+    }
+}
+
+impl From<TimestampWithOffset> for CanonicalExtensionType {
+    fn from(value: TimestampWithOffset) -> Self {
+        CanonicalExtensionType::TimestampWithOffset(value)
     }
 }

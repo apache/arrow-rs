@@ -19,12 +19,13 @@ use arrow_buffer::{OffsetBuffer, OffsetBufferBuilder};
 use criterion::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use std::hint;
 
 const SIZE: usize = 1024;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
-    let lengths: Vec<usize> = black_box((0..SIZE).map(|_| rng.random_range(0..40)).collect());
+    let lengths: Vec<usize> = hint::black_box((0..SIZE).map(|_| rng.random_range(0..40)).collect());
 
     c.bench_function("OffsetBuffer::from_lengths", |b| {
         b.iter(|| OffsetBuffer::<i32>::from_lengths(lengths.iter().copied()));
@@ -41,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied()).into_inner();
 
     c.bench_function("OffsetBuffer::new", |b| {
-        b.iter(|| OffsetBuffer::new(black_box(offsets.clone())));
+        b.iter(|| OffsetBuffer::new(hint::black_box(offsets.clone())));
     });
 }
 

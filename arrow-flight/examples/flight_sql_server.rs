@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::DoPutPreparedStatementResult;
-use base64::prelude::BASE64_STANDARD;
+use arrow_flight::sql::server::PeekableFlightDataStream;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use core::str;
-use futures::{stream, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream};
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
@@ -39,23 +39,23 @@ use arrow_flight::sql::metadata::{
     SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
-    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
-    ActionCancelQueryResult, ActionClosePreparedStatementRequest,
-    ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult,
-    ActionCreatePreparedSubstraitPlanRequest, ActionEndSavepointRequest,
-    ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable,
-    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
+    CommandStatementUpdate, Nullable, ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery,
+    XdbcDataType, server::FlightSqlService,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
-    FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, SchemaAsIpc, Ticket,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket, flight_service_server::FlightService,
+    flight_service_server::FlightServiceServer,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
@@ -112,6 +112,7 @@ static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.t
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
+    #[allow(clippy::result_large_err)]
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
@@ -188,7 +189,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
 
-        let token = format!("Bearer {}", FAKE_TOKEN);
+        let token = format!("Bearer {FAKE_TOKEN}");
         let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
             Response::new(Box::pin(output));
         response.metadata_mut().append(
@@ -744,7 +745,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
@@ -813,7 +814,7 @@ mod tests {
     async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let incoming = TcpIncoming::from_listener(listener, true, None).unwrap();
+        let incoming = TcpIncoming::from(listener).with_nodelay(Some(true));
         (incoming, addr)
     }
 
