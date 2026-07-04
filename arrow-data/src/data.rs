@@ -294,24 +294,18 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Self {
-        let mut skip_validation = UnsafeFlag::new();
-        // SAFETY: caller responsible for ensuring data is valid
-        unsafe { skip_validation.set(true) };
-
-        ArrayDataBuilder {
+        let builder = Self::inner_new_builder(
             data_type,
             len,
             null_count,
             null_bit_buffer,
-            nulls: None,
             offset,
             buffers,
             child_data,
-            align_buffers: false,
-            skip_validation,
-        }
-        .build()
-        .unwrap()
+        );
+
+        // SAFETY: caller responsible for ensuring data is valid
+        unsafe { builder.build_unchecked() }
     }
 
     /// Create a new ArrayData, validating that the provided buffers form a valid
@@ -349,25 +343,47 @@ impl ArrayData {
                 )));
             }
         }
-        // Safety justification: `validate_full` is called below
-        let new_self = unsafe {
-            Self::new_unchecked(
-                data_type,
-                len,
-                None,
-                null_bit_buffer,
-                offset,
-                buffers,
-                child_data,
-            )
-        };
+
+        let builder = Self::inner_new_builder(
+            data_type,
+            len,
+            None,
+            null_bit_buffer,
+            offset,
+            buffers,
+            child_data,
+        );
+
+        assert!(!builder.skip_validation.get());
 
         // As the data is not trusted, do a full validation of its contents
         // We don't need to validate children as we can assume that the
         // [`ArrayData`] in `child_data` have already been validated through
         // a call to `ArrayData::try_new` or created using unsafe
-        new_self.validate_data()?;
-        Ok(new_self)
+        builder.build()
+    }
+
+    fn inner_new_builder(
+        data_type: DataType,
+        len: usize,
+        null_count: Option<usize>,
+        null_bit_buffer: Option<Buffer>,
+        offset: usize,
+        buffers: Vec<Buffer>,
+        child_data: Vec<ArrayData>,
+    ) -> ArrayDataBuilder {
+        ArrayDataBuilder {
+            data_type,
+            len,
+            null_count,
+            null_bit_buffer,
+            nulls: None,
+            offset,
+            buffers,
+            child_data,
+            align_buffers: false,
+            skip_validation: UnsafeFlag::new(),
+        }
     }
 
     /// Return the constituent parts of this ArrayData
@@ -3057,6 +3073,7 @@ mod tests {
             };
         }
     }
+
     #[test]
     fn should_allow_to_create_map_from_data() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
