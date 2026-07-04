@@ -975,13 +975,10 @@ impl ArrayData {
                     )));
                 }
             }
-            DataType::Map(f, _) => {
-                if f.is_nullable() {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "The nullable should be set to false for the map entries field."
-                            .to_string(),
-                    ));
-                }
+            DataType::Map(f, _) if f.is_nullable() => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "The nullable should be set to false for the map entries field.".to_string(),
+                ));
             }
             _ => {}
         };
