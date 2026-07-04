@@ -2778,14 +2778,8 @@ mod tests {
     fn should_fail_validation_when_having_map_field_type_is_not_struct() {
         let map_field = Field::new("key", DataType::Int32, false);
 
-        let map_field_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
+        let map_field_data = valid_non_nullable_int32_array_data(2);
 
-            builder.build().unwrap()
-        };
         let results = test_both_builder_and_array_data(
             DataType::Map(map_field.into(), false),
             1,
@@ -2822,14 +2816,7 @@ mod tests {
             false,
         )]));
 
-        let key_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
-
-            builder.build().unwrap()
-        };
+        let key_array_data = valid_non_nullable_int32_array_data(2);
 
         let struct_data = {
             let builder = ArrayDataBuilder::new(struct_data_type.clone())
@@ -2873,40 +2860,14 @@ mod tests {
         let struct_data_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Int32, false),
             Field::new("values", DataType::Utf8, true),
-            Field::new("other", DataType::Int64, true),
+            Field::new("other", DataType::Int32, true),
         ]));
 
-        let key_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
+        let key_array_data = valid_non_nullable_int32_array_data(2);
 
-            builder.build().unwrap()
-        };
+        let values_array_data = valid_string_array_data(2);
 
-        let values_array_data = {
-            let offsets = OffsetBuffer::<i32>::from_lengths(vec![0, 0])
-                .into_inner()
-                .into_inner();
-            let empty_bytes = Buffer::default();
-
-            let builder = ArrayDataBuilder::new(DataType::Utf8)
-                .len(2)
-                .buffers(vec![offsets, empty_bytes])
-                .nulls(None);
-
-            builder.build().unwrap()
-        };
-
-        let other_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int64)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i64>::from(vec![1, 2]).into_inner()]);
-
-            builder.build().unwrap()
-        };
+        let other_array_data = key_array_data.clone();
 
         let struct_data = {
             let builder = ArrayDataBuilder::new(struct_data_type.clone())
@@ -2952,28 +2913,8 @@ mod tests {
             Field::new("values", DataType::Utf8, true),
         ]));
 
-        let key_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
-
-            builder.build().unwrap()
-        };
-
-        let values_array_data = {
-            let offsets = OffsetBuffer::<i32>::from_lengths(vec![0, 0])
-                .into_inner()
-                .into_inner();
-            let empty_bytes = Buffer::default();
-
-            let builder = ArrayDataBuilder::new(DataType::Utf8)
-                .len(2)
-                .buffers(vec![offsets, empty_bytes])
-                .nulls(None);
-
-            builder.build().unwrap()
-        };
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+        let values_array_data = valid_string_array_data(2);
 
         let struct_data = {
             let builder = ArrayDataBuilder::new(struct_data_type.clone())
@@ -3016,28 +2957,9 @@ mod tests {
             Field::new("values", DataType::Utf8, true),
         ]));
 
-        let key_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
+        let key_array_data = valid_non_nullable_int32_array_data(2);
 
-            builder.build().unwrap()
-        };
-
-        let values_array_data = {
-            let offsets = OffsetBuffer::<i32>::from_lengths(vec![0, 0])
-                .into_inner()
-                .into_inner();
-            let empty_bytes = Buffer::default();
-
-            let builder = ArrayDataBuilder::new(DataType::Utf8)
-                .len(2)
-                .buffers(vec![offsets, empty_bytes])
-                .nulls(None);
-
-            builder.build().unwrap()
-        };
+        let values_array_data = valid_string_array_data(2);
 
         let struct_data = {
             let builder = ArrayDataBuilder::new(struct_data_type.clone())
@@ -3081,28 +3003,8 @@ mod tests {
             Field::new("values", DataType::Utf8, true),
         ]));
 
-        let key_array_data = {
-            let builder = ArrayDataBuilder::new(DataType::Int32)
-                .len(2)
-                .nulls(None)
-                .buffers(vec![ScalarBuffer::<i32>::from(vec![1, 2]).into_inner()]);
-
-            builder.build().unwrap()
-        };
-
-        let values_array_data = {
-            let offsets = OffsetBuffer::<i32>::from_lengths(vec![0, 0])
-                .into_inner()
-                .into_inner();
-            let empty_bytes = Buffer::default();
-
-            let builder = ArrayDataBuilder::new(DataType::Utf8)
-                .len(2)
-                .buffers(vec![offsets, empty_bytes])
-                .nulls(None);
-
-            builder.build().unwrap()
-        };
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+        let values_array_data = valid_string_array_data(2);
 
         let struct_data = {
             let builder = ArrayDataBuilder::new(struct_data_type.clone())
@@ -3129,6 +3031,31 @@ mod tests {
         for result in results {
             result.expect("should be able to create map ArrayData");
         }
+    }
+
+    fn valid_string_array_data(length: usize) -> ArrayData {
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![0; length])
+            .into_inner()
+            .into_inner();
+        let empty_bytes = Buffer::default();
+
+        let builder = ArrayDataBuilder::new(DataType::Utf8)
+            .len(length)
+            .buffers(vec![offsets, empty_bytes])
+            .nulls(None);
+
+        builder.build().unwrap()
+    }
+
+    fn valid_non_nullable_int32_array_data(length: usize) -> ArrayData {
+        let builder = ArrayDataBuilder::new(DataType::Int32)
+            .len(length)
+            .nulls(None)
+            .buffers(vec![
+                ScalarBuffer::<i32>::from(vec![1; length]).into_inner(),
+            ]);
+
+        builder.build().unwrap()
     }
 
     #[test]
