@@ -2749,21 +2749,21 @@ mod tests {
     fn test_dont_panic_on_bad_input_when_using_try_new() {
         let empty_bytes = Buffer::default();
 
-        let builder = ArrayDataBuilder::new(DataType::Utf8)
-            .len(1)
-
+        let array_data = ArrayData::try_new(
+            DataType::Utf8,
+            1, // len
+            None,
+            0,
             // the offsets says that we have 2 bytes but the buffer is empty
-            .buffers(vec![Buffer::from_vec(vec![0i32, 2i32]), empty_bytes])
-            .nulls(None);
+            vec![Buffer::from_vec(vec![0i32, 2i32]), empty_bytes],
+            vec![],
+        );
 
-      let res = builder.build().expect_err("should get error");
-      
+        let res = array_data.expect_err("should get error");
 
-      assert_eq!(
-          res.to_string(),
-          format!(
-              "Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",
-          )
-      );
+        assert_eq!(
+            res.to_string(),
+            format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
+        );
     }
 }
