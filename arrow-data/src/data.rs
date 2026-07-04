@@ -3117,6 +3117,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn empty_and_null_map_array_should_pass_validation() {
+        let dt = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, false),
+                    Field::new("values", DataType::Utf8, true),
+                ])),
+                false,
+            )
+            .into(),
+            false,
+        );
+
+        ArrayData::new_empty(&dt).validate_full().unwrap();
+        ArrayData::new_null(&dt, 1).validate_full().unwrap();
+    }
+
     fn test_both_builder_and_array_data(
         data_type: DataType,
         len: usize,
