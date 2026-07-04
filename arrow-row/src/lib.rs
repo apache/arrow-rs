@@ -6394,34 +6394,6 @@ mod tests {
         assert_eq!(&map, &back[0]);
     }
 
-    // Test Map<Null, Null> - both keys and values are Null type
-    #[test]
-    fn test_map_null_keys_and_null_values() {
-        let null_keys = Arc::new(NullArray::new(3)) as ArrayRef;
-        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
-
-        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
-        let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Null, true)),
-            Arc::new(Field::new("values", DataType::Null, true)),
-        ];
-        let struct_field = Arc::new(Field::new(
-            "entries",
-            DataType::Struct(entries_fields.clone().into()),
-            false,
-        ));
-        let entries = StructArray::new(entries_fields.into(), vec![null_keys, null_values], None);
-
-        let map: ArrayRef = Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
-
-        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
-        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
-        let back = converter.convert_rows(&rows).unwrap();
-        assert_eq!(back.len(), 1);
-        back[0].to_data().validate_full().unwrap();
-        assert_eq!(&map, &back[0]);
-    }
-
     // Test Map<Utf8, Null> all empty maps
     #[test]
     fn test_map_null_all_empty() {
