@@ -3863,6 +3863,23 @@ mod tests {
     }
 
     #[test]
+    fn list_utf8_view_selective_padding_roundtrip() {
+        let item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
+        let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(item);
+        builder.values().append_value("a");
+        builder.values().append_null();
+        builder.append(true);
+        // The null parent list covers selective padding dropping values below
+        // the list definition level while preserving the preceding item null.
+        builder.append(false);
+        // The long string covers the non-inlined Utf8View buffer path.
+        builder.values().append_value("large payload over 12 bytes");
+        builder.append(true);
+
+        one_column_roundtrip(Arc::new(builder.finish()), true);
+    }
+
+    #[test]
     fn struct_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let struct_field_a = Arc::new(Field::new("f", DataType::Int32, false));
