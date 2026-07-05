@@ -28,7 +28,7 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
 If any code has been merged to main that has a breaking API change, as defined
-in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
+in [Rust RFC 1105] the major version number is incremented (e.g. `9.0.2` to `10.0.0`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
 [rust rfc 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
@@ -149,33 +149,77 @@ Send an email, based on the output from the script to dev@arrow.apache.org. The 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow
+Subject: [VOTE][RUST] Release Apache Arrow Rust <VERSION> <RC>
 
 Hi,
 
 I would like to propose a release of Apache Arrow Rust
-Implementation, version 4.1.0.
+Implementation, version <VERSION>.
 
-This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
+This release candidate is based on commit: <COMMIT_HASH> [1]
+
+The SHA256 of the release candidate is: <SHA256_HASH>
 
 The proposed release tarball and signatures are hosted at [2].
+
 The changelog is located at [3].
 
+The release tracking issue is: [5]
+
 Please download, verify checksums and signatures, run the unit tests,
-and vote on the release.
+and vote on the release. There is a script [4] that automates some of the verification.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Arrow Rust
+[ ] +1 Release this as Apache Arrow Rust <VERSION>
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow Rust  because...
+[ ] -1 Do not release this as Apache Arrow Rust <VERSION> because...
 
-[1]: https://github.com/apache/arrow-rs/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-rs-4.1.0
-[3]: https://github.com/apache/arrow-rs/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
+[1]: https://github.com/apache/arrow-rs/tree/<COMMIT_HASH>
+[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-rs-<VERSION>-<RC>
+[3]: https://github.com/apache/arrow-rs/blob/<COMMIT_HASH>/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs/blob/main/dev/release/verify-release-candidate.sh
+[5]: https://github.com/apache/arrow-rs/issues/<ISSUE>
 ```
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
+
+Here's an example of a complete message:
+
+```
+To: dev@arrow.apache.org
+Subject: [VOTE][RUST] Release Apache Arrow Rust 59.1.0 RC1
+
+Hi,
+
+I would like to propose a release of Apache Arrow Rust
+Implementation, version 59.1.0.
+
+This release candidate is based on commit: b1de629ae82ee417e24a413f8f6815c884ec971b [1]
+
+The SHA256 of the release candidate is: b191e0cc7a09c9c53f2f8c2aa086c956b49f4b950145800182880bfb46d01502
+
+The proposed release tarball and signatures are hosted at [2].
+
+The changelog is located at [3].
+
+The release tracking issue is: [5]
+
+Please download, verify checksums and signatures, run the unit tests,
+and vote on the release. There is a script [4] that automates some of the verification.
+
+The vote will be open for at least 72 hours.
+
+[ ] +1 Release this as Apache Arrow Rust 59.1.0
+[ ] +0
+[ ] -1 Do not release this as Apache Arrow Rust 59.1.0 because...
+
+[1]: https://github.com/apache/arrow-rs/tree/b1de629ae82ee417e24a413f8f6815c884ec971b
+[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-rs-59.1.0-rc1
+[3]: https://github.com/apache/arrow-rs/blob/b1de629ae82ee417e24a413f8f6815c884ec971b/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs/blob/main/dev/release/verify-release-candidate.sh
+[5]: https://github.com/apache/arrow-rs/issues/9878
+```
 
 ## Verifying release candidates
 
