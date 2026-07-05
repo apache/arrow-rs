@@ -478,9 +478,9 @@ impl LevelInfoBuilder {
                     for rep in rep_levels.iter_mut().rev() {
                         // Count element starts by skipping nested reps (rep > ctx.rep_level).
                         //
-                        // This can uses `==`, since list write is recursive and the child is written
-                        // before the parent. However, benchmark shows there is no differences
-                        // between them, so uses `<=` here.
+                        // `==` would also work here: the child is written before the
+                        // parent, so no entry within the batch has rep < ctx.rep_level.
+                        // Benchmarks show no difference, so keep the more defensive `<=`.
                         if *rep <= ctx.rep_level {
                             seen += 1;
                             if seen == next_stamp_at {
@@ -564,7 +564,9 @@ impl LevelInfoBuilder {
         }
 
         match nulls {
-            Some(nulls) => {
+            // A null buffer without any null can skip the per-slot validity
+            // checks and use the null-free classification loop below.
+            Some(nulls) if nulls.null_count() > 0 => {
                 let mut run_kind = classify!(0, nulls);
                 let mut run_start: usize = 0;
                 for i in 1..num_slots {
@@ -577,7 +579,7 @@ impl LevelInfoBuilder {
                 }
                 flush_run!(run_kind, run_start, num_slots);
             }
-            None => {
+            _ => {
                 let mut run_kind = if offsets[0] == offsets[1] {
                     SlotKind::Empty
                 } else {
