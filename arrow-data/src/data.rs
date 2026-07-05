@@ -331,7 +331,7 @@ impl ArrayData {
     ) -> Result<Self, ArrowError> {
         // we must check the length of `null_bit_buffer` first
         // because we use this buffer to calculate `null_count`
-        // in `Self::new_unchecked`.
+        // in `ArrayDataBuilder::build`.
         if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
             let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
             let needed_len = bit_util::ceil(len_plus_offset, 8);
@@ -2772,6 +2772,29 @@ mod tests {
         for i in 0..array.len() {
             assert!(array.is_null(i));
         }
+    }
+
+    // Even when `force_validate` feature is on
+    #[test]
+    fn test_dont_panic_on_bad_input_when_using_try_new() {
+        let empty_bytes = Buffer::default();
+
+        let array_data = ArrayData::try_new(
+            DataType::Utf8,
+            1, // len
+            None,
+            0,
+            // the offsets says that we have 2 bytes but the buffer is empty
+            vec![Buffer::from_vec(vec![0i32, 2i32]), empty_bytes],
+            vec![],
+        );
+
+        let res = array_data.expect_err("should get error");
+
+        assert_eq!(
+            res.to_string(),
+            format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
+        );
     }
 
     #[test]

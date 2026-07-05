@@ -5446,12 +5446,12 @@ mod tests {
     }
 
     #[test]
-    fn test_values_buffer_smaller_when_utf8_validation_disabled() {
-        fn get_values_buffer_len(col: ArrayRef) -> (usize, usize) {
+    fn test_utf8_validation_doesnt_affect_values_buffer_size() {
+        fn assert_values_buffer_lens(col: ArrayRef) -> usize {
             // 1. Convert cols into rows
             let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
 
-            // 2a. Convert rows into colsa (validate_utf8 = false)
+            // 2a. Convert rows into cols (validate_utf8 = false)
             let rows = converter.convert_columns(&[col]).unwrap();
             let converted = converter.convert_rows(&rows).unwrap();
             let unchecked_values_len = converted[0].as_string_view().data_buffers()[0].len();
@@ -5463,7 +5463,9 @@ mod tests {
                 .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
                 .unwrap();
             let checked_values_len = converted[0].as_string_view().data_buffers()[0].len();
-            (unchecked_values_len, checked_values_len)
+            // Regardless of utf8 validation flag, we should always have minimal data in buffers
+            assert_eq!(unchecked_values_len, checked_values_len);
+            checked_values_len
         }
 
         // Case1. StringViewArray with inline strings
@@ -5474,22 +5476,18 @@ mod tests {
             Some("tiny"),  // short(4)
         ])) as ArrayRef;
 
-        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        let values_len = assert_values_buffer_lens(col);
         // Since there are no long (>12) strings, len of values buffer is 0
-        assert_eq!(unchecked_values_len, 0);
-        // When utf8 validation enabled, values buffer includes inline strings (5+5+4)
-        assert_eq!(checked_values_len, 14);
+        assert_eq!(values_len, 0);
 
         // Case2. StringViewArray with long(>12) strings
         let col = Arc::new(StringViewArray::from_iter([
-            Some("this is a very long string over 12 bytes"),
-            Some("another long string to test the buffer"),
+            Some("1234567890123"),  // 13
+            Some("12345678901234"), // 14
         ])) as ArrayRef;
 
-        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
-        // Since there are no inline strings, expected length of values buffer is the same
-        assert!(unchecked_values_len > 0);
-        assert_eq!(unchecked_values_len, checked_values_len);
+        let values_len = assert_values_buffer_lens(col);
+        assert_eq!(values_len, 13 + 14);
 
         // Case3. StringViewArray with both short and long strings
         let col = Arc::new(StringViewArray::from_iter([
@@ -5499,10 +5497,9 @@ mod tests {
             Some("short"), // 5 (short)
         ])) as ArrayRef;
 
-        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        let values_len = assert_values_buffer_lens(col);
         // Since there is single long string, len of values buffer is 13
-        assert_eq!(unchecked_values_len, 13);
-        assert!(checked_values_len > unchecked_values_len);
+        assert_eq!(values_len, 13);
     }
 
     #[test]
