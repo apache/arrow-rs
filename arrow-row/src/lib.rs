@@ -5446,51 +5446,6 @@ mod tests {
     }
 
     #[test]
-    fn map_should_be_marked_as_unsupported() {
-        let map_data_type = Field::new_map(
-            "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-            false,
-            true,
-        )
-        .data_type()
-        .clone();
-
-        let is_supported = RowConverter::supports_fields(&[SortField::new(map_data_type)]);
-
-        assert!(!is_supported, "Map should not be supported");
-    }
-
-    #[test]
-    fn should_fail_to_create_row_converter_for_unsupported_map_type() {
-        let map_data_type = Field::new_map(
-            "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-            false,
-            true,
-        )
-        .data_type()
-        .clone();
-
-        let converter = RowConverter::new(vec![SortField::new(map_data_type)]);
-
-        match converter {
-            Err(ArrowError::NotYetImplemented(message)) => {
-                assert!(
-                    message.contains("Row format support not yet implemented for"),
-                    "Expected NotYetImplemented error for map data type, got: {message}",
-                );
-            }
-            Err(e) => panic!("Expected NotYetImplemented error, got: {e}"),
-            Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
-        }
-    }
-
-    #[test]
     fn test_utf8_validation_doesnt_affect_values_buffer_size() {
         fn assert_values_buffer_lens(col: ArrayRef) -> usize {
             // 1. Convert cols into rows
