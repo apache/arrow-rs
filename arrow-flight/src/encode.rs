@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
@@ -329,18 +329,12 @@ impl FlightDataEncoder {
     }
 
     /// Place the `FlightData` in the queue to send
+    #[inline]
     fn queue_message(&mut self, mut data: FlightData) {
         if let Some(descriptor) = self.descriptor.take() {
             data.flight_descriptor = Some(descriptor);
         }
         self.queue.push_back(data);
-    }
-
-    /// Place the `FlightData` in the queue to send
-    fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
-        for data in datas {
-            self.queue_message(data)
-        }
     }
 
     /// Encodes schema as a [`FlightData`] in self.queue.
@@ -381,8 +375,9 @@ impl FlightDataEncoder {
 
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
             let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
-
-            self.queue_messages(flight_dictionaries);
+            for dict in flight_dictionaries {
+                self.queue_message(dict);
+            }
             self.queue_message(flight_batch);
         }
 
@@ -671,7 +666,7 @@ fn prepare_schema_for_flight(
 fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_flight_data_size: usize,
-) -> Vec<RecordBatch> {
+) -> impl Iterator<Item = RecordBatch> {
     let size = batch
         .columns()
         .iter()
@@ -680,18 +675,20 @@ fn split_batch_for_grpc_response(
 
     let n_batches =
         (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
-    let rows_per_batch = (batch.num_rows() / n_batches).max(1);
-    let mut out = Vec::with_capacity(n_batches + 1);
-
+    let num_rows = batch.num_rows();
+    let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
-    while offset < batch.num_rows() {
-        let length = (rows_per_batch).min(batch.num_rows() - offset);
-        out.push(batch.slice(offset, length));
 
-        offset += length;
-    }
-
-    out
+    std::iter::from_fn(move || {
+        if offset < num_rows {
+            let length = rows_per_batch.min(num_rows - offset);
+            let slice = batch.slice(offset, length);
+            offset += length;
+            Some(slice)
+        } else {
+            None
+        }
+    })
 }
 
 /// The data needed to encode a stream of flight data, holding on to
@@ -704,7 +701,7 @@ struct FlightIpcEncoder {
     options: IpcWriteOptions,
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
-    compression_context: CompressionContext,
+    ipc_write_context: IpcWriteContext,
 }
 
 impl FlightIpcEncoder {
@@ -713,7 +710,7 @@ impl FlightIpcEncoder {
             options,
             data_gen: IpcDataGenerator::default(),
             dictionary_tracker: DictionaryTracker::new(error_on_replacement),
-            compression_context: CompressionContext::default(),
+            ipc_write_context: IpcWriteContext::default(),
         }
     }
 
@@ -724,15 +721,18 @@ impl FlightIpcEncoder {
 
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
-    fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
+    fn encode_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(impl Iterator<Item = FlightData> + use<>, FlightData)> {
         let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
             &self.options,
-            &mut self.compression_context,
+            &mut self.ipc_write_context,
         )?;
 
-        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(|e| e.into());
         let flight_batch = encoded_batch.into();
 
         Ok((flight_dictionaries, flight_batch))
@@ -793,9 +793,9 @@ mod tests {
     use arrow_array::{cast::downcast_array, types::*};
     use arrow_buffer::ScalarBuffer;
     use arrow_cast::pretty::pretty_format_batches;
-    use arrow_ipc::MetadataVersion;
+    use arrow_ipc::{CompressionType, MetadataVersion};
     use arrow_schema::{UnionFields, UnionMode};
-    use builder::{GenericStringBuilder, MapBuilder};
+    use builder::MapBuilder;
     use std::collections::HashMap;
 
     use super::*;
@@ -891,6 +891,27 @@ mod tests {
         let batch2 = RecordBatch::try_new(schema, vec![Arc::new(arr2)]).unwrap();
 
         verify_flight_round_trip(vec![batch1, batch2]).await;
+    }
+
+    #[tokio::test]
+    async fn test_compression_round_trip() {
+        // Round trip a batch through Flight with IPC body compression enabled. This exercises
+        // the compressed `IpcDataGenerator::encode` path (per-buffer codec output), which the
+        // uncompressed Flight tests and the writer-based compression tests do not cover.
+        let ints = Int32Array::from_iter_values((0..1024).map(|i| i % 8));
+        let strings = StringArray::from_iter_values((0..1024).map(|i| format!("value-{}", i % 8)));
+        let batch = RecordBatch::try_from_iter(vec![
+            ("ints", Arc::new(ints) as ArrayRef),
+            ("strings", Arc::new(strings) as ArrayRef),
+        ])
+        .unwrap();
+
+        for compression in [CompressionType::LZ4_FRAME, CompressionType::ZSTD] {
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(compression))
+                .unwrap();
+            verify_flight_round_trip_with_options(vec![batch.clone()], options).await;
+        }
     }
 
     #[tokio::test]
@@ -1505,34 +1526,24 @@ mod tests {
 
         let expected_schema = Arc::new(expected_schema);
 
-        // Builder without dictionary fields
-        let mut builder = MapBuilder::new(
-            None,
-            GenericStringBuilder::<i32>::new(),
-            GenericStringBuilder::<i32>::new(),
+        // array without dictionary fields
+        let arr1 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("a")),
+                ("k2", None),
+                ("k3", Some("b")),
+            ])],
+            false,
         );
 
-        // {"k1":"a","k2":null,"k3":"b"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("a");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("b");
-        builder.append(true).unwrap();
-
-        let arr1 = builder.finish();
-
-        // {"k1":"c","k2":null,"k3":"d"}
-        builder.keys().append_value("k1");
-        builder.values().append_value("c");
-        builder.keys().append_value("k2");
-        builder.values().append_null();
-        builder.keys().append_value("k3");
-        builder.values().append_value("d");
-        builder.append(true).unwrap();
-
-        let arr2 = builder.finish();
+        let arr2 = MapArray::from_vec_of_maps::<StringArray, StringArray, _, _>(
+            vec![Some(vec![
+                ("k1", Some("c")),
+                ("k2", None),
+                ("k3", Some("d")),
+            ])],
+            false,
+        );
 
         let mut expected_arrays = vec![arr1, arr2].into_iter();
 
@@ -1752,11 +1763,20 @@ mod tests {
         verify_flight_round_trip(vec![batch1, batch2]).await;
     }
 
-    async fn verify_flight_round_trip(mut batches: Vec<RecordBatch>) {
+    async fn verify_flight_round_trip(batches: Vec<RecordBatch>) {
+        verify_flight_round_trip_with_options(batches, IpcWriteOptions::default()).await;
+    }
+
+    /// Encode `batches` through a [`FlightDataEncoderBuilder`] using `options`, decode them
+    /// again, and assert the decoded batches match the originals.
+    async fn verify_flight_round_trip_with_options(
+        mut batches: Vec<RecordBatch>,
+        options: IpcWriteOptions,
+    ) {
         let expected_schema = batches.first().unwrap().schema();
 
         let encoder = FlightDataEncoderBuilder::default()
-            .with_options(IpcWriteOptions::default())
+            .with_options(options)
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
@@ -1813,14 +1833,14 @@ mod tests {
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
         let mut dictionary_tracker = DictionaryTracker::new(false);
-        let mut compression_context = CompressionContext::default();
+        let mut ipc_write_context = IpcWriteContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
             .encode(
                 batch,
                 &mut dictionary_tracker,
                 options,
-                &mut compression_context,
+                &mut ipc_write_context,
             )
             .expect("DictionaryTracker configured above to not error on replacement");
 
@@ -1838,7 +1858,8 @@ mod tests {
         let c = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 1);
         assert_eq!(batch, split[0]);
 
@@ -1848,7 +1869,8 @@ mod tests {
         let c = UInt8Array::from((0..n_rows).map(|i| (i % 256) as u8).collect::<Vec<_>>());
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
         assert_eq!(split.len(), 3);
         assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
@@ -1892,7 +1914,8 @@ mod tests {
 
         let input_rows = batch.num_rows();
 
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
+        let split: Vec<_> =
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes).collect();
         let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
         let output_rows: usize = sizes.iter().sum();
 

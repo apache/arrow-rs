@@ -938,7 +938,9 @@ pub fn cast_with_options(
         (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
         (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
-            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+            let values = cast_with_options(array, to.data_type(), cast_options)?;
+            let list = FixedSizeListArray::try_new(to.clone(), 1, values, None)?;
+            Ok(Arc::new(list))
         }
         // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
@@ -1710,17 +1712,33 @@ pub fn cast_with_options(
                 .as_primitive::<Date32Type>()
                 .unary::<_, Date64Type>(|x| x as i64 * MILLISECONDS_IN_DAY),
         )),
-        (Date64, Date32) => Ok(Arc::new(
-            array
-                .as_primitive::<Date64Type>()
-                .unary::<_, Date32Type>(|x| (x / MILLISECONDS_IN_DAY) as i32),
-        )),
+        (Date64, Date32) => {
+            let array = array.as_primitive::<Date64Type>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Date32Type>(|x| i32::try_from(x / MILLISECONDS_IN_DAY).ok())
+            } else {
+                array.try_unary::<_, Date32Type, _>(|x| {
+                    i32::try_from(x / MILLISECONDS_IN_DAY).map_err(|_| {
+                        ArrowError::CastError(format!(
+                            "Cannot cast Date64 value {x} to Date32 without overflow"
+                        ))
+                    })
+                })?
+            };
+            Ok(Arc::new(result))
+        }
 
-        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time32SecondType>()
-                .unary::<_, Time32MillisecondType>(|x| x * MILLISECONDS as i32),
-        )),
+        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => {
+            let array = array.as_primitive::<Time32SecondType>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Time32MillisecondType>(|x| x.checked_mul(MILLISECONDS as i32))
+            } else {
+                array.try_unary::<_, Time32MillisecondType, _>(|x| {
+                    x.mul_checked(MILLISECONDS as i32)
+                })?
+            };
+            Ok(Arc::new(result))
+        }
         (Time32(TimeUnit::Second), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time32SecondType>()
@@ -2137,18 +2155,30 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Microsecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampMicrosecondType>(|x| {
+                    (x as i64).checked_mul(MICROSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampMicrosecondType, _>(|x| {
+                    (x as i64).mul_checked(MICROSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Nanosecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampNanosecondType>(|x| {
+                    (x as i64).checked_mul(NANOSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampNanosecondType, _>(|x| {
+                    (x as i64).mul_checked(NANOSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
 
         (_, Duration(unit)) if from_type.is_numeric() => {
@@ -5225,6 +5255,26 @@ mod tests {
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date64_to_date32_overflow() {
+        let a = Date64Array::from(vec![i64::MAX]);
+        let array = Arc::new(a) as ArrayRef;
+
+        let b = cast(&array, &DataType::Date32).unwrap();
+        let c = b.as_primitive::<Date32Type>();
+        assert!(c.is_null(0));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let err = cast_with_options(&array, &DataType::Date32, &options).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot cast Date64 value"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -8883,6 +8933,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
+        let inner = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        );
+        let nested = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]),
+            Arc::new(inner),
+        );
+
+        let result = cast(&nested, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)])
+        );
+        assert_eq!(
+            result.values().as_string::<i32>(),
+            &StringArray::from(vec!["x", "y"])
+        );
+        let logical: Vec<Option<&str>> = result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
+    }
+
+    #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
@@ -9592,6 +9672,41 @@ mod tests {
         assert!(can_cast_types(input.data_type(), expected.data_type()));
         let actual = cast(&input, expected.data_type()).unwrap();
         assert_eq!(actual.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_cast_list_to_zero_size_fsl() {
+        let field = Arc::new(Field::new("a", DataType::Null, true));
+        let length = 2;
+        let expected = Arc::new(
+            FixedSizeListArray::try_new_with_length(
+                field.clone(),
+                0,
+                new_empty_array(&DataType::Null),
+                None,
+                2,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+
+        let list = Arc::new(ListArray::new(
+            field.clone(),
+            OffsetBuffer::from_repeated_length(0, length),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+
+        let list = Arc::new(ListViewArray::new(
+            field.clone(),
+            vec![0; length].into(),
+            vec![0; length].into(),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
     }
 
     #[test]
@@ -11409,6 +11524,51 @@ mod tests {
             .unwrap();
         assert_eq!(1609459200000000000, c.value(0));
         assert_eq!(1640995200000000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_us_overflow() {
+        const MAX_DAYS_MICROS: i32 = (i64::MAX / MICROSECONDS_IN_DAY) as i32;
+        let a = Date32Array::from(vec![Some(MAX_DAYS_MICROS), Some(MAX_DAYS_MICROS + 1), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let c = b.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(MAX_DAYS_MICROS as i64 * MICROSECONDS_IN_DAY, c.value(0));
+        assert!(c.is_null(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_ns_overflow() {
+        // 2262-04-11, 2062-04-12
+        let upper_limit = 106_751;
+        let a = Date32Array::from(vec![Some(upper_limit), Some(upper_limit + 1), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(upper_limit as i64 * NANOSECONDS_IN_DAY, c.value(0));
+        assert!(c.is_null(1));
         assert!(c.is_null(2));
     }
 
@@ -13782,6 +13942,23 @@ mod tests {
         assert_eq!(c.value(1), 60_000_000);
         assert!(c.is_null(2));
         assert_eq!(c.value(3), 43_200_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time32_millisecond_overflow() {
+        let array = Time32SecondArray::from(vec![i32::MAX]);
+
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
+        assert!(c.is_null(0));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let err = cast_with_options(&array, &DataType::Time32(TimeUnit::Millisecond), &options)
+            .unwrap_err();
+        assert!(err.to_string().contains("Overflow"), "{err}");
     }
 
     #[test]

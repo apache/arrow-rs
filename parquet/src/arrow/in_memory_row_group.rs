@@ -165,7 +165,7 @@ impl InMemoryRowGroup<'_> {
                         data: offsets
                             .into_iter()
                             .map(|x| x as usize)
-                            .zip(chunks.into_iter())
+                            .zip(chunks)
                             .collect(),
                     }))
                 }
