@@ -249,7 +249,7 @@ dependencies = [
  "indexmap",
  "liblzma",
  "md5",
- "num-bigint 0.5.0",
+ "num-bigint 0.5.1",
  "object_store",
  "once_cell",
  "rand 0.9.4",
@@ -271,7 +271,7 @@ dependencies = [
  "bytes",
  "criterion",
  "half",
- "num-bigint 0.5.0",
+ "num-bigint 0.5.1",
  "num-traits",
  "rand 0.9.4",
 ]
@@ -376,7 +376,7 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "hex",
- "num-bigint 0.5.0",
+ "num-bigint 0.5.1",
  "num-traits",
  "serde",
  "serde_json",
@@ -2151,9 +2151,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7032fbb7ef662c18e806aa75b311f68ddf5c94e8fc62832c0039d79095ab6abf"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -2350,7 +2350,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "insta",
  "lz4_flex",
- "num-bigint 0.5.0",
+ "num-bigint 0.5.1",
  "num-integer",
  "num-traits",
  "object_store",
