@@ -701,10 +701,10 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     // faster) and drop more than one bit per word on average (otherwise
     // copying whole ranges via the slices strategies is faster)
     let len = predicate.filter.len();
-    if bit_util::compress_available()
-        && predicate.count > len / 64
-        && predicate.count < len - len / 64
-    {
+    let predicate_count = predicate.count;
+    let upper = predicate_count < len - (len / 64);
+    let lower = predicate_count > len / 64;
+    if bit_util::compress_available() && upper && lower {
         return filter_bits_compress(buffer, predicate);
     }
 
@@ -1732,6 +1732,53 @@ mod tests {
                         .collect();
 
                     let actual = filter_bits_compress(&values, &predicate);
+                    let actual = BooleanBuffer::new(actual, 0, predicate.count);
+
+                    assert_eq!(
+                        actual, expected,
+                        "len={len} density={density} offset={offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_bits_variable_bits() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Lengths exercising partial words, exact word multiples, and the
+        // carry logic across flushed words
+        let lens = [0, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
+        // Densities covering empty, sparse, balanced, dense and full masks
+        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
+        // Bit offsets of the value buffer, including non byte-aligned ones
+        let offsets = [3, 8, 67];
+
+        for len in lens {
+            for density in densities {
+                for offset in offsets {
+                    let values: BooleanBuffer =
+                        (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
+                    let values = values.slice(offset, len);
+                    let filter: BooleanArray =
+                        (0..len).map(|_| Some(rng.random_bool(density))).collect();
+
+                    let predicate = FilterBuilder::new(&filter).build();
+
+                    // Skip empty predicates
+                    match predicate.strategy {
+                        IterationStrategy::All | IterationStrategy::None => continue,
+                        _ => {}
+                    }
+
+                    let expected: BooleanBuffer = values
+                        .iter()
+                        .zip(filter.values().iter())
+                        .filter_map(|(value, keep)| keep.then_some(value))
+                        .collect();
+
+                    let actual = filter_bits(&values, &predicate);
                     let actual = BooleanBuffer::new(actual, 0, predicate.count);
 
                     assert_eq!(
