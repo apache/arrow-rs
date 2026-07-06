@@ -337,7 +337,6 @@ impl FlightDataDecoder {
                     )
                 })?;
                 let buffer = {
-                    // Arrow spec requires 64-byte buffer alignment for SIMD;
                     // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
                     // reuse the allocation if already aligned, otherwise copy into a fresh aligned buffer.
                     if data.data_body.as_ptr() as usize % 64 == 0 {
