@@ -277,9 +277,32 @@ where
             logical_offset.saturating_add(logical_length) <= self.logical_length,
             "the length + offset of the sliced RunEndBuffer cannot exceed the existing length"
         );
-        Self {
+        let logical_offset = self.logical_offset + logical_offset;
+
+        // tmp makes it easier to use the get physical index methods here
+        let tmp = Self {
             run_ends: self.run_ends.clone(),
-            logical_offset: self.logical_offset + logical_offset,
+            logical_offset,
+            logical_length,
+        };
+        let start = tmp.get_start_physical_index();
+        let end = tmp.get_end_physical_index();
+
+        // if we're slicing past some of the physical runs at the start, we can
+        // omit them entirely as long as we adjust offset accordingly
+        let (physical_start, logical_offset) = if start > 0 {
+            let new_offset = logical_offset - self.run_ends[start - 1].as_usize();
+            (start, new_offset)
+        } else {
+            (0, logical_offset)
+        };
+
+        Self {
+            run_ends: self
+                .run_ends
+                // its easier to omit the physical end values which may be unreferenced
+                .slice(physical_start, end - physical_start + 1),
+            logical_offset,
             logical_length,
         }
     }
@@ -420,5 +443,46 @@ mod tests {
         let sliced = buffer.slice(4, 2);
         let sliced_values: Vec<i32> = sliced.sliced_values().collect();
         assert_eq!(sliced_values, &[2]);
+    }
+
+    #[test]
+    fn test_compact_slicing() {
+        // {} represents a logical slice within physically expanded []
+        // [{A, A, A, A, B, B, B, B, C, C, C, C}]
+        let buffer = RunEndBuffer::<i32>::new(vec![4, 8, 12].into(), 0, 12);
+
+        // zero slice
+        let slice = buffer.slice(0, 0);
+        assert_eq!(slice.len(), 0);
+        assert_eq!(slice.offset(), 0);
+        assert_eq!(slice.values(), &[4]);
+
+        // compact start only
+        // [B, B, {B, B, C, C, C, C}]
+        let slice = buffer.slice(6, 6);
+        assert_eq!(slice.len(), 6);
+        assert_eq!(slice.offset(), 2); // since we sliced away the 4 run
+        assert_eq!(slice.values(), &[8, 12]);
+
+        // compact end only
+        // [A, {A, A, A, B, B, B}, B]
+        let slice = buffer.slice(1, 6);
+        assert_eq!(slice.len(), 6);
+        assert_eq!(slice.offset(), 1);
+        assert_eq!(slice.values(), &[4, 8]);
+
+        // compact both
+        // [B, {B, B}, B, B, B, B, B]
+        let slice = buffer.slice(5, 2);
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice.offset(), 1);
+        assert_eq!(slice.values(), &[8]);
+
+        // no compaction
+        // [A, {A, A, A, B, B, B, B, C, C, C}, C]
+        let slice = buffer.slice(1, 10);
+        assert_eq!(slice.len(), 10);
+        assert_eq!(slice.offset(), 1);
+        assert_eq!(slice.values(), &[4, 8, 12]);
     }
 }
