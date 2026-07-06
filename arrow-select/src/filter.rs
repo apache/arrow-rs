@@ -690,10 +690,6 @@ pub(crate) fn filter_null_mask(
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
-    let src = buffer.values();
-    let offset = buffer.offset();
-    assert!(buffer.len() >= predicate.filter.len());
-
     // The compress path scans the entire filter mask a word at a time, so it
     // is only worthwhile when `pext` is available in hardware and the filter
     // is neither very sparse nor very dense: it must keep more than one bit
@@ -707,6 +703,16 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     if bit_util::compress_available() && upper && lower {
         return filter_bits_compress(buffer, predicate);
     }
+
+    filter_bits_strategy(buffer, predicate)
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` using its
+/// [`IterationStrategy`]
+fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    let src = buffer.values();
+    let offset = buffer.offset();
+    assert!(buffer.len() >= predicate.filter.len());
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
@@ -748,6 +754,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 /// Filter the packed bitmask `buffer` with `predicate` by extracting the kept
 /// bits of each 64-bit word with [`bit_util::compress`] (`pext`)
 fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    assert!(buffer.len() >= predicate.filter.len());
     let mask_chunks = predicate.filter.values().bit_chunks();
     let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
 
@@ -1699,11 +1706,13 @@ mod tests {
         test_case_filter_sliced_list_view::<i64>();
     }
 
-    /// [`filter_bits_compress`] is only dispatched to when `pext` is
-    /// available in hardware, so exercise it directly to get coverage of the
-    /// word packing logic on every platform
+    /// Tests [`filter_bits_compress`] and [`filter_bits_strategy`] on the
+    /// same inputs against a naive bit-by-bit filter, verifying both pathways
+    /// produce the same output. Both are called directly rather than through
+    /// [`filter_bits`], whose dispatch depends on whether the build has
+    /// hardware `pext`, so both get coverage on every platform
     #[test]
-    fn test_filter_bits_compress() {
+    fn test_filter_bits() {
         let mut rng = StdRng::seed_from_u64(42);
 
         // Lengths exercising partial words, exact word multiples, and the
@@ -1731,59 +1740,37 @@ mod tests {
                         .filter_map(|(value, keep)| keep.then_some(value))
                         .collect();
 
-                    let actual = filter_bits_compress(&values, &predicate);
-                    let actual = BooleanBuffer::new(actual, 0, predicate.count);
+                    let compressed = filter_bits_compress(&values, &predicate);
+                    let compressed = BooleanBuffer::new(compressed, 0, predicate.count);
 
                     assert_eq!(
-                        actual, expected,
-                        "len={len} density={density} offset={offset}"
+                        compressed, expected,
+                        "compress: len={len} density={density} offset={offset}"
                     );
-                }
-            }
-        }
-    }
 
-    #[test]
-    fn test_filter_bits_variable_bits() {
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Lengths exercising partial words, exact word multiples, and the
-        // carry logic across flushed words
-        let lens = [0, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
-        // Densities covering empty, sparse, balanced, dense and full masks
-        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
-        // Bit offsets of the value buffer, including non byte-aligned ones
-        let offsets = [3, 8, 67];
-
-        for len in lens {
-            for density in densities {
-                for offset in offsets {
-                    let values: BooleanBuffer =
-                        (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
-                    let values = values.slice(offset, len);
-                    let filter: BooleanArray =
-                        (0..len).map(|_| Some(rng.random_bool(density))).collect();
-
-                    let predicate = FilterBuilder::new(&filter).build();
-
-                    // Skip empty predicates
+                    // `filter_bits` is never reached with the `All` / `None`
+                    // strategies, they are short-circuited by the callers
                     match predicate.strategy {
                         IterationStrategy::All | IterationStrategy::None => continue,
                         _ => {}
                     }
 
-                    let expected: BooleanBuffer = values
-                        .iter()
-                        .zip(filter.values().iter())
-                        .filter_map(|(value, keep)| keep.then_some(value))
-                        .collect();
-
-                    let actual = filter_bits(&values, &predicate);
-                    let actual = BooleanBuffer::new(actual, 0, predicate.count);
+                    let strategy = filter_bits_strategy(&values, &predicate);
+                    let strategy = BooleanBuffer::new(strategy, 0, predicate.count);
 
                     assert_eq!(
-                        actual, expected,
-                        "len={len} density={density} offset={offset}"
+                        strategy, expected,
+                        "{:?}: len={len} density={density} offset={offset}",
+                        predicate.strategy
+                    );
+
+                    // Also cover the dispatch between the two pathways
+                    let dispatched = filter_bits(&values, &predicate);
+                    let dispatched = BooleanBuffer::new(dispatched, 0, predicate.count);
+
+                    assert_eq!(
+                        dispatched, expected,
+                        "dispatch: len={len} density={density} offset={offset}"
                     );
                 }
             }
