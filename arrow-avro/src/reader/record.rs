@@ -2325,12 +2325,10 @@ fn process_block_items(
     total: usize,
     on_item: &mut impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
 ) -> Result<usize, AvroError> {
-    let new_total = total.checked_add(count).filter(|&t| t <= i32::MAX as usize);
-    let Some(new_total) = new_total else {
-        return Err(AvroError::ParseError(format!(
-            "Array/map item count {count} exceeds the maximum {} addressable by 32-bit offsets",
-            i32::MAX
-        )));
+    let Some(new_total) = total.checked_add(count).filter(|&t| t <= i32::MAX as usize) else {
+        return Err(AvroError::ParseError(
+            "Capacity overflow when decoding array/map item blocks".to_string(),
+        ));
     };
     for _ in 0..count {
         on_item(buf)?;
@@ -3479,8 +3477,6 @@ mod tests {
 
     #[test]
     fn test_array_of_null_decodes() {
-        // A valid `array<null>` still decodes: zero-byte items make the count exceed the
-        // bytes left, so the bound must not reject it (#10235 review).
         let mut decoder = array_of_null_decoder();
         let mut data = encode_avro_long(3); // three null items
         data.extend_from_slice(&encode_avro_long(0)); // empty-block terminator
@@ -3495,7 +3491,7 @@ mod tests {
         data.extend_from_slice(&encode_avro_long(0)); // empty-block terminator
         let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
         assert!(
-            err.to_string().contains("exceeds the maximum"),
+            err.to_string().contains("Capacity overflow"),
             "unexpected error: {err}",
         );
     }
@@ -3508,7 +3504,7 @@ mod tests {
         data.extend_from_slice(&encode_avro_long(0)); // block size in bytes
         let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
         assert!(
-            err.to_string().contains("exceeds the maximum"),
+            err.to_string().contains("Capacity overflow"),
             "unexpected error: {err}",
         );
     }
