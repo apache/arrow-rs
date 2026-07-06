@@ -503,6 +503,26 @@ mod tests {
     use rand::{Rng, rng};
 
     #[test]
+    fn test_build_validity_bitmap_unfiltered_word_chunk() {
+        // 65 levels forces the unfiltered path to process one full u64 word
+        // with append_word, plus a remainder bit.
+        let def_levels = (0..65)
+            .map(|i| if i % 3 == 0 { 2 } else { 1 })
+            .collect::<Vec<_>>();
+        let mut bitmap = BooleanBufferBuilder::new(0);
+
+        assert_eq!(
+            build_filtered_validity_bitmap(&def_levels, None, None, 2, &mut bitmap),
+            def_levels.len()
+        );
+
+        let bitmap = bitmap.finish();
+        for (idx, def) in def_levels.iter().enumerate() {
+            assert_eq!(bitmap.value(idx), *def >= 2);
+        }
+    }
+
+    #[test]
     fn test_packed_decoder() {
         let mut rng = rng();
         let len: usize = rng.random_range(512..1024);
