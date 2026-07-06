@@ -187,6 +187,12 @@ impl FFI_ArrowSchema {
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
     {
+        if self.private_data.is_null() {
+            return Err(ArrowError::CDataInterface(
+                "Cannot set metadata on FFI_ArrowSchema with null private_data".to_string(),
+            ));
+        }
+
         let metadata: Vec<(S, S)> = metadata.into_iter().collect();
         // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
         let new_metadata = if !metadata.is_empty() {
@@ -1000,6 +1006,17 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_set_metadata_on_empty_schema_errors() {
+        let err = FFI_ArrowSchema::empty()
+            .with_metadata([("key", "value")])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ArrowError::CDataInterface(message) if message.contains("null private_data")
+        ));
     }
 
     #[test]
