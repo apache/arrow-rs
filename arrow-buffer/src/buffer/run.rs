@@ -288,20 +288,8 @@ where
         let start = tmp.get_start_physical_index();
         let end = tmp.get_end_physical_index();
 
-        // if we're slicing past some of the physical runs at the start, we can
-        // omit them entirely as long as we adjust offset accordingly
-        let (physical_start, logical_offset) = if start > 0 {
-            let new_offset = logical_offset - self.run_ends[start - 1].as_usize();
-            (start, new_offset)
-        } else {
-            (0, logical_offset)
-        };
-
         Self {
-            run_ends: self
-                .run_ends
-                // its easier to omit the physical end values which may be unreferenced
-                .slice(physical_start, end - physical_start + 1),
+            run_ends: self.run_ends.slice(start, end - start + 1),
             logical_offset,
             logical_length,
         }
@@ -458,11 +446,13 @@ mod tests {
         assert_eq!(slice.values(), &[4]);
 
         // compact start only
-        // [B, B, {B, B, C, C, C, C}]
+        // [B, B, B, B, B, B, {B, B, C, C, C, C}]
         let slice = buffer.slice(6, 6);
         assert_eq!(slice.len(), 6);
-        assert_eq!(slice.offset(), 2); // since we sliced away the 4 run
+        assert_eq!(slice.offset(), 6);
         assert_eq!(slice.values(), &[8, 12]);
+        let values = slice.sliced_values().collect::<Vec<_>>();
+        assert_eq!(values, &[2, 6]);
 
         // compact end only
         // [A, {A, A, A, B, B, B}, B]
@@ -470,13 +460,17 @@ mod tests {
         assert_eq!(slice.len(), 6);
         assert_eq!(slice.offset(), 1);
         assert_eq!(slice.values(), &[4, 8]);
+        let values = slice.sliced_values().collect::<Vec<_>>();
+        assert_eq!(values, &[3, 6]);
 
         // compact both
-        // [B, {B, B}, B, B, B, B, B]
+        // [B, B, B, B, B, {B, B}, B]
         let slice = buffer.slice(5, 2);
         assert_eq!(slice.len(), 2);
-        assert_eq!(slice.offset(), 1);
+        assert_eq!(slice.offset(), 5);
         assert_eq!(slice.values(), &[8]);
+        let values = slice.sliced_values().collect::<Vec<_>>();
+        assert_eq!(values, &[2]);
 
         // no compaction
         // [A, {A, A, A, B, B, B, B, C, C, C}, C]
@@ -484,5 +478,7 @@ mod tests {
         assert_eq!(slice.len(), 10);
         assert_eq!(slice.offset(), 1);
         assert_eq!(slice.values(), &[4, 8, 12]);
+        let values = slice.sliced_values().collect::<Vec<_>>();
+        assert_eq!(values, &[3, 7, 10]);
     }
 }
