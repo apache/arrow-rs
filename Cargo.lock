@@ -354,7 +354,6 @@ dependencies = [
  "http-body",
  "hyper-util",
  "once_cell",
- "paste",
  "pin-project-lite",
  "prost",
  "prost-types",
