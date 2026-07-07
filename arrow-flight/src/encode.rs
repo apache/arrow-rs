@@ -494,7 +494,7 @@ fn prepare_field_for_flight(
             field.is_nullable(),
         )
         .with_metadata(field.metadata().clone()),
-        DataType::LargeList(inner) => Field::new_list(
+        DataType::LargeList(inner) => Field::new_large_list(
             field.name(),
             prepare_field_for_flight(inner, dictionary_tracker, send_dictionaries),
             field.is_nullable(),
@@ -1806,6 +1806,25 @@ mod tests {
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
         assert!(got.metadata().contains_key("some_key"));
+    }
+
+    #[test]
+    fn test_large_list_schema_encoded() {
+        let list_field =
+            Field::new("item", DataType::Int32, false).with_metadata(HashMap::from([(
+                "nested".to_owned(),
+                "metadata".to_owned(),
+            )]));
+        let field = Arc::new(
+            Field::new_large_list("large_list", list_field.clone(), true)
+                .with_metadata(HashMap::from([("field".to_owned(), "metadata".to_owned())])),
+        );
+        let schema = Schema::new(vec![Arc::clone(&field)]);
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+
+        let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
+
+        assert_eq!(got.field(0), field.as_ref());
     }
 
     #[test]
