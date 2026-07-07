@@ -1500,9 +1500,9 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new_dictionary("keys", DataType::UInt16, DataType::Utf8, false),
-            Field::new_dictionary("values", DataType::UInt16, DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new_dictionary(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::UInt16, DataType::Utf8, false),
+            Field::new_dictionary(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt16, DataType::Utf8, true),
             false,
             false,
         )]));
@@ -1517,9 +1517,9 @@ mod tests {
         let mut decoder = FlightDataDecoder::new(encoder);
         let expected_schema = Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new("keys", DataType::Utf8, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             false,
             false,
         )]);
@@ -1596,9 +1596,9 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new_dictionary("keys", DataType::UInt16, DataType::Utf8, false),
-            Field::new_dictionary("values", DataType::UInt16, DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new_dictionary(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::UInt16, DataType::Utf8, false),
+            Field::new_dictionary(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt16, DataType::Utf8, true),
             false,
             false,
         )]));

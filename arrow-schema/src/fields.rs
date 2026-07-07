@@ -675,9 +675,9 @@ mod tests {
             ),
             Field::new_map(
                 "g",
-                "entries",
-                Field::new("keys", DataType::LargeUtf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::LargeUtf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),

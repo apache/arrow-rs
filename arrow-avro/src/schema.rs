@@ -2991,11 +2991,11 @@ mod tests {
         let avro_list = AvroSchema::try_from(&list_schema).unwrap();
         assert_json_contains(&avro_list.json_string, "\"type\":\"array\"");
         assert_json_contains(&avro_list.json_string, "\"items\"");
-        let value_field = ArrowField::new("value", DataType::Boolean, true);
+        let value_field = ArrowField::new(arrow_schema::Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Boolean, true);
         let entries_struct = ArrowField::new(
-            "entries",
+            arrow_schema::Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(arrow_schema::Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                 value_field.clone(),
             ])),
             false,
@@ -3244,11 +3244,11 @@ mod tests {
         );
         let expected_b = ArrowField::new("b", DataType::List(Arc::new(expected_list_item)), false);
 
-        let expected_map_value = ArrowField::new("value", DataType::Float64, false);
+        let expected_map_value = ArrowField::new(arrow_schema::Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Float64, false);
         let expected_entries = ArrowField::new(
-            "entries",
+            arrow_schema::Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(arrow_schema::Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                 expected_map_value,
             ])),
             false,

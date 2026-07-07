@@ -10143,11 +10143,7 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
+            None,
             string_builder,
             value_builder,
         );
@@ -10165,11 +10161,11 @@ mod tests {
         let new_ordered = true;
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),
@@ -10194,11 +10190,7 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = IntervalDayTimeArray::builder(2);
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
+            None,
             string_builder,
             value_builder,
         );
@@ -10246,6 +10238,7 @@ mod tests {
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
             Some(MapFieldNames {
+                // Explicitly writing the name so it will be apparent from what names to what names are we converting to
                 entry: "entries".to_string(),
                 key: "key".to_string(),
                 value: "value".to_string(),
@@ -10319,11 +10312,7 @@ mod tests {
         let string_builder = StringBuilder::new();
         let value_builder = Int8Builder::new();
         let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
+            None,
             string_builder,
             value_builder,
         );
@@ -10339,11 +10328,11 @@ mod tests {
 
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),

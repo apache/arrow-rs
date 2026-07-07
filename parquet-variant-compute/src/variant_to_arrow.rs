@@ -1309,10 +1309,10 @@ mod tests {
         let item_field = Arc::new(Field::new("item", DataType::Int32, true));
         let struct_fields = Fields::from(vec![Field::new("child", DataType::Int32, true)]);
         let map_entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Float64, true),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Float64, true),
             ])),
             true,
         ));

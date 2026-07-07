@@ -1011,7 +1011,7 @@ fn find_struct_child_index(fields: &arrow_schema::Fields, name: &str) -> Option<
 
 fn find_map_value_field_index(fields: &arrow_schema::Fields) -> Option<usize> {
     // Prefer common Arrow field names; fall back to second child if exactly two
-    find_struct_child_index(fields, "value")
+    find_struct_child_index(fields, Field::MAP_VALUE_FIELD_DEFAULT_NAME)
         .or_else(|| find_struct_child_index(fields, "values"))
         .or_else(|| if fields.len() == 2 { Some(1) } else { None })
 }
@@ -2893,8 +2893,8 @@ mod tests {
         let keys = StringArray::from(vec!["k1", "k2"]);
         let values = Int32Array::from(vec![1, 2]);
         let entries_fields = Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Int32, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
         ]);
         let entries = StructArray::new(
             entries_fields,
@@ -2903,7 +2903,7 @@ mod tests {
         );
         let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
         let map = MapArray::new(
-            Field::new("entries", entries.data_type().clone(), false).into(),
+            Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entries.data_type().clone(), false).into(),
             offsets,
             entries,
             None,
@@ -3378,8 +3378,8 @@ mod tests {
         let values = Int32Array::from(vec![Some(7), None]);
 
         let entries_fields = Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Int32, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
         ]);
         let entries = StructArray::new(
             entries_fields,
@@ -3390,7 +3390,7 @@ mod tests {
         // Single row -> offsets [0, 2]
         let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2].into());
         let map = MapArray::new(
-            Field::new("entries", entries.data_type().clone(), false).into(),
+            Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entries.data_type().clone(), false).into(),
             offsets,
             entries,
             None,
