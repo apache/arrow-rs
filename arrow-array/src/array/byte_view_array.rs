@@ -578,35 +578,49 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             // copied unchanged (they reference no buffer); non-inline views are
             // packed into the current output buffer until adding the next one
             // would exceed `max_buffer_size`, at which point a new buffer is
-            // started. Cap the per-buffer reservation at `max_buffer_size` so a
-            // single huge value doesn't request an absurd allocation up front.
-            let buffer_cap = total_large.min(max_buffer_size);
+            // started.
+            //
+            // `total_large` is the *sum* of all non-inline bytes — it is what
+            // pushed us onto this path, so it can be many GiB. Size each buffer
+            // reservation to the data still to be copied, capped at one buffer's
+            // worth (`max_buffer_size`), so we neither reserve the whole
+            // multi-GiB total up front nor pad the final buffer out to a full
+            // `max_buffer_size` when only a little data is left.
+            let mut remaining_large = total_large;
             let mut views_buf = Vec::with_capacity(len);
-            let mut data_blocks = Vec::new();
-            let mut data_buf: Vec<u8> = Vec::with_capacity(buffer_cap);
-            let mut current_buffer_idx: i32 = 0;
+            let mut data_blocks: Vec<Buffer> = Vec::new();
+            let mut data_buf: Vec<u8> = Vec::with_capacity(remaining_large.min(max_buffer_size));
 
             for i in 0..len {
                 // SAFETY: `i < len == self.len()`.
                 let view_len = *unsafe { self.views().get_unchecked(i) } as u32;
+                let is_large = view_len > MAX_INLINE_VIEW_LEN;
                 // Only non-inline views consume space in the data buffer; if the
                 // next one would overflow the current buffer's offset space,
                 // seal it and start a new one. The `!data_buf.is_empty()` guard
                 // avoids emitting a leading empty buffer and guarantees forward
-                // progress even for a single value larger than `max_buffer_size`.
-                if view_len > MAX_INLINE_VIEW_LEN
+                // progress even for a single value larger than `max_buffer_size`
+                // — in that case `data_buf.len()` itself can exceed
+                // `max_buffer_size`, so the sum is computed in `u64` to avoid
+                // overflowing the `u32` offset space on the addition.
+                if is_large
                     && !data_buf.is_empty()
                     && data_buf.len() as u64 + view_len as u64 > max_buffer_size as u64
                 {
                     data_blocks.push(Buffer::from_vec(std::mem::take(&mut data_buf)));
-                    current_buffer_idx += 1;
-                    data_buf.reserve(buffer_cap);
+                    data_buf.reserve(remaining_large.min(max_buffer_size));
                 }
 
+                // The buffer currently being filled becomes block
+                // `data_blocks.len()` once it is sealed, so that is the index
+                // the copied views must point at.
+                let buffer_idx = data_blocks.len() as i32;
                 // SAFETY: `i < self.len()` and every view refers to valid data.
-                let new_view =
-                    unsafe { self.copy_view_to_buffer(i, current_buffer_idx, &mut data_buf) };
+                let new_view = unsafe { self.copy_view_to_buffer(i, buffer_idx, &mut data_buf) };
                 views_buf.push(new_view);
+                if is_large {
+                    remaining_large -= view_len as usize;
+                }
             }
             data_blocks.push(Buffer::from_vec(data_buf));
             debug_assert!(data_blocks.len() <= i32::MAX as usize);
