@@ -308,12 +308,14 @@ impl FlightDataDecoder {
                     )
                 })?;
 
-                arrow_ipc::reader::read_dictionary(
+                arrow_ipc::reader::read_dictionary_impl(
                     &buffer,
                     dictionary_batch,
                     &state.schema,
                     &mut state.dictionaries_by_field,
                     &message.version(),
+                    false,
+                    self.skip_validation.clone(),
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
