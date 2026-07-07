@@ -2742,14 +2742,14 @@ mod tests {
         let value_dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 3, 1]);
         let value_dict_array = DictionaryArray::new(value_dict_keys, values.clone());
 
-        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 1, 1, 3]);
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, values);
 
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
             "keys",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            true, // It is technically not legal for this field to be null.
+            false,
             1,
             false,
         ));
@@ -2954,13 +2954,13 @@ mod tests {
         let bin_view_array = Arc::new(BinaryViewArray::from_iter(bin_values));
         let utf8_view_array = Arc::new(StringViewArray::from_iter(utf8_values));
 
-        let key_dict_keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 0, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, utf8_view_array.clone());
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
             "keys",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8View)),
-            true,
+            false,
             1,
             false,
         ));
