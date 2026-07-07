@@ -183,15 +183,15 @@ impl Field {
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
     /// Default field name for the entries field for Map
     ///
-    /// See https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
     pub const MAP_ENTRIES_FIELD_DEFAULT_NAME: &'static str = "entries";
     /// Default field name for the key field for Map
     ///
-    /// See https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
     pub const MAP_KEY_FIELD_DEFAULT_NAME: &'static str = "key";
     /// Default field name for the value field for Map
     ///
-    /// See https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
     pub const MAP_VALUE_FIELD_DEFAULT_NAME: &'static str = "value";
 
     /// Creates a new field with the given name, data type, and nullability
