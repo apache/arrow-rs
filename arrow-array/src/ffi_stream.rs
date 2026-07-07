@@ -121,6 +121,21 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
 struct StreamPrivateData {
     batch_reader: Box<dyn RecordBatchReader + Send>,
     last_error: Option<CString>,
+    error_code: Box<dyn Fn(&ArrowError) -> i32 + Send>,
+}
+
+impl StreamPrivateData {
+    /// Stashes `err` for `get_last_error` and returns the code to report from the callback.
+    fn set_error(&mut self, err: &ArrowError) -> i32 {
+        self.last_error =
+            Some(CString::new(err.to_string()).expect("Error string has a null byte in it."));
+        match (self.error_code)(err) {
+            // Zero would signal success to the consumer, which would then read the
+            // uninitialized out-parameter.
+            0 => EINVAL,
+            code => code,
+        }
+    }
 }
 
 // The callback used to get array schema
@@ -162,9 +177,29 @@ impl Drop for FFI_ArrowArrayStream {
 impl FFI_ArrowArrayStream {
     /// Creates a new [`FFI_ArrowArrayStream`].
     pub fn new(batch_reader: Box<dyn RecordBatchReader + Send>) -> Self {
+        Self::new_with_error_code(batch_reader, get_error_code)
+    }
+
+    /// Creates a new [`FFI_ArrowArrayStream`] with a custom mapping from stream errors to
+    /// the error codes returned by the stream's `get_schema`/`get_next` callbacks.
+    ///
+    /// [`FFI_ArrowArrayStream::new`] maps every error to one of `ENOSYS`/`ENOMEM`/`EIO`/
+    /// `EINVAL` based solely on the [`ArrowError`] variant. Producers whose errors carry
+    /// richer semantics than the variant can express — for example ADBC drivers, which are
+    /// expected to report `ECANCELED` from `get_next` after a cancelled query — can supply
+    /// the mapping themselves.
+    ///
+    /// `error_code` should return an errno-compatible non-zero value. Zero would signal
+    /// success to the consumer (which would then read the uninitialized out-parameter), so
+    /// it is coerced to `EINVAL`.
+    pub fn new_with_error_code(
+        batch_reader: Box<dyn RecordBatchReader + Send>,
+        error_code: impl Fn(&ArrowError) -> i32 + Send + 'static,
+    ) -> Self {
         let private_data = Box::new(StreamPrivateData {
             batch_reader,
             last_error: None,
+            error_code: Box::new(error_code),
         });
 
         Self {
@@ -225,12 +260,7 @@ impl ExportedArrayStream {
                 std::mem::forget(schema);
                 0
             }
-            Err(ref err) => {
-                private_data.last_error = Some(
-                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
-                );
-                get_error_code(err)
-            }
+            Err(ref err) => private_data.set_error(err),
         }
     }
 
@@ -253,10 +283,7 @@ impl ExportedArrayStream {
                     0
                 } else {
                     let err = &next_batch.unwrap_err();
-                    private_data.last_error = Some(
-                        CString::new(err.to_string()).expect("Error string has a null byte in it."),
-                    );
-                    get_error_code(err)
+                    private_data.set_error(err)
                 }
             }
         }
@@ -527,6 +554,35 @@ mod tests {
 
         _test_round_trip_export(batch.clone(), schema.clone()).unwrap();
         _test_round_trip_import(batch, schema).unwrap();
+    }
+
+    #[test]
+    fn test_custom_error_code() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let iter = Box::new(
+            vec![
+                Err(ArrowError::ComputeError("cancelled".to_string())),
+                Err(ArrowError::ComputeError("other".to_string())),
+            ]
+            .into_iter(),
+        );
+        let reader = TestRecordBatchReader::new(schema, iter);
+
+        const ECANCELED: i32 = 125;
+        let mut stream = FFI_ArrowArrayStream::new_with_error_code(reader, |err| match err {
+            ArrowError::ComputeError(msg) if msg == "cancelled" => ECANCELED,
+            _ => 0,
+        });
+
+        let mut array = FFI_ArrowArray::empty();
+        let code = unsafe { get_next(&mut stream, &mut array) };
+        assert_eq!(code, ECANCELED);
+
+        // A zero mapping on an error would read as success, so it is coerced to EINVAL.
+        let mut array = FFI_ArrowArray::empty();
+        let code = unsafe { get_next(&mut stream, &mut array) };
+        assert_eq!(code, EINVAL);
     }
 
     #[test]
