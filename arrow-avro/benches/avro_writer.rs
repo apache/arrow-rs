@@ -623,8 +623,16 @@ static DECIMAL256_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
 static MAP_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     use arrow_array::builder::{MapBuilder, StringBuilder};
 
-    let key_field = Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false));
-    let value_field = Arc::new(Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true));
+    let key_field = Arc::new(Field::new(
+        Field::MAP_KEY_FIELD_DEFAULT_NAME,
+        DataType::Utf8,
+        false,
+    ));
+    let value_field = Arc::new(Field::new(
+        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+        DataType::Utf8,
+        true,
+    ));
     let entry_struct = Field::new(
         Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
         DataType::Struct(vec![key_field.as_ref().clone(), value_field.as_ref().clone()].into()),

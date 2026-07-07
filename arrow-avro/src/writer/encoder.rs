@@ -2903,7 +2903,12 @@ mod tests {
         );
         let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
         let map = MapArray::new(
-            Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entries.data_type().clone(), false).into(),
+            Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entries.data_type().clone(),
+                false,
+            )
+            .into(),
             offsets,
             entries,
             None,
@@ -3390,7 +3395,12 @@ mod tests {
         // Single row -> offsets [0, 2]
         let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2].into());
         let map = MapArray::new(
-            Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entries.data_type().clone(), false).into(),
+            Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entries.data_type().clone(),
+                false,
+            )
+            .into(),
             offsets,
             entries,
             None,

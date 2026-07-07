@@ -2048,7 +2048,11 @@ mod tests {
         ];
 
         let entries = StructArray::new(fields.clone(), columns, None);
-        let field = Arc::new(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, DataType::Struct(fields), false));
+        let field = Arc::new(Field::new(
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            DataType::Struct(fields),
+            false,
+        ));
 
         let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
 

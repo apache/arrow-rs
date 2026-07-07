@@ -398,7 +398,11 @@ mod tests {
                     Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(
                         vec![
-                            Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false)),
+                            Arc::new(Field::new(
+                                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                false
+                            )),
                             value_field.clone()
                         ]
                         .into()
@@ -422,7 +426,11 @@ mod tests {
                     Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(
                         vec![
-                            Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false)),
+                            Arc::new(Field::new(
+                                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                false
+                            )),
                             value_field
                         ]
                         .into()
@@ -460,7 +468,11 @@ mod tests {
                                 Field::new("other", DataType::Int32, false)
                                     .with_metadata(key_metadata)
                             ),
-                            Arc::new(Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true))
+                            Arc::new(Field::new(
+                                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                true
+                            ))
                         ]
                         .into()
                     ),

@@ -10142,11 +10142,7 @@ mod tests {
     fn test_cast_map_dont_allow_change_of_order() {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
-        let mut builder = MapBuilder::new(
-            None,
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value("test_val_1");
@@ -10189,11 +10185,7 @@ mod tests {
     fn test_cast_map_dont_allow_when_container_cant_cast() {
         let string_builder = StringBuilder::new();
         let value_builder = IntervalDayTimeArray::builder(2);
-        let mut builder = MapBuilder::new(
-            None,
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(IntervalDayTime::new(1, 1));
@@ -10311,11 +10303,7 @@ mod tests {
     fn test_cast_map_contained_values() {
         let string_builder = StringBuilder::new();
         let value_builder = Int8Builder::new();
-        let mut builder = MapBuilder::new(
-            None,
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(44);

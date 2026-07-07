@@ -3692,9 +3692,24 @@ mod tests {
 
     #[test]
     fn encode_map_array() {
-        let keys = Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::UInt32, false));
-        let values = Arc::new(Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, true));
-        let map_field = Field::new_map("map", Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, keys, values, false, true);
+        let keys = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            false,
+        ));
+        let values = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            true,
+        ));
+        let map_field = Field::new_map(
+            "map",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            keys,
+            values,
+            false,
+            true,
+        );
         let schema = Arc::new(Schema::new(vec![map_field]));
 
         let values = Arc::new(generate_map_array_data());
@@ -4053,7 +4068,11 @@ mod tests {
                 Arc::new(dict_keys) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true)),
+                Arc::new(Field::new(
+                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    true,
+                )),
                 Arc::new(values) as ArrayRef,
             ),
         ]);
@@ -4113,7 +4132,11 @@ mod tests {
 
         let entries = StructArray::from(vec![
             (
-                Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                )),
                 Arc::new(keys) as ArrayRef,
             ),
             (

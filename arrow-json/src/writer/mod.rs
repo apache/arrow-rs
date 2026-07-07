@@ -1421,8 +1421,16 @@ mod tests {
     fn run_json_writer_map_with_keys(keys_array: ArrayRef) {
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys_field = Arc::new(Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, keys_array.data_type().clone(), false));
-        let values_field = Arc::new(Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int64, false));
+        let keys_field = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            keys_array.data_type().clone(),
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
         let entry_struct = StructArray::from(vec![
             (keys_field, keys_array.clone()),
             (values_field, Arc::new(values_array) as ArrayRef),

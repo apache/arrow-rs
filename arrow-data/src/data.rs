@@ -2851,7 +2851,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2902,7 +2910,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2949,7 +2965,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2994,7 +3018,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_data_type, true).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    true,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3039,7 +3071,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,

@@ -955,8 +955,14 @@ mod tests {
         let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
-        let map_data_type =
-            DataType::Map(Arc::new(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entry_struct, false)), true);
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entry_struct,
+                false,
+            )),
+            true,
+        );
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

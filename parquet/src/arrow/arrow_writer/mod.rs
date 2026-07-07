@@ -2757,7 +2757,11 @@ mod tests {
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Arc::new(Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, entries_struct_type, false)),
+                Arc::new(Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    entries_struct_type,
+                    false,
+                )),
                 false,
             ),
             true,

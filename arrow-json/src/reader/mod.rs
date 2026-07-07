@@ -1289,7 +1289,11 @@ mod tests {
             "map",
             Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-            Field::new_list(Field::MAP_VALUE_FIELD_DEFAULT_NAME, Field::new("element", DataType::Utf8, true), true),
+            Field::new_list(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                Field::new("element", DataType::Utf8, true),
+                true,
+            ),
             false,
             true,
         );
