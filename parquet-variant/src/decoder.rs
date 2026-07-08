@@ -367,21 +367,22 @@ pub(crate) fn decode_short_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paste::paste;
 
     macro_rules! test_decoder_bounds {
         ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
-            paste! {
+            mod $test_name {
+                use super::*;
+
                 #[test]
-                fn [<$test_name _exact_length>]() {
+                fn exact_length() {
                     let result = $decode_fn(&$data).unwrap();
                     assert_eq!(result, $expected);
                 }
 
                 #[test]
-                fn [<$test_name _truncated_length>]() {
+                fn truncated_length() {
                     // Remove the last byte of data so that there is not enough to decode
-                    let truncated_data = &$data[.. $data.len() - 1];
+                    let truncated_data = &$data[..$data.len() - 1];
                     let result = $decode_fn(truncated_data);
                     assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                 }

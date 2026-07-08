@@ -2395,7 +2395,6 @@ dependencies = [
  "half",
  "indexmap",
  "num-traits",
- "paste",
  "rand 0.9.4",
  "simdutf8",
  "uuid",
