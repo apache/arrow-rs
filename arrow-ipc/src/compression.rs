@@ -46,9 +46,19 @@ impl IpcWriteContext {
 
     /// Set whether the scratch buffer capacity should be reserved after each encode for reuse
     /// on the next call. Set to `false` for the final batch in a sequence to avoid a
-    /// pointless allocation.
+    /// pointless allocation. by default, this is set to `false`.
     pub fn set_reserve_scratch(&mut self, reserve: bool) {
         self.reserve_scratch = reserve;
+    }
+    /// Reserve the scratch buffer capacity for reuse on the next call. This is a no-op if
+    /// `reserve_scratch` is set to `false`.
+    pub(crate) fn reserve_scratch_with_capacity(&mut self, additional: usize) {
+        if self.reserve_scratch {
+            self.scratch.reserve(additional);
+        }
+    }
+    pub(crate) fn scratch(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.scratch)
     }
 
     #[cfg(feature = "zstd")]
