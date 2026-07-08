@@ -447,7 +447,7 @@ mod tests {
         let mut key_metadata = HashMap::new();
         key_metadata.insert("foo".to_string(), "bar".to_string());
         let key_field = Arc::new(
-            Field::new("other", DataType::Int32, false).with_metadata(key_metadata.clone()),
+            Field::new("other_key", DataType::Int32, false).with_metadata(key_metadata.clone()),
         );
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
             .with_keys_field(key_field.clone());
@@ -465,7 +465,7 @@ mod tests {
                     DataType::Struct(
                         vec![
                             Arc::new(
-                                Field::new("other", DataType::Int32, false)
+                                Field::new("other_key", DataType::Int32, false)
                                     .with_metadata(key_metadata)
                             ),
                             Arc::new(Field::new(
