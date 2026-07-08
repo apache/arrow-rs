@@ -52,6 +52,31 @@ pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {
     }
 }
 
+const ONE_TOP_LEVEL_VALUE_MSG: &str =
+    "VariantBuilder already contains a top-level variant value; only one is allowed";
+const EMPTY_BUILDER_MSG: &str =
+    "VariantBuilder is empty; append a top-level value before calling finish()";
+
+// Error/panic construction is kept out-of-line and cold so the per-call guards on the
+// builder hot paths stay small enough to inline as a single predictable branch.
+#[cold]
+#[inline(never)]
+fn top_level_value_panic() -> ! {
+    panic!("{ONE_TOP_LEVEL_VALUE_MSG}");
+}
+
+#[cold]
+#[inline(never)]
+fn top_level_value_error() -> ArrowError {
+    ArrowError::InvalidArgumentError(ONE_TOP_LEVEL_VALUE_MSG.into())
+}
+
+#[cold]
+#[inline(never)]
+fn empty_builder_error() -> ArrowError {
+    ArrowError::InvalidArgumentError(EMPTY_BUILDER_MSG.into())
+}
+
 /// Wrapper around a `Vec<u8>` that provides methods for appending
 /// primitive values, variant types, and metadata.
 ///
@@ -477,6 +502,13 @@ impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
 
 /// Top level builder for [`Variant`] values
 ///
+/// `VariantBuilder` builds a single, self-contained [`Variant`] value -- useful
+/// for one-off values and unit tests. To build an array (column) of variants,
+/// one per input row, use [`VariantArrayBuilder`] from the
+/// `parquet-variant-compute` crate rather than a `VariantBuilder` per row.
+///
+/// [`VariantArrayBuilder`]: https://docs.rs/parquet-variant-compute/latest/parquet_variant_compute/struct.VariantArrayBuilder.html
+///
 /// # Example: create a Primitive Int8
 /// ```
 /// # use parquet_variant::{Variant, VariantBuilder};
@@ -792,30 +824,85 @@ impl VariantBuilder {
         self.metadata_builder.upsert_field_name(field_name);
     }
 
+    /// Returns true if a top-level variant value has already been written to this builder.
+    ///
+    /// A [`VariantBuilder`] holds exactly one top-level variant value. Any committed top-level
+    /// value leaves bytes in the value buffer; a child builder dropped without `finish()` has
+    /// its bytes rolled back by [`ParentState`], so the offset is a faithful indicator.
+    #[inline]
+    fn has_top_level_value(&self) -> bool {
+        self.value_builder.offset() != 0
+    }
+
+    #[inline]
+    fn ensure_no_top_level_value(&self) {
+        if self.has_top_level_value() {
+            top_level_value_panic();
+        }
+    }
+
+    #[inline]
+    fn check_no_top_level_value(&self) -> Result<(), ArrowError> {
+        if self.has_top_level_value() {
+            return Err(top_level_value_error());
+        }
+        Ok(())
+    }
+
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder. For a
+    /// fallible version, use [`VariantBuilder::try_new_list`].
     pub fn new_list(&mut self) -> ListBuilder<'_, ()> {
+        self.try_new_list().unwrap()
+    }
+
+    /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
+    pub fn try_new_list(&mut self) -> Result<ListBuilder<'_, ()>, ArrowError> {
+        self.check_no_top_level_value()?;
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
-        ListBuilder::new(parent_state, self.validate_unique_fields)
+        Ok(ListBuilder::new(parent_state, self.validate_unique_fields))
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder. For a
+    /// fallible version, use [`VariantBuilder::try_new_object`].
     pub fn new_object(&mut self) -> ObjectBuilder<'_, ()> {
+        self.try_new_object().unwrap()
+    }
+
+    /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
+    pub fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, ()>, ArrowError> {
+        self.check_no_top_level_value()?;
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
-        ObjectBuilder::new(parent_state, self.validate_unique_fields)
+        Ok(ObjectBuilder::new(
+            parent_state,
+            self.validate_unique_fields,
+        ))
     }
 
     /// Append a value to the builder.
     ///
     /// # Panics
     ///
-    /// This method will panic if the variant contains duplicate field names in objects
-    /// when validation is enabled. For a fallible version, use [`VariantBuilder::try_append_value`]
+    /// Panics if a top-level variant value has already been written to this builder, or if the
+    /// variant contains duplicate field names in objects when validation is enabled. For a
+    /// fallible version, use [`VariantBuilder::try_append_value`].
     ///
     /// # Example
     /// ```
@@ -825,15 +912,19 @@ impl VariantBuilder {
     /// builder.append_value(42i8);
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.ensure_no_top_level_value();
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::append_variant(state, value.into())
     }
 
     /// Append a value to the builder.
+    ///
+    /// Returns an error if a top-level variant value has already been written to this builder.
     pub fn try_append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
+        self.check_no_top_level_value()?;
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::try_append_variant(state, value.into())
     }
@@ -846,18 +937,51 @@ impl VariantBuilder {
     ///
     /// The caller must ensure that the metadata dictionary entries are already built and correct for
     /// any objects or lists being appended.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a top-level variant value has already been written to this builder. For a
+    /// fallible version, use [`VariantBuilder::try_append_value_bytes`].
     pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        self.try_append_value_bytes(value).unwrap()
+    }
+
+    /// Tries to append a variant value to the builder by copying raw bytes when possible.
+    ///
+    /// This is the fallible version of [`VariantBuilder::append_value_bytes`]. Returns an error
+    /// if a top-level variant value has already been written to this builder.
+    pub fn try_append_value_bytes<'m, 'd>(
+        &mut self,
+        value: impl Into<Variant<'m, 'd>>,
+    ) -> Result<(), ArrowError> {
+        self.check_no_top_level_value()?;
         let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ValueBuilder::append_variant_bytes(state, value.into());
+        Ok(())
     }
 
     /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
+    ///
+    /// # Panics
+    ///
+    /// Panics if no top-level variant value has been appended. For a fallible version, use
+    /// [`VariantBuilder::try_finish`].
+    pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
+        self.try_finish().expect(EMPTY_BUILDER_MSG)
+    }
+
+    /// Finish the builder and return the metadata and value buffers.
+    ///
+    /// Returns an error if no top-level variant value has been appended.
+    pub fn try_finish(mut self) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
+        if !self.has_top_level_value() {
+            return Err(empty_builder_error());
+        }
         self.metadata_builder.finish();
-        (
+        Ok((
             self.metadata_builder.into_inner(),
             self.value_builder.into_inner(),
-        )
+        ))
     }
 }
 
@@ -915,11 +1039,11 @@ impl VariantBuilderExt for VariantBuilder {
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
-        Ok(self.new_list())
+        self.try_new_list()
     }
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
-        Ok(self.new_object())
+        self.try_new_object()
     }
 }
 
@@ -962,6 +1086,96 @@ mod tests {
             panic!("Failed to create variant from metadata and value: {metadata:?}, {value:?}")
         });
         assert_eq!(variant, expected);
+    }
+
+    #[test]
+    fn test_try_finish_empty_builder_errors() {
+        let builder = VariantBuilder::new();
+        let err = builder.try_finish().unwrap_err();
+        assert!(err.to_string().contains("empty"), "unexpected error: {err}");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn test_finish_empty_builder_panics() {
+        let builder = VariantBuilder::new();
+        let _ = builder.finish();
+    }
+
+    #[test]
+    fn test_try_append_value_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_append_value(2i32).unwrap_err();
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_append_value_bytes_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_append_value_bytes(2i32).unwrap_err();
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_new_list_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_new_list().expect_err("expected error");
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_new_object_after_value_errors() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let err = builder.try_new_object().expect_err("expected error");
+        assert!(
+            err.to_string().contains("only one is allowed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_append_value_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        builder.append_value(2i32);
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_append_value_bytes_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        builder.append_value_bytes(2i32);
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_new_list_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let _ = builder.new_list();
+    }
+
+    #[test]
+    #[should_panic(expected = "only one is allowed")]
+    fn test_new_object_after_value_panics() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1i32);
+        let _ = builder.new_object();
     }
 
     #[test]
@@ -1044,14 +1258,9 @@ mod tests {
             variant2.add_field_name("a");
             assert!(!variant2.metadata_builder.is_sorted);
 
-            // per the spec, make sure the variant will fail to build if only metadata is provided
-            let (m, v) = variant2.finish();
-            let res = Variant::try_new(&m, &v);
-            assert!(res.is_err());
-
-            // since it is not sorted, make sure the metadata says so
-            let header = VariantMetadata::try_new(&m).unwrap();
-            assert!(!header.is_sorted());
+            // per the spec, a variant must have a top-level value; try_finish() rejects empty
+            let err = variant2.try_finish().unwrap_err();
+            assert!(err.to_string().contains("empty"), "unexpected error: {err}");
         }
 
         // write out variant1 and make sure the sorted flag is properly encoded

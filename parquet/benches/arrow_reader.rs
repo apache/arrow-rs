@@ -35,7 +35,7 @@ use parquet::{
     arrow::array_reader::ArrayReader,
     basic::Encoding,
     column::page::PageIterator,
-    data_type::{ByteArrayType, Int32Type, Int64Type},
+    data_type::{BoolType, ByteArrayType, Int32Type, Int64Type},
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
@@ -105,6 +105,8 @@ fn build_test_schema() -> SchemaDescPtr {
                     optional FIXED_LEN_BYTE_ARRAY(32) element;
                 }
             }
+            REQUIRED BOOLEAN mandatory_bool_leaf;
+            OPTIONAL BOOLEAN optional_bool_leaf;
         }
         ";
     parse_message_type(message_type)
@@ -329,6 +331,47 @@ where
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
             page_builder.add_def_levels(max_def_level, &def_levels);
             page_builder.add_values::<T>(encoding, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
+fn build_encoded_bool_page_iterator(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+    encoding: Encoding,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; VALUES_PER_PAGE];
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values = Vec::with_capacity(VALUES_PER_PAGE);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
+            for _k in 0..VALUES_PER_PAGE {
+                let def_level = if rng.random::<f32>() < null_density {
+                    max_def_level - 1
+                } else {
+                    max_def_level
+                };
+                if def_level == max_def_level {
+                    let value = rng.random_bool(0.5);
+                    values.push(value);
+                }
+                def_levels.push(def_level);
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<BoolType>(encoding, &values);
             column_chunk_pages.push(page_builder.consume());
         }
         pages.push(column_chunk_pages);
@@ -742,12 +785,15 @@ fn create_int32_list_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            Some(2),
         )
         .unwrap(),
     ) as Box<dyn ArrayReader>;
     let field = Field::new_list_field(DataType::Int32, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 const FIXED_BYTE_LEN: usize = 32;
@@ -815,11 +861,14 @@ fn create_fixed32_list_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        Some(2),
     )
     .unwrap();
     let field = Field::new_list_field(DataType::FixedSizeBinary(FIXED_BYTE_LEN as i32), true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
@@ -869,6 +918,7 @@ fn create_primitive_array_reader(
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
             Box::new(reader)
@@ -879,6 +929,18 @@ fn create_primitive_array_reader(
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
+            Box::new(reader)
+        }
+        Type::BOOLEAN => {
+            let reader = PrimitiveArrayReader::<BoolType>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
             Box::new(reader)
@@ -898,6 +960,7 @@ fn create_f16_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         _ => unimplemented!(),
@@ -915,6 +978,7 @@ fn create_decimal_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         Type::FIXED_LEN_BYTE_ARRAY => make_fixed_len_byte_array_reader(
@@ -922,6 +986,7 @@ fn create_decimal_by_bytes_reader(
             column_desc,
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap(),
         _ => unimplemented!(),
@@ -937,6 +1002,7 @@ fn create_fixed_len_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -950,6 +1016,7 @@ fn create_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -963,6 +1030,7 @@ fn create_byte_view_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -976,6 +1044,7 @@ fn create_string_view_byte_array_reader(
         column_desc,
         None,
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -992,6 +1061,7 @@ fn create_string_byte_array_dictionary_reader(
         column_desc,
         Some(arrow_type),
         DEFAULT_BATCH_SIZE,
+        None,
     )
     .unwrap()
 }
@@ -1000,10 +1070,19 @@ fn create_string_list_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    let items = create_byte_array_reader(page_iterator, column_desc);
+    let items = make_byte_array_reader(
+        Box::new(page_iterator),
+        column_desc,
+        None,
+        DEFAULT_BATCH_SIZE,
+        Some(2),
+    )
+    .unwrap();
     let field = Field::new_list_field(DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        items, data_type, 2, 1, true, None,
+    ))
 }
 
 fn bench_byte_decimal<T>(
@@ -1575,6 +1654,47 @@ fn bench_primitive<T>(
     });
 }
 
+fn bench_boolean(
+    group: &mut BenchmarkGroup<WallTime>,
+    mandatory_column_desc: &ColumnDescPtr,
+    optional_column_desc: &ColumnDescPtr,
+) {
+    let mut count: usize = 0;
+
+    // plain encoded, no NULLs
+    let data =
+        build_encoded_bool_page_iterator(mandatory_column_desc.clone(), 0.0, Encoding::PLAIN);
+    group.bench_function("plain encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_bool_page_iterator(optional_column_desc.clone(), 0.0, Encoding::PLAIN);
+    group.bench_function("plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // plain encoded, half NULLs
+    let data = build_encoded_bool_page_iterator(optional_column_desc.clone(), 0.5, Encoding::PLAIN);
+    group.bench_function("plain encoded, optional, half NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+}
+
 // Benchmark reading a struct with a single primitive field.
 // No need to bench all encodings for the data, as that should already be covered by `bench_primitive`.
 // The only performance difference should be caused by the additional definition level.
@@ -1801,6 +1921,8 @@ fn add_benches(c: &mut Criterion) {
     let optional_struct_optional_in32_column_desc = schema.column(40);
     let int32_list_desc = schema.column(41);
     let fixed32_list_desc = schema.column(42);
+    let mandatory_bool_column_desc = schema.column(43);
+    let optional_bool_column_desc = schema.column(44);
 
     // primitive / int32 benchmarks
     // =============================
@@ -1891,6 +2013,15 @@ fn add_benches(c: &mut Criterion) {
         &optional_uint64_column_desc,
         0,
         1000,
+    );
+    group.finish();
+
+    // boolean benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/BooleanArray");
+    bench_boolean(
+        &mut group,
+        &mandatory_bool_column_desc,
+        &optional_bool_column_desc,
     );
     group.finish();
 

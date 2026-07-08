@@ -23,6 +23,8 @@ use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::bit_mask::set_bits;
+use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
@@ -373,6 +375,80 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
+fn interleave_list_primitive_child<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+    interleaved: &Interleave<'_, GenericListArray<O>>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+    data_type: &DataType,
+) -> ArrayRef {
+    let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_primitive::<T>())
+        .collect();
+
+    let has_child_nulls = child_arrays.iter().any(|a| a.null_count() > 0);
+
+    // Build values buffer by copying contiguous slices
+    let mut values: Vec<T::Native> = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let o = interleaved.arrays[array].value_offsets();
+        let start = o[row].as_usize();
+        let end = o[row + 1].as_usize();
+        if end > start {
+            values.extend_from_slice(&child_arrays[array].values()[start..end]);
+        }
+    }
+
+    // Build null buffer. Pre-allocate with 0x00 (all null), then:
+    // - Sources with nulls: set_bits copies the source validity bits into the destination range.
+    // - Sources without nulls: set the bit range to all 1s directly.
+    let nulls = if has_child_nulls {
+        let null_byte_len = bit_util::ceil(capacity, 8);
+        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
+
+        let mut offset_write = 0;
+        let mut output_null_count = 0usize;
+        for &(array, row) in indices {
+            let o = interleaved.arrays[array].value_offsets();
+            let start = o[row].as_usize();
+            let end = o[row + 1].as_usize();
+            let len = end - start;
+            if len > 0 {
+                match child_arrays[array].nulls() {
+                    Some(null_buffer) => {
+                        output_null_count += set_bits(
+                            output_null_buf.as_slice_mut(),
+                            null_buffer.validity(),
+                            offset_write,
+                            null_buffer.offset() + start,
+                            len,
+                        );
+                    }
+                    None => {
+                        // For a non-nullable source, set the bit range to all 1s directly.
+                        let buf = output_null_buf.as_slice_mut();
+                        (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
+                    }
+                }
+            }
+            offset_write += len;
+        }
+
+        if output_null_count > 0 {
+            let bool_buf = BooleanBuffer::new(output_null_buf.into(), 0, capacity);
+            // SAFETY: null_count is accumulated from set_bits which correctly counts unset bits
+            Some(unsafe { NullBuffer::new_unchecked(bool_buf, output_null_count) })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+}
+
 fn interleave_list<O: OffsetSizeTrait>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -380,6 +456,7 @@ fn interleave_list<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericListArray<O>>::new(values, indices);
 
+    // Step 1: compute output offsets and total child capacity
     let mut capacity = 0usize;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(O::from_usize(0).unwrap());
@@ -392,29 +469,46 @@ fn interleave_list<O: OffsetSizeTrait>(
         );
     }
 
-    let mut child_indices = Vec::with_capacity(capacity);
-    for (array, row) in indices {
-        let list = interleaved.arrays[*array];
-        let start = list.value_offsets()[*row].as_usize();
-        let end = list.value_offsets()[*row + 1].as_usize();
-        child_indices.extend((start..end).map(|i| (*array, i)));
+    // Step 2: build child values.
+    macro_rules! list_primitive_helper {
+        ($t:ty) => {
+            interleave_list_primitive_child::<O, $t>(
+                &interleaved,
+                indices,
+                capacity,
+                field.data_type(),
+            )
+        };
     }
 
-    let child_arrays: Vec<&dyn Array> = interleaved
-        .arrays
-        .iter()
-        .map(|list| list.values().as_ref())
-        .collect();
+    let child_values = downcast_primitive! {
+        // For primitive child types, directly copy typed value slices and null bit
+        // ranges, avoiding both the intermediate child_indices Vec allocation and
+        // MutableArrayData's function pointer indirection.
+        field.data_type() => (list_primitive_helper),
+        _ => {
+            // For complex child types (nested lists, structs, views, dictionaries, etc.),
+            // use recursive interleave to benefit from type-specific optimizations.
+            let mut child_indices = Vec::with_capacity(capacity);
+            for (array, row) in indices {
+                let list = interleaved.arrays[*array];
+                let start = list.value_offsets()[*row].as_usize();
+                let end = list.value_offsets()[*row + 1].as_usize();
+                child_indices.extend((start..end).map(|i| (*array, i)));
+            }
 
-    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+            let child_arrays: Vec<&dyn Array> = interleaved
+                .arrays
+                .iter()
+                .map(|list| list.values().as_ref())
+                .collect();
+            interleave(&child_arrays, &child_indices)?
+        }
+    };
 
     let offsets = OffsetBuffer::new(offsets.into());
-    let list_array = GenericListArray::<O>::new(
-        field.clone(),
-        offsets,
-        interleaved_values,
-        interleaved.nulls,
-    );
+    let list_array =
+        GenericListArray::<O>::new(field.clone(), offsets, child_values, interleaved.nulls);
 
     Ok(Arc::new(list_array))
 }
@@ -539,7 +633,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         let start = list.offsets()[row_idx].as_usize();
         let size = list.sizes()[row_idx].as_usize();
         if size > 0 {
-            mutable_child.extend(array_idx, start, start + size);
+            mutable_child.try_extend(array_idx, start, start + size)?;
         }
     }
 
@@ -613,7 +707,7 @@ fn interleave_fallback(
         }
 
         // emit current batch of rows for current buffer
-        array_data.extend(cur_array, start_row_idx, end_row_idx);
+        array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
 
         // start new batch of rows
         cur_array = array;
@@ -622,7 +716,7 @@ fn interleave_fallback(
     }
 
     // emit final batch of rows
-    array_data.extend(cur_array, start_row_idx, end_row_idx);
+    array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
     Ok(make_array(array_data.freeze()))
 }
 
@@ -761,10 +855,12 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
-    use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
-    use arrow_array::types::Int8Type;
+    use arrow_array::builder::{
+        GenericListBuilder, Int32Builder, PrimitiveBuilder, PrimitiveRunBuilder,
+    };
+    use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, TimeUnit};
 
     #[test]
     fn test_primitive() {
@@ -949,6 +1045,103 @@ mod tests {
     #[test]
     fn test_large_lists() {
         test_interleave_lists::<i64>();
+    }
+
+    /// One list slot in a `List<Primitive>` fixture: `None` is a null slot,
+    /// `Some(items)` is a list whose items may individually be null.
+    type ListRow<T> = Option<Vec<Option<<T as ArrowPrimitiveType>::Native>>>;
+
+    /// Build a `List<Primitive>` from row fixtures. The primitive child carries
+    /// `data_type` (e.g. its Decimal scale or timezone).
+    fn list_of_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        rows: &[ListRow<T>],
+    ) -> GenericListArray<O> {
+        let mut builder = GenericListBuilder::<O, _>::new(
+            PrimitiveBuilder::<T>::new().with_data_type(data_type.clone()),
+        );
+        for row in rows {
+            match row {
+                Some(items) => {
+                    items
+                        .iter()
+                        .for_each(|v| builder.values().append_option(*v));
+                    builder.append(true);
+                }
+                None => builder.append(false),
+            }
+        }
+        builder.finish()
+    }
+
+    /// Interleave list fixtures and assert both the result and that the
+    /// interleaved primitive child preserves the parameterized `data_type`.
+    fn check_interleave_list_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        inputs: &[&[ListRow<T>]],
+        indices: &[(usize, usize)],
+        expected: &[ListRow<T>],
+    ) {
+        let arrays: Vec<_> = inputs
+            .iter()
+            .map(|rows| list_of_primitive::<O, T>(data_type, rows))
+            .collect();
+        let refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+
+        let values = interleave(&refs, indices).unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListArray<O>>()
+            .unwrap();
+
+        assert_eq!(v, &list_of_primitive::<O, T>(data_type, expected));
+        // The child's logical type (Decimal precision/scale, Timestamp timezone)
+        // must be preserved, not reset to the primitive's default.
+        assert_eq!(v.values().data_type(), data_type);
+    }
+
+    fn test_interleave_lists_decimal<O: OffsetSizeTrait>() {
+        // List<Decimal128(20, 3)>, exercising child-element nulls and null slots.
+        check_interleave_list_primitive::<O, Decimal128Type>(
+            &DataType::Decimal128(20, 3),
+            &[
+                &[
+                    Some(vec![Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None]),
+                ], // a
+                &[Some(vec![Some(4)]), Some(vec![Some(5), Some(6)])], // b
+            ],
+            &[(0, 2), (0, 1), (1, 0), (1, 1)],
+            &[
+                Some(vec![Some(3), None]),
+                None,
+                Some(vec![Some(4)]),
+                Some(vec![Some(5), Some(6)]),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_lists_decimal() {
+        test_interleave_lists_decimal::<i32>();
+        test_interleave_lists_decimal::<i64>();
+    }
+
+    fn test_interleave_lists_timestamp_tz<O: OffsetSizeTrait>() {
+        // List<Timestamp(Microsecond, "+08:00")>, checking the timezone survives.
+        check_interleave_list_primitive::<O, TimestampMicrosecondType>(
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("+08:00".into())),
+            &[&[Some(vec![Some(1), Some(2)]), Some(vec![Some(3)])]],
+            &[(0, 1), (0, 0)],
+            &[Some(vec![Some(3)]), Some(vec![Some(1), Some(2)])],
+        );
+    }
+
+    #[test]
+    fn test_lists_timestamp_tz() {
+        test_interleave_lists_timestamp_tz::<i32>();
+        test_interleave_lists_timestamp_tz::<i64>();
     }
 
     fn test_interleave_list_views<O: OffsetSizeTrait>() {

@@ -82,7 +82,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
             writeln!(
                 out,
                 "  {}: {}",
-                &kv.key,
+                kv.key,
                 kv.value.as_ref().unwrap_or(&"".to_owned())
             );
         }
@@ -469,7 +469,7 @@ mod tests {
             let mut p = Printer::new(&mut s);
             p.print(&message);
         }
-        println!("{}", &s);
+        println!("{s}");
         let parsed = parse_message_type(&s).unwrap();
         assert_eq!(message, parsed);
     }

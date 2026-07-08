@@ -17,13 +17,10 @@
 
 use crate::array::PrimitiveArray;
 use crate::null_sentinel;
-use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
-    NullBuffer, bit_util, i256,
+    BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, NullBuffer, bit_util, i256,
 };
-use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
 
@@ -364,7 +361,6 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
 
     let len = rows.len();
 
-    let mut null_count = 0;
     let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
     let mut values = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
 
@@ -377,7 +373,6 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
         for bit_idx in 0..64 {
             let i = split_off(&mut rows[bit_idx + chunk * 64], 2);
             let (null, value) = (i[0] == 1, i[1] == true_val);
-            null_count += !null as usize;
             null_packed |= (null as u64) << bit_idx;
             values_packed |= (value as u64) << bit_idx;
         }
@@ -393,7 +388,6 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
         for bit_idx in 0..remainder {
             let i = split_off(&mut rows[bit_idx + chunks * 64], 2);
             let (null, value) = (i[0] == 1, i[1] == true_val);
-            null_count += !null as usize;
             null_packed |= (null as u64) << bit_idx;
             values_packed |= (value as u64) << bit_idx;
         }
@@ -402,61 +396,19 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
         values.push(values_packed);
     }
 
-    let builder = ArrayDataBuilder::new(DataType::Boolean)
-        .len(rows.len())
-        .null_count(null_count)
-        .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls.into()));
+    let nulls = NullBuffer::new(BooleanBuffer::new(nulls.into(), 0, len));
+    let nulls = (nulls.null_count() > 0).then_some(nulls);
 
-    // SAFETY:
-    // Buffers are the correct length
-    unsafe { BooleanArray::from(builder.build_unchecked()) }
+    BooleanArray::new(BooleanBuffer::new(values.into(), 0, len), nulls)
 }
 
 /// Decodes a single byte from each row, interpreting `0x01` as a valid value
-/// and all other values as a null
-///
-/// Returns the null count and null buffer
-pub fn decode_nulls(rows: &[&[u8]]) -> (usize, Buffer) {
-    let mut null_count = 0;
-    let buffer = MutableBuffer::collect_bool(rows.len(), |idx| {
-        let valid = rows[idx][0] == 1;
-        null_count += !valid as usize;
-        valid
-    })
-    .into();
-    (null_count, buffer)
-}
-
-/// Decodes a `ArrayData` from rows based on the provided `FixedLengthEncoding` `T`
-///
-/// # Safety
-///
-/// `data_type` must be appropriate native type for `T`
-unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
-    rows: &mut [&[u8]],
-    data_type: DataType,
-    options: SortOptions,
-) -> ArrayData {
-    let len = rows.len();
-
-    let mut values = BufferBuilder::<T>::new(len);
-    let (null_count, nulls) = decode_nulls(rows);
-
-    for row in rows {
-        let i = split_off(row, T::ENCODED_LEN);
-        let value = T::Encoded::from_slice(&i[1..], options.descending);
-        values.append(T::decode(value));
-    }
-
-    let builder = ArrayDataBuilder::new(data_type)
-        .len(len)
-        .null_count(null_count)
-        .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls));
-
-    // SAFETY: Buffers correct length
-    unsafe { builder.build_unchecked() }
+/// and all other values as a null. Optionally returns `None` if there are no
+/// null values.
+pub fn decode_nulls(rows: &[&[u8]]) -> Option<NullBuffer> {
+    let nulls = BooleanBuffer::collect_bool(rows.len(), |idx| rows[idx][0] == 1);
+    let nulls = NullBuffer::new(nulls);
+    (nulls.null_count() > 0).then_some(nulls)
 }
 
 /// Decodes a `PrimitiveArray` from rows
@@ -469,9 +421,21 @@ where
     T::Native: FixedLengthEncoding,
 {
     assert!(PrimitiveArray::<T>::is_compatible(&data_type));
-    // SAFETY:
-    // Validated data type above
-    unsafe { decode_fixed::<T::Native>(rows, data_type, options).into() }
+
+    let nulls = decode_nulls(rows);
+    let values = rows
+        .iter_mut()
+        .map(|row| {
+            let i = split_off(row, T::Native::ENCODED_LEN);
+            let value = <T::Native as FixedLengthEncoding>::Encoded::from_slice(
+                &i[1..],
+                options.descending,
+            );
+            T::Native::decode(value)
+        })
+        .collect::<Vec<_>>();
+
+    PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
 }
 
 /// Decodes a `FixedLengthBinary` from rows
@@ -483,13 +447,12 @@ pub fn decode_fixed_size_binary(
     size: i32,
     options: SortOptions,
 ) -> FixedSizeBinaryArray {
-    let len = rows.len();
-
     if size < 0 {
         panic!("cannot decode FixedSizeBinary({size})");
     }
-    let mut values = MutableBuffer::new(size as usize * rows.len());
-    let (null_count, nulls) = decode_nulls(rows);
+    let num_rows = rows.len();
+    let mut values = MutableBuffer::new(size as usize * num_rows);
+    let nulls = decode_nulls(rows);
 
     let encoded_len = size as usize + 1;
 
@@ -504,12 +467,6 @@ pub fn decode_fixed_size_binary(
         }
     }
 
-    let builder = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
-        .len(len)
-        .null_count(null_count)
-        .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls));
-
-    // SAFETY: Buffers correct length
-    unsafe { builder.build_unchecked().into() }
+    // Need to set the length since when size is 0 and no nulls the length could not be determined by FixedSizeBinaryArray
+    FixedSizeBinaryArray::try_new_with_len(size, values.into(), nulls, num_rows).unwrap()
 }
