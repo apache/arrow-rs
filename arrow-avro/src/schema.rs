@@ -3201,11 +3201,19 @@ mod tests {
     #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_map_duration_value_extra() {
-        let val_field = ArrowField::new("value", DataType::Duration(TimeUnit::Second), true);
+        let val_field = ArrowField::new(
+            ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Duration(TimeUnit::Second),
+            true,
+        );
         let entries_struct = ArrowField::new(
-            "entries",
+            ArrowField::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(
+                    ArrowField::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                ),
                 val_field,
             ])),
             false,

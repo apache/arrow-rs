@@ -523,7 +523,11 @@ mod tests {
     #[should_panic(expected = "Keys field must not be nullable")]
     fn test_with_nullable_keys_field() {
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(Arc::new(Field::new("key", DataType::Int32, true)));
+            .with_keys_field(Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )));
 
         builder.keys().append_value(1);
         builder.values().append_value(2);
@@ -536,7 +540,11 @@ mod tests {
     #[should_panic(expected = "Incorrect datatype")]
     fn test_keys_field_type_mismatch() {
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(Arc::new(Field::new("key", DataType::Utf8, false)));
+            .with_keys_field(Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )));
 
         builder.keys().append_value(1);
         builder.values().append_value(2);

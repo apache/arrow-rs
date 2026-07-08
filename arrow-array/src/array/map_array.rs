@@ -347,9 +347,13 @@ impl MapArray {
         let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
         let keys_data = StringArray::from_iter_values(keys);
 
-        let keys_field = Arc::new(Field::new("key", DataType::Utf8, false));
+        let keys_field = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            false,
+        ));
         let values_field = Arc::new(Field::new(
-            "value",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             values.data_type().clone(),
             values.null_count() > 0,
         ));
@@ -838,8 +842,8 @@ mod tests {
         // A DictionaryArray has similar buffer layout to a MapArray
         // but the meaning of the values differs
         let struct_t = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("value", DataType::UInt32, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, true),
         ]));
         let dict_t = DataType::Dictionary(Box::new(DataType::Int32), Box::new(struct_t));
         let _ = MapArray::from(ArrayData::new_empty(&dict_t));
@@ -870,8 +874,16 @@ mod tests {
 
         let key_array = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
-        let keys_field = Arc::new(Field::new("key", DataType::Utf8, false));
-        let values_field = Arc::new(Field::new("value", DataType::UInt32, false));
+        let keys_field = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            false,
+        ));
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
