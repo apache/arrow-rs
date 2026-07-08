@@ -295,7 +295,7 @@ union LogicalType {
    17: (GeometryType) Geometry
    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
    18: (GeographyType) Geography
-   /// A reference to an external file.
+   /// A reference to a range of bytes, stored inline, elsewhere in this file, or in an external file.
    19: File
 }
 );

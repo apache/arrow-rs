@@ -1182,7 +1182,7 @@ mod tests {
             let mut p = Printer::new(&mut s);
             let path_field = Arc::new(
                 Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
-                    .with_repetition(Repetition::REQUIRED)
+                    .with_repetition(Repetition::OPTIONAL)
                     .with_logical_type(Some(LogicalType::String))
                     .build()
                     .unwrap(),
@@ -1207,7 +1207,7 @@ mod tests {
         }
         let expected = "message schema {
   REQUIRED group f (FILE) {
-    REQUIRED BYTE_ARRAY path (STRING);
+    OPTIONAL BYTE_ARRAY path (STRING);
     OPTIONAL INT64 size;
   }
 }";

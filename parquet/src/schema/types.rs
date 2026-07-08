@@ -666,35 +666,92 @@ impl<'a> GroupTypeBuilder<'a> {
     }
 }
 
+/// Validates the fields of a `FILE`-annotated group against the Parquet
+/// [specification].
+///
+/// A `FILE` group annotates a reference to a range of bytes. Every field is
+/// optional both in the schema and in the data: a writer may omit any field
+/// from the group definition, and any field that is present must have a field
+/// repetition type of `OPTIONAL`. The recognized fields (identified by name)
+/// and their expected physical/logical types are:
+///
+/// | Field          | Physical type | Logical type |
+/// |----------------|---------------|--------------|
+/// | `path`         | `BYTE_ARRAY`  | `STRING`     |
+/// | `offset`       | `INT64`       | —            |
+/// | `size`         | `INT64`       | —            |
+/// | `content_type` | `BYTE_ARRAY`  | `STRING`     |
+/// | `checksum`     | `BYTE_ARRAY`  | `STRING`     |
+/// | `inline`       | `BYTE_ARRAY`  | —            |
+///
+/// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
 fn validate_file_type_fields(name: &str, fields: &[TypePtr]) -> Result<()> {
-    const VALID_OPTIONAL_FIELDS: &[&str] = &["size", "offset", "etag"];
-    let mut has_path = false;
+    // (name, expected physical type, expected logical type)
+    const VALID_FIELDS: &[(&str, PhysicalType, Option<LogicalType>)] = &[
+        ("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+        ("offset", PhysicalType::INT64, None),
+        ("size", PhysicalType::INT64, None),
+        (
+            "content_type",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        (
+            "checksum",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        ("inline", PhysicalType::BYTE_ARRAY, None),
+    ];
+
     for field in fields {
         let field_name = field.get_basic_info().name();
-        if field_name == "path" {
-            let is_required = field.get_basic_info().has_repetition()
-                && field.get_basic_info().repetition() == Repetition::REQUIRED;
-            if !is_required {
-                return Err(general_err!(
-                    "FILE type field 'path' must be REQUIRED in group '{}'",
-                    name
-                ));
-            }
-            has_path = true;
-        } else if !VALID_OPTIONAL_FIELDS.contains(&field_name) {
+        let Some((_, expected_physical, expected_logical)) =
+            VALID_FIELDS.iter().find(|(n, _, _)| *n == field_name)
+        else {
             return Err(general_err!(
                 "FILE type group '{}' contains unrecognized field '{}'. \
-                 Valid fields are: path, size, offset, etag",
+                 Valid fields are: path, offset, size, content_type, checksum, inline",
                 name,
                 field_name
             ));
+        };
+
+        // Every field present in a FILE group must be OPTIONAL.
+        let is_optional = field.get_basic_info().has_repetition()
+            && field.get_basic_info().repetition() == Repetition::OPTIONAL;
+        if !is_optional {
+            return Err(general_err!(
+                "FILE type field '{}' must be OPTIONAL in group '{}'",
+                field_name,
+                name
+            ));
         }
-    }
-    if !has_path {
-        return Err(general_err!(
-            "FILE type group '{}' must contain required field 'path'",
-            name
-        ));
+
+        // FILE fields are always primitives with a fixed physical type.
+        if field.is_group() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must be a primitive type",
+                field_name,
+                name
+            ));
+        }
+        if field.get_physical_type() != *expected_physical {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have physical type {:?}",
+                field_name,
+                name,
+                expected_physical
+            ));
+        }
+        if field.get_basic_info().logical_type_ref() != expected_logical.as_ref() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have logical type {:?}",
+                field_name,
+                name,
+                expected_logical
+            ));
+        }
     }
     Ok(())
 }
@@ -2541,39 +2598,44 @@ mod tests {
         assert_eq!(result_schema, expected_schema);
     }
 
+    /// Builds an `OPTIONAL` primitive field for use inside a `FILE` group.
+    fn file_field(name: &str, physical: PhysicalType, logical: Option<LogicalType>) -> TypePtr {
+        Arc::new(
+            Type::primitive_type_builder(name, physical)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_logical_type(logical)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// The full set of recognized `FILE` fields, all `OPTIONAL`, per the spec.
+    fn all_file_fields() -> Vec<TypePtr> {
+        vec![
+            file_field("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+            file_field("offset", PhysicalType::INT64, None),
+            file_field("size", PhysicalType::INT64, None),
+            file_field(
+                "content_type",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field(
+                "checksum",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field("inline", PhysicalType::BYTE_ARRAY, None),
+        ]
+    }
+
     #[test]
     fn test_file_logical_type_roundtrip() {
-        let path_field = Arc::new(
-            Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::REQUIRED)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
-        let size_field = Arc::new(
-            Type::primitive_type_builder("size", PhysicalType::INT64)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let offset_field = Arc::new(
-            Type::primitive_type_builder("offset", PhysicalType::INT64)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let etag_field = Arc::new(
-            Type::primitive_type_builder("etag", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
         let file_group = Arc::new(
             Type::group_type_builder("f")
                 .with_repetition(Repetition::REQUIRED)
                 .with_logical_type(Some(LogicalType::File))
-                .with_fields(vec![path_field, size_field, offset_field, etag_field])
+                .with_fields(all_file_fields())
                 .build()
                 .unwrap(),
         );
@@ -2586,95 +2648,85 @@ mod tests {
         let result = roundtrip_schema(schema.clone()).unwrap();
         assert_eq!(result, schema);
         assert_eq!(
-            result
-                .get_fields()[0]
-                .get_basic_info()
-                .logical_type_ref(),
-            Some(&LogicalType::File)
-        );
-    }
-
-    #[test]
-    fn test_file_logical_type_path_only() {
-        let path_field = Arc::new(
-            Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::REQUIRED)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
-        let result = Type::group_type_builder("file_field")
-            .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![path_field])
-            .build();
-        assert!(result.is_ok());
-        let tp = result.unwrap();
-        assert_eq!(
-            tp.get_basic_info().logical_type_ref(),
+            result.get_fields()[0].get_basic_info().logical_type_ref(),
             Some(&LogicalType::File)
         );
     }
 
     #[test]
     fn test_file_logical_type_all_fields() {
-        let path_field = Arc::new(
-            Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::REQUIRED)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
-        let size_field = Arc::new(
-            Type::primitive_type_builder("size", PhysicalType::INT64)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let offset_field = Arc::new(
-            Type::primitive_type_builder("offset", PhysicalType::INT64)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let etag_field = Arc::new(
-            Type::primitive_type_builder("etag", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
         let result = Type::group_type_builder("file_field")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![path_field, size_field, offset_field, etag_field])
+            .with_fields(all_file_fields())
             .build();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().get_fields().len(), 4);
+        assert_eq!(result.unwrap().get_fields().len(), 6);
     }
 
     #[test]
-    fn test_file_logical_type_requires_path_field() {
-        let size_field = Arc::new(
-            Type::primitive_type_builder("size", PhysicalType::INT64)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let result = Type::group_type_builder("missing_path")
+    fn test_file_logical_type_path_only() {
+        // Every field is optional, so a group may define just `path`.
+        let result = Type::group_type_builder("file_field")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![size_field])
+            .with_fields(vec![file_field(
+                "path",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            )])
             .build();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must contain required field 'path'"));
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().get_basic_info().logical_type_ref(),
+            Some(&LogicalType::File)
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_inline_only() {
+        // An inline-only group need only define `inline`.
+        let result = Type::group_type_builder("inline_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![file_field("inline", PhysicalType::BYTE_ARRAY, None)])
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_logical_type_empty_group_is_allowed() {
+        // No field is mandatory in the schema, so an empty group is valid.
+        let result = Type::group_type_builder("empty_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![])
+            .build();
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_file_logical_type_rejects_unrecognized_field() {
+        let unknown_field = file_field("unknown_field", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![
+                file_field("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+                unknown_field,
+            ])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type group 'bad_file' contains unrecognized field \
+             'unknown_field'. Valid fields are: path, offset, size, content_type, \
+             checksum, inline"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_requires_optional_fields() {
+        // A REQUIRED field is no longer valid: every field must be OPTIONAL.
         let path_field = Arc::new(
             Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
                 .with_repetition(Repetition::REQUIRED)
@@ -2682,43 +2734,46 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let unknown_field = Arc::new(
-            Type::primitive_type_builder("unknown_field", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
-        );
-        let result = Type::group_type_builder("bad_file")
-            .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![path_field, unknown_field])
-            .build();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unrecognized field"));
-    }
-
-    #[test]
-    fn test_file_logical_type_requires_required_path_field() {
-        let path_field = Arc::new(
-            Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
-                .with_repetition(Repetition::OPTIONAL)
-                .with_logical_type(Some(LogicalType::String))
-                .build()
-                .unwrap(),
-        );
-        let result = Type::group_type_builder("optional_path")
+        let result = Type::group_type_builder("required_path")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
             .with_fields(vec![path_field])
             .build();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("'path' must be REQUIRED"));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'path' must be OPTIONAL in group 'required_path'"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_physical_type() {
+        // `size` must be an INT64, not a BYTE_ARRAY.
+        let bad_size = file_field("size", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_size")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_size])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'size' in group 'bad_size' must have physical type INT64"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_logical_type() {
+        // `path` must carry the STRING logical type.
+        let bad_path = file_field("path", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_path")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_path])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'path' in group 'bad_path' must have logical type \
+             Some(String)"
+        );
     }
 
     #[test]
