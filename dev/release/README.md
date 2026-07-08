@@ -145,9 +145,8 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate tarball
 
-Send an email to dev@arrow.apache.org. See [this example of how the email should look](https://lists.apache.org/thread/2vpxdt6n7kzo72sxpr7q8yyby4495gnk).
-Adjust the contents of the email based on the version being released and the output
-of the script.
+Send an email, based on the output from the script to dev@arrow.apache.org.
+See an [example of how the email should look](https://lists.apache.org/thread/2vpxdt6n7kzo72sxpr7q8yyby4495gnk).
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
