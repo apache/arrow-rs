@@ -72,7 +72,7 @@ macro_rules! impl_primitive_from_variant {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
                 let value = match shred {
-                    true => ($shred_fun)(variant),
+                    true => $shred_fun(variant),
                     false => $get_method(variant),
                 };
                 $( let value = value.and_then($cast_fn); )?
@@ -448,51 +448,115 @@ where
 ///
 /// This function is unlike `variant_to_unscaled_decim`, it would never rescale the decimal value,
 /// and only return the unscaled integer representation for the specific decimal variants.
-pub(crate) fn shred_variant_to_unscaled_decimal<O>(variant: &Variant<'_, '_>) -> Option<O::Native>
+pub(crate) fn shred_variant_to_unscaled_decimal<O>(
+    variant: &Variant<'_, '_>,
+    precision: u8,
+    scale: i8,
+) -> Option<O::Native>
 where
     O: ShredDecimalVariant,
     O::Native: DecimalCast,
 {
     match variant {
         Variant::Decimal4(_) | Variant::Decimal8(_) | Variant::Decimal16(_) => {
-            O::shred_variant(variant)
+            O::shred_variant(variant, precision, scale)
         }
         _ => None,
     }
 }
 pub(crate) trait ShredDecimalVariant: DecimalType {
-    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native>;
+    fn shred_variant(value: &Variant<'_, '_>, precision: u8, scale: i8) -> Option<Self::Native>;
 }
 
 impl ShredDecimalVariant for Decimal32Type {
-    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+    fn shred_variant(value: &Variant<'_, '_>, precision: u8, scale: i8) -> Option<Self::Native> {
         match *value {
-            Variant::Decimal4(d) => Some(d.integer()),
+            Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, Decimal32Type>(
+                d.integer(),
+                VariantDecimal4::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, Decimal32Type>(
+                d.integer(),
+                VariantDecimal8::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, Decimal32Type>(
+                d.integer(),
+                VariantDecimal16::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
             _ => None,
         }
     }
 }
 
 impl ShredDecimalVariant for Decimal64Type {
-    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+    fn shred_variant(value: &Variant<'_, '_>, precision: u8, scale: i8) -> Option<Self::Native> {
         match *value {
-            Variant::Decimal8(d) => Some(d.integer()),
+            Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, Decimal64Type>(
+                d.integer(),
+                VariantDecimal4::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, Decimal64Type>(
+                d.integer(),
+                VariantDecimal8::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, Decimal64Type>(
+                d.integer(),
+                VariantDecimal16::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
             _ => None,
         }
     }
 }
 
 impl ShredDecimalVariant for Decimal128Type {
-    fn shred_variant(value: &Variant<'_, '_>) -> Option<Self::Native> {
+    fn shred_variant(value: &Variant<'_, '_>, precision: u8, scale: i8) -> Option<Self::Native> {
         match *value {
-            Variant::Decimal16(d) => Some(d.integer()),
+            Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, Decimal128Type>(
+                d.integer(),
+                VariantDecimal4::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, Decimal128Type>(
+                d.integer(),
+                VariantDecimal8::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
+            Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, Decimal128Type>(
+                d.integer(),
+                VariantDecimal16::MAX_PRECISION,
+                d.scale() as i8,
+                precision,
+                scale,
+            ),
             _ => None,
         }
     }
 }
 
 impl ShredDecimalVariant for Decimal256Type {
-    fn shred_variant(_value: &Variant<'_, '_>) -> Option<Self::Native> {
+    fn shred_variant(_value: &Variant<'_, '_>, _precision: u8, _scale: i8) -> Option<Self::Native> {
         None // always return none because we'll never shred to decimal256
     }
 }
