@@ -61,6 +61,7 @@ impl MapArray {
     /// * `entries.null_count() != 0`
     /// * `entries.columns().len() != 2`
     /// * `field.data_type() != entries.data_type()`
+    /// * the keys field is nullable
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<i32>,
@@ -108,6 +109,16 @@ impl MapArray {
                 entries.columns().len()
             )));
         }
+
+        // The Arrow spec requires the "key" field to be non-nullable
+        // <https://github.com/apache/arrow/blob/98347d233f03bcf4d116d77f1769d498902b1fc8/format/Schema.fbs#L138>
+        if entries.fields()[0].is_nullable() {
+            return Err(ArrowError::InvalidArgumentError(
+                "MapArray keys field cannot be nullable".to_string(),
+            ));
+        }
+        // No need to verify if key contain nulls since `StructArray`
+        // already disallow nulls for non nullable fields
 
         Ok(Self {
             data_type: DataType::Map(field, ordered),
@@ -928,6 +939,27 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Invalid argument error: MapArray entries must contain two children, got 3"
+        );
+    }
+
+    #[test]
+    fn test_try_new_nullable_keys_field() {
+        // https://github.com/apache/arrow-rs/issues/10268
+        let keys = Int32Array::from(vec![Some(1), None]);
+        let values = Int32Array::from(vec![None, Some(2)]);
+        let fields = Fields::from(vec![
+            Field::new("keys", DataType::Int32, true),
+            Field::new("values", DataType::Int32, true),
+        ]);
+        let entries =
+            StructArray::new(fields.clone(), vec![Arc::new(keys), Arc::new(values)], None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+
+        let err = MapArray::try_new(field, OffsetBuffer::from_lengths([2]), entries, None, false)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: MapArray keys field cannot be nullable"
         );
     }
 

@@ -41,7 +41,7 @@ pool = []
 
 [dependencies]
 bytes = { version = "1.4" }
-num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }
+num-bigint = { version = "0.5.0", default-features = false, features = ["std"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }
 
