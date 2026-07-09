@@ -1102,7 +1102,7 @@ where
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
         match variant_cast_with_options(value, self.cast_options, |value| match self.shred {
-            true => shred_variant_to_unscaled_decimal::<T>(value),
+            true => shred_variant_to_unscaled_decimal::<T>(value, self.precision, self.scale),
             false => variant_to_unscaled_decimal::<T>(value, self.precision, self.scale),
         }) {
             Ok(Some(scaled)) => {
