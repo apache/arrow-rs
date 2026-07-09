@@ -608,7 +608,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `DateTime<Utc>` if possible.
     ///
-    /// Returns `Some(DateTime<Utc>)` for timestamp nano variants,
+    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
     /// `None` for other variants.
     ///
     /// # Examples
@@ -649,7 +649,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `NaiveDateTime` if possible.
     ///
-    /// Returns `Some(NaiveDateTime)` for timestamp nano variants,
+    /// Returns `Some(NaiveDateTime)` for timestamp variants,
     /// `None` for other variants.
     ///
     /// # Examples
@@ -775,7 +775,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     /// use parquet_variant::Variant;
     ///
-    /// // you can read an int64 variant into an int8 if it fits
+    /// // you can read an int64 variant into an i8 if it fits
     /// let v1 = Variant::from(123i64);
     /// assert_eq!(v1.as_int8(), Some(123i8));
     ///
@@ -783,7 +783,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(1234i64);
     /// assert_eq!(v2.as_int8(), None);
     ///
-    /// // but not for other variants
+    /// // or if the variant cannot be cast into an integer
     /// let v3 = Variant::from("hello");
     /// assert_eq!(v3.as_int8(), None);
     /// ```
@@ -807,7 +807,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     /// use parquet_variant::Variant;
     ///
-    /// // you can read an int64 variant into an int16 if it fits
+    /// // you can read an int64 variant into an i16 if it fits
     /// let v1 = Variant::from(123i64);
     /// assert_eq!(v1.as_int16(), Some(123i16));
     ///
@@ -815,7 +815,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(123456i64);
     /// assert_eq!(v2.as_int16(), None);
     ///
-    /// // but not for other variants
+    /// // or if the variant cannot be cast into an integer
     /// let v3 = Variant::from("hello");
     /// assert_eq!(v3.as_int16(), None);
     /// ```
@@ -829,9 +829,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to an `i32`.
+    /// Converts this variant to an `i32` if possible.
     ///
-    /// Returns `Some(i32)` for Variant::Int32, `None` for other variants.
+    /// Returns `Some(i32)` for int variants that fit in `i32` range,
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -846,11 +847,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(1231i64);
     /// assert_eq!(v2.as_int32(), Some(1231i32));
     ///
-    /// // but not if the value overflows
+    /// // but not if it would overflow
     /// let v3 = Variant::from(1234567890123i64);
     /// assert_eq!(v3.as_f32(), None);
     ///
-    /// // or from other variants
+    /// // or if the variant cannot be cast into an integer
     /// let v4 = Variant::from("hello");
     /// assert_eq!(v4.as_f32(), None)
     /// ```
@@ -1022,7 +1023,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     /// use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8};
     ///
-    /// // you can read decimal4 variant into VariantDecimal4
+    /// // you can extract decimal parts from smaller or equally-sized decimal variants
     /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
     /// assert_eq!(v1.as_decimal4(), VariantDecimal4::try_new(1234_i32, 2).ok());
     ///
@@ -1050,7 +1051,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Converts this variant to tuple with an 8-byte unscaled value if possible.
     ///
     /// Returns `Some((i64, u8))` for decimal variants where the unscaled value
-    /// fits in `i64` range, `None` for other variants or the value would overflow.
+    /// fits in `i64` range, `None` for other variants or decimal values that would overflow.
     ///
     /// # Examples
     ///
@@ -1082,9 +1083,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to tuple with a 16-byte unscaled value.
+    /// Converts this variant to tuple with a 16-byte unscaled value if possible.
     ///
-    /// Returns `Some((i128, u8))` for decimal variants, `None` for other variants.
+    /// Returns `Some((i128, u8))` for decimal variants,
+    /// `None` for other variants or decimal values that would overflow.
     ///
     /// # Examples
     ///
@@ -1096,7 +1098,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(d);
     /// assert_eq!(v1.as_decimal16(), VariantDecimal16::try_new(2e19 as i128, 2).ok());
     ///
-    /// // but not for other variants
+    /// // but not if the variant is not a decimal
     /// let v2 = Variant::from("hello");
     /// assert_eq!(v2.as_decimal16(), None);
     /// ```
