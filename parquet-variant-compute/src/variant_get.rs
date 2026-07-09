@@ -1952,7 +1952,7 @@ mod test {
             let result_variant = VariantArray::try_new(&result).unwrap();
 
             assert_eq!(result_variant.value(0), Variant::from("drama"), "{case}");
-            assert_eq!(result_variant.value(1).as_int8(), Some(123), "{case}");
+            assert_eq!(result_variant.value(1).as_int64(), Some(123), "{case}");
         }
     }
 
@@ -2008,7 +2008,7 @@ mod test {
         let result_variant = VariantArray::try_new(&result).unwrap();
 
         assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int8(), Some(123));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
     }
 
     #[test]
@@ -2031,7 +2031,7 @@ mod test {
         let result = variant_get(&array, GetOptions::new_with_path(path.clone())).unwrap();
         let result_variant = VariantArray::try_new(&result).unwrap();
         assert_eq!(result_variant.value(0), Variant::from("b"));
-        assert_eq!(result_variant.value(1).as_int8(), Some(123));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
 
         let field = Field::new("typed_value", DataType::Int64, true);
         let casted = variant_get(
