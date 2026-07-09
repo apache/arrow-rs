@@ -30,13 +30,13 @@ use arrow::array::{
     BooleanBuilder, FixedSizeBinaryBuilder, FixedSizeListArray, GenericListArray,
     GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
     OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
-    StructArray,
+    StructArray, UnionArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
-use arrow_schema::{FieldRef, Fields, TimeUnit};
+use arrow_schema::{FieldRef, Fields, TimeUnit, UnionFields, UnionMode};
 use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
 
@@ -48,6 +48,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     Array(ArrayVariantToArrowRowBuilder<'a>),
     Struct(StructVariantToArrowRowBuilder<'a>),
+    Union(UnionVariantToArrowRowBuilder<'a>),
     Encoded(EncodedVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
@@ -62,6 +63,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.append_null(),
             Array(b) => b.append_null(),
             Struct(b) => b.append_null(),
+            Union(b) => b.append_null(),
             Encoded(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
@@ -74,6 +76,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.append_value(&value),
             Array(b) => b.append_value(&value),
             Struct(b) => b.append_value(&value),
+            Union(b) => b.append_value(&value),
             Encoded(b) => b.append_value(value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
@@ -86,6 +89,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Primitive(b) => b.finish(),
             Array(b) => b.finish(),
             Struct(b) => b.finish(),
+            Union(b) => b.finish(),
             Encoded(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
@@ -113,6 +117,15 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
             let builder =
                 ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity, false)?;
             Ok(Array(builder))
+        }
+        DataType::Union(union_fields, mode) => {
+            let builder = UnionVariantToArrowRowBuilder::try_new(
+                union_fields,
+                *mode,
+                cast_options,
+                capacity,
+            )?;
+            Ok(Union(builder))
         }
         DataType::Dictionary(_, value_type) => {
             let builder = EncodedVariantToArrowRowBuilder::try_new(
@@ -646,6 +659,217 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
             self.nulls.finish(),
         )?))
     }
+}
+
+/// Builder for converting variant values into a [`UnionArray`].
+///
+/// Each value is dispatched to the union field that most exactly represents its runtime type
+/// (see [`union_child_rank`]), with ties broken by declaration order. Unions have no top-level
+/// null buffer, so null rows -- and, in safe mode, values no field can represent -- become a
+/// null in the [`DataType::Null`] child if the union declares one, otherwise in the first child.
+pub(crate) struct UnionVariantToArrowRowBuilder<'a> {
+    fields: &'a UnionFields,
+    mode: UnionMode,
+    children: Vec<UnionChildBuilder<'a>>,
+    type_ids: Vec<i8>,
+    /// Dense mode only
+    offsets: Vec<i32>,
+    null_child: usize,
+    cast_options: &'a CastOptions<'a>,
+}
+
+struct UnionChildBuilder<'a> {
+    type_id: i8,
+    builder: VariantToArrowRowBuilder<'a>,
+    len: i32,
+}
+
+impl<'a> UnionVariantToArrowRowBuilder<'a> {
+    fn try_new(
+        fields: &'a UnionFields,
+        mode: UnionMode,
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+    ) -> Result<Self> {
+        // null rows need a child to land in
+        if fields.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Casting Variant to a union requires at least one union field".to_string(),
+            ));
+        }
+        let mut children = Vec::with_capacity(fields.len());
+        for (type_id, field) in fields.iter() {
+            children.push(UnionChildBuilder {
+                type_id,
+                builder: make_typed_variant_to_arrow_row_builder(
+                    field.data_type(),
+                    cast_options,
+                    capacity,
+                )?,
+                len: 0,
+            });
+        }
+        let null_child = fields
+            .iter()
+            .position(|(_, field)| field.data_type() == &DataType::Null)
+            .unwrap_or(0);
+        let offsets = match mode {
+            UnionMode::Dense => Vec::with_capacity(capacity),
+            UnionMode::Sparse => Vec::new(),
+        };
+        Ok(Self {
+            fields,
+            mode,
+            children,
+            type_ids: Vec::with_capacity(capacity),
+            offsets,
+            null_child,
+            cast_options,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.append_to_child(self.null_child, None)?;
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        // `Variant::Null` becomes null even in strict mode, like in the other builders
+        if matches!(value, Variant::Null) {
+            self.append_null()?;
+            return Ok(false);
+        }
+        match self.select_child(value) {
+            Some(index) => self.append_to_child(index, Some(value)),
+            None if self.cast_options.safe => {
+                self.append_null()?;
+                Ok(false)
+            }
+            None => Err(ArrowError::CastError(format!(
+                "Failed to cast variant {value:?} to union: no field can represent it"
+            ))),
+        }
+    }
+
+    fn select_child(&self, value: &Variant<'_, '_>) -> Option<usize> {
+        let mut best: Option<(u8, usize)> = None;
+        for (index, (_, field)) in self.fields.iter().enumerate() {
+            let Some(rank) = union_child_rank(value, field.data_type()) else {
+                continue;
+            };
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, index));
+            }
+        }
+        best.map(|(_, index)| index)
+    }
+
+    fn append_to_child(&mut self, index: usize, value: Option<&Variant<'_, '_>>) -> Result<bool> {
+        self.type_ids.push(self.children[index].type_id);
+        match self.mode {
+            UnionMode::Dense => {
+                let child = &mut self.children[index];
+                self.offsets.push(child.len);
+                child.len = child.len.add_checked(1)?;
+                match value {
+                    Some(value) => child.builder.append_value(value.clone()),
+                    None => {
+                        child.builder.append_null()?;
+                        Ok(false)
+                    }
+                }
+            }
+            UnionMode::Sparse => {
+                let mut appended = false;
+                for (child_index, child) in self.children.iter_mut().enumerate() {
+                    match value {
+                        Some(value) if child_index == index => {
+                            appended = child.builder.append_value(value.clone())?;
+                        }
+                        _ => child.builder.append_null()?,
+                    }
+                }
+                Ok(appended)
+            }
+        }
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        let mut type_ids = Vec::with_capacity(self.children.len());
+        let mut fields = Vec::with_capacity(self.children.len());
+        let mut arrays = Vec::with_capacity(self.children.len());
+        for (child, (_, field)) in self.children.into_iter().zip(self.fields.iter()) {
+            let array = child.builder.finish()?;
+            type_ids.push(child.type_id);
+            fields.push(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            );
+            arrays.push(array);
+        }
+        let fields = UnionFields::try_new(type_ids, fields)?;
+        let offsets = (self.mode == UnionMode::Dense).then(|| ScalarBuffer::from(self.offsets));
+        let array =
+            UnionArray::try_new(fields, ScalarBuffer::from(self.type_ids), offsets, arrays)?;
+        Ok(Arc::new(array))
+    }
+}
+
+/// Ranks how exactly a union child of type `data_type` can represent a variant value's runtime
+/// type: 0 is the value's natural Arrow type, higher ranks are lossless widenings, and `None`
+/// means the child cannot represent the value losslessly. Every pair admitted here must be
+/// convertible by the corresponding row builder.
+fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8> {
+    use DataType::*;
+    let rank = match (value, data_type) {
+        (Variant::BooleanTrue | Variant::BooleanFalse, Boolean) => 0,
+        (Variant::Int8(_), Int8) => 0,
+        (Variant::Int8(_), Int16) => 1,
+        (Variant::Int8(_), Int32) => 2,
+        (Variant::Int8(_), Int64) => 3,
+        (Variant::Int16(_), Int16) => 0,
+        (Variant::Int16(_), Int32) => 1,
+        (Variant::Int16(_), Int64) => 2,
+        (Variant::Int32(_), Int32) => 0,
+        (Variant::Int32(_), Int64) => 1,
+        (Variant::Int64(_), Int64) => 0,
+        (Variant::Float(_), Float32) => 0,
+        (Variant::Float(_), Float64) => 1,
+        (Variant::Double(_), Float64) => 0,
+        (Variant::Decimal4(_), Decimal32(..)) => 0,
+        (Variant::Decimal4(_), Decimal64(..)) => 1,
+        (Variant::Decimal4(_), Decimal128(..)) => 2,
+        (Variant::Decimal4(_), Decimal256(..)) => 3,
+        (Variant::Decimal8(_), Decimal64(..)) => 0,
+        (Variant::Decimal8(_), Decimal128(..)) => 1,
+        (Variant::Decimal8(_), Decimal256(..)) => 2,
+        (Variant::Decimal16(_), Decimal128(..)) => 0,
+        (Variant::Decimal16(_), Decimal256(..)) => 1,
+        (Variant::Date(_), Date32) => 0,
+        (Variant::Date(_), Date64) => 1,
+        (Variant::TimestampMicros(_), Timestamp(TimeUnit::Microsecond, Some(_))) => 0,
+        (Variant::TimestampMicros(_), Timestamp(TimeUnit::Nanosecond, Some(_))) => 1,
+        (Variant::TimestampNanos(_), Timestamp(TimeUnit::Nanosecond, Some(_))) => 0,
+        (Variant::TimestampNtzMicros(_), Timestamp(TimeUnit::Microsecond, None)) => 0,
+        (Variant::TimestampNtzMicros(_), Timestamp(TimeUnit::Nanosecond, None)) => 1,
+        (Variant::TimestampNtzNanos(_), Timestamp(TimeUnit::Nanosecond, None)) => 0,
+        (Variant::Time(_), Time64(TimeUnit::Microsecond)) => 0,
+        (Variant::Time(_), Time64(TimeUnit::Nanosecond)) => 1,
+        (Variant::String(_) | Variant::ShortString(_), Utf8 | LargeUtf8 | Utf8View) => 0,
+        (Variant::Binary(_), Binary | LargeBinary | BinaryView) => 0,
+        (Variant::Uuid(_), FixedSizeBinary(16)) => 0,
+        (Variant::Object(_), Struct(_)) => 0,
+        // unreachable until casting Variant to Map lands (#10012)
+        (Variant::Object(_), Map(..)) => 1,
+        (Variant::List(_), List(_)) => 0,
+        (Variant::List(_), LargeList(_)) => 1,
+        (Variant::List(_), ListView(_)) => 2,
+        (Variant::List(_), LargeListView(_)) => 3,
+        _ => return None,
+    };
+    Some(rank)
 }
 
 impl<'a> ArrayVariantToArrowRowBuilder<'a> {

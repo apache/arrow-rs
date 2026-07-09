@@ -493,10 +493,10 @@ mod test {
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
         FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
-        ListArray, ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray,
-        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray,
+        Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
+        LargeStringArray, ListArray, ListBuilder, ListViewArray, NullArray, NullBuilder,
+        StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
@@ -505,7 +505,9 @@ mod test {
     use arrow::util::display::FormatOptions;
     use arrow_schema::ArrowError;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
-    use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
+    use arrow_schema::{
+        DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
+    };
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
@@ -5037,4 +5039,274 @@ mod test {
         .with_precision_and_scale(20, 3)
         .unwrap()
     );
+
+    fn union_get_options(fields: &UnionFields, mode: UnionMode) -> GetOptions<'static> {
+        let field = Field::new("union", DataType::Union(fields.clone(), mode), true);
+        GetOptions::new().with_as_type(Some(FieldRef::from(field)))
+    }
+
+    fn int_str_bool_union_fields() -> UnionFields {
+        UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("int", DataType::Int64, true),
+                Field::new("str", DataType::Utf8, true),
+                Field::new("bool", DataType::Boolean, true),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// int8, string, bool, array-level null, `Variant::Null`, double (no matching field), int64
+    fn mixed_variant_array() -> ArrayRef {
+        let mut builder = VariantArrayBuilder::new(7);
+        builder.append_variant(Variant::Int8(1));
+        builder.append_variant(Variant::from("hello"));
+        builder.append_variant(Variant::from(true));
+        builder.append_null();
+        builder.append_variant(Variant::Null);
+        builder.append_variant(Variant::Double(2.5));
+        builder.append_variant(Variant::Int64(5_000_000_000));
+        ArrayRef::from(builder.build())
+    }
+
+    #[test]
+    fn get_variant_as_dense_union() {
+        let fields = int_str_bool_union_fields();
+        let array = mixed_variant_array();
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+
+        // nulls, `Variant::Null`, and the unmatched Double all land as nulls in the first child
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![0i8, 1, 2, 0, 0, 0, 0]),
+                Some(ScalarBuffer::from(vec![0i32, 0, 0, 1, 2, 3, 4])),
+                vec![
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        None,
+                        None,
+                        Some(5_000_000_000),
+                    ])),
+                    Arc::new(StringArray::from(vec!["hello"])),
+                    Arc::new(BooleanArray::from(vec![true])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_sparse_union() {
+        let fields = int_str_bool_union_fields();
+        let array = mixed_variant_array();
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Sparse)).unwrap();
+
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![0i8, 1, 2, 0, 0, 0, 0]),
+                None,
+                vec![
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(5_000_000_000),
+                    ])),
+                    Arc::new(StringArray::from(vec![
+                        None,
+                        Some("hello"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ])),
+                    Arc::new(BooleanArray::from(vec![
+                        None,
+                        None,
+                        Some(true),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_prefers_most_exact_field() {
+        // Int8 picks the later-declared Int32 over Int64: exactness wins over declaration order
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("big", DataType::Int64, true),
+                Field::new("small", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let mut builder = VariantArrayBuilder::new(3);
+        builder.append_variant(Variant::Int8(1));
+        builder.append_variant(Variant::Int32(2));
+        builder.append_variant(Variant::Int64(3));
+        let array = ArrayRef::from(builder.build());
+
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![1i8, 1, 0]),
+                Some(ScalarBuffer::from(vec![0i32, 1, 0])),
+                vec![
+                    Arc::new(Int64Array::from(vec![3])),
+                    Arc::new(Int32Array::from(vec![1, 2])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_with_null_field() {
+        // nulls and unmatched values land in the Null-typed field instead of the first one
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("null", DataType::Null, true),
+                Field::new("int", DataType::Int64, true),
+            ],
+        )
+        .unwrap();
+        let mut builder = VariantArrayBuilder::new(4);
+        builder.append_variant(Variant::Int8(1));
+        builder.append_null();
+        builder.append_variant(Variant::Null);
+        builder.append_variant(Variant::from("no matching field"));
+        let array = ArrayRef::from(builder.build());
+
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![1i8, 0, 0, 0]),
+                Some(ScalarBuffer::from(vec![0i32, 0, 1, 2])),
+                vec![
+                    Arc::new(NullArray::new(3)),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_of_nested_types() {
+        let fields = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new(
+                    "struct",
+                    DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)])),
+                    true,
+                ),
+                Field::new(
+                    "list",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    true,
+                ),
+                Field::new("str", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let json = StringArray::from(vec![r#"{"a": 1}"#, "[1, 2, 3]", "\"s\""]);
+        let array = ArrayRef::from(json_to_variant(&(Arc::new(json) as ArrayRef)).unwrap());
+
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+
+        let mut list_builder = ListBuilder::new(Int64Builder::new());
+        list_builder.append_value([Some(1), Some(2), Some(3)]);
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![0i8, 1, 2]),
+                Some(ScalarBuffer::from(vec![0i32, 0, 0])),
+                vec![
+                    Arc::new(StructArray::from(vec![(
+                        Arc::new(Field::new("a", DataType::Int64, true)),
+                        Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                    )])),
+                    Arc::new(list_builder.finish()),
+                    Arc::new(StringArray::from(vec!["s"])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_no_matching_field() {
+        let fields =
+            UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, true)]).unwrap();
+        let mut builder = VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from("kept"));
+        builder.append_variant(Variant::Int8(1));
+        let array = ArrayRef::from(builder.build());
+
+        // Safe mode: the Int8 row becomes a null in the first (only) child.
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields.clone(),
+                ScalarBuffer::from(vec![0i8, 0]),
+                Some(ScalarBuffer::from(vec![0i32, 1])),
+                vec![Arc::new(StringArray::from(vec![Some("kept"), None]))],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+
+        // Strict mode: the same row is a cast error.
+        let options = union_get_options(&fields, UnionMode::Dense).with_cast_options(CastOptions {
+            safe: false,
+            ..Default::default()
+        });
+        let err = variant_get(&array, options).unwrap_err();
+        assert!(
+            err.to_string().contains("no field can represent it"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn get_variant_as_union_empty_fields_errors() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int8(1));
+        let array = ArrayRef::from(builder.build());
+
+        let err = variant_get(
+            &array,
+            union_get_options(&UnionFields::empty(), UnionMode::Dense),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("at least one union field"),
+            "unexpected error: {err}"
+        );
+    }
 }
