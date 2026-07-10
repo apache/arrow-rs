@@ -798,7 +798,8 @@ pub fn read_dictionary(
     )
 }
 
-fn read_dictionary_impl(
+/// Low-level version of [`read_dictionary`] with alignment and validation controls
+pub fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
