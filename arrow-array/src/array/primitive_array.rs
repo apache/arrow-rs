@@ -1360,21 +1360,30 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                             // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
                             Ok(tz) => match as_datetime_with_timezone::<T>(v, tz) {
                                 Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
-                                None => write!(f, "null"),
+                                None => write!(
+                                    f,
+                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                                ),
                             },
                             // if the time zone is invalid, shows NaiveDateTime with an error message
                             Err(_) => match as_datetime::<T>(v) {
                                 Some(datetime) => {
                                     write!(f, "{datetime:?} (Unknown Time Zone '{tz_string}')")
                                 }
-                                None => write!(f, "null"),
+                                None => write!(
+                                    f,
+                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                                ),
                             },
                         }
                     }
                     // for Timestamp without TimeZone
                     None => match as_datetime::<T>(v) {
                         Some(datetime) => write!(f, "{datetime:?}"),
-                        None => write!(f, "null"),
+                        None => write!(
+                            f,
+                            "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                        ),
                     },
                 }
             }
@@ -2128,6 +2137,60 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_fmt_debug_out_of_range() {
+        // Include a true null into dataset to ensure we don't write that as an error
+        let data = Int64Array::new(
+            vec![i64::MAX, i64::MIN, i64::MAX].into(),
+            Some(vec![true, true, false].into()),
+        );
+
+        let arr = data.reinterpret_cast::<TimestampSecondType>();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(s)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(s),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(s),
+  null,
+]",
+            format!("{arr:?}")
+        );
+
+        let arr = data.reinterpret_cast::<TimestampMillisecondType>();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(ms)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(ms),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(ms),
+  null,
+]",
+            format!("{arr:?}")
+        );
+
+        let arr = data.reinterpret_cast::<TimestampMicrosecondType>();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(µs)>
+[
+  Cast error: Failed to convert 9223372036854775807 to timestamp for Timestamp(µs),
+  Cast error: Failed to convert -9223372036854775808 to timestamp for Timestamp(µs),
+  null,
+]",
+            format!("{arr:?}")
+        );
+
+        // Nanoseconds always in range
+        let arr = data.reinterpret_cast::<TimestampNanosecondType>();
+        assert_eq!(
+            "PrimitiveArray<Timestamp(ns)>
+[
+  2262-04-11T23:47:16.854775807,
+  1677-09-21T00:12:43.145224192,
+  null,
+]",
+            format!("{arr:?}")
+        );
+    }
+
+    #[test]
     fn test_timestamp_utc_fmt_debug() {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
@@ -2228,16 +2291,6 @@ mod tests {
         assert_eq!(
             "PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(s),\n  Cast error: Failed to convert -60054 to temporal for Time32(s),\n]",
             // "PrimitiveArray<Time32(s)>\n[\n  null,\n  null,\n]",
-            format!("{arr:?}")
-        )
-    }
-
-    #[test]
-    fn test_timestamp_micros_out_of_range() {
-        // replicate the issue from https://github.com/apache/arrow-datafusion/issues/3832
-        let arr: PrimitiveArray<TimestampMicrosecondType> = vec![9065525203050843594].into();
-        assert_eq!(
-            "PrimitiveArray<Timestamp(µs)>\n[\n  null,\n]",
             format!("{arr:?}")
         )
     }
