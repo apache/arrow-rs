@@ -111,11 +111,10 @@ impl ArrayReader for FixedSizeListArrayReader {
         let mut boundary_defs: Vec<i16> = Vec::with_capacity(def_levels.len());
         let mut current_row_len = None;
         for (&d, &r) in def_levels.iter().zip(rep_levels) {
-            if let Some(threshold) = self.parent_threshold {
-                if d < threshold {
+            if let Some(threshold) = self.parent_threshold
+                && d < threshold {
                     continue;
                 }
-            }
             if r < self.rep_level {
                 if let Some(row_len) = current_row_len.take().filter(|&len| len != self.fixed_size)
                 {

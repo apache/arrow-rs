@@ -173,17 +173,16 @@ pub(crate) fn build_filtered_validity_bitmap(
         let mut value_mask: u64 = 0;
         for (i, &d) in chunk.iter().enumerate() {
             let mut include = true;
-            if let Some(threshold) = include_threshold {
-                if d < threshold {
-                    include = false;
-                }
+            if let Some(threshold) = include_threshold
+                && d < threshold
+            {
+                include = false;
             }
-            if include {
-                if let Some((reps, max_rep)) = rep_filter {
-                    if reps[base + i] > max_rep {
-                        include = false;
-                    }
-                }
+            if include
+                && let Some((reps, max_rep)) = rep_filter
+                && reps[base + i] > max_rep
+            {
+                include = false;
             }
             include_mask |= (include as u64) << i;
             value_mask |= ((d >= value_level) as u64) << i;
@@ -197,15 +196,15 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     for idx in remainder_offset..def_levels.len() {
         let d = def_levels[idx];
-        if let Some(threshold) = include_threshold {
-            if d < threshold {
-                continue;
-            }
+        if let Some(threshold) = include_threshold
+            && d < threshold
+        {
+            continue;
         }
-        if let Some((reps, max_rep)) = rep_filter {
-            if reps[idx] > max_rep {
-                continue;
-            }
+        if let Some((reps, max_rep)) = rep_filter
+            && reps[idx] > max_rep
+        {
+            continue;
         }
         bitmap.append(d >= value_level);
         item_count += 1;

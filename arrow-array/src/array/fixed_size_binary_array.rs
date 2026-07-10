@@ -201,14 +201,14 @@ impl FixedSizeBinaryArray {
             ))
         })?;
 
-        if let Some(nulls) = &nulls {
-            if nulls.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                    len,
-                    nulls.len(),
-                )));
-            }
+        if let Some(nulls) = &nulls
+            && nulls.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                len,
+                nulls.len(),
+            )));
         }
 
         if value_size != 0 && values.len() / value_size != len {
