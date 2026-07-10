@@ -55,6 +55,8 @@ macro_rules! variant_test_case {
 // Notes
 // - case 3 is empty in cases.json for some reason
 // - cases 40, 42, 87, 127 and 128 are expected to fail always (they include invalid variants)
+// - cases 41, 131 and 138 are expected to fail because their schemas omit the
+//   required `value` column (https://github.com/apache/arrow-rs/issues/10306)
 // - the remaining cases are expected to (eventually) pass
 
 variant_test_case!(1);
@@ -104,7 +106,9 @@ variant_test_case!(38);
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(40, "both value and typed_value are non-null");
-variant_test_case!(41);
+// Is an error case: the spec requires the `value` column to always be present
+// (testArrayMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
+variant_test_case!(41, "StructArray must contain a 'value' field");
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(42, "both value and typed_value are non-null");
 // Is an error case (should be failing as the expected error message indicates)
@@ -201,7 +205,9 @@ variant_test_case!(127, "Illegal shredded value type: UInt32");
 variant_test_case!(128, "Expected object in value field");
 variant_test_case!(129);
 variant_test_case!(130);
-variant_test_case!(131);
+// Is an error case: the spec requires the `value` column to always be present
+// (testMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
+variant_test_case!(131, "StructArray must contain a 'value' field");
 variant_test_case!(132);
 variant_test_case!(133);
 variant_test_case!(134);
@@ -209,7 +215,9 @@ variant_test_case!(135);
 variant_test_case!(136);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
-variant_test_case!(138);
+// Is an error case: the spec requires the `value` column to always be present
+// (testShreddedObjectMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
+variant_test_case!(138, "StructArray must contain a 'value' field");
 
 /// Test case definition structure matching the format from
 /// `parquet-testing/parquet_shredded/cases.json`

@@ -1001,7 +1001,7 @@ impl<'a> ListElementBuilder<'a> {
             Self::Shredded(b) => {
                 let (value, typed_value, nulls) = b.finish()?;
                 Ok(ArrayRef::from(ShreddedVariantFieldArray::from_parts(
-                    Some(Arc::new(value)),
+                    Arc::new(value),
                     Some(typed_value),
                     nulls,
                 )))
@@ -1253,7 +1253,7 @@ impl VariantToBinaryVariantArrowRowBuilder {
     fn finish(mut self) -> Result<ArrayRef> {
         let variant_array = VariantArray::from_parts(
             self.metadata,
-            Some(Arc::new(self.builder.build()?)),
+            Arc::new(self.builder.build()?),
             None, // no typed_value column
             self.nulls.finish(),
         );
