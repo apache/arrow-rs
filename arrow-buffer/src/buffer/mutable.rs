@@ -33,6 +33,29 @@ use std::sync::Mutex;
 
 use super::Buffer;
 
+/// Error returned by fallible [`MutableBuffer`] operations.
+///
+/// The infallible counterparts panic on these conditions; the `try_*` methods
+/// return this error instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MutableBufferError {
+    /// Arithmetic overflow when computing the required buffer length or capacity.
+    LengthOverflow,
+    /// The requested capacity cannot be represented as a valid allocation layout.
+    LayoutError,
+}
+
+impl std::fmt::Display for MutableBufferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LengthOverflow => write!(f, "buffer length overflow"),
+            Self::LayoutError => write!(f, "invalid allocation layout for requested capacity"),
+        }
+    }
+}
+
+impl std::error::Error for MutableBufferError {}
+
 /// A [`MutableBuffer`] is a wrapper over memory regions, used to build
 /// [`Buffer`]s out of items or slices of items.
 ///
@@ -259,6 +282,27 @@ impl MutableBuffer {
         }
     }
 
+    /// Fallible version of [`MutableBuffer::reserve`].
+    ///
+    /// Returns [`MutableBufferError::LengthOverflow`] if `self.len + additional`
+    /// overflows `usize`, or [`MutableBufferError::LayoutError`] if the required
+    /// capacity cannot be rounded to a 64-byte boundary and form a valid layout.
+    #[inline]
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), MutableBufferError> {
+        let required_cap = self
+            .len
+            .checked_add(additional)
+            .ok_or(MutableBufferError::LengthOverflow)?;
+        if required_cap > self.layout.size() {
+            let new_capacity = required_cap
+                .checked_next_multiple_of(64)
+                .ok_or(MutableBufferError::LayoutError)?;
+            // Mirror the doubling heuristic of the infallible `reserve`.
+            let new_capacity = std::cmp::max(new_capacity, self.layout.size().saturating_mul(2));
+            self.try_reallocate(new_capacity)?;
+        }
+        Ok(())
+    }
     /// Ensures that this buffer has at least `self.len + additional` bytes. This re-allocates iff
     /// `self.len + additional > capacity`.
     /// # Example
@@ -290,6 +334,48 @@ impl MutableBuffer {
         }
     }
 
+    /// Fallible version of [`MutableBuffer::repeat_slice_n_times`].
+    ///
+    /// Returns [`MutableBufferError::LengthOverflow`] if computing the total byte
+    /// count overflows `usize`, or a layout error for the same reasons as
+    /// [`MutableBuffer::try_reserve`].
+    pub fn try_repeat_slice_n_times<T: ArrowNativeType>(
+        &mut self,
+        slice_to_repeat: &[T],
+        repeat_count: usize,
+    ) -> Result<(), MutableBufferError> {
+        if repeat_count == 0 || slice_to_repeat.is_empty() {
+            return Ok(());
+        }
+
+        let bytes_per_copy = size_of_val(slice_to_repeat);
+        let total_bytes = repeat_count
+            .checked_mul(bytes_per_copy)
+            .ok_or(MutableBufferError::LengthOverflow)?;
+        // Verify the final length won't overflow before touching any state.
+        self.len
+            .checked_add(total_bytes)
+            .ok_or(MutableBufferError::LengthOverflow)?;
+
+        self.try_reserve(total_bytes)?;
+
+        let length_before = self.len;
+        self.try_extend_from_slice(slice_to_repeat)?;
+
+        let mut already_repeated = 1usize;
+        while already_repeated < repeat_count {
+            let to_copy = already_repeated.min(repeat_count - already_repeated);
+            let byte_count = to_copy * bytes_per_copy;
+            unsafe {
+                let src = self.data.as_ptr().add(length_before) as *const u8;
+                let dst = self.data.as_ptr().add(self.len);
+                std::ptr::copy_nonoverlapping(src, dst, byte_count);
+            }
+            self.len += byte_count;
+            already_repeated += to_copy;
+        }
+        Ok(())
+    }
     /// Adding to this mutable buffer `slice_to_repeat` repeated `repeat_count` times.
     ///
     /// # Example
@@ -371,6 +457,39 @@ impl MutableBuffer {
         }
     }
 
+    /// mirrors [`MutableBuffer::reallocate`] but returns
+    /// [`MutableBufferError::LayoutError`] instead of panicking on an invalid layout.
+    #[cold]
+    #[allow(dead_code)]
+    fn try_reallocate(&mut self, capacity: usize) -> Result<(), MutableBufferError> {
+        let new_layout = Layout::from_size_align(capacity, self.layout.align())
+            .map_err(|_| MutableBufferError::LayoutError)?;
+
+        if new_layout.size() == 0 {
+            if self.layout.size() != 0 {
+                // Safety: data was allocated with the current layout.
+                unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
+                self.layout = new_layout;
+            }
+            return Ok(());
+        }
+
+        let data = match self.layout.size() {
+            // Safety: new_layout is non-zero.
+            0 => unsafe { std::alloc::alloc(new_layout) },
+            // Safety: new_layout is valid and non-zero.
+            _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
+        };
+        self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
+        self.layout = new_layout;
+        #[cfg(feature = "pool")]
+        {
+            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+                reservation.resize(self.layout.size());
+            }
+        }
+        Ok(())
+    }
     #[cold]
     fn reallocate(&mut self, capacity: usize) {
         let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
@@ -416,6 +535,26 @@ impl MutableBuffer {
         }
     }
 
+    /// Fallible version of [`MutableBuffer::resize`].
+    ///
+    /// Returns an error for the same reasons as [`MutableBuffer::try_reserve`].
+    #[inline]
+    pub fn try_resize(&mut self, new_len: usize, value: u8) -> Result<(), MutableBufferError> {
+        if new_len > self.len {
+            let diff = new_len - self.len;
+            self.try_reserve(diff)?;
+            // Safety: try_reserve ensured capacity >= new_len.
+            unsafe { self.data.as_ptr().add(self.len).write_bytes(value, diff) };
+        }
+        self.len = new_len;
+        #[cfg(feature = "pool")]
+        {
+            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+                reservation.resize(self.len);
+            }
+        }
+        Ok(())
+    }
     /// Resizes the buffer, either truncating its contents (with no change in capacity), or
     /// growing it (potentially reallocating it) and writing `value` in the newly available bytes.
     /// # Example
@@ -450,6 +589,21 @@ impl MutableBuffer {
         }
     }
 
+    /// Fallible version of [`MutableBuffer::shrink_to_fit`].
+    ///
+    /// Returns [`MutableBufferError::LayoutError`] if rounding `self.len` up to the
+    /// nearest 64-byte boundary overflows (practically impossible, but checked for
+    /// completeness).
+    pub fn try_shrink_to_fit(&mut self) -> Result<(), MutableBufferError> {
+        let new_capacity = self
+            .len
+            .checked_next_multiple_of(64)
+            .ok_or(MutableBufferError::LayoutError)?;
+        if new_capacity < self.layout.size() {
+            self.try_reallocate(new_capacity)?;
+        }
+        Ok(())
+    }
     /// Shrinks the capacity of the buffer as much as possible.
     /// The new capacity will aligned to the nearest 64 bit alignment.
     ///
@@ -575,6 +729,24 @@ impl MutableBuffer {
         offsets
     }
 
+    /// Fallible version of [`MutableBuffer::extend_from_slice`].
+    ///
+    /// Returns an error for the same reasons as [`MutableBuffer::try_reserve`].
+    #[inline]
+    pub fn try_extend_from_slice<T: ArrowNativeType>(
+        &mut self,
+        items: &[T],
+    ) -> Result<(), MutableBufferError> {
+        let additional = mem::size_of_val(items);
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = items.as_ptr() as *const u8;
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
+    }
     /// Extends this buffer from a slice of items that can be represented in bytes, increasing its capacity if needed.
     /// # Example
     /// ```
@@ -603,6 +775,21 @@ impl MutableBuffer {
         self.len += additional;
     }
 
+    /// Fallible version of [`MutableBuffer::push`].
+    ///
+    /// Returns an error for the same reasons as [`MutableBuffer::try_reserve`].
+    #[inline]
+    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
+        let additional = std::mem::size_of::<T>();
+        self.try_reserve(additional)?;
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
+        Ok(())
+    }
     /// Extends the buffer with a new item, increasing its capacity if needed.
     /// # Example
     /// ```
@@ -640,6 +827,19 @@ impl MutableBuffer {
         self.len += additional;
     }
 
+    /// Fallible version of [`MutableBuffer::extend_zeros`]
+    ///
+    /// Returns [`MutableBufferError::LengthOverflow`] if `self.len + additional`
+    /// overflows `usize`, or a layout error for the same reasons as
+    /// [`MutableBuffer::try_reserve`].
+    #[inline]
+    pub fn try_extend_zeros(&mut self, additional: usize) -> Result<(), MutableBufferError> {
+        let new_len = self
+            .len
+            .checked_add(additional)
+            .ok_or(MutableBufferError::LengthOverflow)?;
+        self.try_resize(new_len, 0)
+    }
     /// Extends the buffer by `additional` bytes equal to `0u8`, incrementing its capacity if needed.
     ///
     /// # Panics
