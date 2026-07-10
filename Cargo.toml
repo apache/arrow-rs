@@ -32,8 +32,8 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-cmp",
     "arrow-ord",
-    "arrow-ord-basic",
     "arrow-pyarrow",
     "arrow-row",
     "arrow-schema",
@@ -96,7 +96,7 @@ arrow-data = { version = "58.1.0", path = "./arrow-data" }
 arrow-ipc = { version = "58.1.0", path = "./arrow-ipc" }
 arrow-json = { version = "58.1.0", path = "./arrow-json" }
 arrow-ord = { version = "58.1.0", path = "./arrow-ord" }
-arrow-ord-basic = { version = "58.1.0", path = "./arrow-ord-basic" }
+arrow-cmp = { version = "58.1.0", path = "./arrow-cmp" }
 arrow-pyarrow = { version = "58.1.0", path = "./arrow-pyarrow" }
 arrow-row = { version = "58.1.0", path = "./arrow-row" }
 arrow-schema = { version = "58.1.0", path = "./arrow-schema" }

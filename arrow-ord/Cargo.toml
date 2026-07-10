@@ -39,7 +39,7 @@ all-features = true
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
-arrow-ord-basic = { workspace = true }
+arrow-cmp = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 

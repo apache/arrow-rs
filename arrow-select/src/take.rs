@@ -26,11 +26,8 @@ use arrow_buffer::{
     bit_util,
 };
 use arrow_data::ArrayDataBuilder;
-#[cfg(feature = "run_end_encoded")]
-use arrow_ord_basic::make_comparator;
-use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
-#[cfg(feature = "run_end_encoded")]
-use arrow_schema::SortOptions;
+use arrow_cmp::make_comparator;
+use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -884,12 +881,6 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
     let mut new_physical_len = 1;
 
-    // With the `run_end_encoded` feature, also collapse adjacent physical runs
-    // whose underlying values compare equal. Without it, we still drop
-    // duplicate physical indices but leave logically-equal-yet-distinct runs
-    // separated, which keeps `arrow-select` free of the `arrow-ord-basic`
-    // comparator dependency for downstream users that don't need it.
-    #[cfg(feature = "run_end_encoded")]
     let values_cmp = make_comparator(
         run_array.values().as_ref(),
         run_array.values().as_ref(),
@@ -899,10 +890,7 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     for ix in 1..physical_indices.len() {
         let prev_idx = physical_indices[ix - 1];
         let cur_idx = physical_indices[ix];
-        #[cfg(feature = "run_end_encoded")]
         let is_new_run = cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne();
-        #[cfg(not(feature = "run_end_encoded"))]
-        let is_new_run = cur_idx != prev_idx;
         if is_new_run {
             take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
             new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
@@ -2553,7 +2541,6 @@ mod tests {
         assert_eq!(null_buf.as_slice(), &[0b11111111]);
     }
 
-    #[cfg(feature = "run_end_encoded")]
     #[test]
     fn test_take_runs() {
         let logical_array: Vec<i32> = vec![1_i32, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 2];
@@ -2844,7 +2831,6 @@ mod tests {
         assert_eq!(run_result.values().len(), 0);
     }
 
-    #[cfg(feature = "run_end_encoded")]
     #[test]
     fn test_take_run_end_encoded_merges_identical_runs() {
         // see https://github.com/apache/arrow-rs/issues/7710
@@ -2860,7 +2846,6 @@ mod tests {
         assert_eq!(actual, vec![1, 1, 1, 1]);
     }
 
-    #[cfg(feature = "run_end_encoded")]
     #[test]
     fn test_take_run_end_encoded_merges_identical_string_runs() {
         let mut builder = StringRunBuilder::<Int32Type>::new();
@@ -2882,7 +2867,6 @@ mod tests {
         assert_eq!(actual, vec!["bob", "bob", "bob", "bob"]);
     }
 
-    #[cfg(feature = "run_end_encoded")]
     #[test]
     fn test_take_run_end_encoded_mixed_runs() {
         // Validates that runs are merged whether the same logical value comes

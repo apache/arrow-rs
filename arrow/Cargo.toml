@@ -61,17 +61,13 @@ half = { version = "2.1", default-features = false, features = ["rand_distr"], o
 all-features = true
 
 [features]
-default = ["csv", "ipc", "json", "run_end_encoded"]
+default = ["csv", "ipc", "json"]
 async = ["arrow-array/async"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
 prettyprint = ["arrow-cast/prettyprint"]
-# Enables the run-end-encoded `take` fast path in `arrow-select` that merges
-# adjacent physical runs whose underlying values compare equal. Pulls in the
-# `arrow-ord-basic` slot-wise comparator.
-run_end_encoded = ["arrow-select/run_end_encoded"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown

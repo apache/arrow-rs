@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "arrow-ord-basic"
+name = "arrow-cmp"
 version = { workspace = true }
 description = "Basic comparator/ordering building blocks for Apache Arrow, shared by crates that need slot-wise comparison without pulling in the full arrow-ord kernels"
 homepage = { workspace = true }
@@ -29,7 +29,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "arrow_ord_basic"
+name = "arrow_cmp"
 bench = false
 
 [package.metadata.docs.rs]
@@ -40,3 +40,6 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
+
+[dev-dependencies]
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
