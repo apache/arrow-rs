@@ -785,6 +785,84 @@ fn date_op<T: DateOp>(
     }
 }
 
+/// Computes `trunc(l * 10^pow / r)` for decimal division, truncating toward zero,
+/// without overflowing the intermediate `l * 10^pow` when the final quotient is
+/// representable.
+///
+/// The naive approach (`(l * 10^pow) / r`) materialises the full scaled numerator,
+/// which can overflow the native decimal type (e.g. `i256`) even when the true
+/// quotient fits — see <https://github.com/apache/arrow-rs/issues/7216>. To avoid
+/// that, the fast path is attempted first and, only if it overflows, the result is
+/// computed digit-by-digit with schoolbook long division that never materialises a
+/// value larger than the divisor.
+///
+/// `pow` is the number of decimal places the numerator is scaled up by and is always
+/// `> 0` here; `r` is guaranteed non-zero by the caller in the slow path.
+fn decimal_div_scaled<T: DecimalType>(
+    l: T::Native,
+    r: T::Native,
+    pow: u32,
+) -> Result<T::Native, ArrowError> {
+    let ten = T::Native::usize_as(10);
+
+    // Fast path: if the scaled numerator does not overflow, use the direct formula.
+    // This keeps the common case allocation-free and identical to the previous code,
+    // including the `DivideByZero` error produced by `div_checked` when `r == 0`.
+    if let Ok(scaled) = ten.pow_checked(pow).and_then(|m| l.mul_checked(m)) {
+        return scaled.div_checked(r);
+    }
+
+    // The slow path uses `div_wrapping`/`mod_wrapping`, which panic on a zero divisor,
+    // so reject division by zero up front to mirror `div_checked`.
+    if r.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+
+    // Slow path: long division on magnitudes, re-applying the sign at the end.
+    // Decimal values are bounded by 10^MAX_PRECISION, well inside the native type's
+    // range, so negating to obtain a magnitude cannot overflow.
+    let zero = T::Native::ZERO;
+    let one = T::Native::ONE;
+    let negative = l.is_lt(zero) != r.is_lt(zero);
+    let num = if l.is_lt(zero) { l.neg_wrapping() } else { l };
+    let divisor = if r.is_lt(zero) { r.neg_wrapping() } else { r };
+
+    // Start with the integer part, then "bring down" `pow` zero digits one at a time.
+    // After each digit `quotient = quotient * 10 + d` and `remainder = (remainder*10) % divisor`,
+    // where `d = (remainder*10) / divisor` is a single base-10 digit (0..=9).
+    let mut quotient = num.div_wrapping(divisor);
+    let mut remainder = num.mod_wrapping(divisor);
+
+    for _ in 0..pow {
+        // Compute `(remainder * 10) % divisor` and the digit `(remainder * 10) / divisor`
+        // by adding `remainder` to an accumulator ten times, reducing modulo `divisor`
+        // after each add. The accumulator and `remainder` are always `< divisor`, so the
+        // modular add below never overflows even when `divisor` is near the type's max
+        // magnitude (which is what makes `remainder * 10` overflow in the first place).
+        let mut acc = zero;
+        let mut digit = zero;
+        for _ in 0..10 {
+            // acc = (acc + remainder) % divisor, tracking carries into `digit`.
+            // `divisor - remainder >= 1` since `remainder < divisor`.
+            if acc.is_lt(divisor.sub_wrapping(remainder)) {
+                // acc + remainder < divisor: no reduction, no overflow.
+                acc = acc.add_wrapping(remainder);
+            } else {
+                // acc + remainder >= divisor: subtract divisor (carry one into digit).
+                acc = acc.sub_wrapping(divisor.sub_wrapping(remainder));
+                digit = digit.add_wrapping(one);
+            }
+        }
+        quotient = quotient.mul_checked(ten)?.add_checked(digit)?;
+        remainder = acc;
+    }
+
+    if negative {
+        quotient = quotient.neg_wrapping();
+    }
+    Ok(quotient)
+}
+
 /// Perform arithmetic operation on decimal arrays
 fn decimal_op<T: DecimalType>(
     op: Op,
@@ -870,25 +948,24 @@ fn decimal_op<T: DecimalType>(
             // p1 - s1 + s2 + result_scale
             let result_precision = (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
 
-            let (l_mul, r_mul) = match mul_pow.cmp(&0) {
-                Ordering::Greater => (
-                    T::Native::usize_as(10).pow_checked(mul_pow as _)?,
-                    T::Native::ONE,
-                ),
-                Ordering::Equal => (T::Native::ONE, T::Native::ONE),
-                Ordering::Less => (
-                    T::Native::ONE,
-                    T::Native::usize_as(10).pow_checked(mul_pow.neg_wrapping() as _)?,
-                ),
-            };
-
-            try_op!(
-                l,
-                l_s,
-                r,
-                r_s,
-                l.mul_checked(l_mul)?.div_checked(r.mul_checked(r_mul)?)
-            )
+            match mul_pow.cmp(&0) {
+                // Numerator is scaled up by `10^mul_pow`. Use a helper that avoids
+                // overflowing the intermediate `l * 10^mul_pow` when the quotient is
+                // representable (https://github.com/apache/arrow-rs/issues/7216).
+                Ordering::Greater => {
+                    let pow = mul_pow as u32;
+                    try_op!(l, l_s, r, r_s, decimal_div_scaled::<T>(l, r, pow))
+                }
+                // Numerator unscaled; only the divisor is scaled, so the numerator
+                // cannot overflow and the direct formula is sufficient.
+                Ordering::Equal => {
+                    try_op!(l, l_s, r, r_s, l.div_checked(r))
+                }
+                Ordering::Less => {
+                    let r_mul = T::Native::usize_as(10).pow_checked(mul_pow.neg_wrapping() as _)?;
+                    try_op!(l, l_s, r, r_s, l.div_checked(r.mul_checked(r_mul)?))
+                }
+            }
             .with_precision_and_scale(result_precision, result_scale)?
         }
 
@@ -1288,6 +1365,84 @@ mod tests {
         assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_div() {
+        let a = i256::from_i128(60096743305738933273387748827369321010i128);
+        let b = i256::from_i128(60096763826458053191384497987259478584i128);
+        let a = Decimal256Array::from_iter_values(vec![a])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let b = Decimal256Array::from_iter_values(vec![b])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let result = div(&a, &b).unwrap();
+        // Result type follows the Hive rule: scale = s1 + 4 = 41, precision capped at 76.
+        assert_eq!(result.data_type(), &DataType::Decimal256(76, 41));
+        // True quotient (truncated toward zero at scale 41).
+        let expected = i256::from_string("99999965853869970143724273117679321341339").unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>().value(0), expected);
+
+        // Truncation toward zero must hold for every sign combination, which also
+        // exercises the long-division (slow) path on negative magnitudes.
+        let neg_a = Decimal256Array::from_iter_values(vec![i256::from_i128(
+            -60096743305738933273387748827369321010i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+        let neg_b = Decimal256Array::from_iter_values(vec![i256::from_i128(
+            -60096763826458053191384497987259478584i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+
+        assert_eq!(
+            div(&neg_a, &b)
+                .unwrap()
+                .as_primitive::<Decimal256Type>()
+                .value(0),
+            expected.neg_wrapping()
+        );
+        assert_eq!(
+            div(&a, &neg_b)
+                .unwrap()
+                .as_primitive::<Decimal256Type>()
+                .value(0),
+            expected.neg_wrapping()
+        );
+        assert_eq!(
+            div(&neg_a, &neg_b)
+                .unwrap()
+                .as_primitive::<Decimal256Type>()
+                .value(0),
+            expected
+        );
+
+        // Edge case: divisor close to the i256 maximum magnitude (precision 76). Here
+        // even `remainder * 10` overflows i256, so the long division must compute each
+        // digit via repeated modular addition rather than scaling the remainder.
+        let big_num = i256::from_string(
+            "9999999999999999999999999999999999999999999999999999999999999999999999999997",
+        )
+        .unwrap();
+        let big_den = i256::from_string(
+            "9999999999999999999999999999999999999999999999999999999999999999999999999999",
+        )
+        .unwrap();
+        let a = Decimal256Array::from_iter_values(vec![big_num])
+            .with_precision_and_scale(76, 38)
+            .unwrap();
+        let b = Decimal256Array::from_iter_values(vec![big_den])
+            .with_precision_and_scale(76, 38)
+            .unwrap();
+        let result = div(&a, &b).unwrap();
+        // scale = 38 + 4 = 42, pow = 42 - 38 + 38 = 42; true quotient = 10^42 - 1.
+        assert_eq!(result.data_type(), &DataType::Decimal256(76, 42));
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("999999999999999999999999999999999999999999").unwrap()
+        );
     }
 
     fn test_timestamp_impl<T: TimestampOp>() {
