@@ -27,11 +27,15 @@ use base64::engine::Config;
 
 pub use base64::prelude::*;
 
-/// Bas64 encode each element of `array` with the provided [`Engine`]
+/// Base64 encode each element of `array` with the provided [`Engine`]
+///
+/// Returns an error if the `Engine` emits output that is not valid UTF-8. A
+/// correct `Engine` never does, but it is a safe trait so a misbehaving impl
+/// could; validating keeps the returned [`GenericStringArray`] sound (#10284).
 pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     engine: &E,
     array: &GenericBinaryArray<O>,
-) -> GenericStringArray<O> {
+) -> Result<GenericStringArray<O>, ArrowError> {
     let lengths = array.offsets().windows(2).map(|w| {
         let len = w[1].as_usize() - w[0].as_usize();
         encoded_len(len, engine.config().encode_padding()).unwrap()
@@ -49,10 +53,8 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     }
     assert_eq!(offset, buffer_len);
 
-    // Safety: Base64 is valid UTF-8
-    unsafe {
-        GenericStringArray::new_unchecked(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
-    }
+    // `try_new` validates UTF-8 instead of trusting the (safe-trait) Engine.
+    GenericStringArray::try_new(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
 }
 
 /// Base64 decode each element of `array` with the provided [`Engine`]
@@ -89,7 +91,7 @@ mod tests {
     use rand::{Rng, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
-        let encoded = b64_encode(e, a);
+        let encoded = b64_encode(e, a).unwrap();
         encoded.to_data().validate_full().unwrap();
 
         let to_decode = encoded.into();
@@ -112,5 +114,50 @@ mod tests {
 
         test_engine(&BASE64_STANDARD, &data);
         test_engine(&BASE64_STANDARD_NO_PAD, &data);
+    }
+
+    /// Safe-Rust `Engine` that writes invalid UTF-8 into the encode buffer
+    /// (#10284). `b64_encode` must reject it rather than build an unsound
+    /// `StringArray`.
+    struct EvilEngine;
+
+    impl Engine for EvilEngine {
+        type Config = <base64::engine::GeneralPurpose as Engine>::Config;
+        type DecodeEstimate = <base64::engine::GeneralPurpose as Engine>::DecodeEstimate;
+
+        fn internal_encode(&self, input: &[u8], output: &mut [u8]) -> usize {
+            BASE64_STANDARD.internal_encode(input, output)
+        }
+        fn internal_decoded_len_estimate(&self, input_len: usize) -> Self::DecodeEstimate {
+            BASE64_STANDARD.internal_decoded_len_estimate(input_len)
+        }
+        fn internal_decode(
+            &self,
+            input: &[u8],
+            output: &mut [u8],
+            estimate: Self::DecodeEstimate,
+        ) -> Result<base64::engine::DecodeMetadata, base64::DecodeSliceError> {
+            BASE64_STANDARD.internal_decode(input, output, estimate)
+        }
+        fn config(&self) -> &Self::Config {
+            BASE64_STANDARD.config()
+        }
+        fn encode_slice<T: AsRef<[u8]>>(
+            &self,
+            input: T,
+            output_buf: &mut [u8],
+        ) -> Result<usize, base64::EncodeSliceError> {
+            let len = BASE64_STANDARD.encode_slice(input, output_buf)?;
+            for b in output_buf[..len].iter_mut() {
+                *b = 0xFF; // invalid UTF-8, but correct length
+            }
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn test_b64_encode_rejects_invalid_utf8() {
+        let data: BinaryArray = vec![Some(b"hello".to_vec())].into_iter().collect();
+        assert!(b64_encode(&EvilEngine, &data).is_err());
     }
 }
