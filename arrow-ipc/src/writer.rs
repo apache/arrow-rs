@@ -622,7 +622,7 @@ impl IpcDataGenerator {
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
         let encoded_dictionaries =
             self.encode_all_dicts(batch, dictionary_tracker, write_options, ipc_write_context)?;
-        let mut arrow_data = Vec::new();
+        let mut arrow_data = ipc_write_context.scratch();
         let (ipc_message, _, tail_pad) = self.record_batch_to_bytes(
             batch,
             write_options,
@@ -630,6 +630,7 @@ impl IpcDataGenerator {
             &mut IpcBodySink::Write(&mut arrow_data),
         )?;
         arrow_data.extend_from_slice(&PADDING[..tail_pad]);
+        ipc_write_context.reserve_scratch_with_capacity(arrow_data.capacity());
         Ok((
             encoded_dictionaries,
             EncodedData {
