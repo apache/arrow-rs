@@ -20,7 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use crate::data::ArrayData;
-use arrow_buffer::i256;
+use arrow_buffer::{IntervalMonthDayNano, i256};
 use arrow_schema::{DataType, IntervalUnit};
 use half::f16;
 
@@ -92,7 +92,7 @@ fn equal_values(
         | DataType::Timestamp(_, _)
         | DataType::Duration(_) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Interval(IntervalUnit::MonthDayNano) => {
-            primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
+            primitive_equal::<IntervalMonthDayNano>(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::Utf8 | DataType::Binary => {
             variable_sized_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)

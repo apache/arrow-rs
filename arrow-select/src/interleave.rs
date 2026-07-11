@@ -712,7 +712,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         let start = list.offsets()[row_idx].as_usize();
         let size = list.sizes()[row_idx].as_usize();
         if size > 0 {
-            mutable_child.extend(array_idx, start, start + size);
+            mutable_child.try_extend(array_idx, start, start + size)?;
         }
     }
 
@@ -786,7 +786,7 @@ fn interleave_fallback(
         }
 
         // emit current batch of rows for current buffer
-        array_data.extend(cur_array, start_row_idx, end_row_idx);
+        array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
 
         // start new batch of rows
         cur_array = array;
@@ -795,7 +795,7 @@ fn interleave_fallback(
     }
 
     // emit final batch of rows
-    array_data.extend(cur_array, start_row_idx, end_row_idx);
+    array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
     Ok(make_array(array_data.freeze()))
 }
 
@@ -934,10 +934,12 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
-    use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
-    use arrow_array::types::Int8Type;
+    use arrow_array::builder::{
+        GenericListBuilder, Int32Builder, PrimitiveBuilder, PrimitiveRunBuilder,
+    };
+    use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, TimeUnit};
 
     #[test]
     fn test_primitive() {
@@ -1122,6 +1124,103 @@ mod tests {
     #[test]
     fn test_large_lists() {
         test_interleave_lists::<i64>();
+    }
+
+    /// One list slot in a `List<Primitive>` fixture: `None` is a null slot,
+    /// `Some(items)` is a list whose items may individually be null.
+    type ListRow<T> = Option<Vec<Option<<T as ArrowPrimitiveType>::Native>>>;
+
+    /// Build a `List<Primitive>` from row fixtures. The primitive child carries
+    /// `data_type` (e.g. its Decimal scale or timezone).
+    fn list_of_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        rows: &[ListRow<T>],
+    ) -> GenericListArray<O> {
+        let mut builder = GenericListBuilder::<O, _>::new(
+            PrimitiveBuilder::<T>::new().with_data_type(data_type.clone()),
+        );
+        for row in rows {
+            match row {
+                Some(items) => {
+                    items
+                        .iter()
+                        .for_each(|v| builder.values().append_option(*v));
+                    builder.append(true);
+                }
+                None => builder.append(false),
+            }
+        }
+        builder.finish()
+    }
+
+    /// Interleave list fixtures and assert both the result and that the
+    /// interleaved primitive child preserves the parameterized `data_type`.
+    fn check_interleave_list_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        inputs: &[&[ListRow<T>]],
+        indices: &[(usize, usize)],
+        expected: &[ListRow<T>],
+    ) {
+        let arrays: Vec<_> = inputs
+            .iter()
+            .map(|rows| list_of_primitive::<O, T>(data_type, rows))
+            .collect();
+        let refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+
+        let values = interleave(&refs, indices).unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListArray<O>>()
+            .unwrap();
+
+        assert_eq!(v, &list_of_primitive::<O, T>(data_type, expected));
+        // The child's logical type (Decimal precision/scale, Timestamp timezone)
+        // must be preserved, not reset to the primitive's default.
+        assert_eq!(v.values().data_type(), data_type);
+    }
+
+    fn test_interleave_lists_decimal<O: OffsetSizeTrait>() {
+        // List<Decimal128(20, 3)>, exercising child-element nulls and null slots.
+        check_interleave_list_primitive::<O, Decimal128Type>(
+            &DataType::Decimal128(20, 3),
+            &[
+                &[
+                    Some(vec![Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None]),
+                ], // a
+                &[Some(vec![Some(4)]), Some(vec![Some(5), Some(6)])], // b
+            ],
+            &[(0, 2), (0, 1), (1, 0), (1, 1)],
+            &[
+                Some(vec![Some(3), None]),
+                None,
+                Some(vec![Some(4)]),
+                Some(vec![Some(5), Some(6)]),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_lists_decimal() {
+        test_interleave_lists_decimal::<i32>();
+        test_interleave_lists_decimal::<i64>();
+    }
+
+    fn test_interleave_lists_timestamp_tz<O: OffsetSizeTrait>() {
+        // List<Timestamp(Microsecond, "+08:00")>, checking the timezone survives.
+        check_interleave_list_primitive::<O, TimestampMicrosecondType>(
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("+08:00".into())),
+            &[&[Some(vec![Some(1), Some(2)]), Some(vec![Some(3)])]],
+            &[(0, 1), (0, 0)],
+            &[Some(vec![Some(3)]), Some(vec![Some(1), Some(2)])],
+        );
+    }
+
+    #[test]
+    fn test_lists_timestamp_tz() {
+        test_interleave_lists_timestamp_tz::<i32>();
+        test_interleave_lists_timestamp_tz::<i64>();
     }
 
     fn test_interleave_list_views<O: OffsetSizeTrait>() {

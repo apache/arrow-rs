@@ -15,25 +15,26 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Assign the issue via a `take` comment
+name: "Close stale PRs"
 on:
-  issue_comment:
-    types: created
-
-permissions:
-  issues: write
+  schedule:
+    - cron: "30 1 * * *"
 
 jobs:
-  issue_assign:
-    if: (!github.event.issue.pull_request) && github.event.comment.body == 'take'
+  close-stale-prs:
     runs-on: ubuntu-slim
+    permissions:
+      actions: write
+      issues: write
+      pull-requests: write
     steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+      - uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629  # v10.4.0
         with:
-          script: |
-            github.rest.issues.addAssignees({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              assignees: [context.payload.comment.user.login],
-            })
+          stale-pr-message: "Thank you for your contribution. Unfortunately, this pull request is stale because it has been open 60 days with no activity. Please remove the stale label or comment or this will be closed in 7 days."
+          days-before-pr-stale: 60
+          days-before-pr-close: 7
+          # do not close stale issues
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          operations-per-run: 150

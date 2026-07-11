@@ -59,6 +59,24 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
 
+    // Fast path for a nested dictionary source (`Dictionary<K, Dictionary<K2, V>>`).
+    // Both layers index into the same inner values, so the two index layers can
+    // be composed into one rather than materializing the values: `take` gathers
+    // the inner keys through the outer keys and reuses the inner values buffer
+    // untouched, so no value data is rewritten. The flattened single-level
+    // dictionary is then cast to the requested index/value types.
+    if matches!(array.values().data_type(), Dictionary(_, _)) {
+        let flattened = take(array.values().as_ref(), array.keys(), None)?;
+        return cast_with_options(
+            &flattened,
+            &Dictionary(
+                Box::new(to_index_type.clone()),
+                Box::new(to_value_type.clone()),
+            ),
+            cast_options,
+        );
+    }
+
     let keys_array: ArrayRef = Arc::new(PrimitiveArray::<K>::from(array.keys().to_data()));
     let values_array = array.values();
     let cast_keys = cast_with_options(&keys_array, to_index_type, cast_options)?;

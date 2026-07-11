@@ -35,6 +35,7 @@ logging = ["tracing-subscriber"]
 
 [dependencies]
 arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json", "ffi"] }
+arrow-data = { workspace = true }
 arrow-flight = { path = "../arrow-flight", default-features = false }
 arrow-integration-test = { path = "../arrow-integration-test", default-features = false }
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "error-context", "usage"] }
