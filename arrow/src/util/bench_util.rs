@@ -930,11 +930,7 @@ where
     StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
-    let mut builder = MapBuilder::new(
-        None,
-        StringBuilder::new(),
-        PrimitiveBuilder::<T>::new(),
-    );
+    let mut builder = MapBuilder::new(None, StringBuilder::new(), PrimitiveBuilder::<T>::new());
     for _ in 0..size {
         if rng.random::<f32>() < null_density {
             builder.append(false).unwrap();
