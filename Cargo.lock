@@ -256,7 +256,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "snap",
+ "snipsnap",
  "strum_macros 0.28.0",
  "tempfile",
  "tokio",
@@ -2365,7 +2365,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simdutf8",
- "snap",
+ "snipsnap",
  "sysinfo",
  "tempfile",
  "tokio",
@@ -3223,10 +3223,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "snap"
-version = "1.1.1"
+name = "snipsnap"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
+checksum = "777ffec062805c2b852a96078278359580ee45e7aeff9a89dce3ccf2857fb32e"
 
 [[package]]
 name = "socket2"

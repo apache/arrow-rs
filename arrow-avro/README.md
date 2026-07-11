@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
 | Feature   | Default | What it enables                                                     | When to use                                                                                                                            |
 |-----------|--------:|---------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
 | `deflate` |       ✅ | DEFLATE compression via `flate2` (pure‑Rust backend)                | Most compatible; widely supported; good compression, slower than Snappy.                                                               |
-| `snappy`  |       ✅ | Snappy block compression via `snap` with CRC‑32 as required by Avro | Fastest decode/encode; common in streaming/data‑lake pipelines. (Avro requires a 4‑byte big‑endian CRC of the **uncompressed** block.) |
+| `snappy`  |       ✅ | Snappy block compression via `snipsnap` with CRC‑32 as required by Avro | Fastest decode/encode; common in streaming/data‑lake pipelines. (Avro requires a 4‑byte big‑endian CRC of the **uncompressed** block.) |
 | `zstd`    |       ✅ | Zstandard block compression via `zstd`                              | Great compression/speed trade‑off on modern systems. May pull in a native library.                                                     |
 | `bzip2`   |       ✅ | BZip2 block compression                                             | For compatibility with older datasets that used BZip2. Slower; larger deps.                                                            |
 | `xz`      |       ✅ | XZ/LZMA block compression                                           | Highest compression for archival data; slowest; larger deps.                                                                           |
@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
 
 **Lower‑level/internal toggles (rarely used directly)**
 
-* `flate2`, `snap`, `crc`, `zstd`, `bzip2`, `xz` are optional **dependencies** wired to the user‑facing features above. You normally enable `deflate`/`snappy`/`zstd`/`bzip2`/`xz`, not these directly.
+* `flate2`, `snipsnap`, `crc`, `zstd`, `bzip2`, `xz` are optional **dependencies** wired to the user‑facing features above. You normally enable `deflate`/`snappy`/`zstd`/`bzip2`/`xz`, not these directly.
 
 ### Feature snippets
 
