@@ -892,7 +892,7 @@ where
     StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
-    let list_size_usize = list_size as usize;
+    let list_size_usize = usize::try_from(list_size).expect("list_size must be non-negative");
     let values: PrimitiveArray<T> = (0..size * list_size_usize)
         .map(|_| {
             if rng.random::<f32>() < value_null_density {
@@ -930,10 +930,10 @@ where
     StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
-    let mut builder = builder::MapBuilder::new(
+    let mut builder = MapBuilder::new(
         None,
-        builder::StringBuilder::new(),
-        builder::PrimitiveBuilder::<T>::new(),
+        StringBuilder::new(),
+        PrimitiveBuilder::<T>::new(),
     );
     for _ in 0..size {
         if rng.random::<f32>() < null_density {
