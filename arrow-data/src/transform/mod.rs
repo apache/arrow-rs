@@ -195,7 +195,10 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
-            let _: $dt = max.try_into().ok()?;
+            // `max` is the merged dictionary length; the largest key index is
+            // `max - 1`, so the key type only needs to hold `max - 1` (e.g. 256
+            // values use keys 0..=255, which fit in u8).
+            let _: $dt = max.saturating_sub(1).try_into().ok()?;
             let offset: $dt = offset.try_into().ok()?;
             Some(primitive::build_extend_with_offset(array, offset))
         }};
