@@ -1256,6 +1256,14 @@ impl RowConverter {
         RowParser::new(Arc::clone(&self.fields))
     }
 
+    /// Like [`Self::parser`] but skips UTF-8 validation on decode.
+    ///
+    /// # Safety
+    /// The caller must ensure all row bytes contain valid UTF-8 for string columns.
+    pub unsafe fn parser_skip_utf8_validation(&self) -> RowParser {
+        unsafe { RowParser::with_skip_utf8_validate(Arc::clone(&self.fields)) }
+    }
+
     /// Returns the size of this instance in bytes
     ///
     /// Includes the size of `Self`.
@@ -1282,13 +1290,15 @@ impl RowParser {
             },
         }
     }
-    /// Like [`RowConverter::parser`] but lets the caller control UTF-8 validation on decode.
-    /// Pass `false` to skip validation when the bytes are already known to be valid UTF-8.
-    pub unsafe fn with_validate_utf8_flag(fields: Arc<[SortField]>, validate_utf8: bool) -> Self {
+    /// Like [`RowConverter::parser`] but skips UTF-8 validation on decode.
+    ///
+    /// # Safety
+    /// The caller must ensure all row bytes contain valid UTF-8 for string columns.
+    unsafe fn with_skip_utf8_validate(fields: Arc<[SortField]>) -> Self {
         Self {
             config: RowConfig {
                 fields,
-                validate_utf8,
+                validate_utf8: false,
             },
         }
     }
@@ -6686,8 +6696,7 @@ mod tests {
         assert_eq!(rows_iter.next_back(), None);
     }
 
-    /// Round-trip through `with_validate_utf8_flag(false)` confirms skipping validation
-    /// preserves values.
+    /// Round-trip through `with_skip_utf8_validate` confirms skipping validation preserves values.
     #[test]
     fn test_row_parser_skip_utf8_validation_roundtrip() {
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
@@ -6695,8 +6704,8 @@ mod tests {
         let rows = converter.convert_columns(&[Arc::new(array) as _]).unwrap();
         let binary = rows.try_into_binary().expect("fits in i32 offsets");
 
-        let parser =
-            unsafe { RowParser::with_validate_utf8_flag(Arc::clone(&converter.fields), false) };
+        // SAFETY: bytes come from this RowConverter and are known-valid UTF-8.
+        let parser = unsafe { RowParser::with_skip_utf8_validate(Arc::clone(&converter.fields)) };
 
         let decoded = converter
             .convert_rows(binary.iter().map(|b| parser.parse(b.unwrap())))
