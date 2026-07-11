@@ -300,6 +300,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-cmp"
+version = "59.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "half",
+]
+
+[[package]]
 name = "arrow-csv"
 version = "59.1.0"
 dependencies = [
@@ -458,6 +469,7 @@ version = "59.1.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-cmp",
  "arrow-data",
  "arrow-schema",
  "arrow-select",
@@ -510,6 +522,7 @@ dependencies = [
  "ahash",
  "arrow-array",
  "arrow-buffer",
+ "arrow-cmp",
  "arrow-data",
  "arrow-schema",
  "num-traits",
