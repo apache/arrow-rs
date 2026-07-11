@@ -337,15 +337,42 @@ impl VariantArray {
         Self::from_parts(metadata, value, Some(typed_value), nulls)
     }
 
+    /// Note: annotates `value` as nullable, which the spec only permits for shredded
+    /// variants. It is also needed by `variant_get`'s unshredded intermediates, whose
+    /// `value` column can contain unmasked nulls. Unshredded producers should use
+    /// [`Self::from_parts_unshredded`] instead.
     pub(crate) fn from_parts(
         metadata: ArrayRef,
         value: ArrayRef,
         typed_value: Option<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        Self::from_parts_with_nullable_value(metadata, value, typed_value, nulls, true)
+    }
+
+    /// Construct an unshredded `VariantArray`, annotating `value` as non-nullable as the
+    /// spec requires when there is no `typed_value` column.
+    ///
+    /// # Panics
+    /// If `value` contains nulls not masked by `nulls`.
+    pub(crate) fn from_parts_unshredded(
+        metadata: ArrayRef,
+        value: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self::from_parts_with_nullable_value(metadata, value, None, nulls, false)
+    }
+
+    fn from_parts_with_nullable_value(
+        metadata: ArrayRef,
+        value: ArrayRef,
+        typed_value: Option<ArrayRef>,
+        nulls: Option<NullBuffer>,
+        value_nullable: bool,
+    ) -> Self {
         let mut builder = StructArrayBuilder::new()
             .with_field("metadata", metadata.clone(), false)
-            .with_field("value", value.clone(), true);
+            .with_field("value", value.clone(), value_nullable);
         if let Some(typed_value) = typed_value.clone() {
             builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }

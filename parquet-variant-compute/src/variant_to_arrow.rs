@@ -1251,10 +1251,11 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        let variant_array = VariantArray::from_parts(
+        // value-nulls are appended only alongside parent nulls, so the non-nullable
+        // `value` annotation is always valid here
+        let variant_array = VariantArray::from_parts_unshredded(
             self.metadata,
             Arc::new(self.builder.build()?),
-            None, // no typed_value column
             self.nulls.finish(),
         );
 
