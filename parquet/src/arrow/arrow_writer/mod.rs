@@ -2939,16 +2939,6 @@ mod tests {
             K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
             <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
         {
-            let field = Field::new(
-                "a",
-                DataType::Dictionary(
-                    Box::new(K::DATA_TYPE),
-                    Box::new(DataType::FixedSizeBinary(4)),
-                ),
-                false,
-            );
-            let schema = Schema::new(vec![field]);
-
             let keys: Vec<K::Native> = vec![
                 K::Native::try_from(0u8).unwrap(),
                 K::Native::try_from(0u8).unwrap(),
@@ -2960,8 +2950,12 @@ mod tests {
             )
             .unwrap();
 
-            let data = DictionaryArray::<K>::new(keys, Arc::new(values));
-            let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+            let data = Arc::new(DictionaryArray::<K>::new(keys, Arc::new(values))) as ArrayRef;
+            one_column_roundtrip(Arc::clone(&data), true);
+
+            let field = Field::new("a", data.data_type().clone(), false);
+            let schema = Schema::new(vec![field]);
+            let batch = RecordBatch::try_new(Arc::new(schema), vec![data]).unwrap();
             roundtrip(batch, None);
         }
 

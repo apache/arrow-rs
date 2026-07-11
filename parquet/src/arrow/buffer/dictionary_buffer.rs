@@ -185,8 +185,18 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     ArrowType::Dictionary(k, v) => (k, v.as_ref().clone()),
                     _ => unreachable!(),
                 };
+                let array = if let ArrowType::FixedSizeBinary(size) = value_type {
+                    let array = values.into_array(null_buffer, ArrowType::Binary);
+                    let array = array.as_binary::<i32>();
+                    Arc::new(FixedSizeBinaryArray::new(
+                        size,
+                        array.values().clone(),
+                        array.nulls().cloned(),
+                    )) as _
+                } else {
+                    values.into_array(null_buffer, value_type)
+                };
 
-                let array = values.into_array(null_buffer, value_type);
                 pack_values(key_type, &array)
             }
         }
