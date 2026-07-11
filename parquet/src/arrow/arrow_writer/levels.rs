@@ -476,6 +476,9 @@ impl LevelInfoBuilder {
                     let mut seen = 0usize;
 
                     for rep in rep_levels.iter_mut().rev() {
+                        // Asserting rep >= ctx.rep_level to ensure low level depth haven't
+                        // being written.
+                        debug_assert!(*rep >= ctx.rep_level);
                         // Count element starts by skipping nested reps (rep > ctx.rep_level).
                         //
                         // `==` would also work here: the child is written before the
