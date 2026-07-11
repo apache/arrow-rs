@@ -16,7 +16,7 @@
 // under the License.
 
 //! Basic comparator factories shared by Arrow crates that need to compare
-//! arbitrary array slots without pulling in the full [`arrow-ord`] crate.
+//! arbitrary array slots without pulling in the full `arrow-ord` crate.
 //!
 //! The only public surface is [`make_comparator`] (with [`DynComparator`] as the
 //! returned function type). `arrow-ord` re-exports both from here, so its

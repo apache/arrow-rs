@@ -305,7 +305,6 @@ version = "59.1.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
- "arrow-data",
  "arrow-schema",
  "half",
 ]
