@@ -1282,6 +1282,16 @@ impl RowParser {
             },
         }
     }
+    /// Like [`RowConverter::parser`] but lets the caller control UTF-8 validation on decode.
+    /// Pass `false` to skip validation when the bytes are already known to be valid UTF-8.
+    pub unsafe fn with_validate_utf8_flag(fields: Arc<[SortField]>, validate_utf8: bool) -> Self {
+        Self {
+            config: RowConfig {
+                fields,
+                validate_utf8,
+            },
+        }
+    }
 
     /// Creates a [`Row`] from the provided `bytes`.
     ///
@@ -6674,6 +6684,25 @@ mod tests {
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next_back(), None);
+    }
+
+    /// Round-trip through `with_validate_utf8_flag(false)` confirms skipping validation
+    /// preserves values.
+    #[test]
+    fn test_row_parser_skip_utf8_validation_roundtrip() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let array = StringArray::from(vec!["arrow", "rust"]);
+        let rows = converter.convert_columns(&[Arc::new(array) as _]).unwrap();
+        let binary = rows.try_into_binary().expect("fits in i32 offsets");
+
+        let parser =
+            unsafe { RowParser::with_validate_utf8_flag(Arc::clone(&converter.fields), false) };
+
+        let decoded = converter
+            .convert_rows(binary.iter().map(|b| parser.parse(b.unwrap())))
+            .unwrap();
+        let got: Vec<_> = decoded[0].as_string::<i32>().iter().flatten().collect();
+        assert_eq!(got, vec!["arrow", "rust"]);
     }
 
     #[test]
