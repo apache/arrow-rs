@@ -117,21 +117,21 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 /// use arrow_data::ArrayData;
 /// use arrow_data::transform::MutableArrayData;
 /// use arrow_schema::DataType;
-/// fn i32_array(values: &[i32]) -> ArrayData {
-///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
+/// fn i32_array(values: &[i32],len: usize) -> ArrayData {
+///   ArrayData::try_new(DataType::Int32, len, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
 /// }
-/// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
-/// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
+/// let arr1  = i32_array(&[1, 2, 3, 4, 5],5);
+/// let arr2  = i32_array(&[6, 7, 8, 9, 10],5);
 /// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
 /// let capacity = 3 * std::mem::size_of::<i32>();
 /// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
 /// // Copy the first 3 elements from arr1
 /// mutable.extend(0, 0, 3);
 /// // Copy the last 3 elements from arr2
-/// mutable.extend(1, 2, 4);
+/// mutable.extend(1, 2, 5);
 /// // Complete the MutableArrayData into a new ArrayData
 /// let frozen = mutable.freeze();
-/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
+/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10],6));
 /// ```
 pub struct MutableArrayData<'a> {
     /// Input arrays: the data being read FROM.
