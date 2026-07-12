@@ -397,13 +397,12 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// # Arguments
     /// * `arrays` - the source arrays to copy from
-    /// * `use_nulls` - a flag used to optimize insertions
-    ///   - `false` if the only source of nulls are the arrays themselves
-    ///   - `true` if the user plans to call [MutableArrayData::extend_nulls].
-    /// * capacity - the preallocated capacity of the output array, in bytes
+    /// * `use_nulls` - a flag indicating whether the caller intends to call `extend_nulls`.
+    ///   Note: null-handling is enabled automatically if any source array contains nulls.
+    /// * `capacity` - the preallocated capacity of the output array, in slots (number of elements)
     ///
-    /// Thus, if `use_nulls` is `false`, calling
-    /// [MutableArrayData::extend_nulls] should not be used.
+    /// Thus, if `use_nulls` is `false` and none of the source arrays contain nulls,
+    /// calling [MutableArrayData::extend_nulls] should not be used.
     pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
