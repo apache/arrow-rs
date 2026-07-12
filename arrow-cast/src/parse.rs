@@ -611,7 +611,14 @@ fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
     Some((year, month, day))
 }
 
-fn parse_date(string: &str) -> Option<NaiveDate> {
+/// Parse a given date string into a `NaiveDate`.
+///
+/// Supports:
+/// - ISO date strings: `"2026-06-10"`, `"2026-6-9"`, `"2026-06-9"`, `"2026-6-09"`
+/// - ISO extended (signed) year date strings: `"+2026-06-10"`, `"-2026-06-10"`
+/// - No hyphen date strings: `"20260610"`
+/// - Datetime strings:`"2026-06-10T14:23:45"`
+pub fn parse_date(string: &str) -> Option<NaiveDate> {
     // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
     //
     // According to [ISO 8601], years have:
