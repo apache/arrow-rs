@@ -583,6 +583,14 @@ impl BatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
+
+    pub fn size(&self) -> usize {
+        self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
+          + self.in_progress_arrays.iter().map(|array| array.size()).sum::<usize>()
+        + self.completed.capacity() * size_of::<RecordBatch>()
+        + self.completed.iter().map(|batch| batch.get_array_memory_size()).sum::<usize>()
+
+    }
 }
 
 impl BatchCoalescer {
@@ -742,6 +750,9 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+
+    /// Get the number of bytes this array is using
+    fn size(&self) -> usize;
 }
 
 #[cfg(test)]

@@ -226,6 +226,12 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(array))
     }
+
+    fn size(&self) -> usize {
+        self.source.as_ref().map_or(0, |source| source.get_array_memory_size()) +
+          self.current.capacity() * std::mem::size_of::<T>() +
+          self.nulls.allocated_size()
+    }
 }
 
 #[cfg(test)]

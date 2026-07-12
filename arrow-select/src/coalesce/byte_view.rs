@@ -470,6 +470,10 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             unsafe { GenericByteViewArray::<B>::new_unchecked(views.into(), buffers, nulls) };
         Ok(Arc::new(new_array))
     }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
 }
 
 const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)

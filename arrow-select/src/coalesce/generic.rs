@@ -18,7 +18,7 @@
 use super::InProgressArray;
 use crate::concat::concat;
 use crate::filter::FilterPredicate;
-use arrow_array::ArrayRef;
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::ArrowError;
 
 /// Generic implementation for [`InProgressArray`] that works with any type of
@@ -32,8 +32,10 @@ use arrow_schema::ArrowError;
 pub(crate) struct GenericInProgressArray {
     /// The current source
     source: Option<ArrayRef>,
+    used_values_from_source: bool,
     /// The buffered array slices
     buffered_arrays: Vec<ArrayRef>,
+    size: usize,
 }
 
 impl GenericInProgressArray {
@@ -42,12 +44,21 @@ impl GenericInProgressArray {
         Self {
             source: None,
             buffered_arrays: vec![],
+            size: 0,
+            used_values_from_source: false,
         }
     }
 }
 impl InProgressArray for GenericInProgressArray {
     fn set_source(&mut self, source: Option<ArrayRef>) {
-        self.source = source
+        if let Some(old_source) = self.source.take() {
+            if !self.used_values_from_source {
+                self.size -= old_source.get_array_memory_size();
+            }
+        }
+        self.used_values_from_source = false;
+        self.size += source.as_ref().map_or(0, |s| s.get_array_memory_size());
+        self.source = source;
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
@@ -56,6 +67,7 @@ impl InProgressArray for GenericInProgressArray {
                 "Internal Error: GenericInProgressArray: source not set".to_string(),
             )
         })?;
+        self.used_values_from_source = true;
         let array = source.slice(offset, len);
         self.buffered_arrays.push(array);
         Ok(())
@@ -67,7 +79,11 @@ impl InProgressArray for GenericInProgressArray {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         let array = filter.filter(source.as_ref())?;
+        let capacity_before = self.buffered_arrays.capacity();
+        self.size += array.get_array_memory_size();
         self.buffered_arrays.push(array);
+        let capacity_after = self.buffered_arrays.capacity();
+        self.size += (capacity_after - capacity_before) * size_of::<ArrayRef>();
         Ok(())
     }
 
@@ -82,6 +98,15 @@ impl InProgressArray for GenericInProgressArray {
                 .collect::<Vec<_>>(),
         )?;
         self.buffered_arrays.clear();
+        self.size = self.buffered_arrays.capacity() * size_of::<ArrayRef>();
+        if let Some(source) = self.source.as_ref() {
+            self.size += source.get_array_memory_size();
+        }
+        self.used_values_from_source = false;
         Ok(array)
+    }
+
+    fn size(&self) -> usize {
+        self.size
     }
 }
