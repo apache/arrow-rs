@@ -2170,6 +2170,68 @@ mod tests {
         assert_eq!(validity, &[true, false, false, true, true]);
     }
 
+    fn run_fsl_string_child_test(
+        child_data_type: DataType,
+        create_child: impl Fn(Vec<&str>) -> ArrayRef,
+        extract_values: impl Fn(&ArrayRef) -> Vec<String>,
+    ) {
+        let field = Arc::new(Field::new("item", child_data_type, false));
+
+        // a: [["a", "b"], ["c", "d"]]
+        let a = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            create_child(vec!["a", "b", "c", "d"]),
+            None,
+        );
+        // b: [["x", "y"], ["z", "w"]]
+        let b = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            create_child(vec!["x", "y", "z", "w"]),
+            None,
+        );
+
+        let result = interleave(&[&a, &b], &[(0, 1), (1, 0), (0, 0)]).unwrap();
+        let result = result.as_fixed_size_list();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value_length(), 2);
+
+        // Expected: [[c,d], [x,y], [a,b]]
+        let values = extract_values(result.values());
+        assert_eq!(values, vec!["c", "d", "x", "y", "a", "b"]);
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list_string_child() {
+        // FixedSizeList<Utf8> — exercises the non-primitive child path
+        run_fsl_string_child_test(
+            DataType::Utf8,
+            |v| Arc::new(StringArray::from(v)),
+            |a| {
+                a.as_string::<i32>()
+                    .iter()
+                    .map(|s| s.unwrap().to_owned())
+                    .collect()
+            },
+        );
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list_string_view_child() {
+        // FixedSizeList<Utf8View> — exercises the non-primitive child path
+        run_fsl_string_child_test(
+            DataType::Utf8View,
+            |v| Arc::new(StringViewArray::from(v)),
+            |a| {
+                a.as_string_view()
+                    .iter()
+                    .map(|s| s.unwrap().to_owned())
+                    .collect()
+            },
+        );
+    }
+
     #[test]
     fn test_interleave_map() {
         use arrow_array::builder::MapBuilder;
