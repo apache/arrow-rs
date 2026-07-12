@@ -583,11 +583,7 @@ fn interleave_map(
     let interleaved_entries = interleave(&entries_arrays, &child_indices)?;
 
     let offsets = OffsetBuffer::new(offsets.into());
-    let entries = interleaved_entries
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .unwrap()
-        .clone();
+    let entries = interleaved_entries.as_struct().clone();
     let array = MapArray::new(field.clone(), offsets, entries, interleaved.nulls, ordered);
     Ok(Arc::new(array))
 }
