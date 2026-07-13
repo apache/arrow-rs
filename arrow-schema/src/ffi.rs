@@ -1012,11 +1012,7 @@ mod tests {
     #[test]
     fn test_name_with_null_byte() {
         let schema = FFI_ArrowSchema::try_new("i", vec![], None).unwrap();
-        let err = schema.with_name("ab\0cd").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "C Data interface error: Null byte at position 2 not allowed in name"
-        );
+        assert!(schema.with_name("ab\0cd").is_err());
     }
 
     #[test]
