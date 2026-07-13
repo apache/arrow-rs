@@ -588,17 +588,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             // each group's exact byte size lets the second pass size every
             // buffer precisely, with no over-reservation or trailing waste.
             let mut groups: Vec<GcCopyGroup> = Vec::new();
-            let mut current_length: u32 = 0;
+            // Bytes accumulated for the current group. A view length is a `u32`
+            // and a single value may be larger than `max_buffer_size`, so the
+            // running sum is kept in `u64` to stay within the addressable
+            // buffer-offset space without wrapping.
+            let mut current_length: u64 = 0;
             let mut current_elements = 0;
 
             for view in self.views() {
                 let view_len = *view as u32;
                 if view_len > MAX_INLINE_VIEW_LEN {
-                    // Seal the current group before adding this view would
-                    // overflow one buffer. Both `current_length` and `view_len`
-                    // are bounded by `max_buffer_size` (<= `i32::MAX`), so the
-                    // sum fits in `u32`.
-                    if current_length + view_len > max_buffer_size as u32 {
+                    // Seal the current group before adding this view would push
+                    // its buffer past `max_buffer_size`.
+                    if current_length + view_len as u64 > max_buffer_size as u64 {
                         groups.push(GcCopyGroup {
                             total_buffer_bytes: current_length as usize,
                             total_len: current_elements,
@@ -606,7 +608,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                         current_length = 0;
                         current_elements = 0;
                     }
-                    current_length += view_len;
+                    current_length += view_len as u64;
                 }
                 current_elements += 1;
             }
@@ -1630,6 +1632,48 @@ mod tests {
             assert!(buf.len() <= max_buffer_size, "buffer exceeded max size");
         }
         // Every value (inline, large, and null) is unchanged and in order.
+        array
+            .iter()
+            .zip(gced.iter())
+            .enumerate()
+            .for_each(|(i, (a, b))| {
+                assert_eq!(a, b, "value mismatch at index {i} after gc");
+            });
+        // The result round-trips through full validation.
+        gced.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_gc_slow_path_value_larger_than_buffer() {
+        // A single non-inline value can be larger than one output buffer (a view
+        // length is a `u32`, so a value may exceed `max_buffer_size`). Such a
+        // value cannot be split, so it occupies a buffer of its own; gc must
+        // still preserve every row and produce a valid array.
+        //
+        // The real threshold needs a multi-GiB value, so drive the same logic
+        // with a `max_buffer_size` smaller than the value length.
+        let big = "x".repeat(64); // non-inline, larger than the cap below
+        let test_data = [
+            Some("short"),      // inline
+            Some(big.as_str()), // larger than max_buffer_size
+            None,               // null
+            Some("tail"),       // inline
+            Some(big.as_str()), // larger than max_buffer_size
+        ];
+        let array: StringViewArray = test_data.into_iter().collect();
+
+        let max_buffer_size = 16; // smaller than a single `big` value
+        let gced = array.gc_with_max_buffer_size(max_buffer_size);
+
+        // Row count is preserved.
+        assert_eq!(gced.len(), array.len(), "gc changed the row count");
+        // Each oversized value lands in its own buffer, so the copy splits.
+        assert!(
+            gced.data_buffers().len() > 1,
+            "expected output split across multiple buffers, got {}",
+            gced.data_buffers().len()
+        );
+        // Every value is unchanged and in order.
         array
             .iter()
             .zip(gced.iter())
