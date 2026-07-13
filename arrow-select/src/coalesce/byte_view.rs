@@ -54,10 +54,10 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// Phantom so we can use the same struct for both StringViewArray and
     /// BinaryViewArray
     _phantom: PhantomData<B>,
-    /// The size in bytes this take on the heap
-    size: usize,
-    /// The size in bytes from source that it is reused
-    size_from_source_reused: usize,
+    /// The size in bytes the [`Buffer`]s in [`Self::completed`] is taking
+    completed_buffers_size: usize,
+    /// The size in bytes from [`Self::source`] that it is being used in [`Self::completed`]
+    size_of_completed_buffers_from_current_source: usize,
 }
 
 struct Source {
@@ -86,22 +86,18 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     pub(crate) fn new(batch_size: usize) -> Self {
         let buffer_source = BufferSource::new();
 
-        let mut this = Self {
+        Self {
             batch_size,
             source: None,
             views: Vec::new(),                         // allocate in push
             nulls: NullBufferBuilder::new(batch_size), // no allocation
             current: None,
             completed: vec![],
-            size: 0,
-            size_from_source_reused: 0,
+            completed_buffers_size: 0,
+            size_of_completed_buffers_from_current_source: 0,
             buffer_source,
             _phantom: PhantomData,
-        };
-        
-        this.size = this.calculate_initial_size();
-        
-        this
+        }
     }
 
     /// Allocate space for output views and nulls if needed
@@ -111,7 +107,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     fn ensure_capacity(&mut self) {
         if self.views.capacity() == 0 {
             self.views.reserve(self.batch_size);
-            self.size += self.views.capacity() * size_of::<u128>();
         }
     }
 
@@ -121,15 +116,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             return;
         };
         let buffer: Buffer = next_buffer.into();
-        self.size += buffer.capacity();
-        let cap_before = self.completed.capacity();
+        
+        self.completed_buffers_size += buffer.capacity();
         self.completed.push(buffer);
-        let cap_after = self.completed.capacity();
-        self.size += (cap_after - cap_before) * size_of::<Buffer>();
     }
 
     fn append_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
-        let cap_before = self.views.capacity();
         let selected_count = filter.count();
         let current_len = self.views.len();
         self.views.reserve(selected_count);
@@ -166,7 +158,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         }
 
         debug_assert_eq!(written, selected_count);
-        self.size += (self.views.capacity() - cap_before) * size_of::<u128>();
     }
 
     fn append_nulls_by_filter(
@@ -175,10 +166,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         source_nulls: Option<&NullBuffer>,
     ) {
       
-      self.size -= self.nulls.allocated_size();
         let Some((null_count, nulls)) = filter_null_mask(source_nulls, filter) else {
             self.nulls.append_n_non_nulls(filter.count());
-        self.size += self.nulls.allocated_size();
             return;
         };
 
@@ -186,30 +175,28 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
         };
         self.nulls.append_buffer(&nulls);
-        self.size += self.nulls.allocated_size();
     }
 
     /// Append views to self.views, updating the buffer index if necessary
     #[inline(never)]
     fn append_views_and_update_buffer_index(&mut self, views: &[u128], buffers: &[Buffer], is_reused: bool) {
-        let completed_cap_before = self.completed.capacity();
         if let Some(buffer) = self.current.take() {
-            self.completed.push(buffer.into());
+            let buffer: Buffer = buffer.into();
+            self.completed_buffers_size += buffer.capacity();
+            self.completed.push(buffer);
         }
         
         let buffers_size = buffers.iter().map(|b| b.capacity()).sum::<usize>();
         if !is_reused {
-          self.size += buffers_size;
-        } else {
-          self.size_from_source_reused += buffers_size;
+          self.completed_buffers_size += buffers_size;
+        } else if self.size_of_completed_buffers_from_current_source == 0 {
+          // Don't double count buffers size if already counted that
+          self.size_of_completed_buffers_from_current_source += buffers_size;
         }
         
         let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
         self.completed.extend_from_slice(buffers);
-        self.size += (self.completed.capacity() - completed_cap_before) * size_of::<Buffer>();
 
-        let views_cap_before = self.views.capacity(); 
-        
         if starting_buffer == 0 {
             // If there are no buffers, we can just use the views as is
             self.views.extend_from_slice(views);
@@ -226,7 +213,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
             self.views.extend(updated_views);
         }
-        self.size += (self.views.capacity() - views_cap_before) * size_of::<u128>();
     }
 
     /// Append views to self.views, copying data from the buffers into
@@ -255,7 +241,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             return;
         };
         
-        self.size -= current.capacity();
+        self.completed_buffers_size -= current.capacity();
 
         // If there is a current buffer with enough space, append the views and
         // copy the strings into the existing buffer.
@@ -288,12 +274,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         let remaining_view_buffer_size = view_buffer_size - string_bytes_to_copy;
 
         self.append_views_and_copy_strings_inner(first_views, current, buffers);
-        {
-          let completed = self.current.take().expect("completed");
-          let completed_capacity_before = self.completed.capacity();
-          self.completed.push(completed.into());
-          self.size += (self.completed.capacity() - completed_capacity_before) * size_of::<Buffer>();
-        }
+        let completed: Buffer = self.current.take().expect("completed").into();
+        self.completed_buffers_size += completed.capacity();
+        self.completed.push(completed);
 
         // Copy any remaining views into a new buffer
         let remaining_views = &views[num_view_to_current..];
@@ -318,7 +301,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         assert!(self.current.is_none(), "current buffer should be None");
 
         if views.is_empty() {
-            self.size += dst_buffer.capacity();
             self.current = Some(dst_buffer);
             return;
         }
@@ -370,31 +352,17 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             }
             b.as_u128()
         });
-        {
-          let views_capcity_before = self.views.capacity();
-          self.views.extend(new_views);
-          self.size += (self.views.capacity() - views_capcity_before) * size_of::<u128>();
-        }
         
-        self.size += dst_buffer.capacity();
+        self.views.extend(new_views);
         self.current = Some(dst_buffer);
-    }
-    
-    /// Set the [`Self::size`] after finish or after creation, this assume no shared buffer
-    fn calculate_initial_size(&self) -> usize {
-      self.completed.capacity() * size_of::<Buffer>() + self.current.as_ref().map_or(0, |c| c.capacity()) + self.nulls.allocated_size() + self.source.as_ref().map_or(0, |s| s.array.get_array_memory_size())
     }
 }
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     fn set_source(&mut self, source: Option<ArrayRef>) {
-      if let Some(old_source) = self.source.take() {
-          self.size -= old_source.array.get_array_memory_size();
-
-          // If used values from source, add only the size that was used
-          self.size += self.size_from_source_reused;
-      }
-      self.size_from_source_reused = 0;
+      // If used values from source, add only the size that was used
+      self.completed_buffers_size += self.size_of_completed_buffers_from_current_source;
+      self.size_of_completed_buffers_from_current_source = 0;
       
         self.source = source.map(|array| {
             let s = array.as_byte_view::<B>();
@@ -420,7 +388,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 ideal_buffer_size,
             }
         });
-        self.size += self.source.as_ref().map_or(0, |s| s.array.get_array_memory_size());
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
@@ -434,18 +401,13 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         // If creating StringViewArray output, ensure input was valid utf8 too
         let s = source.array.as_byte_view::<B>();
         
-        {
-          let nulls_size_before = self.nulls.allocated_size();
-          // add any nulls, as necessary
-          if let Some(nulls) = s.nulls().as_ref() {
-              let nulls = nulls.slice(offset, len);
-              self.nulls.append_buffer(&nulls);
-          } else {
-              self.nulls.append_n_non_nulls(len);
-          };
-        
-          self.size += self.nulls.allocated_size() - nulls_size_before;
-        }
+        // add any nulls, as necessary
+        if let Some(nulls) = s.nulls().as_ref() {
+            let nulls = nulls.slice(offset, len);
+            self.nulls.append_buffer(&nulls);
+        } else {
+            self.nulls.append_n_non_nulls(len);
+        };
 
         let buffers = s.data_buffers();
         // SAFETY: copy_rows is called with ranges derived from the source array.
@@ -454,10 +416,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
         if source.ideal_buffer_size == 0 {
-            let views_capacity_before = self.views.capacity();
             self.views.extend_from_slice(views);
-            
-            self.size += (self.views.capacity() - views_capacity_before) * size_of::<u128>();
             self.source = Some(source);
             return Ok(());
         }
@@ -517,13 +476,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         let filtered = filtered.as_byte_view::<B>();
 
         self.ensure_capacity();
-        self.size -= self.nulls.allocated_size();
         if let Some(nulls) = filtered.nulls().as_ref() {
             self.nulls.append_buffer(nulls);
         } else {
             self.nulls.append_n_non_nulls(filter.count());
         }
-        self.size += self.nulls.allocated_size();
         self.append_views_and_update_buffer_index(filtered.views(), filtered.data_buffers(), false);
         Ok(())
     }
@@ -536,8 +493,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
         
-        self.size_from_source_reused = 0;
-        self.size += self.calculate_initial_size();
+        // Not reusing anything since we took all complete
+        self.size_of_completed_buffers_from_current_source = 0;
+        self.completed_buffers_size = 0;
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
@@ -547,7 +505,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     }
 
     fn size(&self) -> usize {
-      self.size
+      self.completed_buffers_size + self.current.as_ref().map_or(0, |c| c.capacity()) + self.nulls.allocated_size() + self.views.capacity() * size_of::<u128>() + self.source.as_ref().map_or(0, |s| s.array.get_array_memory_size())
     }
 }
 
