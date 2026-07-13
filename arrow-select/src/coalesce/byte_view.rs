@@ -240,8 +240,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             self.append_views_and_copy_strings_inner(views, new_buffer, buffers);
             return;
         };
-        
-        self.completed_buffers_size -= current.capacity();
 
         // If there is a current buffer with enough space, append the views and
         // copy the strings into the existing buffer.
