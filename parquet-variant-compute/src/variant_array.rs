@@ -325,18 +325,6 @@ impl VariantArray {
         })
     }
 
-    /// Construct a perfectly shredded `VariantArray`: every value is in
-    /// `typed_value` and the required `value` column is all-null.
-    #[cfg(test)]
-    pub(crate) fn perfectly_shredded(
-        metadata: ArrayRef,
-        typed_value: ArrayRef,
-        nulls: Option<NullBuffer>,
-    ) -> Self {
-        let value = all_null_value_column(typed_value.len());
-        Self::from_parts(metadata, value, Some(typed_value), nulls)
-    }
-
     pub(crate) fn from_parts(
         metadata: ArrayRef,
         value: ArrayRef,
@@ -420,7 +408,11 @@ impl VariantArray {
         match self.typed_value_column() {
             // Always prefer typed_value, if available
             Some(typed_value) if typed_value.is_valid(index) => {
-                typed_value_to_variant(typed_value, value, index)
+                if !matches!(typed_value.data_type(), DataType::Struct(_)) && value.is_valid(index) {
+                    // Only a partially shredded struct is allowed to have values for both columns
+                    panic!("Invalid variant, conflicting value and typed_value");
+                }
+                typed_value_to_variant(typed_value, index)
             }
             // Otherwise fall back to value, if available
             _ if value.is_valid(index) => variant_from_arrays_at(&self.metadata, value, index)
@@ -720,14 +712,6 @@ impl ShreddedVariantFieldArray {
         &self.inner
     }
 
-    /// Construct a perfectly shredded field: every value is in `typed_value`
-    /// and the required `value` column is all-null.
-    #[cfg(test)]
-    pub(crate) fn perfectly_shredded(typed_value: ArrayRef) -> Self {
-        let value = all_null_value_column(typed_value.len());
-        Self::from_parts(value, Some(typed_value), None)
-    }
-
     pub(crate) fn from_parts(
         value: ArrayRef,
         typed_value: Option<ArrayRef>,
@@ -955,16 +939,8 @@ impl StructArrayBuilder {
 }
 
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant<'a>(
-    typed_value: &'a ArrayRef,
-    value: &'a ArrayRef,
-    index: usize,
-) -> Result<Variant<'a, 'a>> {
+fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Variant<'_, '_>> {
     let data_type = typed_value.data_type();
-    if !matches!(data_type, DataType::Struct(_)) && value.is_valid(index) {
-        // Only a partially shredded struct is allowed to have values for both columns
-        panic!("Invalid variant, conflicting value and typed_value");
-    }
     match data_type {
         DataType::Null => Ok(Variant::Null),
         DataType::Boolean => {
@@ -1266,6 +1242,28 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
     };
     let new_field = field.as_ref().clone().with_data_type(new_data_type);
     Ok(Cow::Owned(Arc::new(new_field)))
+}
+
+/// Test-only constructors for perfectly shredded arrays, where every value lives in
+/// `typed_value` and the required `value` column is all-null.
+#[cfg(test)]
+impl VariantArray {
+    pub(crate) fn perfectly_shredded(
+        metadata: ArrayRef,
+        typed_value: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let value = all_null_value_column(typed_value.len());
+        Self::from_parts(metadata, value, Some(typed_value), nulls)
+    }
+}
+
+#[cfg(test)]
+impl ShreddedVariantFieldArray {
+    pub(crate) fn perfectly_shredded(typed_value: ArrayRef) -> Self {
+        let value = all_null_value_column(typed_value.len());
+        Self::from_parts(value, Some(typed_value), None)
+    }
 }
 
 #[cfg(test)]
