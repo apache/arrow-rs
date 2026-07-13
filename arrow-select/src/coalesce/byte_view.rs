@@ -642,4 +642,57 @@ mod tests {
             "expected filtered output to reuse the source data buffer"
         );
     }
+
+    /// Build a compacted BinaryViewArray whose values all spill into external
+    /// data buffers. `gc()` makes the buffers dense so the coalescer reuses them
+    /// (`need_gc == false`) rather than copying/compacting them.
+    fn non_inline_array(n: usize) -> (BinaryViewArray, usize) {
+        let values = (0..n)
+            .map(|i| format!("This value is longer than 12 bytes: {i}").into_bytes())
+            .collect::<Vec<_>>();
+        let array = BinaryViewArray::from_iter(values.iter().map(|v| Some(v.as_slice()))).gc();
+        assert!(!array.data_buffers().is_empty());
+        let buffer_capacity = array.data_buffers().iter().map(|b| b.capacity()).sum();
+        (array, buffer_capacity)
+    }
+
+    #[test]
+    fn test_size_empty() {
+        let in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
+        assert_eq!(in_progress.size(), 0);
+    }
+
+    #[test]
+    fn test_size_reused_buffers_not_double_counted() {
+        let (array, buffer_capacity) = non_inline_array(64);
+        let source: ArrayRef = Arc::new(array);
+
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
+        in_progress.set_source(Some(Arc::clone(&source)));
+        in_progress.copy_rows(0, 60).unwrap();
+        in_progress.copy_rows(60, 4).unwrap();
+
+        // The reused buffers now live in `completed`, but while the source is
+        // still set they are counted via the source, not `completed_buffers_size`,
+        // to avoid double counting them.
+        assert_eq!(in_progress.completed_buffers_size, 0);
+        assert_eq!(
+            in_progress.size_of_completed_buffers_from_current_source,
+            buffer_capacity,
+        );
+
+        // Setting a new source commits the pending reused-buffer bytes, since the
+        // old source (and its double count) is dropped.
+        let other: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter(std::iter::once(Some(b"short".as_slice()))));
+        in_progress.set_source(Some(Arc::clone(&other)));
+        assert_eq!(in_progress.completed_buffers_size, buffer_capacity);
+        assert_eq!(in_progress.size_of_completed_buffers_from_current_source, 0);
+
+        // finish() releases everything.
+        in_progress.finish().unwrap();
+        assert_eq!(in_progress.completed_buffers_size, 0);
+        assert_eq!(in_progress.size_of_completed_buffers_from_current_source, 0);
+    }
+
 }
