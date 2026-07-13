@@ -1653,8 +1653,6 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 /// # Ok(())
 /// # }
 /// ```
-///
-/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamEncoder {
     schema: Schema,
     /// IPC write options
@@ -2804,14 +2802,36 @@ mod tests {
 
     // StreamEncoder and StreamWriter currently use separate encoding paths, so these tests
     // verify the new sans-IO API preserves the existing IPC stream byte layout.
-    #[test]
-    fn test_stream_encoder_matches_stream_writer() {
+    #[tokio::test]
+    async fn test_stream_encoder_async_writer_matches_stream_writer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
         let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Utf8, ["x", "y", "z"])).unwrap();
         let options = IpcWriteOptions::default();
-        let encoded = encode_stream(batch.schema_ref(), &[batch.clone()], options.clone());
-        let written = write_stream(batch.schema_ref(), &[batch.clone()], options);
+        let expected = write_stream(
+            batch.schema_ref(),
+            std::slice::from_ref(&batch),
+            options.clone(),
+        );
 
-        assert_eq!(encoded, written);
+        let (mut sink, mut source) = tokio::io::duplex(64);
+        let read = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            source.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+
+        let mut encoder = StreamEncoder::try_new_with_options(batch.schema_ref(), options).unwrap();
+        for buffer in encoder.encode(&batch).unwrap() {
+            sink.write_all(buffer.as_slice()).await.unwrap();
+        }
+        for buffer in encoder.finish().unwrap() {
+            sink.write_all(buffer.as_slice()).await.unwrap();
+        }
+        sink.shutdown().await.unwrap();
+
+        let encoded = read.await.unwrap();
+        assert_eq!(encoded, expected);
 
         let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
         assert_eq!(reader.next().unwrap().unwrap(), batch);
@@ -2847,8 +2867,8 @@ mod tests {
         )
         .unwrap();
         let options = IpcWriteOptions::default();
-        let encoded = encode_stream(&schema, &[batch.clone()], options.clone());
-        let written = write_stream(&schema, &[batch.clone()], options);
+        let encoded = encode_stream(&schema, std::slice::from_ref(&batch), options.clone());
+        let written = write_stream(&schema, std::slice::from_ref(&batch), options);
 
         assert_eq!(encoded, written);
 
