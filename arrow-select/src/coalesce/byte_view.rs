@@ -669,6 +669,7 @@ mod tests {
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
         in_progress.set_source(Some(Arc::clone(&source)));
+
         in_progress.copy_rows(0, 60).unwrap();
         in_progress.copy_rows(60, 4).unwrap();
 
@@ -693,6 +694,36 @@ mod tests {
         in_progress.finish().unwrap();
         assert_eq!(in_progress.completed_buffers_size, 0);
         assert_eq!(in_progress.size_of_completed_buffers_from_current_source, 0);
+    }
+
+    #[test]
+    fn size_should_be_the_same_if_copying_multiple_time_from_same_source_or_once() {
+        let (array, buffer_capacity) = non_inline_array(64);
+        let source: ArrayRef = Arc::new(array);
+
+        let in_progress_size_with_split = {
+            let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
+            in_progress.set_source(Some(Arc::clone(&source)));
+
+            in_progress.copy_rows(0, 60).unwrap();
+            in_progress.copy_rows(60, 4).unwrap();
+            in_progress.set_source(None);
+
+            in_progress.size()
+        };
+
+        let in_progress_size_without_split = {
+            let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
+            in_progress.set_source(Some(Arc::clone(&source)));
+
+            in_progress.copy_rows(0, 64).unwrap();
+            in_progress.set_source(None);
+
+            in_progress.size()
+        };
+
+        assert_eq!(in_progress_size_with_split, in_progress_size_without_split);
+
     }
 
 }

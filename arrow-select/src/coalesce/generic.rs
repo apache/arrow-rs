@@ -181,7 +181,7 @@ mod tests {
                 let in_progress_size = in_progress.size() as f64;
                 let source_size = source.get_array_memory_size();
                 let size_if_source_and_sliced_would_be_counted = (source_size as f64) * 1.8;
-                assert!(in_progress_size < size_if_source_and_sliced_would_be_counted, "size after copy {in_progress_size} should not include the source and sliced array (should be greater than {size_if_source_and_sliced_would_be_counted}), source size is {source}");
+                assert!(in_progress_size < size_if_source_and_sliced_would_be_counted, "size after copy {in_progress_size} should not include the source and sliced array (should be greater than {size_if_source_and_sliced_would_be_counted}), source size is {source_size}");
             }
         }
 

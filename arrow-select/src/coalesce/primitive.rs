@@ -362,9 +362,9 @@ mod tests {
         let in_progress_bytes = |source: ArrayRef| {
             let mut in_progress =
                 InProgressPrimitiveArray::<Int32Type>::new(BATCH_SIZE, DataType::Int32);
-            let source_size = source.get_array_memory_size();
+            let source_len = source.len();
             in_progress.set_source(Some(source));
-            in_progress.copy_rows(0, 50).unwrap();
+            in_progress.copy_rows(0, source_len / 2).unwrap();
             in_progress.size()
         };
 
