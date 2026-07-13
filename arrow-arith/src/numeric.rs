@@ -243,6 +243,12 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Duration(Millisecond), Duration(Millisecond)) => duration_op::<DurationMillisecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Microsecond), Duration(Microsecond)) => duration_op::<DurationMicrosecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Nanosecond), Duration(Nanosecond)) => duration_op::<DurationNanosecondType>(op, l, l_scalar, r, r_scalar),
+        (Interval(YearMonth), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(l, l_scalar, r, r_scalar),
+        (Interval(DayTime), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(l, l_scalar, r, r_scalar),
+        (Int64, Interval(YearMonth)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(r, r_scalar, l, l_scalar),
+        (Int64, Interval(DayTime)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(r, r_scalar, l, l_scalar),
+        (Int64, Interval(MonthDayNano)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(r, r_scalar, l, l_scalar),
         (Interval(YearMonth), Interval(YearMonth)) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
         (Interval(DayTime), Interval(DayTime)) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
         (Interval(MonthDayNano), Interval(MonthDayNano)) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
@@ -621,6 +627,14 @@ date!(Date64Type);
 trait IntervalOp: ArrowPrimitiveType {
     fn add(left: Self::Native, right: Self::Native) -> Result<Self::Native, ArrowError>;
     fn sub(left: Self::Native, right: Self::Native) -> Result<Self::Native, ArrowError>;
+    fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError>;
+}
+
+fn mul_i32_i64(left: i32, right: i64) -> Result<i32, ArrowError> {
+    let value = i64::from(left).mul_checked(right)?;
+    i32::try_from(value).map_err(|_| {
+        ArrowError::ArithmeticOverflow(format!("Overflow happened on: {left} * {right}"))
+    })
 }
 
 impl IntervalOp for IntervalYearMonthType {
@@ -630,6 +644,10 @@ impl IntervalOp for IntervalYearMonthType {
 
     fn sub(left: Self::Native, right: Self::Native) -> Result<Self::Native, ArrowError> {
         left.sub_checked(right)
+    }
+
+    fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError> {
+        mul_i32_i64(left, right)
     }
 }
 
@@ -648,6 +666,14 @@ impl IntervalOp for IntervalDayTimeType {
         let days = l_days.sub_checked(r_days)?;
         let ms = l_ms.sub_checked(r_ms)?;
         Ok(Self::make_value(days, ms))
+    }
+
+    fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError> {
+        let (days, ms) = Self::to_parts(left);
+        Ok(Self::make_value(
+            mul_i32_i64(days, right)?,
+            mul_i32_i64(ms, right)?,
+        ))
     }
 }
 
@@ -669,6 +695,33 @@ impl IntervalOp for IntervalMonthDayNanoType {
         let nanos = l_nanos.sub_checked(r_nanos)?;
         Ok(Self::make_value(months, days, nanos))
     }
+
+    fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError> {
+        let (months, days, nanos) = Self::to_parts(left);
+        Ok(Self::make_value(
+            mul_i32_i64(months, right)?,
+            mul_i32_i64(days, right)?,
+            nanos.mul_checked(right)?,
+        ))
+    }
+}
+
+fn interval_mul_op<T: IntervalOp>(
+    interval: &dyn Array,
+    interval_scalar: bool,
+    factor: &dyn Array,
+    factor_scalar: bool,
+) -> Result<ArrayRef, ArrowError> {
+    let interval = interval.as_primitive::<T>();
+    let factor = factor.as_primitive::<Int64Type>();
+    Ok(try_op_ref!(
+        T,
+        interval,
+        interval_scalar,
+        factor,
+        factor_scalar,
+        T::mul_i64(interval, factor)
+    ))
 }
 
 /// Perform arithmetic operation on an interval array
@@ -1479,6 +1532,70 @@ mod tests {
         assert_eq!(
             err,
             "Arithmetic overflow: Overflow happened on: 2147483647 + 1"
+        );
+    }
+
+    #[test]
+    fn test_interval_mul_i64() {
+        let interval = IntervalYearMonthArray::from(vec![16, 5, 0]);
+        let factor = Int64Array::from(vec![3, -2, i64::MAX]);
+        let expected = IntervalYearMonthArray::from(vec![48, -10, 0]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
+
+        let interval = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(10, 2 * 60 * 60 * 1000)),
+            None,
+        ]);
+        let factor = Int64Array::new_scalar(3);
+        let expected = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(30, 6 * 60 * 60 * 1000)),
+            None,
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
+
+        let null_factor = Scalar::new(Int64Array::new_null(1));
+        let expected = IntervalDayTimeArray::new_null(interval.len());
+        assert_eq!(mul(&interval, &null_factor).unwrap().as_ref(), &expected);
+        assert_eq!(mul(&null_factor, &interval).unwrap().as_ref(), &expected);
+
+        let interval = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(
+            12,
+            15,
+            5_000_000_000,
+        ));
+        let factor = Int64Array::from(vec![2, 0, -1]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(24, 30, 10_000_000_000),
+            IntervalMonthDayNanoType::make_value(0, 0, 0),
+            IntervalMonthDayNanoType::make_value(-12, -15, -5_000_000_000),
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
+
+        let float_factor = Float64Array::new_scalar(2.);
+        assert!(mul(&interval, &float_factor).is_err());
+        assert!(mul_wrapping(&factor, &interval).is_err());
+    }
+
+    #[test]
+    fn test_interval_mul_i64_overflow() {
+        let interval = IntervalYearMonthArray::from(vec![i32::MAX]);
+        let factor = Int64Array::from(vec![2]);
+        assert_eq!(
+            mul(&interval, &factor).unwrap_err().to_string(),
+            "Arithmetic overflow: Overflow happened on: 2147483647 * 2"
+        );
+
+        let interval = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            0,
+            0,
+            i64::MAX,
+        )]);
+        assert_eq!(
+            mul(&interval, &factor).unwrap_err().to_string(),
+            "Arithmetic overflow: Overflow happened on: 9223372036854775807 * 2"
         );
     }
 
