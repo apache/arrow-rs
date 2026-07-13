@@ -572,58 +572,74 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             // slow path: the non-inline data does not fit in a single buffer
             // (a buffer offset is a `u32`, so no buffer may exceed `i32::MAX`),
             // so it must be split across several buffers.
-            //
-            // Iterate over *all* views in order — this is essential for
-            // correctness, as gc must preserve the row count. Inline views are
-            // copied unchanged (they reference no buffer); non-inline views are
-            // packed into the current output buffer until adding the next one
-            // would exceed `max_buffer_size`, at which point a new buffer is
-            // started.
-            //
-            // `total_large` is the *sum* of all non-inline bytes — it is what
-            // pushed us onto this path, so it can be many GiB. Size each buffer
-            // reservation to the data still to be copied, capped at one buffer's
-            // worth (`max_buffer_size`), so we neither reserve the whole
-            // multi-GiB total up front nor pad the final buffer out to a full
-            // `max_buffer_size` when only a little data is left.
-            let mut remaining_large = total_large;
-            let mut views_buf = Vec::with_capacity(len);
-            let mut data_blocks: Vec<Buffer> = Vec::new();
-            let mut data_buf: Vec<u8> = Vec::with_capacity(remaining_large.min(max_buffer_size));
 
-            for i in 0..len {
-                // SAFETY: `i < len == self.len()`.
-                let view_len = *unsafe { self.views().get_unchecked(i) } as u32;
-                let is_large = view_len > MAX_INLINE_VIEW_LEN;
-                // Only non-inline views consume space in the data buffer; if the
-                // next one would overflow the current buffer's offset space,
-                // seal it and start a new one. The `!data_buf.is_empty()` guard
-                // avoids emitting a leading empty buffer and guarantees forward
-                // progress even for a single value larger than `max_buffer_size`
-                // — in that case `data_buf.len()` itself can exceed
-                // `max_buffer_size`, so the sum is computed in `u64` to avoid
-                // overflowing the `u32` offset space on the addition.
-                if is_large
-                    && !data_buf.is_empty()
-                    && data_buf.len() as u64 + view_len as u64 > max_buffer_size as u64
-                {
-                    data_blocks.push(Buffer::from_vec(std::mem::take(&mut data_buf)));
-                    data_buf.reserve(remaining_large.min(max_buffer_size));
-                }
-
-                // The buffer currently being filled becomes block
-                // `data_blocks.len()` once it is sealed, so that is the index
-                // the copied views must point at.
-                let buffer_idx = data_blocks.len() as i32;
-                // SAFETY: `i < self.len()` and every view refers to valid data.
-                let new_view = unsafe { self.copy_view_to_buffer(i, buffer_idx, &mut data_buf) };
-                views_buf.push(new_view);
-                if is_large {
-                    remaining_large -= view_len as usize;
-                }
+            // A contiguous run of views destined for one output buffer.
+            struct GcCopyGroup {
+                total_buffer_bytes: usize,
+                total_len: usize,
             }
-            data_blocks.push(Buffer::from_vec(data_buf));
-            debug_assert!(data_blocks.len() <= i32::MAX as usize);
+
+            // First pass: partition the views into contiguous groups, each of
+            // which fits within one output buffer. `total_len` counts *all*
+            // views in the group, not just the non-inline ones — this is
+            // essential for correctness, as gc must preserve the row count.
+            // Inline views reference no buffer and are copied unchanged, but
+            // they still belong to a group and must be accounted for. Recording
+            // each group's exact byte size lets the second pass size every
+            // buffer precisely, with no over-reservation or trailing waste.
+            let mut groups: Vec<GcCopyGroup> = Vec::new();
+            let mut current_length: u32 = 0;
+            let mut current_elements = 0;
+
+            for view in self.views() {
+                let view_len = *view as u32;
+                if view_len > MAX_INLINE_VIEW_LEN {
+                    // Seal the current group before adding this view would
+                    // overflow one buffer. Both `current_length` and `view_len`
+                    // are bounded by `max_buffer_size` (<= `i32::MAX`), so the
+                    // sum fits in `u32`.
+                    if current_length + view_len > max_buffer_size as u32 {
+                        groups.push(GcCopyGroup {
+                            total_buffer_bytes: current_length as usize,
+                            total_len: current_elements,
+                        });
+                        current_length = 0;
+                        current_elements = 0;
+                    }
+                    current_length += view_len;
+                }
+                current_elements += 1;
+            }
+            if current_elements != 0 {
+                groups.push(GcCopyGroup {
+                    total_buffer_bytes: current_length as usize,
+                    total_len: current_elements,
+                });
+            }
+            debug_assert!(groups.len() <= i32::MAX as usize);
+
+            // Second pass: copy each group into an exactly-sized buffer.
+            let mut views_buf = Vec::with_capacity(len);
+            let mut data_blocks = Vec::with_capacity(groups.len());
+            let mut current_view_idx = 0;
+
+            for (group_idx, group) in groups.iter().enumerate() {
+                let mut data_buf = Vec::with_capacity(group.total_buffer_bytes);
+
+                // Directly push views to avoid an intermediate Vec allocation.
+                let new_views =
+                    (current_view_idx..current_view_idx + group.total_len).map(|view_idx| {
+                        // SAFETY: `view_idx` came from iterating a valid range
+                        // within `len`, and every view refers to valid data.
+                        unsafe {
+                            self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf)
+                        }
+                    });
+                views_buf.extend(new_views);
+
+                data_blocks.push(Buffer::from_vec(data_buf));
+                current_view_idx += group.total_len;
+            }
             (views_buf, data_blocks)
         };
 
