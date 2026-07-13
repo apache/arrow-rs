@@ -163,7 +163,7 @@ fn print_index<T: std::fmt::Display>(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {
@@ -202,7 +202,7 @@ fn print_bytes_index(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {
