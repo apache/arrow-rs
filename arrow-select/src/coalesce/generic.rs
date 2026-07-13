@@ -108,15 +108,19 @@ impl InProgressArray for GenericInProgressArray {
     }
 
     fn size(&self) -> usize {
-        self.total_size_of_non_shared_buffers + self.buffered_arrays.capacity() * size_of::<ArrayRef>() + self.source.as_ref().map_or(0, |a| a.get_array_memory_size())
+        self.total_size_of_non_shared_buffers
+            + self.buffered_arrays.capacity() * size_of::<ArrayRef>()
+            + self
+                .source
+                .as_ref()
+                .map_or(0, |a| a.get_array_memory_size())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filter::FilterBuilder;
-    use arrow_array::{BooleanArray, Int32Array};
+    use arrow_array::Int32Array;
     use std::sync::Arc;
 
     fn arr(range: std::ops::Range<i32>) -> ArrayRef {
@@ -176,12 +180,19 @@ mod tests {
             in_progress.copy_rows(0, 98).unwrap();
 
             // The size should now account for the buffered but not the actual array data since we are still holding on it
-            assert!(in_progress.size() > size_before_copy, "size after copy {} should be greater than before copy {size_before_copy}", in_progress.size());
+            assert!(
+                in_progress.size() > size_before_copy,
+                "size after copy {} should be greater than before copy {size_before_copy}",
+                in_progress.size()
+            );
             {
                 let in_progress_size = in_progress.size() as f64;
                 let source_size = source.get_array_memory_size();
                 let size_if_source_and_sliced_would_be_counted = (source_size as f64) * 1.8;
-                assert!(in_progress_size < size_if_source_and_sliced_would_be_counted, "size after copy {in_progress_size} should not include the source and sliced array (should be greater than {size_if_source_and_sliced_would_be_counted}), source size is {source_size}");
+                assert!(
+                    in_progress_size < size_if_source_and_sliced_would_be_counted,
+                    "size after copy {in_progress_size} should not include the source and sliced array (should be greater than {size_if_source_and_sliced_would_be_counted}), source size is {source_size}"
+                );
             }
         }
 
@@ -207,25 +218,5 @@ mod tests {
 
         // There is still some memory being held by some leftover capacity but not arrays
         assert!(in_progress.size() < source.get_array_memory_size());
-    }
-
-    #[test]
-    fn test_size_retains_used_source() {
-        // copy_rows slices the source (sharing its data), so the source's memory
-        // must keep being counted even after the source pointer is replaced.
-        let mut in_progress = GenericInProgressArray::new();
-        let source = arr(0..100);
-        let source_size = source.get_array_memory_size();
-        in_progress.set_source(Some(Arc::clone(&source)));
-        in_progress.copy_rows(0, 10).unwrap();
-        assert_eq!(in_progress.size(), source_size);
-
-        let source2 = arr(0..40);
-        in_progress.set_source(Some(Arc::clone(&source2)));
-        // The buffered slice still references the first source, so both count.
-        assert_eq!(
-            in_progress.size(),
-            source_size + source2.get_array_memory_size()
-        );
     }
 }

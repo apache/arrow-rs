@@ -587,9 +587,17 @@ impl BatchCoalescer {
     /// Get the number of bytes this struct use
     pub fn size(&self) -> usize {
         self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
-          + self.in_progress_arrays.iter().map(|array| array.size()).sum::<usize>()
-        + self.completed.capacity() * size_of::<RecordBatch>()
-        + self.completed.iter().map(|batch| batch.get_array_memory_size()).sum::<usize>()
+            + self
+                .in_progress_arrays
+                .iter()
+                .map(|array| array.size())
+                .sum::<usize>()
+            + self.completed.capacity() * size_of::<RecordBatch>()
+            + self
+                .completed
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
     }
 }
 
@@ -2728,7 +2736,10 @@ mod tests {
             prev = now;
         }
         assert!(drained_any);
-        assert!(prev < peak, "draining completed batches should release memory");
+        assert!(
+            prev < peak,
+            "draining completed batches should release memory"
+        );
     }
 
     #[test]
@@ -2773,7 +2784,7 @@ mod tests {
         let batch = uint32_batch(0..8);
         let mut coalescer = BatchCoalescer::new(batch.schema(), 4096);
 
-        let mut run_cycle = |coalescer: &mut BatchCoalescer| {
+        let run_cycle = |coalescer: &mut BatchCoalescer| {
             for _ in 0..20 {
                 coalescer.push_batch(batch.clone()).unwrap();
             }
@@ -2786,11 +2797,17 @@ mod tests {
         let (peak1, drained1) = run_cycle(&mut coalescer);
         let (peak2, drained2) = run_cycle(&mut coalescer);
 
-        assert_eq!(peak1, peak2, "identical work must report identical peak size");
+        assert_eq!(
+            peak1, peak2,
+            "identical work must report identical peak size"
+        );
         assert_eq!(
             drained1, drained2,
             "fully-drained size must be stable across cycles (no accounting leak)"
         );
-        assert!(drained1 < peak1, "draining must release the accounted memory");
+        assert!(
+            drained1 < peak1,
+            "draining must release the accounted memory"
+        );
     }
 }

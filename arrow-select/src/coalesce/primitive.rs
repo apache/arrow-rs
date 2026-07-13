@@ -228,9 +228,11 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     }
 
     fn size(&self) -> usize {
-        self.source.as_ref().map_or(0, |source| source.get_array_memory_size()) +
-          self.current.capacity() * std::mem::size_of::<T::Native>() +
-          self.nulls.allocated_size()
+        self.source
+            .as_ref()
+            .map_or(0, |source| source.get_array_memory_size())
+            + self.current.capacity() * std::mem::size_of::<T::Native>()
+            + self.nulls.allocated_size()
     }
 }
 
@@ -371,10 +373,9 @@ mod tests {
         // All values valid: the nulls builder never allocates.
         let all_valid = in_progress_bytes(Arc::new(Int32Array::from_iter_values(0..100)));
         // Some values null: copying materializes a null buffer that must count.
-        let with_nulls =
-            in_progress_bytes(Arc::new(Int32Array::from_iter(
-                (0..100).map(|i| (i % 2 == 0).then_some(i)),
-            )));
+        let with_nulls = in_progress_bytes(Arc::new(Int32Array::from_iter(
+            (0..100).map(|i| (i % 2 == 0).then_some(i)),
+        )));
 
         assert!(
             with_nulls > all_valid,
