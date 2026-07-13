@@ -290,32 +290,18 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
             max.write_thrift(writer)?;
         }
         let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
-        if self.null_counts.is_some() {
+        if let Some(null_counts) = &self.null_counts {
+            last_field_id = null_counts.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if let Some(repetition_level_histograms) = &self.repetition_level_histograms {
             last_field_id =
-                self.null_counts
-                    .as_ref()
-                    .unwrap()
-                    .write_thrift_field(writer, 5, last_field_id)?;
+                repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
-        if self.repetition_level_histograms.is_some() {
-            last_field_id = self
-                .repetition_level_histograms
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 6, last_field_id)?;
+        if let Some(definition_level_histograms) = &self.definition_level_histograms {
+            last_field_id = definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
         }
-        if self.definition_level_histograms.is_some() {
-            last_field_id = self
-                .definition_level_histograms
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 7, last_field_id)?;
-        }
-        if self.nan_counts.is_some() {
-            self.nan_counts
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 8, last_field_id)?;
+        if let Some(nan_counts) = &self.nan_counts {
+            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -510,32 +496,18 @@ impl WriteThrift for ByteArrayColumnIndex {
             max.write_thrift(writer)?;
         }
         let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
-        if self.null_counts.is_some() {
+        if let Some(null_counts) = &self.null_counts {
+            last_field_id = null_counts.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if let Some(repetition_level_histograms) = &self.repetition_level_histograms {
             last_field_id =
-                self.null_counts
-                    .as_ref()
-                    .unwrap()
-                    .write_thrift_field(writer, 5, last_field_id)?;
+                repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
-        if self.repetition_level_histograms.is_some() {
-            last_field_id = self
-                .repetition_level_histograms
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 6, last_field_id)?;
+        if let Some(definition_level_histograms) = &self.definition_level_histograms {
+            last_field_id = definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
         }
-        if self.definition_level_histograms.is_some() {
-            last_field_id = self
-                .definition_level_histograms
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 7, last_field_id)?;
-        }
-        if self.nan_counts.is_some() {
-            self.nan_counts
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 8, last_field_id)?;
+        if let Some(nan_counts) = &self.nan_counts {
+            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }

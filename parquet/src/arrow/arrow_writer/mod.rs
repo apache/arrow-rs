@@ -389,11 +389,13 @@ impl<W: Write + Send> ArrowWriter<W> {
                     return self.write(batch);
                 }
 
-                let avg_row_bytes = current_bytes / in_progress.buffered_rows;
-                if avg_row_bytes > 0 {
+                if let Some(avg_row_bytes) = current_bytes
+                    .checked_div(in_progress.buffered_rows)
+                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                {
                     // At this point, `current_bytes < max_bytes` (checked above)
                     let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes / avg_row_bytes;
+                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
                     if batch.num_rows() > rows_that_fit {
                         if rows_that_fit > 0 {
@@ -582,22 +584,20 @@ impl ArrowWriterOptions {
     /// Sets the [`PageStoreFactory`] used to buffer completed pages while a row
     /// group is being written.
     ///
-    /// By default (an [`InMemoryPageStore`] per column chunk) completed pages
-    /// are buffered on the heap until the row group is flushed, so peak memory
-    /// grows with the row group size. Supplying a factory that spills to a temp
-    /// file or object storage instead bounds peak write memory, decoupling it
-    /// from the row group size while keeping large, read-optimal row groups.
+    /// The default implementation ([`InMemoryPageStore`]) buffers all completed
+    /// pages on the heap until the row group is flushed, so peak write memory
+    /// grows with the row group size. Using this API, pages can be spilled to a
+    /// file or object storage instead, reducing peak write memory substantially
+    /// at the expense of an extra write to and read from secondary storage.
     ///
-    /// # Example: a custom [`PageStore`]
+    /// # Example: spilling pages to a temp file
     ///
-    /// A store only has to map an opaque, store-allocated [`PageKey`] to a blob
-    /// and hand the blob back once. The keys need not be dense or sequential —
-    /// here a `HashMap`-backed store mints sparse handles, proving the writer
-    /// relies only on the opaque-handle contract. A real spilling backend would
-    /// write the bytes to a temp file in `put` and read them back in `take`.
+    /// A simple spilling backend uses one temp file per column chunk; `put`
+    /// appends the page and `take` reads it back.
     ///
     /// ```
-    /// # use std::collections::HashMap;
+    /// # use std::fs::File;
+    /// # use std::io::{Read, Seek, SeekFrom, Write};
     /// # use std::sync::Arc;
     /// # use bytes::Bytes;
     /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
@@ -605,54 +605,64 @@ impl ArrowWriterOptions {
     /// #     ArrowWriter, ArrowWriterOptions, PageKey, PageStore, PageStoreArgs, PageStoreFactory,
     /// # };
     /// # use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
-    /// # use parquet::errors::{ParquetError, Result};
-    /// #[derive(Default)]
-    /// struct MapPageStore {
-    ///     blobs: HashMap<u64, Bytes>,
-    ///     next: u64,
+    /// # use parquet::errors::Result;
+    /// struct TempFilePageStore {
+    ///     file: File,
+    ///     /// Total size of the file
+    ///     end: u64,
+    ///     /// Location of pages: (offset, len)
+    ///     locs: Vec<(u64, usize)>,
     /// }
     ///
-    /// impl PageStore for MapPageStore {
+    /// impl PageStore for TempFilePageStore {
     ///     fn put(&mut self, value: Bytes) -> Result<PageKey> {
-    ///         // Mint a sparse handle (every other integer) to show the writer
-    ///         // never assumes anything about the key's value.
-    ///         let key = PageKey::new(self.next);
-    ///         self.next += 2;
-    ///         self.blobs.insert(key.get(), value);
+    ///         // Append to the end of the file
+    ///         self.file.seek(SeekFrom::Start(self.end))?;
+    ///         self.file.write_all(&value)?;
+    ///         let key = PageKey::new(self.locs.len() as u64);
+    ///         self.locs.push((self.end, value.len()));
+    ///         self.end += value.len() as u64;
     ///         Ok(key)
     ///     }
     ///
     ///     fn take(&mut self, key: PageKey) -> Result<Bytes> {
-    ///         self.blobs
-    ///             .remove(&key.get())
-    ///             .ok_or_else(|| ParquetError::General(format!("invalid key {}", key.get())))
+    ///         let (offset, len) = self.locs[key.get() as usize];
+    ///         let mut buf = vec![0u8; len];
+    ///         self.file.seek(SeekFrom::Start(offset))?;
+    ///         self.file.read_exact(&mut buf)?;
+    ///         Ok(Bytes::from(buf))
     ///     }
     /// }
     ///
+    /// /// Factory for creating [`TempFilePageStore`]
     /// #[derive(Debug)]
-    /// struct MapPageStoreFactory;
+    /// struct TempFilePageStoreFactory;
     ///
-    /// impl PageStoreFactory for MapPageStoreFactory {
+    /// impl PageStoreFactory for TempFilePageStoreFactory {
     ///     fn create(&self, args: &PageStoreArgs<'_>) -> Result<Box<dyn PageStore>> {
     ///         // `args` exposes the column index and descriptor (physical/logical
-    ///         // type, path), so a real backend could spill only large columns.
+    ///         // type, path), so a real backend might choose to spill only large columns.
     ///         let _ = (args.column_index(), args.column_descriptor());
-    ///         Ok(Box::new(MapPageStore::default()))
+    ///         Ok(Box::new(TempFilePageStore {
+    ///             file: tempfile::tempfile()?, // temp file is cleaned on drop
+    ///             end: 0,
+    ///             locs: Vec::new(),
+    ///         }))
     ///     }
     /// }
-    ///
+    /// // write 1000 integers
     /// let col = Arc::new(Int64Array::from_iter_values(0..1000)) as ArrayRef;
     /// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
     ///
     /// let options =
-    ///     ArrowWriterOptions::new().with_page_store_factory(Arc::new(MapPageStoreFactory));
+    ///     ArrowWriterOptions::new().with_page_store_factory(Arc::new(TempFilePageStoreFactory));
     /// let mut buffer = Vec::new();
     /// let mut writer =
     ///     ArrowWriter::try_new_with_options(&mut buffer, to_write.schema(), options).unwrap();
     /// writer.write(&to_write).unwrap();
     /// writer.close().unwrap();
     ///
-    /// // The file is byte-identical to one written with the default store.
+    /// // buffer now holds valid Parquet data, which can be read as normal:
     /// let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024).unwrap();
     /// assert_eq!(to_write, reader.next().unwrap().unwrap());
     /// ```
@@ -2742,13 +2752,17 @@ mod tests {
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
         let entries_struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Arc::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    entries_struct_type,
+                    false,
+                )),
                 false,
             ),
             true,
@@ -3964,6 +3978,23 @@ mod tests {
     }
 
     #[test]
+    fn list_utf8_view_selective_padding_roundtrip() {
+        let item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
+        let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(item);
+        builder.values().append_value("a");
+        builder.values().append_null();
+        builder.append(true);
+        // The null parent list covers selective padding dropping values below
+        // the list definition level while preserving the preceding item null.
+        builder.append(false);
+        // The long string covers the non-inlined Utf8View buffer path.
+        builder.values().append_value("large payload over 12 bytes");
+        builder.append(true);
+
+        one_column_roundtrip(Arc::new(builder.finish()), true);
+    }
+
+    #[test]
     fn struct_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let struct_field_a = Arc::new(Field::new("f", DataType::Int32, false));
@@ -3980,9 +4011,9 @@ mod tests {
             Field::new_list("my_list", Field::new("item", DataType::Int32, false), false);
         let map_field = Field::new_map(
             "my_map",
-            "entries",
-            Field::new("keys", DataType::Int32, false),
-            Field::new("values", DataType::Int32, true),
+            "my_entries",
+            Field::new("my_keys", DataType::Int32, false),
+            Field::new("my_values", DataType::Int32, true),
             false,
             true,
         );
@@ -4010,9 +4041,9 @@ mod tests {
         let map_field = &schema.get_fields()[1].get_fields()[0];
         // Coerced name of "entries" should be "key_value"
         assert_eq!(map_field.name(), "key_value");
-        // Coerced name of "keys" should be "key"
+        // Coerced name of "my_keys" should be "key"
         assert_eq!(map_field.get_fields()[0].name(), "key");
-        // Coerced name of "values" should be "value"
+        // Coerced name of "my_values" should be "value"
         assert_eq!(map_field.get_fields()[1].name(), "value");
 
         // Double check schema after reading from the file
@@ -4459,7 +4490,7 @@ mod tests {
         // check values roundtrip through parquet
         let src = [
             u32::MIN,
-            u32::MIN + 1,
+            1,
             (i32::MAX as u32) - 1,
             i32::MAX as u32,
             (i32::MAX as u32) + 1,
@@ -4505,7 +4536,7 @@ mod tests {
         // check values roundtrip through parquet
         let src = [
             u64::MIN,
-            u64::MIN + 1,
+            1,
             (i64::MAX as u64) - 1,
             i64::MAX as u64,
             (i64::MAX as u64) + 1,

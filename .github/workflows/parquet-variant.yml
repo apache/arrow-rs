@@ -33,6 +33,7 @@ on:
       - parquet-variant/**
       - parquet-variant-json/**
       - parquet-variant-compute/**
+      - rust-toolchain.toml
       - .github/**
 
 jobs:

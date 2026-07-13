@@ -938,7 +938,9 @@ pub fn cast_with_options(
         (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
         (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
-            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+            let values = cast_with_options(array, to.data_type(), cast_options)?;
+            let list = FixedSizeListArray::try_new(to.clone(), 1, values, None)?;
+            Ok(Arc::new(list))
         }
         // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
@@ -8931,6 +8933,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
+        let inner = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        );
+        let nested = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]),
+            Arc::new(inner),
+        );
+
+        let result = cast(&nested, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)])
+        );
+        assert_eq!(
+            result.values().as_string::<i32>(),
+            &StringArray::from(vec!["x", "y"])
+        );
+        let logical: Vec<Option<&str>> = result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
+    }
+
+    #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
@@ -9106,10 +9138,10 @@ mod tests {
         // Cast null from and to map
         let data_type = DataType::Map(
             Arc::new(Field::new_struct(
-                "entry",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 ],
                 false,
             )),
@@ -9643,6 +9675,41 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_to_zero_size_fsl() {
+        let field = Arc::new(Field::new("a", DataType::Null, true));
+        let length = 2;
+        let expected = Arc::new(
+            FixedSizeListArray::try_new_with_length(
+                field.clone(),
+                0,
+                new_empty_array(&DataType::Null),
+                None,
+                2,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+
+        let list = Arc::new(ListArray::new(
+            field.clone(),
+            OffsetBuffer::from_repeated_length(0, length),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+
+        let list = Arc::new(ListViewArray::new(
+            field.clone(),
+            vec![0; length].into(),
+            vec![0; length].into(),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+    }
+
+    #[test]
     fn test_cast_list_to_fsl() {
         // There four noteworthy cases we should handle:
         // 1. No nulls
@@ -10075,15 +10142,7 @@ mod tests {
     fn test_cast_map_dont_allow_change_of_order() {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value("test_val_1");
@@ -10098,11 +10157,11 @@ mod tests {
         let new_ordered = true;
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),
@@ -10126,15 +10185,7 @@ mod tests {
     fn test_cast_map_dont_allow_when_container_cant_cast() {
         let string_builder = StringBuilder::new();
         let value_builder = IntervalDayTimeArray::builder(2);
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(IntervalDayTime::new(1, 1));
@@ -10149,11 +10200,15 @@ mod tests {
         let new_ordered = true;
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Duration(TimeUnit::Second), false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(
+                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                            DataType::Duration(TimeUnit::Second),
+                            false,
+                        ),
                     ]
                     .into(),
                 ),
@@ -10179,9 +10234,10 @@ mod tests {
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
             Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
+                // Explicitly writing the name so it will be apparent from what names to what names are we converting to
+                entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
             }),
             string_builder,
             value_builder,
@@ -10251,15 +10307,7 @@ mod tests {
     fn test_cast_map_contained_values() {
         let string_builder = StringBuilder::new();
         let value_builder = Int8Builder::new();
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(44);
@@ -10272,11 +10320,11 @@ mod tests {
 
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),

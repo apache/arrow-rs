@@ -135,6 +135,19 @@ pub trait ArrayReader: Send {
     ///
     /// This is used by parent [`ArrayReader`] to compute their array offsets
     fn get_rep_levels(&self) -> Option<&[i16]>;
+
+    /// Returns the maximum definition level for this reader as defined by
+    /// the Parquet schema. For leaf readers this is the column's max def level;
+    /// for composite readers it is the level at which the composite itself is
+    /// fully defined.
+    ///
+    /// The default panics. Synthetic readers that are not backed by a Parquet
+    /// column (e.g. row-number or empty-struct readers) may rely on this
+    /// default because they are never used as children of schema-driven
+    /// composite readers (list, map, struct), which are the only callers.
+    fn max_def_level(&self) -> i16 {
+        panic!("max_def_level called on a reader that does not track definition levels")
+    }
 }
 
 /// Interface for reading data pages from the columns of one or more RowGroups.

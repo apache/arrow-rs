@@ -30,6 +30,7 @@ on:
       - main
   pull_request:
     paths:
+      - rust-toolchain.toml
       - arrow/**
       - arrow-array/**
       - arrow-buffer/**
@@ -117,8 +118,8 @@ jobs:
         run: cargo check -p parquet --no-default-features --features encryption --features async
       - name: Check compilation --no-default-features --features flate2, this is expected to fail
         run: if `cargo check -p parquet --no-default-features --features flate2 2>/dev/null`; then false; else true; fi
-      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backened
-        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backened
+      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backend
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backend
       - name: Check compilation --no-default-features --features flate2 --features flate2-zlib-rs
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
@@ -157,7 +158,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.10"
           cache: "pip"

@@ -28,7 +28,7 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
 If any code has been merged to main that has a breaking API change, as defined
-in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
+in [Rust RFC 1105] the major version number is incremented (e.g. `9.0.2` to `10.0.0`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
 [rust rfc 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
@@ -145,35 +145,8 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate tarball
 
-Send an email, based on the output from the script to dev@arrow.apache.org. The email should look like
-
-```
-To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow
-
-Hi,
-
-I would like to propose a release of Apache Arrow Rust
-Implementation, version 4.1.0.
-
-This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
-
-The proposed release tarball and signatures are hosted at [2].
-The changelog is located at [3].
-
-Please download, verify checksums and signatures, run the unit tests,
-and vote on the release.
-
-The vote will be open for at least 72 hours.
-
-[ ] +1 Release this as Apache Arrow Rust
-[ ] +0
-[ ] -1 Do not release this as Apache Arrow Rust  because...
-
-[1]: https://github.com/apache/arrow-rs/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-rs-4.1.0
-[3]: https://github.com/apache/arrow-rs/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
-```
+Send an email, based on the output from the script to dev@arrow.apache.org.
+See an [example of how the email should look](https://lists.apache.org/thread/2vpxdt6n7kzo72sxpr7q8yyby4495gnk).
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
