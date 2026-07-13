@@ -298,7 +298,8 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
                 repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            last_field_id = definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id =
+                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
         }
         if let Some(nan_counts) = &self.nan_counts {
             nan_counts.write_thrift_field(writer, 8, last_field_id)?;
@@ -504,7 +505,8 @@ impl WriteThrift for ByteArrayColumnIndex {
                 repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            last_field_id = definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id =
+                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
         }
         if let Some(nan_counts) = &self.nan_counts {
             nan_counts.write_thrift_field(writer, 8, last_field_id)?;
