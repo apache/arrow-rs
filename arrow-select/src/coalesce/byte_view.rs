@@ -54,15 +54,10 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// Phantom so we can use the same struct for both StringViewArray and
     /// BinaryViewArray
     _phantom: PhantomData<B>,
-    
     /// The size in bytes this take on the heap
     size: usize,
-    
     /// The size in bytes from source that it is reused
     size_from_source_reused: usize,
-    
-    /// If the buffers from source are used the source
-    used_values_from_source: bool,
 }
 
 struct Source {
@@ -100,7 +95,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             completed: vec![],
             size: 0,
             size_from_source_reused: 0,
-            used_values_from_source: false,
             buffer_source,
             _phantom: PhantomData,
         };
@@ -398,11 +392,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
           self.size -= old_source.array.get_array_memory_size();
 
           // If used values from source, add only the size that was used
-          if self.used_values_from_source {
-            self.size += self.size_from_source_reused;
-          }
+          self.size += self.size_from_source_reused;
       }
-      self.used_values_from_source = false;
       self.size_from_source_reused = 0;
       
         self.source = source.map(|array| {
@@ -476,7 +467,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         if source.need_gc {
             self.append_views_and_copy_strings(views, source.ideal_buffer_size, buffers);
         } else {
-            self.used_values_from_source = true;
             self.append_views_and_update_buffer_index(views, buffers, true);
         }
         self.source = Some(source);
@@ -541,15 +531,13 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         self.finish_current();
         assert!(self.current.is_none());
-        self.used_values_from_source = false;
         let buffers = std::mem::take(&mut self.completed);
         let views = std::mem::take(&mut self.views);
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
         
-        self.size += self.calculate_initial_size();
-        self.used_values_from_source = false;
         self.size_from_source_reused = 0;
+        self.size += self.calculate_initial_size();
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
