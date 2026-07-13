@@ -584,12 +584,12 @@ impl BatchCoalescer {
         self.completed.pop_front()
     }
 
+    /// Get the number of bytes this struct use
     pub fn size(&self) -> usize {
         self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
           + self.in_progress_arrays.iter().map(|array| array.size()).sum::<usize>()
         + self.completed.capacity() * size_of::<RecordBatch>()
         + self.completed.iter().map(|batch| batch.get_array_memory_size()).sum::<usize>()
-
     }
 }
 
