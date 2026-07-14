@@ -158,24 +158,20 @@ impl AlpHeader {
         Ok(out)
     }
 
+    /// `vector_size` is always `1 << log_vector_size` (see [`AlpHeader::deserialize`]),
+    /// so the division a `div_ceil` would emit is a shift. `vector_size` is a
+    /// runtime value, so the compiler cannot see that on its own.
     pub(crate) fn num_vectors(&self) -> usize {
-        if self.num_elements == 0 {
-            0
-        } else {
-            self.num_elements.div_ceil(self.vector_size)
-        }
+        debug_assert!(self.vector_size.is_power_of_two());
+        (self.num_elements + self.vector_size - 1) >> self.vector_size.trailing_zeros()
     }
 
+    /// Number of elements in vector `vector_index`: a full vector, the short
+    /// trailing remainder, or zero past the end of the page.
     pub(crate) fn vector_num_elements(&self, vector_index: usize) -> u16 {
-        let num_full_vectors = self.num_elements / self.vector_size;
-        let remainder = self.num_elements % self.vector_size;
-        if vector_index < num_full_vectors {
-            self.vector_size as u16
-        } else if vector_index == num_full_vectors && remainder > 0 {
-            remainder as u16
-        } else {
-            0
-        }
+        let start = vector_index.saturating_mul(self.vector_size);
+        let remaining = self.num_elements.saturating_sub(start);
+        remaining.min(self.vector_size) as u16
     }
 }
 
