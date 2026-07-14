@@ -19,10 +19,13 @@
 
 use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::ListLikeArray;
 use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::bit_mask::set_bits;
+use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
@@ -108,6 +111,8 @@ pub fn interleave(
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
         DataType::List(field) => interleave_list::<i32>(values, indices, field),
         DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
+        DataType::FixedSizeList(field, size) => interleave_fixed_size_list(values, indices, field, *size),
+        DataType::Map(field, ordered) => interleave_map(values, indices, field, *ordered),
         DataType::RunEndEncoded(r, _) => match r.data_type() {
             DataType::Int16 => interleave_run_end::<Int16Type>(values, indices),
             DataType::Int32 => interleave_run_end::<Int32Type>(values, indices),
@@ -373,6 +378,96 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
+fn interleave_list_like_primitive_child<L: ListLikeArray, T: ArrowPrimitiveType>(
+    interleaved: &Interleave<'_, L>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+    data_type: &DataType,
+) -> ArrayRef {
+    let child_arrays: Vec<&PrimitiveArray<T>> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_primitive::<T>())
+        .collect();
+
+    let has_child_nulls = child_arrays.iter().any(|a| a.null_count() > 0);
+
+    // Build values buffer by copying contiguous slices
+    let mut values: Vec<T::Native> = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let range = interleaved.arrays[array].element_range(row);
+        if !range.is_empty() {
+            values.extend_from_slice(&child_arrays[array].values()[range]);
+        }
+    }
+
+    // Build null buffer. Pre-allocate with 0x00 (all null), then:
+    // - Sources with nulls: set_bits copies the source validity bits into the destination range.
+    // - Sources without nulls: set the bit range to all 1s directly.
+    let nulls = if has_child_nulls {
+        let null_byte_len = bit_util::ceil(capacity, 8);
+        let mut output_null_buf = MutableBuffer::from_len_zeroed(null_byte_len);
+
+        let mut offset_write = 0;
+        let mut output_null_count = 0usize;
+        for &(array, row) in indices {
+            let range = interleaved.arrays[array].element_range(row);
+            let len = range.len();
+            if len > 0 {
+                match child_arrays[array].nulls() {
+                    Some(null_buffer) => {
+                        output_null_count += set_bits(
+                            output_null_buf.as_slice_mut(),
+                            null_buffer.validity(),
+                            offset_write,
+                            null_buffer.offset() + range.start,
+                            len,
+                        );
+                    }
+                    None => {
+                        // For a non-nullable source, set the bit range to all 1s directly.
+                        let buf = output_null_buf.as_slice_mut();
+                        (offset_write..offset_write + len).for_each(|i| bit_util::set_bit(buf, i));
+                    }
+                }
+            }
+            offset_write += len;
+        }
+
+        if output_null_count > 0 {
+            let bool_buf = BooleanBuffer::new(output_null_buf.into(), 0, capacity);
+            // SAFETY: null_count is accumulated from set_bits which correctly counts unset bits
+            Some(unsafe { NullBuffer::new_unchecked(bool_buf, output_null_count) })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Arc::new(PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()))
+}
+
+/// Interleave child values for non-primitive child types, shared by List and FixedSizeList.
+fn interleave_list_like_child<L: ListLikeArray>(
+    interleaved: &Interleave<'_, L>,
+    indices: &[(usize, usize)],
+    capacity: usize,
+) -> Result<ArrayRef, ArrowError> {
+    let mut child_indices = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let range = interleaved.arrays[array].element_range(row);
+        child_indices.extend(range.map(|i| (array, i)));
+    }
+
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_ref())
+        .collect();
+    interleave(&child_arrays, &child_indices)
+}
+
 fn interleave_list<O: OffsetSizeTrait>(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -380,6 +475,7 @@ fn interleave_list<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericListArray<O>>::new(values, indices);
 
+    // Step 1: compute output offsets and total child capacity
     let mut capacity = 0usize;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(O::from_usize(0).unwrap());
@@ -392,31 +488,104 @@ fn interleave_list<O: OffsetSizeTrait>(
         );
     }
 
-    let mut child_indices = Vec::with_capacity(capacity);
-    for (array, row) in indices {
-        let list = interleaved.arrays[*array];
-        let start = list.value_offsets()[*row].as_usize();
-        let end = list.value_offsets()[*row + 1].as_usize();
-        child_indices.extend((start..end).map(|i| (*array, i)));
+    // Step 2: build child values.
+    macro_rules! list_primitive_helper {
+        ($t:ty) => {
+            interleave_list_like_primitive_child::<GenericListArray<O>, $t>(
+                &interleaved,
+                indices,
+                capacity,
+                field.data_type(),
+            )
+        };
     }
 
-    let child_arrays: Vec<&dyn Array> = interleaved
-        .arrays
-        .iter()
-        .map(|list| list.values().as_ref())
-        .collect();
-
-    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+    let child_values = downcast_primitive! {
+        // For primitive child types, directly copy typed value slices and null bit
+        // ranges, avoiding both the intermediate child_indices Vec allocation and
+        // MutableArrayData's function pointer indirection.
+        field.data_type() => (list_primitive_helper),
+        _ => {
+            interleave_list_like_child(&interleaved, indices, capacity)?
+        }
+    };
 
     let offsets = OffsetBuffer::new(offsets.into());
-    let list_array = GenericListArray::<O>::new(
-        field.clone(),
-        offsets,
-        interleaved_values,
-        interleaved.nulls,
-    );
+    let list_array =
+        GenericListArray::<O>::new(field.clone(), offsets, child_values, interleaved.nulls);
 
     Ok(Arc::new(list_array))
+}
+
+fn interleave_fixed_size_list(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+    size: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, FixedSizeListArray>::new(values, indices);
+    let capacity = indices.len() * size as usize;
+
+    macro_rules! fsl_primitive_helper {
+        ($t:ty) => {
+            interleave_list_like_primitive_child::<FixedSizeListArray, $t>(
+                &interleaved,
+                indices,
+                capacity,
+                field.data_type(),
+            )
+        };
+    }
+
+    let interleaved_values = downcast_primitive! {
+        field.data_type() => (fsl_primitive_helper),
+        _ => {
+            interleave_list_like_child(&interleaved, indices, capacity)?
+        }
+    };
+
+    let array = FixedSizeListArray::new(field.clone(), size, interleaved_values, interleaved.nulls);
+    Ok(Arc::new(array))
+}
+
+fn interleave_map(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+    ordered: bool,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, MapArray>::new(values, indices);
+
+    let mut capacity = 0usize;
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(0i32);
+    for &(array, row) in indices {
+        let o = interleaved.arrays[array].value_offsets();
+        let element_len = (o[row + 1] - o[row]) as usize;
+        capacity += element_len;
+        offsets
+            .push(i32::try_from(capacity).map_err(|_| ArrowError::OffsetOverflowError(capacity))?);
+    }
+
+    let mut child_indices = Vec::with_capacity(capacity);
+    for &(array, row) in indices {
+        let o = interleaved.arrays[array].value_offsets();
+        let start = o[row] as usize;
+        let end = o[row + 1] as usize;
+        child_indices.extend((start..end).map(|i| (array, i)));
+    }
+
+    let entries_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|m| m.entries() as &dyn Array)
+        .collect();
+    let interleaved_entries = interleave(&entries_arrays, &child_indices)?;
+
+    let offsets = OffsetBuffer::new(offsets.into());
+    let entries = interleaved_entries.as_struct().clone();
+    let array = MapArray::new(field.clone(), offsets, entries, interleaved.nulls, ordered);
+    Ok(Arc::new(array))
 }
 
 /// Specialized [`interleave`] for [`RunArray`].
@@ -539,7 +708,7 @@ fn interleave_list_view_copy<O: OffsetSizeTrait>(
         let start = list.offsets()[row_idx].as_usize();
         let size = list.sizes()[row_idx].as_usize();
         if size > 0 {
-            mutable_child.extend(array_idx, start, start + size);
+            mutable_child.try_extend(array_idx, start, start + size)?;
         }
     }
 
@@ -613,7 +782,7 @@ fn interleave_fallback(
         }
 
         // emit current batch of rows for current buffer
-        array_data.extend(cur_array, start_row_idx, end_row_idx);
+        array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
 
         // start new batch of rows
         cur_array = array;
@@ -622,7 +791,7 @@ fn interleave_fallback(
     }
 
     // emit final batch of rows
-    array_data.extend(cur_array, start_row_idx, end_row_idx);
+    array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
     Ok(make_array(array_data.freeze()))
 }
 
@@ -761,10 +930,12 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
-    use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
-    use arrow_array::types::Int8Type;
+    use arrow_array::builder::{
+        GenericListBuilder, Int32Builder, PrimitiveBuilder, PrimitiveRunBuilder,
+    };
+    use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, TimeUnit};
 
     #[test]
     fn test_primitive() {
@@ -949,6 +1120,103 @@ mod tests {
     #[test]
     fn test_large_lists() {
         test_interleave_lists::<i64>();
+    }
+
+    /// One list slot in a `List<Primitive>` fixture: `None` is a null slot,
+    /// `Some(items)` is a list whose items may individually be null.
+    type ListRow<T> = Option<Vec<Option<<T as ArrowPrimitiveType>::Native>>>;
+
+    /// Build a `List<Primitive>` from row fixtures. The primitive child carries
+    /// `data_type` (e.g. its Decimal scale or timezone).
+    fn list_of_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        rows: &[ListRow<T>],
+    ) -> GenericListArray<O> {
+        let mut builder = GenericListBuilder::<O, _>::new(
+            PrimitiveBuilder::<T>::new().with_data_type(data_type.clone()),
+        );
+        for row in rows {
+            match row {
+                Some(items) => {
+                    items
+                        .iter()
+                        .for_each(|v| builder.values().append_option(*v));
+                    builder.append(true);
+                }
+                None => builder.append(false),
+            }
+        }
+        builder.finish()
+    }
+
+    /// Interleave list fixtures and assert both the result and that the
+    /// interleaved primitive child preserves the parameterized `data_type`.
+    fn check_interleave_list_primitive<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+        data_type: &DataType,
+        inputs: &[&[ListRow<T>]],
+        indices: &[(usize, usize)],
+        expected: &[ListRow<T>],
+    ) {
+        let arrays: Vec<_> = inputs
+            .iter()
+            .map(|rows| list_of_primitive::<O, T>(data_type, rows))
+            .collect();
+        let refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+
+        let values = interleave(&refs, indices).unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListArray<O>>()
+            .unwrap();
+
+        assert_eq!(v, &list_of_primitive::<O, T>(data_type, expected));
+        // The child's logical type (Decimal precision/scale, Timestamp timezone)
+        // must be preserved, not reset to the primitive's default.
+        assert_eq!(v.values().data_type(), data_type);
+    }
+
+    fn test_interleave_lists_decimal<O: OffsetSizeTrait>() {
+        // List<Decimal128(20, 3)>, exercising child-element nulls and null slots.
+        check_interleave_list_primitive::<O, Decimal128Type>(
+            &DataType::Decimal128(20, 3),
+            &[
+                &[
+                    Some(vec![Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None]),
+                ], // a
+                &[Some(vec![Some(4)]), Some(vec![Some(5), Some(6)])], // b
+            ],
+            &[(0, 2), (0, 1), (1, 0), (1, 1)],
+            &[
+                Some(vec![Some(3), None]),
+                None,
+                Some(vec![Some(4)]),
+                Some(vec![Some(5), Some(6)]),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_lists_decimal() {
+        test_interleave_lists_decimal::<i32>();
+        test_interleave_lists_decimal::<i64>();
+    }
+
+    fn test_interleave_lists_timestamp_tz<O: OffsetSizeTrait>() {
+        // List<Timestamp(Microsecond, "+08:00")>, checking the timezone survives.
+        check_interleave_list_primitive::<O, TimestampMicrosecondType>(
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("+08:00".into())),
+            &[&[Some(vec![Some(1), Some(2)]), Some(vec![Some(3)])]],
+            &[(0, 1), (0, 0)],
+            &[Some(vec![Some(3)]), Some(vec![Some(1), Some(2)])],
+        );
+    }
+
+    #[test]
+    fn test_lists_timestamp_tz() {
+        test_interleave_lists_timestamp_tz::<i32>();
+        test_interleave_lists_timestamp_tz::<i64>();
     }
 
     fn test_interleave_list_views<O: OffsetSizeTrait>() {
@@ -1846,5 +2114,208 @@ mod tests {
             result_lv.value(2).as_primitive::<Int64Type>().values(),
             &[3]
         );
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list() {
+        // a: [[1, 2], [3, 4], [5, 6]]
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let a = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            None,
+        );
+        // b: [[7, 8], [9, 10]]
+        let b = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            Arc::new(Int32Array::from(vec![7, 8, 9, 10])),
+            None,
+        );
+
+        let result = interleave(&[&a, &b], &[(0, 2), (1, 0), (0, 0), (1, 1), (0, 1)]).unwrap();
+        let result = result.as_fixed_size_list();
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.value_length(), 2);
+
+        let values = result.values().as_primitive::<Int32Type>();
+        // [[5,6], [7,8], [1,2], [9,10], [3,4]]
+        assert_eq!(values.values(), &[5, 6, 7, 8, 1, 2, 9, 10, 3, 4]);
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list_with_nulls() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        // a: [[1, 2], null, [5, 6]]
+        let a = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            Arc::new(Int32Array::from(vec![1, 2, 0, 0, 5, 6])),
+            Some(NullBuffer::from(&[true, false, true])),
+        );
+        // b: [null, [9, 10]]
+        let b = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            Arc::new(Int32Array::from(vec![0, 0, 9, 10])),
+            Some(NullBuffer::from(&[false, true])),
+        );
+
+        let result = interleave(&[&a, &b], &[(0, 0), (0, 1), (1, 0), (1, 1), (0, 2)]).unwrap();
+        let result = result.as_fixed_size_list();
+        assert_eq!(result.len(), 5);
+
+        let validity: Vec<bool> = result.nulls().unwrap().iter().collect();
+        assert_eq!(validity, &[true, false, false, true, true]);
+    }
+
+    fn run_fsl_string_child_test(
+        child_data_type: DataType,
+        create_child: impl Fn(Vec<&str>) -> ArrayRef,
+        extract_values: impl Fn(&ArrayRef) -> Vec<String>,
+    ) {
+        let field = Arc::new(Field::new("item", child_data_type, false));
+
+        // a: [["a", "b"], ["c", "d"]]
+        let a = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            create_child(vec!["a", "b", "c", "d"]),
+            None,
+        );
+        // b: [["x", "y"], ["z", "w"]]
+        let b = FixedSizeListArray::new(
+            field.clone(),
+            2,
+            create_child(vec!["x", "y", "z", "w"]),
+            None,
+        );
+
+        let result = interleave(&[&a, &b], &[(0, 1), (1, 0), (0, 0)]).unwrap();
+        let result = result.as_fixed_size_list();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value_length(), 2);
+
+        // Expected: [[c,d], [x,y], [a,b]]
+        let values = extract_values(result.values());
+        assert_eq!(values, vec!["c", "d", "x", "y", "a", "b"]);
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list_string_child() {
+        // FixedSizeList<Utf8> — exercises the non-primitive child path
+        run_fsl_string_child_test(
+            DataType::Utf8,
+            |v| Arc::new(StringArray::from(v)),
+            |a| {
+                a.as_string::<i32>()
+                    .iter()
+                    .map(|s| s.unwrap().to_owned())
+                    .collect()
+            },
+        );
+    }
+
+    #[test]
+    fn test_interleave_fixed_size_list_string_view_child() {
+        // FixedSizeList<Utf8View> — exercises the non-primitive child path
+        run_fsl_string_child_test(
+            DataType::Utf8View,
+            |v| Arc::new(StringViewArray::from(v)),
+            |a| {
+                a.as_string_view()
+                    .iter()
+                    .map(|s| s.unwrap().to_owned())
+                    .collect()
+            },
+        );
+    }
+
+    #[test]
+    fn test_interleave_map() {
+        use arrow_array::builder::MapBuilder;
+        use arrow_array::builder::StringBuilder;
+
+        // a: [{k1: 1, k2: 2}, {k3: 3}]
+        let mut a_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        a_builder.keys().append_value("k1");
+        a_builder.values().append_value(1);
+        a_builder.keys().append_value("k2");
+        a_builder.values().append_value(2);
+        a_builder.append(true).unwrap();
+        a_builder.keys().append_value("k3");
+        a_builder.values().append_value(3);
+        a_builder.append(true).unwrap();
+        let a = a_builder.finish();
+
+        // b: [{k4: 4}, {k5: 5, k6: 6, k7: 7}]
+        let mut b_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        b_builder.keys().append_value("k4");
+        b_builder.values().append_value(4);
+        b_builder.append(true).unwrap();
+        b_builder.keys().append_value("k5");
+        b_builder.values().append_value(5);
+        b_builder.keys().append_value("k6");
+        b_builder.values().append_value(6);
+        b_builder.keys().append_value("k7");
+        b_builder.values().append_value(7);
+        b_builder.append(true).unwrap();
+        let b = b_builder.finish();
+
+        let result = interleave(&[&a, &b], &[(1, 0), (0, 0), (0, 1), (1, 1)]).unwrap();
+        let result = result.as_map();
+        assert_eq!(result.len(), 4);
+
+        // Row 0: {k4: 4}
+        let row0 = result.value(0);
+        assert_eq!(row0.len(), 1);
+        assert_eq!(row0.column(0).as_string::<i32>().value(0), "k4");
+        assert_eq!(row0.column(1).as_primitive::<Int32Type>().value(0), 4);
+
+        // Row 1: {k1: 1, k2: 2}
+        let row1 = result.value(1);
+        assert_eq!(row1.len(), 2);
+
+        // Row 2: {k3: 3}
+        let row2 = result.value(2);
+        assert_eq!(row2.len(), 1);
+        assert_eq!(row2.column(0).as_string::<i32>().value(0), "k3");
+
+        // Row 3: {k5: 5, k6: 6, k7: 7}
+        let row3 = result.value(3);
+        assert_eq!(row3.len(), 3);
+    }
+
+    #[test]
+    fn test_interleave_map_with_nulls() {
+        use arrow_array::builder::MapBuilder;
+        use arrow_array::builder::StringBuilder;
+
+        // a: [{k1: 1}, null]
+        let mut a_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        a_builder.keys().append_value("k1");
+        a_builder.values().append_value(1);
+        a_builder.append(true).unwrap();
+        a_builder.append(false).unwrap();
+        let a = a_builder.finish();
+
+        // b: [null, {k2: 2}]
+        let mut b_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        b_builder.append(false).unwrap();
+        b_builder.keys().append_value("k2");
+        b_builder.values().append_value(2);
+        b_builder.append(true).unwrap();
+        let b = b_builder.finish();
+
+        let result = interleave(&[&a, &b], &[(0, 0), (1, 0), (0, 1), (1, 1)]).unwrap();
+        let result = result.as_map();
+        assert_eq!(result.len(), 4);
+
+        let validity: Vec<bool> = result.nulls().unwrap().iter().collect();
+        assert_eq!(validity, &[true, false, false, true]);
+
+        assert_eq!(result.value(0).len(), 1);
+        assert_eq!(result.value(3).len(), 1);
     }
 }

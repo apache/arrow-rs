@@ -57,7 +57,7 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
     let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(arrays).unwrap();
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    sort.sort_unstable_by_key(|(_, a)| *a);
     UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }
 
