@@ -204,6 +204,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "chrono",
+ "criterion",
  "num-traits",
 ]
 
