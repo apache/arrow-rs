@@ -461,13 +461,17 @@ where
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let header = parse_alp_page_header(data.as_ref())?;
 
-        if header.num_elements != num_values {
+        // `num_values` is an upper bound, not an exact count: only non-null values
+        // are encoded, and the caller passes the level count when the value count
+        // is not known up front. The header carries the authoritative count.
+        if header.num_elements > num_values {
             return Err(general_err!(
-                "Invalid ALP page: header num_elements {} does not match page num_values {}",
+                "Invalid ALP page: header num_elements {} exceeds page num_values {}",
                 header.num_elements,
                 num_values
             ));
         }
+        let num_values = header.num_elements;
 
         let offsets_section_size = header
             .num_vectors()
