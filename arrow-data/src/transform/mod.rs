@@ -117,11 +117,11 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 /// use arrow_data::ArrayData;
 /// use arrow_data::transform::MutableArrayData;
 /// use arrow_schema::DataType;
-/// fn i32_array(values: &[i32], len: usize) -> ArrayData {
-///   ArrayData::try_new(DataType::Int32, len, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
+/// fn i32_array(values: &[i32]) -> ArrayData {
+///   ArrayData::try_new(DataType::Int32, values.len(), None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
 /// }
-/// let arr1  = i32_array(&[1, 2, 3, 4, 5], 5);
-/// let arr2  = i32_array(&[6, 7, 8, 9, 10], 5);
+/// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
+/// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
 /// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
 /// let capacity = 3 * std::mem::size_of::<i32>();
 /// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
@@ -131,7 +131,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 /// mutable.extend(1, 2, 5);
 /// // Complete the MutableArrayData into a new ArrayData
 /// let frozen = mutable.freeze();
-/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10], 6));
+/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
 /// ```
 pub struct MutableArrayData<'a> {
     /// Input arrays: the data being read FROM.
@@ -401,8 +401,8 @@ impl<'a> MutableArrayData<'a> {
     ///   Note: null-handling is enabled automatically if any source array contains nulls.
     /// * `capacity` - the preallocated capacity of the output array, in slots (number of elements)
     ///
-    /// Thus, if `use_nulls` is `false` and none of the source arrays contain nulls,
-    /// calling [MutableArrayData::extend_nulls] should not be used.
+    /// if `use_nulls` is `false` and no source arrays contains nulls, calling
+    /// [MutableArrayData::extend_nulls] or [MutableArrayData::try_extend_nulls] will panic.
     pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
