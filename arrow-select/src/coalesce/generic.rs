@@ -33,7 +33,7 @@ pub(crate) struct GenericInProgressArray {
     /// The current source
     source: Option<ArrayRef>,
 
-    /// Is [`Self::source`] is referenced in [`Self::buffered_arrays`]
+    /// Is [`Self::source`] referenced in [`Self::buffered_arrays`]
     source_data_referenced_in_buffers: bool,
     /// The buffered array slices
     buffered_arrays: Vec<ArrayRef>,

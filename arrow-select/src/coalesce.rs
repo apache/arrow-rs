@@ -584,7 +584,7 @@ impl BatchCoalescer {
         self.completed.pop_front()
     }
 
-    /// Get the number of bytes this struct use
+    /// Returns the number of bytes used by this data structure.
     pub fn size(&self) -> usize {
         self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
             + self
