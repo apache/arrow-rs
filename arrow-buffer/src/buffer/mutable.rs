@@ -424,7 +424,7 @@ impl MutableBuffer {
         Ok(())
     }
     #[cold]
-    #[expect(unused)]
+    #[allow(dead_code)]
     fn reallocate(&mut self, capacity: usize) {
         self.try_reallocate(capacity)
             .unwrap_or_else(|e| panic!("{e}"))
