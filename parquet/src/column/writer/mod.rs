@@ -1773,15 +1773,14 @@ fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, 
         {
             return compare_greater_f16(a.as_bytes(), b.as_bytes());
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
             if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
                 || matches!(
                     basic_type_info.logical_type_ref(),
                     Some(LogicalType::Decimal(_))
-                )
-            {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
+                ) =>
+        {
+            return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
         _ => {}
