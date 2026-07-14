@@ -655,19 +655,6 @@ impl MutableBuffer {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// Fallible version of [`MutableBuffer::push`].
-    #[inline]
-    pub fn try_push<T: ToByteSlice>(&mut self, item: T) -> Result<(), MutableBufferError> {
-        let additional = std::mem::size_of::<T>();
-        self.try_reserve(additional)?;
-        unsafe {
-            let src = item.to_byte_slice().as_ptr();
-            let dst = self.data.as_ptr().add(self.len);
-            std::ptr::copy_nonoverlapping(src, dst, additional);
-        }
-        self.len += additional;
-        Ok(())
-    }
     /// Extends the buffer with a new item, increasing its capacity if needed.
     /// # Example
     /// ```
@@ -1771,7 +1758,6 @@ mod tests {
         assert!(buf.capacity() >= 64 && buf.capacity() < 256);
 
         assert!(buf.try_extend_zeros(32).is_ok());
-        assert!(buf.try_push(42u32).is_ok());
 
         let mut buf = MutableBuffer::new(0);
         assert!(buf.try_extend_from_slice(&[1u32, 2, 3]).is_ok());
