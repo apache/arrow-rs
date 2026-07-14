@@ -34,7 +34,7 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
-mod alp_decoder;
+pub(crate) mod alp_decoder;
 mod byte_stream_split_decoder;
 
 pub(crate) mod private {

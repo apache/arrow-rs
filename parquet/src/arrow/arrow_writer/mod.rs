@@ -3131,7 +3131,7 @@ mod tests {
                 Encoding::BYTE_STREAM_SPLIT,
             ],
             DataType::Float32 | DataType::Float64 => {
-                vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
+                vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
             }
             _ => vec![Encoding::PLAIN],
         };

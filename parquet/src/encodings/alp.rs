@@ -133,7 +133,6 @@ impl AlpHeader {
     /// what cannot be represented: `vector_size` must be a power of two (its log
     /// is the on-disk field), and `num_elements` must fit in an `i32`.
     /// Counterpart to [`AlpHeader::deserialize`]; consumed by the ALP encoder.
-    #[allow(dead_code)]
     pub(crate) fn serialize(&self) -> Result<[u8; ALP_HEADER_SIZE]> {
         if !self.vector_size.is_power_of_two() {
             return Err(general_err!(
@@ -195,6 +194,13 @@ pub(crate) struct AlpInfo {
 
 impl AlpInfo {
     pub(crate) const STORED_SIZE: usize = 4;
+
+    /// Append this vector's ALP metadata in its on-disk little-endian form.
+    pub(crate) fn extend_serialized(&self, out: &mut Vec<u8>) {
+        out.push(self.exponent);
+        out.push(self.factor);
+        out.extend_from_slice(&self.num_exceptions.to_le_bytes());
+    }
 }
 
 /// Per-vector FOR metadata for exact integer type (`u32` for `f32`, `u64` for `f64`).
@@ -221,6 +227,12 @@ impl<Exact: AlpExact> ForInfo<Exact> {
         Exact::WIDTH + 1
     }
 
+    /// Append this vector's FOR metadata in its on-disk little-endian form.
+    pub(crate) fn extend_serialized(&self, out: &mut Vec<u8>) {
+        self.frame_of_reference.extend_le_bytes(out);
+        out.push(self.bit_width);
+    }
+
     pub(crate) fn get_bit_packed_size(&self, num_elements: u16) -> usize {
         (self.bit_width as usize * num_elements as usize).div_ceil(8)
     }
@@ -243,12 +255,17 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// - FOR stores non-negative deltas optimized for bitpacking.
 /// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
 /// - Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact: Copy + std::fmt::Debug + FromBitpacked + Default {
+pub(crate) trait AlpExact: Copy + std::fmt::Debug + PartialEq + FromBitpacked + Default {
     const WIDTH: usize;
-    type Signed: Copy;
+    type Signed: Copy + Ord + std::fmt::Debug + Send;
     fn from_le_slice(slice: &[u8]) -> Self;
     fn wrapping_add(self, rhs: Self) -> Self;
+    fn wrapping_sub(self, rhs: Self) -> Self;
     fn reinterpret_as_signed(self) -> Self::Signed;
+    fn reinterpret_from_signed(signed: Self::Signed) -> Self;
+    /// Widen to `u64` for bit-packing, which is `u64`-oriented throughout.
+    fn to_u64(self) -> u64;
+    fn extend_le_bytes(self, out: &mut Vec<u8>);
 }
 
 impl AlpExact for u32 {
@@ -263,8 +280,24 @@ impl AlpExact for u32 {
         self.wrapping_add(rhs)
     }
 
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        self.wrapping_sub(rhs)
+    }
+
     fn reinterpret_as_signed(self) -> Self::Signed {
         i32::from_ne_bytes(self.to_ne_bytes())
+    }
+
+    fn reinterpret_from_signed(signed: Self::Signed) -> Self {
+        u32::from_ne_bytes(signed.to_ne_bytes())
+    }
+
+    fn to_u64(self) -> u64 {
+        u64::from(self)
+    }
+
+    fn extend_le_bytes(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
     }
 }
 
@@ -282,8 +315,24 @@ impl AlpExact for u64 {
         self.wrapping_add(rhs)
     }
 
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        self.wrapping_sub(rhs)
+    }
+
     fn reinterpret_as_signed(self) -> Self::Signed {
         i64::from_ne_bytes(self.to_ne_bytes())
+    }
+
+    fn reinterpret_from_signed(signed: Self::Signed) -> Self {
+        u64::from_ne_bytes(signed.to_ne_bytes())
+    }
+
+    fn to_u64(self) -> u64 {
+        self
+    }
+
+    fn extend_le_bytes(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
     }
 }
 pub(crate) const ALP_POW10_F32: [f32; 11] = [
@@ -358,9 +407,25 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
     0.000000000000000001,
 ];
 
-pub(crate) trait AlpFloat: Copy + Default {
+pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
     type Exact: AlpExact + FromBytes;
     type Scale: Copy + Send;
+
+    /// Largest `exponent` this type admits: 10 for `f32`, 18 for `f64`.
+    const MAX_EXPONENT: u8;
+
+    /// Rounding magic number: `2^22 + 2^23` (`f32`) or `2^51 + 2^52` (`f64`).
+    const MAGIC_NUMBER: Self;
+
+    /// Bounds outside which the scaled value cannot reach the exact integer
+    /// type: `i32` for `f32`, `i64` for `f64`.
+    const ENCODING_UPPER_LIMIT: Self;
+    const ENCODING_LOWER_LIMIT: Self;
+
+    /// [`AlpFloat::ENCODING_UPPER_LIMIT`] as the exact signed integer. Stands in
+    /// for values ALP cannot represent, so that the round-trip check that
+    /// follows fails and the value is recorded as an exception.
+    const ENCODING_SENTINEL: <Self::Exact as AlpExact>::Signed;
 
     /// Precompute vector-level ALP decimal scale constants for:
     /// `value = (encoded * 10^(factor)) * 10^(-exponent)`.
@@ -372,11 +437,57 @@ pub(crate) trait AlpFloat: Copy + Default {
     fn decode_value(signed_encoded: <Self::Exact as AlpExact>::Signed, scale: Self::Scale) -> Self;
 
     fn from_exact_bits(bits: Self::Exact) -> Self;
+
+    fn to_exact_bits(self) -> Self::Exact;
+
+    /// Precompute vector-level ALP decimal scale constants for the encode
+    /// direction: `encoded = fast_round((value * 10^(exponent)) * 10^(-factor))`.
+    fn encode_scale(exponent: u8, factor: u8) -> Self::Scale;
+
+    /// Apply a scale as the same two separate multiplications the decode side
+    /// uses. The spec requires two steps rather than one multiplication by a
+    /// combined constant, so that every implementation produces bit-identical
+    /// results.
+    fn apply_scale(self, scale: Self::Scale) -> Self;
+
+    /// True for values ALP cannot turn into an exact integer: NaN, the
+    /// infinities, anything scaled past the exact integer type, and `-0.0`
+    /// (which would come back as `+0.0` and lose its sign).
+    fn is_impossible_to_encode(self) -> bool;
+
+    /// Round to the nearest integer by the "magic number" technique: adding and
+    /// then subtracting the magic number lands the value in a binade where the
+    /// unit in the last place is exactly 1.0, so the fractional bits fall off.
+    ///
+    /// The sign branch is load-bearing, not a micro-optimization: negative
+    /// values must use `- magic + magic` to land in the corresponding negative
+    /// binade. Nor can the `+ magic - magic` be algebraically cancelled - the
+    /// rounding *is* the intermediate loss of precision.
+    fn fast_round(self) -> <Self::Exact as AlpExact>::Signed;
+
+    /// Encode one value with a precomputed [`AlpFloat::encode_scale`].
+    ///
+    /// Values ALP cannot represent map to [`AlpFloat::ENCODING_SENTINEL`], whose
+    /// round trip is guaranteed to mismatch, so the caller's `decode == value`
+    /// check records them as exceptions without a separate test.
+    fn encode_value(self, scale: Self::Scale) -> <Self::Exact as AlpExact>::Signed {
+        let scaled = self.apply_scale(scale);
+        if scaled.is_impossible_to_encode() {
+            return Self::ENCODING_SENTINEL;
+        }
+        scaled.fast_round()
+    }
 }
 
 impl AlpFloat for f32 {
     type Exact = u32;
     type Scale = (f32, f32);
+
+    const MAX_EXPONENT: u8 = ALP_MAX_EXPONENT_F32;
+    const MAGIC_NUMBER: Self = 12582912.0; // 2^22 + 2^23
+    const ENCODING_UPPER_LIMIT: Self = 2147483520.0;
+    const ENCODING_LOWER_LIMIT: Self = -2147483520.0;
+    const ENCODING_SENTINEL: i32 = 2147483520;
 
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F32);
@@ -394,11 +505,50 @@ impl AlpFloat for f32 {
     fn from_exact_bits(bits: Self::Exact) -> Self {
         f32::from_bits(bits)
     }
+
+    fn to_exact_bits(self) -> Self::Exact {
+        self.to_bits()
+    }
+
+    fn encode_scale(exponent: u8, factor: u8) -> Self::Scale {
+        debug_assert!(exponent <= ALP_MAX_EXPONENT_F32);
+        debug_assert!(factor <= exponent);
+        (
+            ALP_POW10_F32[exponent as usize],
+            ALP_NEG_POW10_F32[factor as usize],
+        )
+    }
+
+    fn apply_scale(self, scale: Self::Scale) -> Self {
+        (self * scale.0) * scale.1
+    }
+
+    fn is_impossible_to_encode(self) -> bool {
+        // The infinities need no separate test: they fall outside the limits.
+        self.is_nan()
+            || !(Self::ENCODING_LOWER_LIMIT..=Self::ENCODING_UPPER_LIMIT).contains(&self)
+            || (self == 0.0 && self.is_sign_negative())
+    }
+
+    fn fast_round(self) -> i32 {
+        let rounded = if self >= 0.0 {
+            (self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER
+        } else {
+            (self - Self::MAGIC_NUMBER) + Self::MAGIC_NUMBER
+        };
+        rounded as i32
+    }
 }
 
 impl AlpFloat for f64 {
     type Exact = u64;
     type Scale = (f64, f64);
+
+    const MAX_EXPONENT: u8 = ALP_MAX_EXPONENT_F64;
+    const MAGIC_NUMBER: Self = 6755399441055744.0; // 2^51 + 2^52
+    const ENCODING_UPPER_LIMIT: Self = 9223372036854774784.0;
+    const ENCODING_LOWER_LIMIT: Self = -9223372036854774784.0;
+    const ENCODING_SENTINEL: i64 = 9223372036854774784;
 
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F64);
@@ -415,5 +565,38 @@ impl AlpFloat for f64 {
 
     fn from_exact_bits(bits: Self::Exact) -> Self {
         f64::from_bits(bits)
+    }
+
+    fn to_exact_bits(self) -> Self::Exact {
+        self.to_bits()
+    }
+
+    fn encode_scale(exponent: u8, factor: u8) -> Self::Scale {
+        debug_assert!(exponent <= ALP_MAX_EXPONENT_F64);
+        debug_assert!(factor <= exponent);
+        (
+            ALP_POW10_F64[exponent as usize],
+            ALP_NEG_POW10_F64[factor as usize],
+        )
+    }
+
+    fn apply_scale(self, scale: Self::Scale) -> Self {
+        (self * scale.0) * scale.1
+    }
+
+    fn is_impossible_to_encode(self) -> bool {
+        // The infinities need no separate test: they fall outside the limits.
+        self.is_nan()
+            || !(Self::ENCODING_LOWER_LIMIT..=Self::ENCODING_UPPER_LIMIT).contains(&self)
+            || (self == 0.0 && self.is_sign_negative())
+    }
+
+    fn fast_round(self) -> i64 {
+        let rounded = if self >= 0.0 {
+            (self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER
+        } else {
+            (self - Self::MAGIC_NUMBER) + Self::MAGIC_NUMBER
+        };
+        rounded as i64
     }
 }
