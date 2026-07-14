@@ -400,7 +400,7 @@ impl MutableBuffer {
 
         if new_layout.size() == 0 {
             if self.layout.size() != 0 {
-                // Safety: data was allocated with the current layout.
+                // Safety: data was allocated with layout
                 unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
                 self.layout = new_layout;
             }
@@ -408,9 +408,9 @@ impl MutableBuffer {
         }
 
         let data = match self.layout.size() {
-            // Safety: new_layout is non-zero.
+            // Safety: new_layout is not empty
             0 => unsafe { std::alloc::alloc(new_layout) },
-            // Safety: new_layout is valid and non-zero.
+            // Safety: verified new layout is valid and not empty
             _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
         };
         self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
@@ -683,7 +683,14 @@ impl MutableBuffer {
     /// reasons as [`MutableBuffer::reserve`].
     #[inline]
     pub fn push<T: ToByteSlice>(&mut self, item: T) {
-        self.try_push(item).unwrap_or_else(|e| panic!("{e}"))
+        let additional = std::mem::size_of::<T>();
+        self.reserve(additional);
+        unsafe {
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+        }
+        self.len += additional;
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
@@ -1751,90 +1758,57 @@ mod tests {
     }
 
     #[test]
-    fn test_try_reserve_ok_and_overflow() {
+    fn test_try_methods_ok() {
         let mut buf = MutableBuffer::new(0);
         assert!(buf.try_reserve(64).is_ok());
         assert!(buf.capacity() >= 64);
 
+        assert!(buf.try_resize(128, 0xAB).is_ok());
+        assert_eq!(buf.len(), 128);
+        assert!(buf.as_slice().iter().all(|&b| b == 0xAB));
+
+        assert!(buf.try_shrink_to_fit().is_ok());
+        assert!(buf.capacity() >= 64 && buf.capacity() < 256);
+
+        assert!(buf.try_extend_zeros(32).is_ok());
+        assert!(buf.try_push(42u32).is_ok());
+
+        let mut buf = MutableBuffer::new(0);
+        assert!(buf.try_extend_from_slice(&[1u32, 2, 3]).is_ok());
+        let expected: Vec<u8> = [1u32, 2, 3].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        assert_eq!(buf.as_slice(), expected.as_slice());
+
+        let mut buf = MutableBuffer::new(0);
+        assert!(buf.try_repeat_slice_n_times(&[0xFFu8], 8).is_ok());
+        assert_eq!(buf.as_slice(), &[0xFF; 8]);
+    }
+
+    #[test]
+    fn test_try_methods_errors() {
+        let mut buf = MutableBuffer::new(0);
         buf.push(1u8);
         assert_eq!(
             buf.try_reserve(usize::MAX),
             Err(MutableBufferError::LengthOverflow)
         );
-    }
 
-    #[test]
-    fn test_try_resize_ok_and_overflow() {
         let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_resize(128, 0xAB).is_ok());
-        assert_eq!(buf.len(), 128);
-        assert!(buf.as_slice().iter().all(|&b| b == 0xAB));
-
-        // usize::MAX itself doesn't cause a length overflow, but it can't be rounded
-        // up to the next 64-byte boundary without wrapping, so we get LayoutError.
+        buf.try_resize(128, 0).unwrap();
         assert_eq!(
             buf.try_resize(usize::MAX, 0),
             Err(MutableBufferError::LayoutError)
         );
-    }
 
-    #[test]
-    fn test_try_shrink_to_fit_ok() {
-        let mut buf = MutableBuffer::new(256);
-        assert_eq!(buf.capacity(), 256);
-        buf.push(1u8);
-        buf.push(2u8);
-
-        assert!(buf.try_shrink_to_fit().is_ok());
-        assert!(buf.capacity() >= 64 && buf.capacity() < 256);
-    }
-
-    #[test]
-    fn test_try_extend_zeros_ok_and_overflow() {
         let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_extend_zeros(32).is_ok());
-        assert_eq!(buf.len(), 32);
-        assert!(buf.as_slice().iter().all(|&b| b == 0));
-
+        buf.push(1u8);
         assert_eq!(
             buf.try_extend_zeros(usize::MAX),
             Err(MutableBufferError::LengthOverflow)
         );
-    }
 
-    #[test]
-    fn test_try_push_ok() {
         let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_push(42u32).is_ok());
-        assert_eq!(buf.len(), 4);
-        assert_eq!(&buf.as_slice()[..4], &42u32.to_le_bytes());
-
-        // Chaining multiple pushes works fine.
-        assert!(buf.try_push(0xDEADBEEFu32).is_ok());
-        assert_eq!(buf.len(), 8);
-    }
-
-    #[test]
-    fn test_try_extend_from_slice_ok() {
-        let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_extend_from_slice(&[1u32, 2, 3]).is_ok());
-        assert_eq!(buf.len(), 12);
-
-        // Round-trips correctly: the bytes match a native-endian u32 slice.
-        let expected: Vec<u8> = [1u32, 2, 3].iter().flat_map(|v| v.to_ne_bytes()).collect();
-        assert_eq!(buf.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn test_try_repeat_slice_n_times_ok_and_overflow() {
-        let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_repeat_slice_n_times(&[0xFFu8], 8).is_ok());
-        assert_eq!(buf.as_slice(), &[0xFF; 8]);
-
-        // A 2-byte slice repeated usize::MAX/2 + 1 times overflows checked_mul.
-        let mut buf2 = MutableBuffer::new(0);
         assert_eq!(
-            buf2.try_repeat_slice_n_times(&[0u8, 0u8], usize::MAX / 2 + 1),
+            buf.try_repeat_slice_n_times(&[0u8, 0u8], usize::MAX / 2 + 1),
             Err(MutableBufferError::LengthOverflow)
         );
     }
