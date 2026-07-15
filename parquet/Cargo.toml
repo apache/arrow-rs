@@ -157,6 +157,11 @@ required-features = ["cli"]
 path = "./examples/write_parquet.rs"
 
 [[example]]
+name = "alp_compression_stats"
+required-features = ["arrow"]
+path = "./examples/alp_compression_stats.rs"
+
+[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
