@@ -51,7 +51,7 @@ The CHANGELOG is created automatically using
 This script creates a changelog using github issues and the
 labels associated with them.
 
-## Prepare CHANGELOG and version:
+## Prepare CHANGELOG and version
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
@@ -109,7 +109,7 @@ distribution servers.
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
-### Create git tag for the release:
+### Create git tag for the release
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
@@ -141,11 +141,11 @@ The `create-tarball.sh` script
    apache distribution svn server
 
 2. provide you an email template to
-   send to dev@arrow.apache.org for release voting.
+   send to <dev@arrow.apache.org> for release voting.
 
 ### Vote on Release Candidate tarball
 
-Send an email, based on the output from the script to dev@arrow.apache.org.
+Send an email, based on the output from the script to <dev@arrow.apache.org>.
 See an [example of how the email should look](https://lists.apache.org/thread/2vpxdt6n7kzo72sxpr7q8yyby4495gnk).
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
@@ -162,7 +162,7 @@ The `dev/release/verify-release-candidate.sh` script in this repository can assi
 
 If the release is not approved, fix whatever the problem is and try again with the next RC number
 
-### If the release is approved,
+### If the release is approved
 
 Then, create a new release on GitHub using the tag `<version>` (e.g. `4.1.0`).
 
@@ -173,7 +173,7 @@ git tag <version> <version>-<rc>
 git push apache <version>
 ```
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-rs-4.1.0/, using the `release-tarball.sh` script:
+Move tarball to the release location in SVN, e.g. <https://dist.apache.org/repos/dist/release/arrow/arrow-rs-4.1.0/>, using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
@@ -185,7 +185,7 @@ Congratulations! The release is now official!
 
 The [`release.yml`] workflow automatically creates a github release for the tag.
 Check that the release is created and contains the correct changelog here:
-https://github.com/apache/arrow-rs/releases
+<https://github.com/apache/arrow-rs/releases>
 
 [`release.yml`]: https://github.com/apache/arrow-rs/blob/main/.github/workflows/release.yml#L1-L0
 
@@ -216,6 +216,7 @@ Rust Arrow Crates:
 (cd arrow-schema && cargo publish)
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
+(cd arrow-cmp && cargo publish) 
 (cd arrow-select && cargo publish)
 (cd arrow-ord && cargo publish)
 (cd arrow-cast && cargo publish)
