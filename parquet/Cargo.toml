@@ -58,6 +58,7 @@ brotli = { version = "8.0", default-features = false, features = ["std"], option
 flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.13", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
+zstd-safe = { version = "7.2", optional = true, default-features = false }
 chrono = { workspace = true }
 num-bigint = { version = "0.5", default-features = false }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
@@ -118,7 +119,7 @@ async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
-zstd = ["dep:zstd"]
+zstd = ["dep:zstd", "dep:zstd-safe"]
 # Verify 32-bit CRC checksum when decoding parquet pages
 crc = ["dep:crc32fast"]
 # Enable SIMD UTF-8 validation

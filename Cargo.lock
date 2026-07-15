@@ -2370,6 +2370,7 @@ dependencies = [
  "tokio",
  "twox-hash",
  "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
