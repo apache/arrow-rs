@@ -536,13 +536,13 @@ mod zstd_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let capacity = uncompress_size.unwrap_or_else(|| {
-                // Get the decompressed size from the zstd frame header
+            let len = uncompress_size.unwrap_or_else(|| {
+                // Get the decompressed size from the zstd frame header.
                 // See doc of upper_bound about "experimental" feature.
                 zstd::bulk::Decompressor::upper_bound(input_buf)
                     .unwrap_or(input_buf.len().saturating_mul(4))
             });
-            output_buf.reserve(capacity);
+            output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
@@ -554,8 +554,8 @@ mod zstd_codec {
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let offset = output_buf.len();
-            let buffer_len = zstd_safe::compress_bound(input_buf.len());
-            output_buf.reserve(buffer_len);
+            let len = zstd_safe::compress_bound(input_buf.len());
+            output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
