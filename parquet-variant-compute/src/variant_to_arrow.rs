@@ -126,6 +126,7 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
                 *ordered,
                 cast_options,
                 capacity,
+                shred,
             )?;
             Ok(Map(builder))
         }
@@ -724,6 +725,7 @@ impl<'a> MapVariantToArrowRowBuilder<'a> {
         ordered: bool,
         cast_options: &'a CastOptions,
         capacity: usize,
+        shred: bool,
     ) -> Result<Self> {
         let DataType::Struct(entry_fields) = entries_field.data_type() else {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -744,11 +746,13 @@ impl<'a> MapVariantToArrowRowBuilder<'a> {
             key_field.data_type(),
             cast_options,
             capacity,
+            shred,
         )?);
         let value_builder = Box::new(make_typed_variant_to_arrow_row_builder(
             value_field.data_type(),
             cast_options,
             capacity,
+            shred,
         )?);
         if capacity >= isize::MAX as usize {
             return Err(ArrowError::ComputeError(
