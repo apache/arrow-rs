@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
-use crate::filter::{FilterPredicate, FilterSelection, filter_null_mask};
+use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -156,15 +156,11 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         filter: &FilterPredicate,
         source_nulls: Option<&NullBuffer>,
     ) {
-        let Some((null_count, nulls)) = filter_null_mask(source_nulls, filter) else {
+        if let Some(nulls) = filter.filter_nulls(source_nulls) {
+            self.nulls.append_buffer(&nulls);
+        } else {
             self.nulls.append_n_non_nulls(filter.count());
-            return;
-        };
-
-        let nulls = unsafe {
-            NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
-        };
-        self.nulls.append_buffer(&nulls);
+        }
     }
 
     /// Append views to self.views, updating the buffer index if necessary
