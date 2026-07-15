@@ -171,7 +171,14 @@ impl FFI_ArrowSchema {
 
     /// Set the name of the schema
     pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
-        self.name = CString::new(name).unwrap().into_raw();
+        self.name = CString::new(name)
+            .map_err(|e| {
+                ArrowError::CDataInterface(format!(
+                    "Null byte at position {} not allowed in name",
+                    e.nul_position()
+                ))
+            })?
+            .into_raw();
         Ok(self)
     }
 
@@ -1006,6 +1013,12 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_name_with_null_byte() {
+        let schema = FFI_ArrowSchema::try_new("i", vec![], None).unwrap();
+        assert!(schema.with_name("ab\0cd").is_err());
     }
 
     #[test]
