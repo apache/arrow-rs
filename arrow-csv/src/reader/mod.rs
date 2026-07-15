@@ -3032,12 +3032,12 @@ mod tests {
         assert_eq!(f32_col.value(1), 0.25f32);
         assert_eq!(f64_col.value(1), 0.25f64);
 
-        assert_eq!(f16_col.value(2), half::f16::from_f32(1.23456789));
-        assert_eq!(f32_col.value(2), 1.23456789f32);
+        assert_eq!(f16_col.value(2), half::f16::from_f32(1.234_567_9));
+        assert_eq!(f32_col.value(2), 1.234_567_9_f32);
         assert_eq!(f64_col.value(2), 1.23456789f64);
 
         assert_eq!(f16_col.value(3), half::f16::from_f64(1.234567890123456f64));
-        assert_eq!(f32_col.value(3), 1.234567890123456f32);
+        assert_eq!(f32_col.value(3), 1.234_567_9_f32);
         assert_eq!(f64_col.value(3), 1.234567890123456f64);
 
         assert_eq!(f16_col.value(4), half::f16::from_f32(-2.5));

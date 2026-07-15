@@ -313,6 +313,7 @@ dependencies = [
  "csv",
  "csv-core",
  "futures",
+ "half",
  "regex",
  "tempfile",
  "tokio",
