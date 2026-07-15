@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::alloc::{Layout, handle_alloc_error};
+use std::alloc::Layout;
 use std::mem;
 use std::ptr::NonNull;
 
@@ -40,6 +40,8 @@ pub enum MutableBufferError {
     LengthOverflow,
     /// The requested capacity cannot be represented as a valid allocation layout.
     LayoutError,
+    /// An allocation failed due to insufficient memory.
+    AllocationError(Layout),
 }
 
 impl std::fmt::Display for MutableBufferError {
@@ -47,6 +49,9 @@ impl std::fmt::Display for MutableBufferError {
         match self {
             Self::LengthOverflow => write!(f, "buffer length overflow"),
             Self::LayoutError => write!(f, "invalid allocation layout for requested capacity"),
+            Self::AllocationError(layout) => {
+                write!(f, "failed to allocate memory for layout {layout:?}")
+            }
         }
     }
 }
@@ -171,7 +176,10 @@ impl MutableBuffer {
             _ => {
                 // Safety: Verified size != 0
                 let raw_ptr = unsafe { std::alloc::alloc(layout) };
-                NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+                match NonNull::new(raw_ptr) {
+                    Some(ptr) => ptr,
+                    None => return Err(MutableBufferError::AllocationError(layout)),
+                }
             }
         };
         Ok(Self {
@@ -199,22 +207,31 @@ impl MutableBuffer {
     ///
     /// Panics if `len` is too large to construct a valid allocation [`Layout`]
     pub fn from_len_zeroed(len: usize) -> Self {
-        let layout = Layout::from_size_align(len, ALIGNMENT).unwrap();
+        Self::try_from_len_zeroed(len).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Fallible version of [`MutableBuffer::from_len_zeroed`].
+    pub fn try_from_len_zeroed(len: usize) -> Result<Self, MutableBufferError> {
+        let layout =
+            Layout::from_size_align(len, ALIGNMENT).map_err(|_| MutableBufferError::LayoutError)?;
         let data = match layout.size() {
             0 => dangling_ptr(),
             _ => {
                 // Safety: Verified size != 0
                 let raw_ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-                NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+                match NonNull::new(raw_ptr) {
+                    Some(ptr) => ptr,
+                    None => return Err(MutableBufferError::AllocationError(layout)),
+                }
             }
         };
-        Self {
+        Ok(Self {
             data,
             len,
             layout,
             #[cfg(feature = "pool")]
             reservation: std::sync::Mutex::new(None),
-        }
+        })
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
@@ -413,7 +430,10 @@ impl MutableBuffer {
             // Safety: verified new layout is valid and not empty
             _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
         };
-        self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
+        self.data = match NonNull::new(data) {
+            Some(ptr) => ptr,
+            None => return Err(MutableBufferError::AllocationError(new_layout)),
+        };
         self.layout = new_layout;
         #[cfg(feature = "pool")]
         {
