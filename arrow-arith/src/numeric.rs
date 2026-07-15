@@ -821,6 +821,13 @@ fn decimal_op<T: DecimalType>(
             let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
 
             match op {
+                // Equal scales make both decimal multipliers one.
+                Op::Add | Op::AddWrapping if s1 == s2 => {
+                    try_op!(l, l_s, r, r_s, l.add_checked(r))
+                }
+                Op::Sub | Op::SubWrapping if s1 == s2 => {
+                    try_op!(l, l_s, r, r_s, l.sub_checked(r))
+                }
                 Op::Add | Op::AddWrapping => {
                     try_op!(
                         l,
@@ -1288,6 +1295,72 @@ mod tests {
         assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_same_scale_add_sub() {
+        let lhs = Decimal256Array::from(vec![
+            Some(i256::from_parts(u128::MAX, 0)),
+            Some(i256::MINUS_ONE),
+            None,
+        ])
+        .with_precision_and_scale(70, 2)
+        .unwrap();
+        let rhs = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::ONE), Some(i256::MAX)])
+            .with_precision_and_scale(70, 2)
+            .unwrap();
+
+        let expected =
+            Decimal256Array::from(vec![Some(i256::from_parts(0, 1)), Some(i256::ZERO), None])
+                .with_precision_and_scale(71, 2)
+                .unwrap();
+        for operation in [add, add_wrapping] {
+            let result = operation(&lhs, &rhs).unwrap();
+            assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        }
+
+        let expected = Decimal256Array::from(vec![
+            Some(i256::from_parts(u128::MAX - 1, 0)),
+            Some(i256::from_i128(-2)),
+            None,
+        ])
+        .with_precision_and_scale(71, 2)
+        .unwrap();
+        for operation in [sub, sub_wrapping] {
+            let result = operation(&lhs, &rhs).unwrap();
+            assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        }
+
+        let lhs = Decimal256Array::from(vec![i256::MAX])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        let rhs = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        for operation in [add, add_wrapping] {
+            assert_eq!(
+                operation(&lhs, &rhs).unwrap_err().to_string(),
+                format!(
+                    "Arithmetic overflow: Overflow happened on: {:?} + {:?}",
+                    i256::MAX,
+                    i256::ONE
+                )
+            );
+        }
+
+        let lhs = Decimal256Array::from(vec![i256::MIN])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        for operation in [sub, sub_wrapping] {
+            assert_eq!(
+                operation(&lhs, &rhs).unwrap_err().to_string(),
+                format!(
+                    "Arithmetic overflow: Overflow happened on: {:?} - {:?}",
+                    i256::MIN,
+                    i256::ONE
+                )
+            );
+        }
     }
 
     fn test_timestamp_impl<T: TimestampOp>() {
