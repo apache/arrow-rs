@@ -222,6 +222,7 @@ dependencies = [
  "futures",
  "half",
  "hashbrown 0.17.1",
+ "libc",
  "num-complex",
  "num-integer",
  "num-traits",
