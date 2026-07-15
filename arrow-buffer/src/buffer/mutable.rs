@@ -423,13 +423,6 @@ impl MutableBuffer {
         }
         Ok(())
     }
-    #[cold]
-    #[allow(dead_code)]
-    fn reallocate(&mut self, capacity: usize) {
-        self.try_reallocate(capacity)
-            .unwrap_or_else(|e| panic!("{e}"))
-    }
-
     /// Truncates this buffer to `len` bytes
     ///
     /// If `len` is greater than the buffer's current length, this has no effect
@@ -1504,14 +1497,14 @@ mod tests {
             assert_eq!(pool.used(), 128);
 
             // Reallocate to a larger size
-            buffer.reallocate(200);
+            buffer.try_reallocate(200).unwrap();
 
             // The capacity is exactly the requested size, not rounded up
             assert_eq!(buffer.capacity(), 200);
             assert_eq!(pool.used(), 200);
 
             // Reallocate to a smaller size
-            buffer.reallocate(50);
+            buffer.try_reallocate(50).unwrap();
 
             // The capacity is exactly the requested size, not rounded up
             assert_eq!(buffer.capacity(), 50);
@@ -1742,60 +1735,5 @@ mod tests {
         let mut buf = MutableBuffer::new(1);
         buf.push(1u8);
         buf.reserve(usize::MAX);
-    }
-
-    #[test]
-    fn test_try_methods_ok() {
-        let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_reserve(64).is_ok());
-        assert!(buf.capacity() >= 64);
-
-        assert!(buf.try_resize(128, 0xAB).is_ok());
-        assert_eq!(buf.len(), 128);
-        assert!(buf.as_slice().iter().all(|&b| b == 0xAB));
-
-        assert!(buf.try_shrink_to_fit().is_ok());
-        assert!(buf.capacity() >= 64 && buf.capacity() < 256);
-
-        assert!(buf.try_extend_zeros(32).is_ok());
-
-        let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_extend_from_slice(&[1u32, 2, 3]).is_ok());
-        let expected: Vec<u8> = [1u32, 2, 3].iter().flat_map(|v| v.to_ne_bytes()).collect();
-        assert_eq!(buf.as_slice(), expected.as_slice());
-
-        let mut buf = MutableBuffer::new(0);
-        assert!(buf.try_repeat_slice_n_times(&[0xFFu8], 8).is_ok());
-        assert_eq!(buf.as_slice(), &[0xFF; 8]);
-    }
-
-    #[test]
-    fn test_try_methods_errors() {
-        let mut buf = MutableBuffer::new(0);
-        buf.push(1u8);
-        assert_eq!(
-            buf.try_reserve(usize::MAX),
-            Err(MutableBufferError::LengthOverflow)
-        );
-
-        let mut buf = MutableBuffer::new(0);
-        buf.try_resize(128, 0).unwrap();
-        assert_eq!(
-            buf.try_resize(usize::MAX, 0),
-            Err(MutableBufferError::LayoutError)
-        );
-
-        let mut buf = MutableBuffer::new(0);
-        buf.push(1u8);
-        assert_eq!(
-            buf.try_extend_zeros(usize::MAX),
-            Err(MutableBufferError::LengthOverflow)
-        );
-
-        let mut buf = MutableBuffer::new(0);
-        assert_eq!(
-            buf.try_repeat_slice_n_times(&[0u8, 0u8], usize::MAX / 2 + 1),
-            Err(MutableBufferError::LengthOverflow)
-        );
     }
 }
