@@ -2572,13 +2572,13 @@ mod tests {
 
             let result = shred_variant(&input, &$shred_type).unwrap();
 
-            assert!(result.value_field().is_some());
-            assert!(result.typed_value_field().is_some());
+            assert!(result.value_column().is_some());
+            assert!(result.typed_value_column().is_some());
             assert_eq!(result.len(), input.len());
 
-            let value = result.value_field().unwrap();
+            let value = result.value_column().unwrap();
             let typed_value = result
-                .typed_value_field()
+                .typed_value_column()
                 .unwrap()
                 .as_any()
                 .downcast_ref::<$array_type>()
