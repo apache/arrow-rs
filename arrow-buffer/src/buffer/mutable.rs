@@ -143,13 +143,7 @@ impl MutableBuffer {
     /// See [`MutableBuffer::with_capacity`].
     #[inline]
     pub fn new(capacity: usize) -> Self {
-        Self::with_capacity(capacity)
-    }
-
-    /// Fallible version of [`MutableBuffer::new`].
-    #[inline]
-    pub fn try_new(capacity: usize) -> Result<Self, MutableBufferError> {
-        Self::try_with_capacity(capacity)
+        Self::try_with_capacity(capacity).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
@@ -359,25 +353,41 @@ impl MutableBuffer {
         if repeat_count == 0 || slice_to_repeat.is_empty() {
             return Ok(());
         }
+        let bytes_per_copy = size_of_val(slice_to_repeat);
         let total_bytes = repeat_count
-            .checked_mul(size_of_val(slice_to_repeat))
+            .checked_mul(bytes_per_copy)
             .ok_or(MutableBufferError::LengthOverflow)?;
         self.len
             .checked_add(total_bytes)
             .ok_or(MutableBufferError::LengthOverflow)?;
+
+        // Ensure capacity
         self.try_reserve(total_bytes)?;
-        let bytes_per_copy = size_of_val(slice_to_repeat);
+
+        // Save the length before we do all the copies to know where to start from
         let length_before = self.len;
+
+        // Copy the initial slice once so we can use doubling strategy on it
         self.try_extend_from_slice(slice_to_repeat)?;
+
+        // Number of times the slice was repeated
         let mut already_repeated = 1usize;
+
+        // We will use doubling strategy to fill the buffer in log(repeat_count) steps
         while already_repeated < repeat_count {
+            // How many slices can we copy in this iteration
+            // (either double what we have, or just the remaining ones)
             let to_copy = already_repeated.min(repeat_count - already_repeated);
             let byte_count = to_copy * bytes_per_copy;
             unsafe {
+                // Get to the start of the data before we started copying anything
                 let src = self.data.as_ptr().add(length_before) as *const u8;
+                // Go to the current location to copy to (end of current data)
                 let dst = self.data.as_ptr().add(self.len);
+                // SAFETY: the pointers are not overlapping as there is `byte_count` or less between them
                 std::ptr::copy_nonoverlapping(src, dst, byte_count);
             }
+            // Advance the length by the amount of data we just copied (doubled)
             self.len += byte_count;
             already_repeated += to_copy;
         }
@@ -467,8 +477,10 @@ impl MutableBuffer {
             let diff = new_len - self.len;
             self.try_reserve(diff)?;
             // Safety: try_reserve ensured capacity >= new_len.
+            // write the value
             unsafe { self.data.as_ptr().add(self.len).write_bytes(value, diff) };
         }
+        // this truncates the buffer when new_len < self.len
         self.len = new_len;
         #[cfg(feature = "pool")]
         {
@@ -642,6 +654,9 @@ impl MutableBuffer {
         let additional = mem::size_of_val(items);
         self.try_reserve(additional)?;
         unsafe {
+            // this assumes that `[ToByteSlice]` can be copied directly
+            // without calling `to_byte_slice` for each element,
+            // which is correct for all ArrowNativeType implementations.
             let src = items.as_ptr() as *const u8;
             let dst = self.data.as_ptr().add(self.len);
             std::ptr::copy_nonoverlapping(src, dst, additional);
