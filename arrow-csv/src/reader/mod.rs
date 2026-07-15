@@ -801,6 +801,9 @@ fn parse(
                 DataType::UInt64 => {
                     build_primitive_array::<UInt64Type>(line_number, rows, i, null_regex)
                 }
+                DataType::Float16 => {
+                    build_primitive_array::<Float16Type>(line_number, rows, i, null_regex)
+                }
                 DataType::Float32 => {
                     build_primitive_array::<Float32Type>(line_number, rows, i, null_regex)
                 }
