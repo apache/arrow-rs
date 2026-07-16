@@ -625,39 +625,17 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 /// Whether the specialized [`filter_list`] is beneficial for a `List`/`LargeList`
 /// with the given child data type.
 ///
-/// The rule that matches the benchmarks: specialize exactly the children that
-/// [`filter_array`] has a fast typed kernel for *and* which only consume the
-/// predicate's `Slices` (never `filter` directly).
-///
 /// Left on the fallback, for distinct reasons:
 /// - dense `Union`: filtering it requires a per-row, per-type compacting
 ///   gather (no contiguous range copy), so the specialized path can only match
 ///   the `MutableArrayData` fallback, not beat it.
 /// - `RunEndEncoded`: its kernel reads `predicate.filter` directly, which the
-///   streamed `Slices` predicate does not populate.
+///   streamed range predicate does not populate.
 fn filter_list_child_is_fast(child: &DataType) -> bool {
-    child.is_primitive()
-        || matches!(
-            child,
-            DataType::Boolean
-                | DataType::Null
-                | DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Utf8View
-                | DataType::Binary
-                | DataType::LargeBinary
-                | DataType::BinaryView
-                | DataType::FixedSizeBinary(_)
-                | DataType::FixedSizeList(_, _)
-                | DataType::Dictionary(_, _)
-                | DataType::Struct(_)
-                | DataType::Map(_, _)
-                | DataType::Union(_, UnionMode::Sparse)
-                | DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::ListView(_)
-                | DataType::LargeListView(_)
-        )
+    !matches!(
+        child,
+        DataType::Union(_, UnionMode::Dense) | DataType::RunEndEncoded(_, _)
+    )
 }
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
