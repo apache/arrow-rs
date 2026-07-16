@@ -822,8 +822,12 @@ fn copy_runs<T: ArrowNativeType>(
 ) -> Vec<T> {
     let mut buffer = Vec::with_capacity(count);
     for (start, end) in runs {
-        // Bounds-checked once per run (runs, not elements): negligible.
-        buffer.extend_from_slice(&values[start..end]);
+        // SAFETY: runs are derived from a validated `FilterPredicate` (top-level
+        // filters) or from list offsets (list children), so `[start, end)` is
+        // always within `values`. Matches the original `filter_native` codegen and
+        // avoids a per-run bounds check (measurable on the primitive hot path at
+        // ~50% selectivity, where runs are many and short).
+        buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
     }
     buffer
 }
