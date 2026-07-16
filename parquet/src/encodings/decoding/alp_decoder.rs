@@ -540,29 +540,67 @@ where
         Encoding::ALP
     }
 
-    /// Skip up to `num_values` values, advancing the per-vector cursor (and the
-    /// underlying bit reader) without decoding.
+    /// Skip up to `num_values` values.
+    ///
+    /// Skipped-over vectors are not parsed, so a multi-vector skip is O(1) in
+    /// vectors skipped - and, unlike a sequential read, they are not validated.
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = num_values.min(self.num_values);
         if to_skip == 0 {
             return Ok(0);
         }
 
-        let mut skipped = 0;
-        while skipped < to_skip {
-            if self.current.as_ref().is_none_or(|c| c.remaining == 0) {
-                self.load_current_vector()?;
-            }
-            let cur = self.current.as_mut().unwrap();
-            let n = cur.remaining.min(to_skip - skipped);
+        let mut left = to_skip;
+
+        // The current vector carries live bit-reader/cursor state, so a skip
+        // within it advances it in place rather than jumping.
+        if let Some(cur) = self.current.as_mut() {
+            let within = left.min(cur.remaining);
             if cur.bit_width != 0 {
-                cur.reader.skip(n, cur.bit_width as usize);
+                cur.reader.skip(within, cur.bit_width as usize);
             }
-            cur.delivered += n;
-            cur.remaining -= n;
-            skipped += n;
-            self.num_values -= n;
+            cur.delivered += within;
+            cur.remaining -= within;
+            self.num_values -= within;
+            left -= within;
         }
+        if left == 0 {
+            return Ok(to_skip);
+        }
+
+        let vector_size = self.header.vector_size;
+        let num_elements = self.header.num_elements;
+        let target = (num_elements - self.num_values) + left;
+
+        self.current = None;
+        self.num_values = num_elements - target;
+
+        if target == num_elements {
+            self.next_vector_idx = self.header.num_vectors();
+            return Ok(to_skip);
+        }
+
+        // vector_size is a power of two: shift and mask instead of div/rem.
+        let landing = target >> vector_size.trailing_zeros();
+        let within = target & (vector_size - 1);
+
+        // Seed expected_next_offset so the jump satisfies load_current_vector's
+        // contiguity check; validation resumes from the landing vector.
+        self.next_vector_idx = landing;
+        self.expected_next_offset = read_offset(self.body.as_ref(), landing)?;
+
+        // within == 0 lands on a boundary and is loaded lazily by the next
+        // get/skip; a mid-vector landing must be parsed and advanced now.
+        if within > 0 {
+            self.load_current_vector()?;
+            let cur = self.current.as_mut().unwrap();
+            if cur.bit_width != 0 {
+                cur.reader.skip(within, cur.bit_width as usize);
+            }
+            cur.delivered = within;
+            cur.remaining -= within;
+        }
+
         Ok(to_skip)
     }
 }
@@ -1409,5 +1447,108 @@ mod tests {
         // The exhausted decoder yields nothing more.
         let mut extra = [0.0f32; 1];
         assert_eq!(decoder.get(&mut extra).unwrap(), 0);
+    }
+
+    /// A skip must land where a sequential decode would, across boundaries and
+    /// over vectors carrying exceptions. `exponent = factor = 0` makes the
+    /// decode the identity `frame_of_reference + delta`, so expected values fall
+    /// out of the packed deltas.
+    #[test]
+    fn test_alp_decoder_skip_matches_sequential_decode() {
+        use crate::util::bit_util::BitWriter;
+
+        fn pack(deltas: &[u64], bit_width: usize) -> Vec<u8> {
+            let mut w = BitWriter::new(deltas.len() * 2 + 16);
+            for &d in deltas {
+                w.put_value(d, bit_width);
+            }
+            w.flush();
+            w.consume()
+        }
+
+        struct Spec {
+            for_ref: u64,
+            bit_width: usize,
+            len: usize,
+            exc_pos: u16,
+            exc_val: f64,
+        }
+        let specs = [
+            Spec { for_ref: 1000, bit_width: 4, len: 1024, exc_pos: 100, exc_val: f64::NAN },
+            Spec { for_ref: 5000, bit_width: 8, len: 1024, exc_pos: 300, exc_val: f64::INFINITY },
+            Spec { for_ref: 100, bit_width: 2, len: 552, exc_pos: 200, exc_val: -0.0 },
+        ];
+
+        let mut vectors = Vec::new();
+        let mut expected: Vec<f64> = Vec::new();
+        for s in &specs {
+            let modulo = 1u64 << s.bit_width;
+            let deltas: Vec<u64> = (0..s.len).map(|j| (j as u64) % modulo).collect();
+            let packed = pack(&deltas, s.bit_width);
+            vectors.push(make_vector(VectorSpec {
+                exponent: 0,
+                factor: 0,
+                frame_of_reference: s.for_ref,
+                bit_width: s.bit_width as u8,
+                packed_values: &packed,
+                exception_positions: &[s.exc_pos],
+                exception_values: &[s.exc_val.to_bits()],
+            }));
+            for (j, &d) in deltas.iter().enumerate() {
+                expected.push(if j as u16 == s.exc_pos {
+                    s.exc_val
+                } else {
+                    (s.for_ref + d) as f64
+                });
+            }
+        }
+        let n = expected.len();
+        let page = make_page_from_vectors(10, n as i32, &vectors);
+
+        let assert_bits = |actual: &[f64], expected: &[f64], ctx: &str| {
+            assert_eq!(actual.len(), expected.len(), "{ctx}: length");
+            for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+                assert_eq!(a.to_bits(), e.to_bits(), "{ctx}: mismatch at {i}");
+            }
+        };
+
+        // Sanity check: a straight sequential decode reproduces `expected`.
+        assert_bits(&decode_page::<DoubleType>(page.clone(), n), &expected, "sequential");
+
+        // Skip from the start: boundary-aligned (1024, 2048), mid-vector (1, 1025,
+        // 2222), just before the end (2599), and exactly to the end (2600).
+        for &k in &[0usize, 1, 1023, 1024, 1025, 2048, 2222, 2599, 2600] {
+            let mut d = AlpDecoder::<DoubleType>::new();
+            d.set_data(Bytes::from(page.clone()), n).unwrap();
+            assert_eq!(d.skip(k).unwrap(), k);
+            assert_eq!(d.values_left(), n - k);
+
+            let mut tail = vec![0.0f64; n - k];
+            assert_eq!(d.get(&mut tail).unwrap(), n - k);
+            assert_bits(&tail, &expected[k..], &format!("skip {k}"));
+        }
+
+        // Skip that starts mid-vector: consume part of vector 0, then skip across
+        // the vector-0/1 boundary before reading the rest.
+        let mut d = AlpDecoder::<DoubleType>::new();
+        d.set_data(Bytes::from(page.clone()), n).unwrap();
+        let mut head = vec![0.0f64; 500];
+        assert_eq!(d.get(&mut head).unwrap(), 500);
+        assert_bits(&head, &expected[..500], "head");
+        assert_eq!(d.skip(700).unwrap(), 700); // 500..1200, crossing into vector 1
+        assert_eq!(d.values_left(), n - 1200);
+        let mut tail = vec![0.0f64; n - 1200];
+        assert_eq!(d.get(&mut tail).unwrap(), n - 1200);
+        assert_bits(&tail, &expected[1200..], "tail");
+
+        // Two consecutive skips, the first landing boundary-aligned (lazy, no
+        // parse), the second jumping again from that lazy position.
+        let mut d = AlpDecoder::<DoubleType>::new();
+        d.set_data(Bytes::from(page.clone()), n).unwrap();
+        assert_eq!(d.skip(1024).unwrap(), 1024); // boundary -> lazy landing
+        assert_eq!(d.skip(600).unwrap(), 600); // jump again from the boundary
+        let mut tail = vec![0.0f64; n - 1624];
+        assert_eq!(d.get(&mut tail).unwrap(), n - 1624);
+        assert_bits(&tail, &expected[1624..], "double skip");
     }
 }
