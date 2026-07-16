@@ -740,6 +740,21 @@ pub(crate) fn filter_null_mask(
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
+/// Appends the packed bits of the selected `[start, end)` runs of `src` (a bit
+/// buffer starting at `offset`) to `builder`. Shared by the range-based
+/// [`filter_bits`] strategies and [`filter_validity`].
+#[inline]
+fn append_validity_runs(
+    builder: &mut BooleanBufferBuilder,
+    runs: impl Iterator<Item = (usize, usize)>,
+    offset: usize,
+    src: &[u8],
+) {
+    for (start, end) in runs {
+        builder.append_packed_range(start + offset..end + offset, src);
+    }
+}
+
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
@@ -766,16 +781,17 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
         }
         IterationStrategy::SlicesIterator => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                builder.append_packed_range(start + offset..end + offset, src)
-            }
+            append_validity_runs(
+                &mut builder,
+                SlicesIterator::new(&predicate.filter),
+                offset,
+                src,
+            );
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
-            for (start, end) in slices {
-                builder.append_packed_range(*start + offset..*end + offset, src)
-            }
+            append_validity_runs(&mut builder, slices.iter().copied(), offset, src);
             builder.into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
@@ -791,6 +807,27 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::new(values, nulls)
 }
 
+/// Copies the selected `[start, end)` runs of `values` into a fresh `Vec`.
+///
+/// Shared by the range-based [`filter_native`] strategies and the list-child
+/// primitive filter, so the copy loop is written once. The range source is a
+/// transient iterator argument (never stored), so callers pass either a
+/// predicate-derived iterator or a streamed list-child iterator without any
+/// lifetime plumbing.
+#[inline]
+fn copy_runs<T: ArrowNativeType>(
+    values: &[T],
+    runs: impl Iterator<Item = (usize, usize)>,
+    count: usize,
+) -> Vec<T> {
+    let mut buffer = Vec::with_capacity(count);
+    for (start, end) in runs {
+        // Bounds-checked once per run (runs, not elements): negligible.
+        buffer.extend_from_slice(&values[start..end]);
+    }
+    buffer
+}
+
 #[inline(never)]
 pub(crate) fn filter_native<T: ArrowNativeType>(
     values: &[T],
@@ -800,20 +837,10 @@ pub(crate) fn filter_native<T: ArrowNativeType>(
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
-            }
-            buffer.into()
+            copy_runs(values, SlicesIterator::new(&predicate.filter), predicate.count).into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in slices {
-                // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { values.get_unchecked(*start..*end) });
-            }
-            buffer.into()
+            copy_runs(values, slices.iter().copied(), predicate.count).into()
         }
         IterationStrategy::IndexIterator => {
             // SAFETY: indices were derived from the filter predicate
@@ -957,17 +984,26 @@ fn filter_bytes<T>(array: &GenericByteArray<T>, predicate: &FilterPredicate) -> 
 where
     T: ByteArrayType,
 {
-    let mut filter = FilterBytes::new(predicate.count, array);
-
+    // Range strategies reuse the shared range-driven builder (also used by
+    // list-child byte filtering), keeping the offset-rebuild + value-copy in one
+    // place and streaming the ranges (no `Vec` materialization).
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
-            filter.extend_slices(SlicesIterator::new(&predicate.filter))
+            return filter_bytes_runs(
+                array,
+                || SlicesIterator::new(&predicate.filter),
+                predicate.count,
+            );
         }
         IterationStrategy::Slices(slices) => {
-            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
-            filter.extend_slices(slices.iter().cloned())
+            return filter_bytes_runs(array, || slices.iter().copied(), predicate.count);
         }
+        _ => {}
+    }
+
+    // Index strategies gather element-wise, with predicate-driven nulls.
+    let mut filter = FilterBytes::new(predicate.count, array);
+    match &predicate.strategy {
         IterationStrategy::IndexIterator => {
             filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
@@ -976,12 +1012,11 @@ where
             filter.extend_offsets_idx(indices.iter().cloned());
             filter.extend_idx(indices.iter().cloned())
         }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+        _ => unreachable!(),
     }
 
-    // SAFETY: `dst_offsets` starts at `[0]` and is monotonically non-decreasing:
-    // the index paths accumulate a non-negative `cur_offset`, and the slice path
-    // emits source offsets (themselves monotonic) shifted by a non-decreasing base.
+    // SAFETY: `dst_offsets` starts at `[0]` and grows by a non-negative
+    // `cur_offset`, so it is monotonically non-decreasing.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = predicate.filter_nulls(array.nulls());
 
@@ -1194,7 +1229,7 @@ fn filter_list_inner<'a, OffsetType: OffsetSizeTrait>(
         DataType::List(field) | DataType::LargeList(field) => field.clone(),
         _ => unreachable!(),
     };
-    let nulls = filter_nulls_ranges(array.nulls(), make_row_ranges(), count);
+    let nulls = filter_validity(array.nulls(), make_row_ranges(), count);
 
     Ok(GenericListArray::new(
         field,
@@ -1322,22 +1357,22 @@ fn filter_list_child<'a>(
     child_count: usize,
 ) -> Result<ArrayRef, ArrowError> {
     Ok(match values.data_type() {
-        DataType::Utf8 => Arc::new(filter_list_bytes::<Utf8Type, _, _>(
+        DataType::Utf8 => Arc::new(filter_bytes_runs::<Utf8Type, _, _>(
             values.as_string::<i32>(),
             make_ranges,
             child_count,
         )),
-        DataType::LargeUtf8 => Arc::new(filter_list_bytes::<LargeUtf8Type, _, _>(
+        DataType::LargeUtf8 => Arc::new(filter_bytes_runs::<LargeUtf8Type, _, _>(
             values.as_string::<i64>(),
             make_ranges,
             child_count,
         )),
-        DataType::Binary => Arc::new(filter_list_bytes::<BinaryType, _, _>(
+        DataType::Binary => Arc::new(filter_bytes_runs::<BinaryType, _, _>(
             values.as_binary::<i32>(),
             make_ranges,
             child_count,
         )),
-        DataType::LargeBinary => Arc::new(filter_list_bytes::<LargeBinaryType, _, _>(
+        DataType::LargeBinary => Arc::new(filter_bytes_runs::<LargeBinaryType, _, _>(
             values.as_binary::<i64>(),
             make_ranges,
             child_count,
@@ -1382,10 +1417,12 @@ fn filter_list_child<'a>(
     })
 }
 
-/// Filters a primitive child of a list by streaming child-element ranges directly
-/// into a values buffer, mirroring [`filter_list_bytes`]. Avoids materializing a
-/// `Vec` of ranges and re-dispatching through [`filter_array`]; at ~50% selectivity
-/// the runs are short and that per-range/dispatch overhead dominates the actual copy.
+/// Filters a primitive child of a list from streamed child-element ranges.
+///
+/// Reuses the shared [`copy_runs`] / [`filter_validity`] kernels (same code the
+/// top-level [`filter_primitive`] runs), so there is no duplicated copy loop, no
+/// `Vec` of ranges, and no re-dispatch through [`filter_array`] — the streaming
+/// that keeps ~50%-selectivity children fast.
 fn filter_list_primitive<T, F, I>(
     child: &PrimitiveArray<T>,
     make_ranges: F,
@@ -1396,13 +1433,8 @@ where
     F: Fn() -> I,
     I: Iterator<Item = (usize, usize)>,
 {
-    let src = child.values();
-    let mut buffer: Vec<T::Native> = Vec::with_capacity(child_count);
-    for (start, end) in make_ranges() {
-        // Safe slice index (bounds-checked once per run); mirrors `extend_slices`.
-        buffer.extend_from_slice(&src[start..end]);
-    }
-    let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
+    let buffer = copy_runs(child.values(), make_ranges(), child_count);
+    let nulls = filter_validity(child.nulls(), make_ranges(), child_count);
     let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(buffer), nulls);
     // Preserve the concrete logical type (timestamps with tz, decimals, etc.).
     if child.data_type() == &T::DATA_TYPE {
@@ -1412,12 +1444,15 @@ where
     }
 }
 
-/// Filters a byte child of a list by streaming child-element ranges into
-/// [`FilterBytes`], avoiding an intermediate `Vec` of ranges. `make_ranges`
-/// produces a fresh iterator over the child ranges each call (one per pass:
-/// offsets, values, nulls).
-fn filter_list_bytes<T, F, I>(
-    child: &GenericByteArray<T>,
+/// Range-driven byte-array filter, shared by [`filter_bytes`] (its `Slices` /
+/// `SlicesIterator` strategies) and list-child byte filtering.
+///
+/// Streams the `[start, end)` element runs into [`FilterBytes`] — rebuilding
+/// offsets and copying values without an intermediate `Vec` of ranges.
+/// `make_ranges` yields a fresh iterator each call (one per pass: offsets,
+/// values, nulls).
+fn filter_bytes_runs<T, F, I>(
+    array: &GenericByteArray<T>,
     make_ranges: F,
     child_count: usize,
 ) -> GenericByteArray<T>
@@ -1426,7 +1461,7 @@ where
     F: Fn() -> I,
     I: Iterator<Item = (usize, usize)>,
 {
-    let mut filter = FilterBytes::new(child_count, child);
+    let mut filter = FilterBytes::new(child_count, array);
     filter.extend_offsets_slices(make_ranges(), child_count);
     filter.extend_slices(make_ranges());
 
@@ -1434,17 +1469,19 @@ where
     // each retained run emits source offsets (themselves monotonic) shifted by a
     // non-decreasing base.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
-    let nulls = filter_nulls_ranges(child.nulls(), make_ranges(), child_count);
+    let nulls = filter_validity(array.nulls(), make_ranges(), child_count);
     // SAFETY: `offsets` index into `dst_values` by construction, and each slot is a
-    // byte-for-byte copy from `child`, so UTF-8 validity (if any) is preserved.
+    // byte-for-byte copy from `array`, so UTF-8 validity (if any) is preserved.
     // Length invariant: `offsets.len() - 1 == child_count == nulls.len()`.
     unsafe { GenericByteArray::new_unchecked(offsets, filter.dst_values.into(), nulls) }
 }
 
-/// Builds the null buffer for a filtered child by copying the validity bits of
-/// the selected element ranges (mirrors [`filter_bits`] for the `Slices` case,
-/// but streamed from an iterator rather than a materialized predicate).
-fn filter_nulls_ranges(
+/// Builds a filtered [`NullBuffer`] by copying the validity bits of the selected
+/// `[start, end)` runs (via the shared [`append_validity_runs`] loop), returning
+/// `None` when the result has no nulls. Used by the list-child filters; the
+/// top-level null path goes through [`FilterPredicate::filter_nulls`] →
+/// [`filter_bits`], which shares the same run loop.
+fn filter_validity(
     nulls: Option<&NullBuffer>,
     ranges: impl Iterator<Item = (usize, usize)>,
     count: usize,
@@ -1458,9 +1495,7 @@ fn filter_nulls_ranges(
     let offset = inner.offset();
 
     let mut builder = BooleanBufferBuilder::new(count);
-    for (start, end) in ranges {
-        builder.append_packed_range(start + offset..end + offset, src);
-    }
+    append_validity_runs(&mut builder, ranges, offset, src);
     let buffer = builder.finish();
     let null_count = count - buffer.count_set_bits();
     if null_count == 0 {
