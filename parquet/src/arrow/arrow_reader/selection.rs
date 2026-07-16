@@ -15,20 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
-use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::page_index::offset_index::PageLocation;
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Policy for picking a strategy to materialise [`RowSelection`] during execution.
-///
-/// Note that this is a user-provided preference, and the actual strategy used
-/// may differ based on safety considerations (e.g. page skipping).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RowSelectionPolicy {
     /// Use a queue of [`RowSelector`] values
@@ -50,8 +47,8 @@ impl Default for RowSelectionPolicy {
 
 /// Fully resolved strategy for materializing [`RowSelection`] during execution.
 ///
-/// This is determined from a combination of user preference (via [`RowSelectionPolicy`])
-/// and safety considerations (e.g. page skipping).
+/// This is determined by [`RowSelectionPolicy`], including selector density for
+/// [`RowSelectionPolicy::Auto`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RowSelectionStrategy {
     /// Use a queue of [`RowSelector`] values
@@ -250,37 +247,32 @@ impl RowSelection {
         ranges
     }
 
-    /// Returns true if this selection would skip any data pages within the provided columns
-    fn selection_skips_any_page(
+    /// Returns the complete row ranges of the pages selected by [`Self::scan_ranges`].
+    pub(crate) fn row_ranges_for_selected_pages(
         &self,
-        projection: &ProjectionMask,
-        columns: &[OffsetIndexMetaData],
-    ) -> bool {
-        columns.iter().enumerate().any(|(leaf_idx, column)| {
-            if !projection.leaf_included(leaf_idx) {
-                return false;
+        page_locations: &[PageLocation],
+        total_rows: usize,
+    ) -> Vec<Range<usize>> {
+        let mut selected_pages = self.scan_ranges(page_locations).into_iter().peekable();
+        let mut row_ranges = Vec::new();
+
+        for (idx, page) in page_locations.iter().enumerate() {
+            let Some(selected_page) = selected_pages.peek() else {
+                break;
+            };
+            if selected_page.start != page.offset as u64 {
+                continue;
             }
+            selected_pages.next();
 
-            let locations = column.page_locations();
-            if locations.is_empty() {
-                return false;
-            }
-
-            let ranges = self.scan_ranges(locations);
-            !ranges.is_empty() && ranges.len() < locations.len()
-        })
-    }
-
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
-        &self,
-        projection: &ProjectionMask,
-        offset_index: Option<&[OffsetIndexMetaData]>,
-    ) -> bool {
-        match offset_index {
-            Some(columns) => self.selection_skips_any_page(projection, columns),
-            None => false,
+            let end = page_locations
+                .get(idx + 1)
+                .map(|next| next.first_row_index as usize)
+                .unwrap_or(total_rows);
+            row_ranges.push(page.first_row_index as usize..end);
         }
+
+        row_ranges
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -770,6 +762,8 @@ pub struct MaskCursor {
     mask: BooleanBuffer,
     /// Current absolute offset into the selection
     position: usize,
+    /// Row ranges whose backing pages are loaded for every projected column.
+    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
 }
 
 impl MaskCursor {
@@ -822,6 +816,54 @@ impl MaskCursor {
             selected_rows,
             mask_start,
         })
+    }
+
+    /// Returns the next mask chunk without crossing a row range that was not loaded.
+    pub(crate) fn next_chunk(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<MaskChunk>, ParquetError> {
+        if self.loaded_row_ranges.is_none() {
+            return Ok(self.next_mask_chunk(batch_size));
+        }
+
+        let start_position = self.position;
+        let mut cursor = start_position;
+        while cursor < self.mask.len() && !self.mask.value(cursor) {
+            cursor += 1;
+        }
+
+        if cursor == self.mask.len() {
+            self.position = cursor;
+            return Ok(None);
+        }
+
+        let loaded_range_end = self
+            .loaded_row_ranges
+            .as_ref()
+            .and_then(|ranges| ranges.end_containing(cursor))
+            .ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Internal Error: selected row {cursor} has no loaded page range"
+                ))
+            })?;
+
+        let mask_start = cursor;
+        let mut selected_rows = 0;
+        while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
+            if self.mask.value(cursor) {
+                selected_rows += 1;
+            }
+            cursor += 1;
+        }
+
+        self.position = cursor;
+        Ok(Some(MaskChunk {
+            initial_skip: mask_start - start_position,
+            chunk_rows: cursor - mask_start,
+            selected_rows,
+            mask_start,
+        }))
     }
 
     /// Materialise the boolean values for a mask-backed chunk
@@ -885,6 +927,39 @@ pub struct MaskChunk {
     pub mask_start: usize,
 }
 
+/// Row ranges whose backing pages are loaded for every projected column.
+#[derive(Clone, Debug)]
+pub(crate) struct LoadedRowRanges(Vec<Range<usize>>);
+
+impl LoadedRowRanges {
+    pub(crate) fn from_selection(selection: RowSelection) -> Self {
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut position = 0;
+        let ranges = selectors
+            .into_iter()
+            .filter_map(|selector| {
+                let start = position;
+                position += selector.row_count;
+                (!selector.skip).then_some(start..position)
+            })
+            .collect();
+        Self(ranges)
+    }
+
+    fn end_containing(&self, row: usize) -> Option<usize> {
+        let idx = self.0.partition_point(|range| range.end <= row);
+        self.0
+            .get(idx)
+            .filter(|range| range.start <= row)
+            .map(|range| range.end)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ranges(&self) -> &[Range<usize>] {
+        &self.0
+    }
+}
+
 /// Cursor for iterating a [`RowSelection`] during execution within a
 /// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
 ///
@@ -902,10 +977,14 @@ pub enum RowSelectionCursor {
 
 impl RowSelectionCursor {
     /// Create a [`MaskCursor`] cursor backed by a bitmask, from an existing set of selectors
-    pub(crate) fn new_mask_from_selectors(selectors: Vec<RowSelector>) -> Self {
+    pub(crate) fn new_mask_from_selectors(
+        selectors: Vec<RowSelector>,
+        loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
+    ) -> Self {
         Self::Mask(MaskCursor {
             mask: boolean_mask_from_selectors(&selectors),
             position: 0,
+            loaded_row_ranges,
         })
     }
 
@@ -1466,6 +1545,10 @@ mod tests {
 
         // assert_eq!(mask, vec![false, true, true, false, true, true, false]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
+        assert_eq!(
+            selection.row_ranges_for_selected_pages(&index, 70),
+            vec![10..20, 20..30, 40..50, 50..60]
+        );
 
         let selection = RowSelection::from(vec![
             // Skip first page
@@ -1535,6 +1618,24 @@ mod tests {
 
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
+    }
+
+    #[test]
+    fn test_loaded_mask_chunk_stops_at_trimmed_mask_end() {
+        let loaded = LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
+            std::iter::once(0..5),
+            10,
+        ));
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionCursor::new_mask_from_selectors(
+            vec![RowSelector::select(1)],
+            Some(loaded.into()),
+        ) else {
+            unreachable!()
+        };
+
+        let chunk = cursor.next_chunk(10).unwrap().unwrap();
+        assert_eq!(chunk.chunk_rows, 1);
+        assert!(cursor.is_empty());
     }
 
     #[test]

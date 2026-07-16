@@ -98,26 +98,44 @@ async fn test_row_filter_full_page_skip_is_handled_async() {
         })
     };
 
-    let predicate = make_predicate(filter_mask.clone());
+    for policy in [
+        RowSelectionPolicy::Auto { threshold: 32 },
+        RowSelectionPolicy::Mask,
+    ] {
+        let predicate = make_predicate(filter_mask.clone());
 
-    // The batch size is set to 12 to read all rows in one go after filtering
-    // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
-    let stream = ParquetRecordBatchStreamBuilder::new_with_options(
-        TestReader::new(data.clone()),
-        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
-    )
-    .await
-    .unwrap()
-    .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
-    .with_batch_size(12)
-    .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
-    .build()
-    .unwrap();
+        // A batch larger than the selection forces Mask to cross the skipped pages.
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .await
+        .unwrap()
+        .with_row_selection(RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(10),
+            RowSelector::select(1),
+        ]))
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_batch_size(12)
+        .with_row_selection_policy(policy)
+        .with_max_predicate_cache_size(0)
+        .build()
+        .unwrap();
 
-    let schema = stream.schema().clone();
-    let batches: Vec<_> = stream.try_collect().await.unwrap();
-    let result = concat_batches(&schema, &batches).unwrap();
-    assert_eq!(result.num_rows(), 2);
+        let schema = stream.schema().clone();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap(),
+            &Int64Array::from(vec![first_value, last_value])
+        );
+    }
 }
 
 #[tokio::test]
@@ -526,19 +544,16 @@ async fn test_predicate_pushdown_with_skipped_pages() {
     }
 }
 
-/// Regression test: when multiple predicates are used, the first predicate's
-/// override of the selection strategy (to Mask) must NOT carry forward to
-/// subsequent predicates. Each predicate must get a fresh Auto policy so the
-/// override can detect page skipping for that predicate's specific columns.
+/// Regression test: Auto resolution and loaded row ranges must be refreshed for
+/// each predicate's current selection and projection.
 ///
 /// Scenario:
 /// - Dense initial RowSelection (alternating select/skip) covers all pages → Auto resolves to Mask
 /// - Predicate 1 evaluates on column A, narrows selection to skip middle pages
 /// - Predicate 2's column B is fetched sparsely with the narrowed selection (missing middle pages)
-/// - Without the fix, the override for predicate 2 returns early (policy=Mask, not Auto),
-///   so Mask is used and tries to read missing pages → "Invalid offset" error
+/// - Predicate 2 remains safe with Mask because its loaded row ranges are recomputed for column B
 #[tokio::test]
-async fn test_multi_predicate_mask_policy_carryover() {
+async fn test_multi_predicate_auto_mask_with_sparse_pages() {
     // 300 rows, 1 row group, 100 rows per page (3 pages)
     let num_rows = 300usize;
     let rows_per_page = 100;
