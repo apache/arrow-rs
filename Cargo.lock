@@ -2395,7 +2395,6 @@ dependencies = [
  "criterion",
  "half",
  "indexmap",
- "num-traits",
  "rand 0.9.4",
  "simdutf8",
  "uuid",
