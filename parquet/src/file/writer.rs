@@ -22,6 +22,7 @@ use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
+use bytes::Bytes;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
@@ -708,14 +709,74 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     pub(crate) fn append_column_from_read<R: Read>(
         &mut self,
         read: R,
-        mut close: ColumnCloseResult,
+        close: ColumnCloseResult,
     ) -> Result<()> {
+        let (src_offset, src_length, write_offset) = self.begin_appended_column(&close)?;
+
+        let mut read = read.take(src_length as _);
+        let write_length = std::io::copy(&mut read, &mut self.buf)?;
+
+        if src_length as u64 != write_length {
+            return Err(general_err!(
+                "Failed to splice column data, expected {src_length} got {write_length}"
+            ));
+        }
+
+        self.finish_appended_column(close, src_offset, write_offset)
+    }
+
+    /// Splice an already-encoded column chunk into the row group from an
+    /// in-order sequence of byte buffers (typically its serialized pages).
+    ///
+    /// This is a lower-overhead alternative to [`Self::append_column`] /
+    /// [`Self::append_column_from_read`] for callers that already hold the
+    /// chunk as owned [`Bytes`]: each buffer is written straight to the output
+    /// with a single `write_all`, skipping the intermediate copy through
+    /// [`std::io::copy`]'s fixed-size buffer.
+    ///
+    /// `pages` must yield the chunk's compressed bytes in final file order
+    /// (the dictionary page, if any, first) and together total exactly the
+    /// compressed size recorded in `close`.
+    pub(crate) fn append_column_from_pages<I>(
+        &mut self,
+        pages: I,
+        close: ColumnCloseResult,
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = Result<Bytes>>,
+    {
+        let (src_offset, src_length, write_offset) = self.begin_appended_column(&close)?;
+
+        let mut write_length = 0u64;
+        for page in pages {
+            let page = page?;
+            self.buf.write_all(&page)?;
+            write_length += page.len() as u64;
+        }
+
+        if src_length as u64 != write_length {
+            return Err(general_err!(
+                "Failed to splice column data, expected {src_length} got {write_length}"
+            ));
+        }
+
+        self.finish_appended_column(close, src_offset, write_offset)
+    }
+
+    /// [`Self::append_column_from_read`] / [`Self::append_column_from_pages`]
+    /// preamble: validates the writer state and that `close` matches the next
+    /// expected column.
+    ///
+    /// Returns `(src_offset, src_length, write_offset)`: the chunk's start
+    /// offset and length in the source buffer, and the offset at which it will
+    /// land in the output file.
+    fn begin_appended_column(&mut self, close: &ColumnCloseResult) -> Result<(i64, i64, usize)> {
         self.assert_previous_writer_closed()?;
         let desc = self
             .next_column_desc()
             .ok_or_else(|| general_err!("exhausted columns in SerializedRowGroupWriter"))?;
 
-        let metadata = close.metadata;
+        let metadata = &close.metadata;
 
         if metadata.column_descr() != desc.as_ref() {
             return Err(general_err!(
@@ -725,20 +786,26 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             ));
         }
 
+        let src_offset = metadata
+            .dictionary_page_offset()
+            .unwrap_or_else(|| metadata.data_page_offset());
+        let src_length = metadata.compressed_size();
+        let write_offset = self.buf.bytes_written();
+        Ok((src_offset, src_length, write_offset))
+    }
+
+    /// [`Self::append_column_from_read`] / [`Self::append_column_from_pages`]
+    /// epilogue: rewrites the buffer-relative page offsets recorded in `close`
+    /// to their final positions in the output file and closes the column.
+    fn finish_appended_column(
+        &mut self,
+        mut close: ColumnCloseResult,
+        src_offset: i64,
+        write_offset: usize,
+    ) -> Result<()> {
+        let metadata = close.metadata;
         let src_dictionary_offset = metadata.dictionary_page_offset();
         let src_data_offset = metadata.data_page_offset();
-        let src_offset = src_dictionary_offset.unwrap_or(src_data_offset);
-        let src_length = metadata.compressed_size();
-
-        let write_offset = self.buf.bytes_written();
-        let mut read = read.take(src_length as _);
-        let write_length = std::io::copy(&mut read, &mut self.buf)?;
-
-        if src_length as u64 != write_length {
-            return Err(general_err!(
-                "Failed to splice column data, expected {read_length} got {write_length}"
-            ));
-        }
 
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
