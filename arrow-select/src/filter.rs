@@ -739,7 +739,6 @@ pub(crate) fn filter_null_mask(
     Some((null_count, nulls))
 }
 
-/// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 /// Appends the packed bits of the selected `[start, end)` runs of `src` (a bit
 /// buffer starting at `offset`) to `builder`. Shared by the range-based
 /// [`filter_bits`] strategies and [`filter_validity`].
@@ -755,6 +754,7 @@ fn append_validity_runs(
     }
 }
 
+/// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
@@ -809,11 +809,7 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 
 /// Copies the selected `[start, end)` runs of `values` into a fresh `Vec`.
 ///
-/// Shared by the range-based [`filter_native`] strategies and the list-child
-/// primitive filter, so the copy loop is written once. The range source is a
-/// transient iterator argument (never stored), so callers pass either a
-/// predicate-derived iterator or a streamed list-child iterator without any
-/// lifetime plumbing.
+/// Assumes `runs` `[start, end)` are within `values`.
 #[inline]
 fn copy_runs<T: ArrowNativeType>(
     values: &[T],
@@ -824,9 +820,7 @@ fn copy_runs<T: ArrowNativeType>(
     for (start, end) in runs {
         // SAFETY: runs are derived from a validated `FilterPredicate` (top-level
         // filters) or from list offsets (list children), so `[start, end)` is
-        // always within `values`. Matches the original `filter_native` codegen and
-        // avoids a per-run bounds check (measurable on the primitive hot path at
-        // ~50% selectivity, where runs are many and short).
+        // always within `values`.
         buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
     }
     buffer
@@ -1422,11 +1416,6 @@ fn filter_list_child<'a>(
 }
 
 /// Filters a primitive child of a list from streamed child-element ranges.
-///
-/// Reuses the shared [`copy_runs`] / [`filter_validity`] kernels (same code the
-/// top-level [`filter_primitive`] runs), so there is no duplicated copy loop, no
-/// `Vec` of ranges, and no re-dispatch through [`filter_array`] — the streaming
-/// that keeps ~50%-selectivity children fast.
 fn filter_list_primitive<T, F, I>(
     child: &PrimitiveArray<T>,
     make_ranges: F,
