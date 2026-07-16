@@ -841,6 +841,44 @@ impl ArrowReaderOptions {
     }
 }
 
+impl ParquetMetaDataReader {
+    /// Applies the metadata related settings from [`ArrowReaderOptions`],
+    /// such as the [`ParquetMetaDataOptions`], decryption properties, and
+    /// [`PageIndexPolicy`] to this reader.
+    ///
+    /// The page index policies are only applied if at least one of them is not
+    /// [`PageIndexPolicy::Skip`], so policies previously configured on this
+    /// reader (e.g. from a preload setting) are preserved when the options do
+    /// not request the page index.
+    ///
+    /// This encodes the canonical way to construct a `ParquetMetaDataReader`
+    /// inside `AsyncFileReader::get_metadata` (available with the `async`
+    /// feature), so implementations outside this crate do not need to
+    /// duplicate it.
+    pub fn with_arrow_reader_options(mut self, options: Option<&ArrowReaderOptions>) -> Self {
+        let Some(options) = options else { return self };
+
+        self = self.with_metadata_options(Some(options.metadata_options().clone()));
+
+        #[cfg(feature = "encryption")]
+        {
+            self = self.with_decryption_properties(
+                options.file_decryption_properties.as_ref().map(Arc::clone),
+            );
+        }
+
+        if options.column_index_policy() != PageIndexPolicy::Skip
+            || options.offset_index_policy() != PageIndexPolicy::Skip
+        {
+            self = self
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self
+    }
+}
+
 /// The metadata necessary to construct a [`ArrowReaderBuilder`]
 ///
 /// Note this structure is cheaply clone-able as it consists of several arcs.

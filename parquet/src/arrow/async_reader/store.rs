@@ -51,6 +51,10 @@ use tokio::runtime::Handle;
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
 /// # }
 /// ```
+#[deprecated(
+    since = "59.2.0",
+    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime."
+)]
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
@@ -62,6 +66,7 @@ pub struct ParquetObjectReader {
     runtime: Option<Handle>,
 }
 
+#[allow(deprecated)]
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -133,6 +138,10 @@ impl ParquetObjectReader {
     /// other issues. For more information see [here].
     ///
     /// [here]: https://www.influxdata.com/blog/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
+    #[deprecated(
+        since = "59.2.0",
+        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`"
+    )]
     pub fn with_runtime(self, handle: Handle) -> Self {
         Self {
             runtime: Some(handle),
@@ -168,6 +177,7 @@ impl ParquetObjectReader {
     }
 }
 
+#[allow(deprecated)]
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
@@ -184,6 +194,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
     }
 }
 
+#[allow(deprecated)]
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range).boxed())
@@ -247,6 +258,7 @@ impl AsyncFileReader for ParquetObjectReader {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use crate::arrow::async_reader::ArrowReaderOptions;
     use crate::file::metadata::PageIndexPolicy;

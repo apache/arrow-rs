@@ -420,32 +420,100 @@ async fn test_write_non_uniform_encryption() {
     .await;
 }
 
-#[cfg(feature = "object_store")]
-async fn get_encrypted_meta_store() -> (
-    object_store::ObjectMeta,
-    std::sync::Arc<dyn object_store::ObjectStore>,
-) {
-    use object_store::local::LocalFileSystem;
+/// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+/// example on the [`AsyncFileReader`] trait documentation
+///
+/// [`AsyncFileReader`]: parquet::arrow::async_reader::AsyncFileReader
+/// [`ObjectStore`]: object_store::ObjectStore
+mod object_store_reader {
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::{FutureExt, TryFutureExt};
     use object_store::path::Path;
-    use object_store::{ObjectStore, ObjectStoreExt};
-
+    use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+    use parquet::errors::{ParquetError, Result};
+    use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+    use std::ops::Range;
     use std::sync::Arc;
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let store = LocalFileSystem::new_with_prefix(test_data).unwrap();
 
-    let meta = store
-        .head(&Path::from("uniform_encryption.parquet.encrypted"))
-        .await
-        .unwrap();
+    fn to_parquet_err(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
 
-    (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    #[derive(Clone)]
+    pub struct ObjectStoreReader {
+        pub store: Arc<dyn ObjectStore>,
+        pub path: Path,
+    }
+
+    impl AsyncFileReader for ObjectStoreReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+            self.store
+                .get_range(&self.path, range)
+                .map_err(to_parquet_err)
+                .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+            async move {
+                self.store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+            async move {
+                let metadata = ParquetMetaDataReader::new()
+                    .with_arrow_reader_options(options)
+                    .load_via_suffix_and_finish(self)
+                    .await?;
+                Ok(Arc::new(metadata))
+            }
+            .boxed()
+        }
+    }
+
+    impl MetadataSuffixFetch for &mut ObjectStoreReader {
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+            let options = GetOptions {
+                range: Some(GetRange::Suffix(suffix as u64)),
+                ..Default::default()
+            };
+            async move {
+                let resp = self
+                    .store
+                    .get_opts(&self.path, options)
+                    .await
+                    .map_err(to_parquet_err)?;
+                resp.bytes().await.map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+    }
 }
 
 #[tokio::test]
-#[cfg(feature = "object_store")]
 async fn test_read_encrypted_file_from_object_store() {
-    use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-    let (meta, store) = get_encrypted_meta_store().await;
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store_reader::ObjectStoreReader;
+    use parquet::arrow::async_reader::AsyncFileReader;
+    use std::sync::Arc;
+
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(test_data).unwrap());
+    let path = Path::from("uniform_encryption.parquet.encrypted");
 
     let key_code: &[u8] = "0123456789012345".as_bytes();
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
@@ -453,7 +521,7 @@ async fn test_read_encrypted_file_from_object_store() {
         .unwrap();
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let mut reader = ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
+    let mut reader = ObjectStoreReader { store, path };
     let metadata = reader.get_metadata(Some(&options)).await.unwrap();
     let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
         .await

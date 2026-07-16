@@ -28,15 +28,19 @@ use tokio::io::AsyncWriteExt;
 
 /// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
 ///
+/// This type is deprecated: [`BufWriter`] implements [`AsyncWrite`] and can
+/// therefore be passed to [`AsyncArrowWriter`] directly via the blanket
+/// [`AsyncFileWriter`] implementation for [`AsyncWrite`] types:
+///
 /// ```
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use object_store::buffered::BufWriter;
 /// # use object_store::memory::InMemory;
 /// # use object_store::path::Path;
 /// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use std::sync::Arc;
 ///
 /// # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-/// # use parquet::arrow::async_writer::ParquetObjectWriter;
 /// # use parquet::arrow::AsyncArrowWriter;
 ///
 /// # #[tokio::main(flavor="current_thread")]
@@ -46,7 +50,7 @@ use tokio::io::AsyncWriteExt;
 ///     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
 ///     let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 ///
-///     let object_store_writer = ParquetObjectWriter::new(store.clone(), Path::from("test"));
+///     let object_store_writer = BufWriter::new(store.clone(), Path::from("test"));
 ///     let mut writer =
 ///         AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None).unwrap();
 ///     writer.write(&to_write).await.unwrap();
@@ -68,11 +72,19 @@ use tokio::io::AsyncWriteExt;
 ///     assert_eq!(to_write, read);
 /// # }
 /// ```
+///
+/// [`AsyncWrite`]: tokio::io::AsyncWrite
+/// [`AsyncArrowWriter`]: crate::arrow::async_writer::AsyncArrowWriter
+#[deprecated(
+    since = "59.2.0",
+    note = "Pass an `object_store::buffered::BufWriter` to `AsyncArrowWriter` directly instead; see `parquet/examples/object_store.rs`"
+)]
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
     w: BufWriter,
 }
 
+#[allow(deprecated)]
 impl ParquetObjectWriter {
     /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
     ///
@@ -92,6 +104,7 @@ impl ParquetObjectWriter {
     }
 }
 
+#[allow(deprecated)]
 impl AsyncFileWriter for ParquetObjectWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {
@@ -111,12 +124,14 @@ impl AsyncFileWriter for ParquetObjectWriter {
         })
     }
 }
+#[allow(deprecated)]
 impl From<BufWriter> for ParquetObjectWriter {
     fn from(w: BufWriter) -> Self {
         Self::from_buf_writer(w)
     }
 }
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use object_store::memory::InMemory;
