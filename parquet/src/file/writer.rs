@@ -22,6 +22,7 @@ use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
+#[cfg(feature = "arrow")]
 use bytes::Bytes;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -737,6 +738,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// `pages` must yield the chunk's compressed bytes in final file order
     /// (the dictionary page, if any, first) and together total exactly the
     /// compressed size recorded in `close`.
+    #[cfg(feature = "arrow")]
     pub(crate) fn append_column_from_pages<I>(
         &mut self,
         pages: I,
