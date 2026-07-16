@@ -118,7 +118,15 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv (if needed)
         # cargo-msrv binary may be cached by the cargo cache step in setup-builder, and cargo install will error if it is already installed
-        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv ; fi
+        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv --locked ; fi
+      - name: Downgrade workspace dependencies
+        # Necessary because tonic 0.14.6 requires rust 1.88 or newer. We do not commit a Cargo.lock,
+        # so `cargo msrv verify` resolves fresh and would otherwise pick these newer versions. The
+        # tonic crates must be downgraded in matched pairs so their inter-crate requirements stay
+        # satisfiable. See https://github.com/apache/arrow-rs/issues/10349
+        run: |
+          cargo update -p tonic -p tonic-prost --precise 0.14.5
+          cargo update -p tonic-build -p tonic-prost-build --precise 0.14.5
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies
