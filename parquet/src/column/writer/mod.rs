@@ -1649,12 +1649,16 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
     update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
 }
 
+fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
+    is_nan_with(descr.logical_type_ref(), val)
+}
+
 #[inline]
 #[allow(clippy::eq_op)]
-fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
+fn is_nan_with<T: ParquetValueType>(logical_type_ref: Option<&LogicalType>, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY if logical_type_ref == Some(&LogicalType::Float16) => {
             let val = val.as_bytes();
             let val = f16::from_le_bytes([val[0], val[1]]);
             val.is_nan()
@@ -1685,18 +1689,29 @@ fn update_stat<T: ParquetValueType, F>(
 }
 
 /// Evaluate `a > b` according to underlying logical type.
+#[inline]
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+    compare_greater_with(descr.logical_type_ref(), descr.converted_type(), a, b)
+}
+
+#[inline]
+fn compare_greater_with<T: ParquetValueType>(
+    logical_type_ref: Option<&LogicalType>,
+    converted_type: ConvertedType,
+    a: &T,
+    b: &T,
+) -> bool {
     match T::PHYSICAL_TYPE {
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer(IntType {
                 is_signed: false, ..
-            })) = descr.logical_type_ref()
+            })) = logical_type_ref
             {
                 // need to compare unsigned
                 return compare_greater_unsigned_int(a, b);
             }
 
-            match descr.converted_type() {
+            match converted_type {
                 ConvertedType::UINT_8
                 | ConvertedType::UINT_16
                 | ConvertedType::UINT_32
@@ -1707,13 +1722,13 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
             };
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal(_)) = descr.logical_type_ref() {
+            if let Some(LogicalType::Decimal(_)) = logical_type_ref {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
-            if let ConvertedType::DECIMAL = descr.converted_type() {
+            if let ConvertedType::DECIMAL = converted_type {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
-            if let Some(LogicalType::Float16) = descr.logical_type_ref() {
+            if let Some(LogicalType::Float16) = logical_type_ref {
                 return compare_greater_f16(a.as_bytes(), b.as_bytes());
             }
         }
