@@ -1880,12 +1880,20 @@ fn get_decimal_128_array_slice(
     array: &arrow_array::Decimal128Array,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
+    let mut arena = Vec::with_capacity(indices.len() * size);
+    let mut values = Vec::with_capacity(indices.len());
+
     for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(16 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = &as_be_bytes[(16 - size)..];
+        arena.extend_from_slice(resized_value);
+    }
+
+    let mut arena = Bytes::from(arena);
+    while arena.len() >= size {
+        let slice = arena.split_to(size);
+        values.push(FixedLenByteArray::from(ByteArray::from(slice)));
     }
     values
 }
