@@ -23,7 +23,7 @@ use crate::type_conversion::{
     PrimitiveFromVariant, TimestampFromVariant, variant_cast_with_options,
     variant_to_unscaled_decimal,
 };
-use crate::variant_array::ShreddedVariantFieldArray;
+use crate::variant_array::{ShreddedVariantFieldArray, binary_array_value};
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewBuilder,
@@ -37,7 +37,7 @@ use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use arrow_schema::{FieldRef, Fields, TimeUnit};
-use parquet_variant::{Variant, VariantPath};
+use parquet_variant::{Variant, VariantMetadata, VariantPath, VariantPathElement};
 use std::sync::Arc;
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -177,7 +177,11 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     if !path.is_empty() {
         builder = WithPath(VariantPathRowBuilder {
             builder: Box::new(builder),
+            metadata: metadata.clone(),
             path,
+            row_index: 0,
+            cached_metadata_identity: None,
+            resolved_path: None,
         })
     };
 
@@ -886,16 +890,69 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
 /// result to a nested builder.
 pub(crate) struct VariantPathRowBuilder<'a> {
     builder: Box<VariantToArrowRowBuilder<'a>>,
+    metadata: ArrayRef,
     path: VariantPath<'a>,
+    row_index: usize,
+    cached_metadata_identity: Option<(*const u8, usize)>,
+    resolved_path: Option<Vec<ResolvedVariantPathElement>>,
+}
+
+#[derive(Debug)]
+enum ResolvedVariantPathElement {
+    FieldId(u32),
+    FieldName(String),
+    Index(usize),
 }
 
 impl<'a> VariantPathRowBuilder<'a> {
     fn append_null(&mut self) -> Result<()> {
+        self.row_index += 1;
         self.builder.append_null()
     }
 
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.get_path(&self.path) {
+        let row_index = self.row_index;
+        self.row_index += 1;
+
+        let Some(metadata_bytes) = binary_array_value(self.metadata.as_ref(), row_index) else {
+            self.builder.append_null()?;
+            return Ok(false);
+        };
+        let metadata_identity = (metadata_bytes.as_ptr(), metadata_bytes.len());
+        if self.cached_metadata_identity != Some(metadata_identity) {
+            let metadata = VariantMetadata::try_new(metadata_bytes)?;
+            self.resolved_path = self
+                .path
+                .iter()
+                .map(|element| match element {
+                    VariantPathElement::Field { name } => {
+                        metadata.get_entry(name).map(|(field_id, _)| {
+                            if metadata.is_sorted() {
+                                ResolvedVariantPathElement::FieldId(field_id)
+                            } else {
+                                ResolvedVariantPathElement::FieldName(name.to_string())
+                            }
+                        })
+                    }
+                    VariantPathElement::Index { index } => {
+                        Some(ResolvedVariantPathElement::Index(*index))
+                    }
+                })
+                .collect();
+            self.cached_metadata_identity = Some(metadata_identity);
+        }
+
+        let value = self.resolved_path.as_ref().and_then(|path| {
+            path.iter().try_fold(value, |value, element| match element {
+                ResolvedVariantPathElement::FieldId(field_id) => {
+                    value.get_object_field_by_id(*field_id)
+                }
+                ResolvedVariantPathElement::FieldName(name) => value.get_object_field(name),
+                ResolvedVariantPathElement::Index(index) => value.get_list_element(*index),
+            })
+        });
+
+        if let Some(v) = value {
             self.builder.append_value(v)
         } else {
             self.builder.append_null()?;

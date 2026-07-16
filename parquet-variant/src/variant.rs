@@ -1505,6 +1505,19 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// If this is an object and the requested field id exists, retrieves the corresponding field
+    /// value. Otherwise, returns None.
+    ///
+    /// This is shorthand for [`Self::as_object`] followed by [`VariantObject::get_by_field_id`].
+    /// The field id must be resolved from this value's metadata dictionary, for example with
+    /// [`VariantMetadata::get_entry`].
+    pub fn get_object_field_by_id(&self, field_id: u32) -> Option<Self> {
+        match self {
+            Variant::Object(object) => object.get_by_field_id(field_id),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to a `List` if it is a [`VariantList`].
     ///
     /// Returns `Some(&VariantList)` for list variants,
