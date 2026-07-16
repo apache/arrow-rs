@@ -834,9 +834,12 @@ pub(crate) fn filter_native<T: ArrowNativeType>(
     assert!(values.len() >= predicate.filter.len());
 
     match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
-            copy_runs(values, SlicesIterator::new(&predicate.filter), predicate.count).into()
-        }
+        IterationStrategy::SlicesIterator => copy_runs(
+            values,
+            SlicesIterator::new(&predicate.filter),
+            predicate.count,
+        )
+        .into(),
         IterationStrategy::Slices(slices) => {
             copy_runs(values, slices.iter().copied(), predicate.count).into()
         }
