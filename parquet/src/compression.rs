@@ -554,7 +554,7 @@ mod zstd_codec {
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let offset = output_buf.len();
-            let len = zstd_safe::compress_bound(input_buf.len());
+            let len = zstd::zstd_safe::compress_bound(input_buf.len());
             output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
