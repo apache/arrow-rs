@@ -18,7 +18,8 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{BooleanArray, RecordBatch, RecordBatchReader};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
@@ -1381,13 +1382,17 @@ impl ParquetRecordBatchReader {
         if batch_size == 0 {
             return Ok(None);
         }
-        match self.read_plan.row_selection_cursor_mut() {
+        let filter_mask = match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
-                // Stream the record batch reader using contiguous segments of the selection
-                // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
-                while !mask_cursor.is_empty() {
-                    let Some(mask_chunk) = mask_cursor.next_chunk(batch_size)? else {
-                        return Ok(None);
+                let mut first_filter_mask: Option<BooleanBuffer> = None;
+                let mut combined_filter_mask: Option<BooleanBufferBuilder> = None;
+
+                // Each chunk stays within loaded pages, while the in-progress array and
+                // filter mask accumulate chunks until the logical batch is full.
+                while read_records < batch_size && !mask_cursor.is_empty() {
+                    let remaining = batch_size - read_records;
+                    let Some(mask_chunk) = mask_cursor.next_chunk(remaining)? else {
+                        break;
                     };
 
                     if mask_chunk.initial_skip > 0 {
@@ -1403,7 +1408,7 @@ impl ParquetRecordBatchReader {
 
                     if mask_chunk.chunk_rows == 0 {
                         if mask_cursor.is_empty() && mask_chunk.selected_rows == 0 {
-                            return Ok(None);
+                            break;
                         }
                         continue;
                     }
@@ -1424,33 +1429,33 @@ impl ParquetRecordBatchReader {
                             read
                         ));
                     }
-
-                    let array = self.array_reader.consume_batch()?;
-                    // The column reader exposes the projection as a struct array; convert this
-                    // into a record batch before applying the boolean filter mask.
-                    let struct_array = array.as_struct_opt().ok_or_else(|| {
-                        ArrowError::ParquetError(
-                            "Struct array reader should return struct array".to_string(),
-                        )
-                    })?;
-
-                    let filtered_batch =
-                        filter_record_batch(&RecordBatch::from(struct_array), &mask)?;
-
-                    if filtered_batch.num_rows() != mask_chunk.selected_rows {
-                        return Err(general_err!(
-                            "filtered rows mismatch selection - expected {}, got {}",
-                            mask_chunk.selected_rows,
-                            filtered_batch.num_rows()
-                        ));
+                    match combined_filter_mask.as_mut() {
+                        Some(combined) => combined.append_buffer(mask.values()),
+                        None => match first_filter_mask.take() {
+                            Some(first) => {
+                                let mut combined =
+                                    BooleanBufferBuilder::new(first.len() + mask.len());
+                                combined.append_buffer(&first);
+                                combined.append_buffer(mask.values());
+                                combined_filter_mask = Some(combined);
+                            }
+                            None => first_filter_mask = Some(mask.values().clone()),
+                        },
                     }
-
-                    if filtered_batch.num_rows() == 0 {
-                        continue;
-                    }
-
-                    return Ok(Some(filtered_batch));
+                    read_records += mask_chunk.selected_rows;
                 }
+
+                if read_records == 0 {
+                    return Ok(None);
+                }
+
+                let filter_mask = match combined_filter_mask {
+                    Some(combined) => combined.build(),
+                    None => first_filter_mask.ok_or_else(|| {
+                        general_err!("Internal Error: decoded Mask batch has no filter values")
+                    })?,
+                };
+                Some(BooleanArray::from(filter_mask))
             }
             RowSelectionCursor::Selectors(selectors_cursor) => {
                 while read_records < batch_size && !selectors_cursor.is_empty() {
@@ -1490,9 +1495,11 @@ impl ParquetRecordBatchReader {
                         rec => read_records += rec,
                     };
                 }
+                None
             }
             RowSelectionCursor::All => {
                 self.array_reader.read_records(batch_size)?;
+                None
             }
         };
 
@@ -1501,8 +1508,24 @@ impl ParquetRecordBatchReader {
             ArrowError::ParquetError("Struct array reader should return struct array".to_string())
         })?;
 
-        Ok(if struct_array.len() > 0 {
-            Some(RecordBatch::from(struct_array))
+        let batch = RecordBatch::from(struct_array);
+        let batch = match filter_mask {
+            Some(mask) => {
+                let filtered_batch = filter_record_batch(&batch, &mask)?;
+                if filtered_batch.num_rows() != read_records {
+                    return Err(general_err!(
+                        "filtered rows mismatch selection - expected {}, got {}",
+                        read_records,
+                        filtered_batch.num_rows()
+                    ));
+                }
+                filtered_batch
+            }
+            None => batch,
+        };
+
+        Ok(if batch.num_rows() > 0 {
+            Some(batch)
         } else {
             None
         })
