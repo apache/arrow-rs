@@ -3955,9 +3955,7 @@ pub(crate) mod tests {
 
         let schema_without_metadata = Arc::new(Schema::new(vec![field.clone()]));
 
-        let metadata = [("key".to_string(), "value".to_string())]
-            .into_iter()
-            .collect();
+        let metadata = arrow_schema::Metadata::from([("key".to_string(), "value".to_string())]);
 
         let schema_with_metadata = Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 

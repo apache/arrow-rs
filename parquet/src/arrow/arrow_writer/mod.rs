@@ -4774,11 +4774,7 @@ mod tests {
     #[test]
     fn test_arrow_writer_metadata() {
         let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
-        let file_schema = batch_schema.clone().with_metadata(
-            vec![("foo".to_string(), "bar".to_string())]
-                .into_iter()
-                .collect(),
-        );
+        let file_schema = batch_schema.clone().with_metadata([("foo", "bar")]);
 
         let batch = RecordBatch::try_new(
             Arc::new(batch_schema),

@@ -553,7 +553,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use arrow_schema::{DataType, Field, Metadata, Schema, SchemaRef, TimeUnit};
     use futures::{StreamExt, TryStreamExt};
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -1687,7 +1687,7 @@ mod tests {
         let expected_schema = get_alltypes_schema()
             .as_ref()
             .clone()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
 
         // Build reader without providing reader schema - should use writer schema from file
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1714,7 +1714,7 @@ mod tests {
         let schema = get_alltypes_schema()
             .project(&[0, 1, 7])
             .unwrap()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
         let reader_schema = AvroSchema::try_from(&schema).unwrap();
         let expected_schema = schema.clone();
 
@@ -1747,7 +1747,7 @@ mod tests {
         let expected_schema = get_nested_records_schema()
             .as_ref()
             .clone()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .try_build()

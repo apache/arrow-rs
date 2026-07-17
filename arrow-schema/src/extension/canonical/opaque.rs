@@ -291,25 +291,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
-        let field = Field::new("", DataType::Null, false).with_metadata(
-            [(
-                EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                r#"{ "type_name": "type", "vendor_name": "vendor" }"#.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Null, false).with_metadata([(
+            EXTENSION_TYPE_METADATA_KEY,
+            r#"{ "type_name": "type", "vendor_name": "vendor" }"#,
+        )]);
         field.extension_type::<Opaque>();
     }
 
     #[test]
     #[should_panic(expected = "Opaque extension types requires metadata")]
     fn missing_metadata() {
-        let field = Field::new("", DataType::Null, false).with_metadata(
-            [(EXTENSION_TYPE_NAME_KEY.to_owned(), Opaque::NAME.to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        let field = Field::new("", DataType::Null, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, Opaque::NAME)]);
         field.extension_type::<Opaque>();
     }
 
@@ -318,17 +311,13 @@ mod tests {
         expected = "Opaque metadata deserialization failed: missing field `vendor_name`"
     )]
     fn invalid_metadata() {
-        let field = Field::new("", DataType::Null, false).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), Opaque::NAME.to_owned()),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    r#"{ "type_name": "no-vendor" }"#.to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let field = Field::new("", DataType::Null, false).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, Opaque::NAME),
+            (
+                EXTENSION_TYPE_METADATA_KEY,
+                r#"{ "type_name": "no-vendor" }"#,
+            ),
+        ]);
         field.extension_type::<Opaque>();
     }
 }
