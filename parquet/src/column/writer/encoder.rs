@@ -439,7 +439,7 @@ where
     Some((min, max))
 }
 
-#[inline]
+#[inline(always)]
 fn replace_zero<T: ParquetValueType>(
     val: &T,
     logical_type_ref: Option<&LogicalType>,

@@ -1653,7 +1653,7 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
     is_nan_with(descr.logical_type_ref(), val)
 }
 
-#[inline]
+#[inline(always)]
 #[allow(clippy::eq_op)]
 fn is_nan_with<T: ParquetValueType>(logical_type_ref: Option<&LogicalType>, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
@@ -1694,7 +1694,7 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
     compare_greater_with(descr.logical_type_ref(), descr.converted_type(), a, b)
 }
 
-#[inline]
+#[inline(always)]
 fn compare_greater_with<T: ParquetValueType>(
     logical_type_ref: Option<&LogicalType>,
     converted_type: ConvertedType,
