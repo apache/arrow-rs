@@ -29,13 +29,13 @@ pub use base64::prelude::*;
 
 /// Base64 encode each element of `array` with the provided [`Engine`]
 ///
-/// Returns an error if the `Engine` emits output that is not valid UTF-8. A
-/// correct `Engine` never does, but it is a safe trait so a misbehaving impl
-/// could; validating keeps the returned [`GenericStringArray`] sound (#10284).
+/// Panics if the `Engine` emits output that is not valid UTF-8. A correct
+/// `Engine` never does, but it is a safe trait so a misbehaving impl could;
+/// validating keeps the returned [`GenericStringArray`] sound (#10284).
 pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
     engine: &E,
     array: &GenericBinaryArray<O>,
-) -> Result<GenericStringArray<O>, ArrowError> {
+) -> GenericStringArray<O> {
     let lengths = array.offsets().windows(2).map(|w| {
         let len = w[1].as_usize() - w[0].as_usize();
         encoded_len(len, engine.config().encode_padding()).unwrap()
@@ -55,6 +55,7 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
 
     // `try_new` validates UTF-8 instead of trusting the (safe-trait) Engine.
     GenericStringArray::try_new(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
+        .expect("Engine produced invalid UTF-8")
 }
 
 /// Base64 decode each element of `array` with the provided [`Engine`]
@@ -91,7 +92,7 @@ mod tests {
     use rand::{Rng, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
-        let encoded = b64_encode(e, a).unwrap();
+        let encoded = b64_encode(e, a);
         encoded.to_data().validate_full().unwrap();
 
         let to_decode = encoded.into();
@@ -156,8 +157,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "produced invalid UTF-8")]
     fn test_b64_encode_rejects_invalid_utf8() {
         let data: BinaryArray = vec![Some(b"hello".to_vec())].into_iter().collect();
-        assert!(b64_encode(&EvilEngine, &data).is_err());
+        let _ = b64_encode(&EvilEngine, &data);
     }
 }

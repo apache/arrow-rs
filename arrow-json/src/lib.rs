@@ -48,7 +48,7 @@
 //! let input = BinaryArray::from(vec![b"\xDE\x00\xFF".as_ref()]);
 //!
 //! // Base64 encode it to a string
-//! let encoded: StringArray = b64_encode(&BASE64_STANDARD, &input).unwrap();
+//! let encoded: StringArray = b64_encode(&BASE64_STANDARD, &input);
 //!
 //! // Write the StringArray to JSON
 //! let batch = RecordBatch::try_from_iter([("col", Arc::new(encoded) as _)]).unwrap();
