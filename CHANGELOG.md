@@ -19,6 +19,14 @@
 
 # Changelog
 
+## [58.4.0](https://github.com/apache/arrow-rs/tree/58.4.0) (2026-07-17)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/58.3.0...58.4.0)
+
+**Merged pull requests:**
+
+- \[58\_maintenance\] \[parquet\] Allow more encryption algorithms (\#9203) [\#10351](https://github.com/apache/arrow-rs/pull/10351) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mbutrovich](https://github.com/mbutrovich))
+
 ## [58.3.0](https://github.com/apache/arrow-rs/tree/58.3.0) (2026-05-07)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/58.2.0...58.3.0)
