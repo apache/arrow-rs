@@ -351,6 +351,85 @@ impl Format {
         self
     }
 
+    /// Infer format settings from the CSV records in `reader`
+    ///
+    /// This currently infers whether the first record is a header. Up to
+    /// `max_records` records after the first record are inspected; if `None`, all
+    /// records are read. Detection is conservative and returns no header when the
+    /// sampled records do not provide type evidence.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::reader::Format;
+    /// use std::io::Cursor;
+    ///
+    /// let csv = "name,count\nalice,1\nbob,2\n";
+    /// let format = Format::default().infer_format(Cursor::new(csv), Some(10))?;
+    /// let (schema, records_read) = format.infer_schema(Cursor::new(csv), None)?;
+    ///
+    /// assert_eq!(schema.field(0).name(), "name");
+    /// assert_eq!(records_read, 2);
+    /// # Ok::<_, arrow_schema::ArrowError>(())
+    /// ```
+    pub fn infer_format<R: Read>(
+        mut self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<Self, ArrowError> {
+        self.header = self.infer_header(reader, max_records)?;
+        Ok(self)
+    }
+
+    /// Infer whether the first CSV record is a header
+    ///
+    /// Inspects up to `max_records` records after the first record. Returns `true`
+    /// when a value in the first record is text while the remaining values in the
+    /// same column have a consistent non-text type.
+    fn infer_header<R: Read>(
+        &self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<bool, ArrowError> {
+        let mut format = self.clone();
+        format.header = false;
+        let mut csv_reader = format.build_reader(reader);
+
+        let mut first_record = StringRecord::new();
+        if !csv_reader
+            .read_record(&mut first_record)
+            .map_err(map_csv_error)?
+        {
+            return Ok(false);
+        }
+
+        let mut first_types = vec![InferredDataType::default(); first_record.len()];
+        for (value, inferred) in first_record.iter().zip(&mut first_types) {
+            if !self.null_regex.is_null(value) {
+                inferred.update(value);
+            }
+        }
+
+        let mut column_types = vec![InferredDataType::default(); first_record.len()];
+        let mut record = StringRecord::new();
+        let mut records_count = 0;
+        let max_records = max_records.unwrap_or(usize::MAX);
+        while records_count < max_records
+            && csv_reader.read_record(&mut record).map_err(map_csv_error)?
+        {
+            records_count += 1;
+            for (value, inferred) in record.iter().zip(&mut column_types) {
+                if !self.null_regex.is_null(value) {
+                    inferred.update(value);
+                }
+            }
+        }
+
+        Ok(first_types.iter().zip(&column_types).any(|(first, rest)| {
+            first.get() == DataType::Utf8 && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
+        }))
+    }
+
     /// Infer schema of CSV records from the provided `reader`
     ///
     /// If `max_records` is `None`, all records will be read, otherwise up to `max_records`
@@ -1503,6 +1582,83 @@ mod tests {
         let batch = csv.next().unwrap().unwrap();
         assert_eq!(74, batch.num_rows());
         assert_eq!(3, batch.num_columns());
+    }
+
+    #[test]
+    fn test_infer_format_with_typed_columns() {
+        let csv = "name,count,active\nalice,1,true\nbob,2,false\n";
+
+        let format = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(schema.field(2).name(), "active");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_without_header() {
+        let csv = "1,true\n2,false\n";
+
+        let format = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "column_1");
+        assert_eq!(schema.field(1).name(), "column_2");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_returns_no_header_when_ambiguous() {
+        for csv in ["name,count\n", "alice,london\nbob,paris\n"] {
+            let format = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+        }
+
+        let format = Format::default()
+            .infer_format(Cursor::new(""), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(""), None).unwrap();
+        assert!(schema.fields().is_empty());
+        assert_eq!(records_read, 0);
+    }
+
+    #[test]
+    fn test_infer_format_honors_format_options() {
+        let csv = "name;count\nalice;1\nbob;2\n";
+        let format = Format::default()
+            .with_delimiter(b';')
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_respects_max_records() {
+        let csv = "name,count\nalice,1\nbob,unknown\n";
+        let infer_first_name = |max_records| {
+            let format = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            schema.field(0).name().to_string()
+        };
+
+        assert_eq!(infer_first_name(Some(1)), "name");
+        assert_eq!(infer_first_name(None), "column_1");
+        assert_eq!(infer_first_name(Some(0)), "column_1");
     }
 
     #[test]
