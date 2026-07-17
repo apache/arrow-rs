@@ -32,12 +32,9 @@
 //! Objects are generated structurally rather than as random bytes: random bytes are rejected by
 //! header and offset validation long before reaching the object logic, so they never exercise it.
 
-use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantMetadata};
 use proptest::prelude::*;
 use std::collections::HashSet;
-
-/// The empty metadata dictionary.
-const EMPTY_METADATA: &[u8] = &[1, 0, 0];
 
 /// Field names covering the shapes that distinguish correct validation from incorrect: an empty
 /// name (encoded as two equal dictionary offsets), and multi-byte characters (whose interior bytes
@@ -161,13 +158,13 @@ proptest! {
     ) {
         let mut value = vec![type_id << 2];
         value.extend_from_slice(&payload);
-        let _ = Variant::try_new(EMPTY_METADATA, &value).as_ref().map(traverse);
+        let _ = Variant::try_new(EMPTY_VARIANT_METADATA_BYTES, &value).as_ref().map(traverse);
     }
 
     /// Arbitrary header byte and payload, covering short strings, objects and lists.
     #[test]
     fn arbitrary_value_never_panics(value in prop::collection::vec(any::<u8>(), 1..32)) {
-        let _ = Variant::try_new(EMPTY_METADATA, &value).as_ref().map(traverse);
+        let _ = Variant::try_new(EMPTY_VARIANT_METADATA_BYTES, &value).as_ref().map(traverse);
     }
 
     /// Arbitrary metadata paired with arbitrary value, as both arrive from a file.
