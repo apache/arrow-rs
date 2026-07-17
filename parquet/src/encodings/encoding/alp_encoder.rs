@@ -447,21 +447,157 @@ fn encode_page<F: AlpFloat>(
     Ok(page)
 }
 
+/// A page encoded incrementally, one vector at a time.
+///
+/// Once the column chunk's preset is known (after the first page), later pages do
+/// not need all their values at once: each vector is encoded and appended to
+/// `body` as soon as its [`VECTOR_SIZE`] values arrive, and the raw floats are
+/// dropped. Only a sub-vector remainder is held in `carry` between `put`s. The
+/// header and offset array - which depend on the final vector count - are
+/// prepended in [`StreamingPage::finish`].
+///
+/// The bytes produced are identical to encoding the same values in one pass with
+/// [`encode_page`]: same vectors, same per-vector parameters, same contiguous
+/// offsets. What changes is peak memory - the whole page of raw floats is never
+/// resident - and that the encode work is spread across `put`s.
+struct StreamingPage<F: AlpFloat> {
+    /// Encoded vectors, concatenated; becomes the page body after the offsets.
+    body: Vec<u8>,
+    /// Body-relative start offset of each completed vector.
+    vector_offsets: Vec<u32>,
+    /// Values not yet forming a complete vector, carried across `put`s.
+    carry: Vec<F>,
+    /// Total values appended to this page so far.
+    count: usize,
+}
+
+impl<F: AlpFloat> StreamingPage<F> {
+    fn new() -> Self {
+        Self {
+            body: Vec::new(),
+            vector_offsets: Vec::new(),
+            carry: Vec::new(),
+            count: 0,
+        }
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        self.body.capacity()
+            + self.vector_offsets.capacity() * std::mem::size_of::<u32>()
+            + self.carry.capacity() * std::mem::size_of::<F>()
+    }
+
+    /// Encode one complete vector and append it to `body`.
+    fn push_vector(
+        &mut self,
+        vector: &[F],
+        preset: &[ExponentAndFactor],
+        scratch: &mut Scratch<F>,
+    ) -> Result<()> {
+        let body_start = u32::try_from(self.body.len())
+            .map_err(|_| general_err!("Invalid ALP page: body exceeds u32 offset range"))?;
+        self.vector_offsets.push(body_start);
+        let params = select_params(vector, preset, &mut scratch.sample);
+        encode_vector(vector, params, scratch, &mut self.body)
+    }
+
+    /// Buffer `values`, encoding and dropping every complete vector they form.
+    fn put(
+        &mut self,
+        mut values: &[F],
+        preset: &[ExponentAndFactor],
+        scratch: &mut Scratch<F>,
+    ) -> Result<()> {
+        self.count += values.len();
+
+        // Finish a vector left partially filled by a previous `put`.
+        if !self.carry.is_empty() {
+            let need = VECTOR_SIZE - self.carry.len();
+            if values.len() < need {
+                self.carry.extend_from_slice(values);
+                return Ok(());
+            }
+            let (head, tail) = values.split_at(need);
+            self.carry.extend_from_slice(head);
+            // Move the carry out so the vector slice does not alias `self`; the
+            // allocation is handed back, cleared, for the next partial to reuse.
+            let mut vector = std::mem::take(&mut self.carry);
+            self.push_vector(&vector, preset, scratch)?;
+            vector.clear();
+            self.carry = vector;
+            values = tail;
+        }
+
+        // Encode whole vectors straight from the input, no copy.
+        let mut chunks = values.chunks_exact(VECTOR_SIZE);
+        for vector in chunks.by_ref() {
+            self.push_vector(vector, preset, scratch)?;
+        }
+        self.carry.extend_from_slice(chunks.remainder());
+        Ok(())
+    }
+
+    /// Encode the trailing partial vector, then assemble `[header][offsets][body]`
+    /// and reset for the next page.
+    fn finish(
+        &mut self,
+        preset: &[ExponentAndFactor],
+        scratch: &mut Scratch<F>,
+    ) -> Result<Vec<u8>> {
+        if !self.carry.is_empty() {
+            let mut vector = std::mem::take(&mut self.carry);
+            self.push_vector(&vector, preset, scratch)?;
+            vector.clear();
+            self.carry = vector;
+        }
+
+        let num_vectors = self.vector_offsets.len();
+        let offsets_section = num_vectors * std::mem::size_of::<u32>();
+        let header = AlpHeader {
+            compression_mode: ALP_COMPRESSION_MODE,
+            integer_encoding: ALP_INTEGER_ENCODING_FOR_BIT_PACK,
+            vector_size: VECTOR_SIZE,
+            num_elements: self.count,
+        };
+
+        let mut page = Vec::with_capacity(ALP_HEADER_SIZE + offsets_section + self.body.len());
+        page.extend_from_slice(&header.serialize()?);
+        for &body_start in &self.vector_offsets {
+            // Offsets are measured from the start of the offset array: the array's
+            // own size plus the vector's position within the body.
+            let page_offset = u32::try_from(offsets_section + body_start as usize)
+                .map_err(|_| general_err!("Invalid ALP page: body exceeds u32 offset range"))?;
+            page.extend_from_slice(&page_offset.to_le_bytes());
+        }
+        page.extend_from_slice(&self.body);
+
+        self.body.clear();
+        self.vector_offsets.clear();
+        self.count = 0;
+        Ok(page)
+    }
+}
+
 /// Encoder for ALP-encoded floating-point pages (`f32`/`f64`).
 ///
-/// Values are buffered and encoded on flush, because ALP chooses its decimal
-/// parameters per vector by sampling the values, and the candidate set for the
-/// column chunk is derived from the first page's data.
+/// The first page is buffered whole: ALP samples it to choose the column chunk's
+/// candidate `(exponent, factor)` set, which needs all of the page's data. Once
+/// that preset is fixed, later pages are encoded incrementally, a vector at a
+/// time, without ever holding the whole page of raw floats (see [`StreamingPage`]).
 pub struct AlpEncoder<T: DataType>
 where
     T::T: AlpFloat,
 {
-    /// Values buffered for the page currently being built.
+    /// Values buffered for the first page, until the preset is built. Empty once
+    /// streaming begins.
     values: Vec<T::T>,
     /// Candidate `(exponent, factor)` pairs for this column chunk, sampled once
-    /// from the first page and reused for the rest of the chunk.
+    /// from the first page and reused for the rest of the chunk. `None` until the
+    /// first page is flushed; its presence is what switches `put` to streaming.
     preset: Option<Vec<ExponentAndFactor>>,
     scratch: Scratch<T::T>,
+    /// The page built incrementally, used for every page after the first.
+    streaming: StreamingPage<T::T>,
 }
 
 impl<T: DataType> AlpEncoder<T>
@@ -473,6 +609,17 @@ where
             values: Vec::new(),
             preset: None,
             scratch: Scratch::new(),
+            streaming: StreamingPage::new(),
+        }
+    }
+
+    /// Values buffered for the current page: the first page lives in `values`,
+    /// later pages in the streaming buffer. Used only for size estimates.
+    fn current_page_len(&self) -> usize {
+        if self.preset.is_none() {
+            self.values.len()
+        } else {
+            self.streaming.count
         }
     }
 }
@@ -482,7 +629,18 @@ where
     T::T: AlpFloat,
 {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        self.values.extend_from_slice(values);
+        let Self {
+            values: buffer,
+            preset,
+            scratch,
+            streaming,
+        } = self;
+        match preset.as_deref() {
+            // First page: buffer until the preset can be built on flush.
+            None => buffer.extend_from_slice(values),
+            // Later pages: encode incrementally against the fixed preset.
+            Some(preset) => streaming.put(values, preset, scratch)?,
+        }
         Ok(())
     }
 
@@ -493,15 +651,17 @@ where
     fn estimated_data_encoded_size(&self) -> usize {
         // Encoded size is not known until the parameters are chosen, so bound it
         // by the unencoded size: a vector never encodes larger than storing every
-        // value as an exception.
-        let num_vectors = self.values.len().div_ceil(VECTOR_SIZE);
+        // value as an exception. Bounding by value count (not the running encoded
+        // size) keeps the writer's page-boundary decisions identical whether the
+        // page is buffered or streamed.
+        let len = self.current_page_len();
+        let num_vectors = len.div_ceil(VECTOR_SIZE);
         ALP_HEADER_SIZE
             + num_vectors
                 * (std::mem::size_of::<u32>()
                     + AlpInfo::STORED_SIZE
                     + ForInfo::<<T::T as AlpFloat>::Exact>::stored_size())
-            + self.values.len()
-                * (<T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
+            + len * (<T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
     }
 
     fn estimated_memory_size(&self) -> usize {
@@ -510,13 +670,29 @@ where
                 p.capacity() * std::mem::size_of::<ExponentAndFactor>()
             })
             + self.scratch.estimated_memory_size()
+            + self.streaming.estimated_memory_size()
     }
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
-        let values = &self.values;
-        let preset = self.preset.get_or_insert_with(|| build_preset(values));
-        let page = encode_page(&self.values, preset, &mut self.scratch)?;
-        self.values.clear();
+        let Self {
+            values,
+            preset,
+            scratch,
+            streaming,
+        } = self;
+
+        // The first flush builds the preset from the whole buffered page and
+        // encodes it in one pass; that also arms streaming for later pages.
+        let page = match preset {
+            None => {
+                let built = build_preset(values);
+                let page = encode_page(values, &built, scratch)?;
+                values.clear();
+                *preset = Some(built);
+                page
+            }
+            Some(preset) => streaming.finish(preset.as_slice(), scratch)?,
+        };
         Ok(page.into())
     }
 }
@@ -710,6 +886,65 @@ mod tests {
 
         assert_bits_eq(&roundtrip::<DoubleType>(&values), &values);
     }
+
+    /// Streaming pages (every page after the first) must be byte-for-byte
+    /// identical to encoding the same values in one pass with the same preset.
+    /// This is the guarantee that makes the streaming path a pure refactor.
+    #[test]
+    fn test_streaming_matches_buffered() {
+        let page1: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01 + 1.23).collect();
+        let page2: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.03 - 7.0).collect();
+
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        encoder.put(&page1).unwrap();
+        let _ = encoder.flush_buffer().unwrap(); // builds and caches the preset
+
+        // Feed page 2 in irregular chunks that cross vector boundaries.
+        for chunk in page2.chunks(997) {
+            encoder.put(chunk).unwrap();
+        }
+        let streamed = encoder.flush_buffer().unwrap();
+
+        // The encoder built its preset from page 1; reproduce it to encode page 2
+        // in a single pass as the reference.
+        let preset = build_preset(&page1);
+        let mut scratch = Scratch::<f64>::new();
+        let reference = encode_page(&page2, &preset, &mut scratch).unwrap();
+
+        assert_eq!(
+            streamed.as_ref(),
+            reference.as_slice(),
+            "streamed page differs from single-pass encoding"
+        );
+    }
+
+    /// The carry logic must reassemble vectors correctly no matter how `put` calls
+    /// land relative to vector boundaries: sizes below, at, and above a vector.
+    #[test]
+    fn test_streaming_irregular_puts() {
+        let page1: Vec<f64> = (0..2048).map(|i| (i as f64) * 0.01).collect();
+        let page2: Vec<f64> = (0..5000).map(|i| (i as f64) * 0.01 + 100.0).collect();
+
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        encoder.put(&page1).unwrap();
+        let _ = encoder.flush_buffer().unwrap();
+
+        let sizes = [1usize, 1023, 2, 1024, 1025, 7, 900, 118];
+        let (mut offset, mut i) = (0usize, 0usize);
+        while offset < page2.len() {
+            let n = sizes[i % sizes.len()].min(page2.len() - offset);
+            encoder.put(&page2[offset..offset + n]).unwrap();
+            offset += n;
+            i += 1;
+        }
+        let page = encoder.flush_buffer().unwrap();
+
+        let mut decoder = AlpDecoder::<DoubleType>::new();
+        decoder.set_data(page, page2.len()).unwrap();
+        let mut out = vec![0.0f64; page2.len()];
+        assert_eq!(decoder.get(&mut out).unwrap(), page2.len());
+        assert_bits_eq(&out, &page2);
+    }
 }
 
 #[cfg(test)]
@@ -778,5 +1013,129 @@ mod conformance {
             pages_checked += 1;
         }
         assert!(pages_checked > 0, "no ALP data page found in the test file");
+    }
+}
+
+/// Throughput microbench (not a correctness test). Reports cycles/value for the
+/// three hot paths, using `rdtsc`. The absolute numbers are TSC reference cycles
+/// on this machine, not portable core cycles - but the *ratios* (streaming vs
+/// buffered, encode vs decode) are robust, since the TSC skew is identical
+/// across measurements.
+///
+/// Run with:
+/// ```text
+/// cargo test -p parquet --release --lib alp_encoder::throughput -- --ignored --nocapture
+/// ```
+#[cfg(all(test, target_arch = "x86_64"))]
+mod throughput {
+    use super::*;
+    use crate::data_type::{DoubleType, FloatType};
+    use crate::encodings::decoding::Decoder;
+    use crate::encodings::decoding::alp_decoder::AlpDecoder;
+    use core::arch::x86_64::{_mm_lfence, _rdtsc};
+    use std::hint::black_box;
+
+    const N: usize = 1 << 17; // ~one rowgroup
+    const PUT_CHUNK: usize = 2048; // a plausible writer sub-batch
+    const ITERS: u64 = 500;
+
+    /// Minimum single-run TSC delta over `ITERS`, after warmup. Min rejects
+    /// scheduling/interrupt noise better than mean.
+    fn min_cycles<F: FnMut()>(mut f: F) -> u64 {
+        for _ in 0..5 {
+            f();
+        }
+        let mut best = u64::MAX;
+        for _ in 0..ITERS {
+            unsafe {
+                _mm_lfence();
+                let t0 = _rdtsc();
+                _mm_lfence();
+                f();
+                _mm_lfence();
+                let t1 = _rdtsc();
+                best = best.min(t1.wrapping_sub(t0));
+            }
+        }
+        best
+    }
+
+    fn report(label: &str, cycles: u64, n: usize) {
+        let cpv = cycles as f64 / n as f64;
+        println!("{label}: {cpv:6.2} cyc/val   {:5.3} val/cyc", 1.0 / cpv);
+    }
+
+    #[test]
+    #[ignore = "throughput bench; run with --release --ignored --nocapture"]
+    fn throughput_f64() {
+        // 2-decimal data, ~one rowgroup, few exceptions - the ALP common case.
+        let values: Vec<f64> = (0..N).map(|i| ((i % 100_000) as f64) * 0.01 + 1.0).collect();
+        let preset = build_preset(&values);
+        let mut scratch = Scratch::<f64>::new();
+
+        let enc_buffered = min_cycles(|| {
+            let page = encode_page(black_box(&values), &preset, &mut scratch).unwrap();
+            black_box(page);
+        });
+
+        let mut sp = StreamingPage::<f64>::new();
+        let enc_streaming = min_cycles(|| {
+            for chunk in black_box(&values).chunks(PUT_CHUNK) {
+                sp.put(chunk, &preset, &mut scratch).unwrap();
+            }
+            black_box(sp.finish(&preset, &mut scratch).unwrap());
+        });
+
+        let page: Bytes = encode_page(&values, &preset, &mut scratch).unwrap().into();
+        let mut out = vec![0.0f64; values.len()];
+        let dec = min_cycles(|| {
+            let mut decoder = AlpDecoder::<DoubleType>::new();
+            decoder
+                .set_data(black_box(page.clone()), values.len())
+                .unwrap();
+            decoder.get(&mut out).unwrap();
+            black_box(&out);
+        });
+
+        println!();
+        report("f64 encode buffered ", enc_buffered, N);
+        report("f64 encode streaming", enc_streaming, N);
+        report("f64 decode          ", dec, N);
+    }
+
+    #[test]
+    #[ignore = "throughput bench; run with --release --ignored --nocapture"]
+    fn throughput_f32() {
+        let values: Vec<f32> = (0..N).map(|i| ((i % 100_000) as f32) * 0.01 + 1.0).collect();
+        let preset = build_preset(&values);
+        let mut scratch = Scratch::<f32>::new();
+
+        let enc_buffered = min_cycles(|| {
+            black_box(encode_page(black_box(&values), &preset, &mut scratch).unwrap());
+        });
+
+        let mut sp = StreamingPage::<f32>::new();
+        let enc_streaming = min_cycles(|| {
+            for chunk in black_box(&values).chunks(PUT_CHUNK) {
+                sp.put(chunk, &preset, &mut scratch).unwrap();
+            }
+            black_box(sp.finish(&preset, &mut scratch).unwrap());
+        });
+
+        let page: Bytes = encode_page(&values, &preset, &mut scratch).unwrap().into();
+        let mut out = vec![0.0f32; values.len()];
+        let dec = min_cycles(|| {
+            let mut decoder = AlpDecoder::<FloatType>::new();
+            decoder
+                .set_data(black_box(page.clone()), values.len())
+                .unwrap();
+            decoder.get(&mut out).unwrap();
+            black_box(&out);
+        });
+
+        println!();
+        report("f32 encode buffered ", enc_buffered, N);
+        report("f32 encode streaming", enc_streaming, N);
+        report("f32 decode          ", dec, N);
     }
 }
