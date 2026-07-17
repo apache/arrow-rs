@@ -101,6 +101,7 @@ impl VariantObjectHeader {
 /// - field value array is in bounds
 /// - all field ids are valid metadata dictionary entries (*)
 /// - field ids are lexically ordered according by their corresponding string values (*)
+/// - field names are unique; no field name appears more than once (*)
 /// - all field offsets are in bounds (*)
 /// - all field values are (recursively) _valid_ variant values (*)
 /// - the associated variant metadata is [valid] (*)
