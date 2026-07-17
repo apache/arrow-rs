@@ -342,7 +342,7 @@ impl i256 {
     /// Computes the absolute value of this i256 returning `None` if `Self == Self::MIN`
     #[inline]
     pub const fn checked_abs(self) -> Option<Self> {
-        if self.high != Self::MIN.high || self.low != Self::MIN.low {
+        if !self.is_eq(Self::MIN) {
             Some(self.wrapping_abs())
         } else {
             None
