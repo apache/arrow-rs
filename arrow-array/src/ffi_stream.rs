@@ -74,10 +74,21 @@ use crate::record_batch::{RecordBatch, RecordBatchReader};
 
 type Result<T> = std::result::Result<T, ArrowError>;
 
+// Errno values returned through the C stream interface, taken from libc so they match
+// the platform the consumer interprets them against.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use libc::{EINVAL, EIO, ENOMEM, ENOSYS};
+
+// wasm32-unknown-unknown has no libc, and no OS to interpret the codes either — any
+// non-zero value works there, so use Linux's.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const ENOMEM: i32 = 12;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EIO: i32 = 5;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EINVAL: i32 = 22;
-const ENOSYS: i32 = 78;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+const ENOSYS: i32 = 38;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
