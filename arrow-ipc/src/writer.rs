@@ -219,6 +219,10 @@ impl IpcMessageSink<'_> {
         Ok(len + pad_len)
     }
 
+    /// Writes an already encoded IPC message with optional contiguous body data.
+    ///
+    /// This is used for schema and dictionary messages represented by [`EncodedData`].
+    /// Returns the padded metadata length and body length written.
     fn write_encoded_data(
         &mut self,
         encoded: EncodedData,
@@ -256,6 +260,11 @@ impl IpcMessageSink<'_> {
         Ok((padded_header_len, body_len))
     }
 
+    /// Writes a record batch message from its encoded metadata and body buffers.
+    ///
+    /// The body buffers are already materialized as [`EncodedBuffer`] segments,
+    /// allowing buffer output to preserve uncompressed Arrow buffers.
+    /// Returns the padded metadata length and body length written.
     fn write_record_batch(
         &mut self,
         metadata: Vec<u8>,
@@ -288,6 +297,7 @@ impl IpcMessageSink<'_> {
         Ok((padded_header_len, body_len))
     }
 
+    /// Writes the IPC end-of-stream marker.
     fn write_eos(&mut self, write_options: &IpcWriteOptions) -> Result<(), ArrowError> {
         self.write_continuation(write_options, 0)?;
         Ok(())
