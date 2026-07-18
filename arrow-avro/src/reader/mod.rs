@@ -3040,12 +3040,16 @@ mod test {
             list_builder.append(true);
         }
         arrays.push(Arc::new(list_builder.finish()));
-        let values_field = Arc::new(Field::new("value", DataType::Int64, false));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
         let mut map_builder = MapBuilder::new(
             Some(builder::MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
+                entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
             }),
             StringBuilder::new(),
             Int64Builder::new(),
@@ -6270,9 +6274,9 @@ mod test {
         iaa_builder.append(true);
         let int_array_array = iaa_builder.finish();
         let field_names = MapFieldNames {
-            entry: "entries".to_string(),
-            key: "key".to_string(),
-            value: "value".to_string(),
+            entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+            key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+            value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
         };
         let mut int_map_builder =
             MapBuilder::new(Some(field_names), StringBuilder::new(), Int32Builder::new());
@@ -6284,9 +6288,9 @@ mod test {
         int_map_builder.append(true).unwrap(); // finalize map for row 0
         let int_map = int_map_builder.finish();
         let field_names2 = MapFieldNames {
-            entry: "entries".to_string(),
-            key: "key".to_string(),
-            value: "value".to_string(),
+            entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+            key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+            value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
         };
         let mut ima_builder = ListBuilder::new(MapBuilder::new(
             Some(field_names2),
@@ -6372,17 +6376,17 @@ mod test {
             .with_metadata(meta_h.clone());
         // G.value : Struct<{ h: ... }> with metadata (G)
         let g_value_struct_field = Field::new(
-            "value",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Struct(vec![h_field.clone()].into()),
             true,
         )
         .with_metadata(meta_g_value.clone());
         // entries struct for Map G
         let entries_struct_field = Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
                 vec![
-                    Field::new("key", DataType::Utf8, false),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     g_value_struct_field.clone(),
                 ]
                 .into(),
@@ -6441,9 +6445,9 @@ mod test {
                 },
                 {
                     let map_field_names = MapFieldNames {
-                        entry: "entries".to_string(),
-                        key: "key".to_string(),
-                        value: "value".to_string(),
+                        entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                        key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                        value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
                     };
                     let i_list_builder = ListBuilder::new(Float64Builder::new());
                     let h_struct_builder = StructBuilder::new(
@@ -6469,7 +6473,7 @@ mod test {
                     )
                     .with_values_field(Arc::new(
                         Field::new(
-                            "value",
+                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                             DataType::Struct(vec![h_field.clone()].into()),
                             true,
                         )
@@ -8702,11 +8706,11 @@ mod test {
         )
         .unwrap();
         let map_entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                 Field::new(
-                    "value",
+                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                     DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
                     true,
                 ),
@@ -8736,10 +8740,10 @@ mod test {
             Field::new("y", DataType::Binary, false),
         ]);
         let union_map_entries = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
             ])),
             false,
         ));
@@ -8918,10 +8922,10 @@ mod test {
             Field::new(item_name, DataType::Struct(kv_fields.clone()), false).with_metadata(kv_md),
         );
         let map_int_entries = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Int32, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
             ])),
             false,
         ));
@@ -9164,8 +9168,8 @@ mod test {
                 let vals = Int32Array::from(vec![1, 2, 10]);
                 let entries = StructArray::new(
                     Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Int32, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
                     ]),
                     vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
                     None,
@@ -9313,8 +9317,8 @@ mod test {
                     let vals = StringArray::from(vec!["v"]);
                     let entries = StructArray::new(
                         Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
-                            Field::new("value", DataType::Utf8, false),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                         ]),
                         vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
                         None,
@@ -9392,9 +9396,9 @@ mod test {
             });
             let entries = StructArray::new(
                 Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     Field::new(
-                        "value",
+                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                         DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
                         true,
                     ),

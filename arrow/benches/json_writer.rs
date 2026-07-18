@@ -31,6 +31,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 const NUM_ROWS: usize = 65536;
+const STR_LEN: usize = 20;
 
 fn do_bench(c: &mut Criterion, name: &str, batch: &RecordBatch) {
     c.bench_function(name, |b| {
@@ -42,12 +43,12 @@ fn do_bench(c: &mut Criterion, name: &str, batch: &RecordBatch) {
     });
 }
 
-fn create_mixed(len: usize) -> RecordBatch {
+fn create_mixed(len: usize, str_len: usize) -> RecordBatch {
     let c1 = Arc::new(create_string_array::<i32>(len, 0.));
     let c2 = Arc::new(create_primitive_array::<Int32Type>(len, 0.));
     let c3 = Arc::new(create_primitive_array::<UInt32Type>(len, 0.));
-    let c4 = Arc::new(create_string_array_with_len::<i32>(len, 0.2, 10));
-    let c5 = Arc::new(create_string_array_with_len::<i32>(len, 0.2, 20));
+    let c4 = Arc::new(create_string_array_with_len::<i32>(len, 0.2, str_len / 2));
+    let c5 = Arc::new(create_string_array_with_len::<i32>(len, 0.2, str_len));
     let c6 = Arc::new(create_primitive_array::<Float32Type>(len, 0.2));
     RecordBatch::try_from_iter([
         ("c1", c1 as _),
@@ -82,7 +83,7 @@ fn create_offsets(len: usize) -> (usize, OffsetBuffer<i32>) {
 }
 
 fn create_nullable_struct(len: usize) -> StructArray {
-    let c2 = StructArray::from(create_mixed(len));
+    let c2 = StructArray::from(create_mixed(len, STR_LEN));
     StructArray::new(
         c2.fields().clone(),
         c2.columns().to_vec(),
@@ -111,8 +112,32 @@ fn bench_integer(c: &mut Criterion) {
 }
 
 fn bench_mixed(c: &mut Criterion) {
-    let batch = create_mixed(NUM_ROWS);
+    let batch = create_mixed(NUM_ROWS, STR_LEN);
     do_bench(c, "bench_mixed", &batch)
+}
+
+fn create_mixed_longname(len: usize, str_len: usize) -> RecordBatch {
+    let batch = create_mixed(len, str_len);
+    // Skip the first 400-len string column.
+    let columns = &batch.columns()[1..];
+
+    let names: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| format!("{:?}_column_{}", c.data_type(), idx))
+        .collect();
+    RecordBatch::try_from_iter(names.iter().zip(columns.iter().map(Arc::clone))).unwrap()
+}
+
+fn bench_mixed_longname(c: &mut Criterion) {
+    let batch = create_mixed_longname(NUM_ROWS, STR_LEN);
+    do_bench(c, "bench_mixed_longname", &batch);
+}
+
+fn bench_shortmixed_longname(c: &mut Criterion) {
+    // Reduce the influence of slow-to-encode string columns.
+    let batch = create_mixed_longname(NUM_ROWS, STR_LEN / 5);
+    do_bench(c, "bench_shortmixed_longname", &batch);
 }
 
 fn bench_dict_array(c: &mut Criterion) {
@@ -139,7 +164,7 @@ fn bench_string(c: &mut Criterion) {
 
 fn bench_struct(c: &mut Criterion) {
     let c1 = Arc::new(create_string_array::<i32>(NUM_ROWS, 0.));
-    let c2 = Arc::new(StructArray::from(create_mixed(NUM_ROWS)));
+    let c2 = Arc::new(StructArray::from(create_mixed(NUM_ROWS, STR_LEN)));
     let batch = RecordBatch::try_from_iter([("c1", c1 as _), ("c2", c2 as _)]).unwrap();
 
     do_bench(c, "bench_struct", &batch)
@@ -319,6 +344,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_float(c);
     bench_string(c);
     bench_mixed(c);
+    bench_mixed_longname(c);
+    bench_shortmixed_longname(c);
     bench_dict_array(c);
     bench_struct(c);
     bench_nullable_struct(c);

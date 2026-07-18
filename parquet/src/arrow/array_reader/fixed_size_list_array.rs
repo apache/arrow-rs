@@ -112,9 +112,10 @@ impl ArrayReader for FixedSizeListArrayReader {
         let mut current_row_len = None;
         for (&d, &r) in def_levels.iter().zip(rep_levels) {
             if let Some(threshold) = self.parent_threshold
-                && d < threshold {
-                    continue;
-                }
+                && d < threshold
+            {
+                continue;
+            }
             if r < self.rep_level {
                 if let Some(row_len) = current_row_len.take().filter(|&len| len != self.fixed_size)
                 {
