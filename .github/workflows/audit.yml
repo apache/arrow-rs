@@ -30,6 +30,7 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.github/workflows/dev_pr/audit.yml'
 
 jobs:
   cargo-audit:
@@ -43,4 +44,7 @@ jobs:
         # Waiting on an object_store release with quick-xml >=0.41.0.
         # https://rustsec.org/advisories/RUSTSEC-2026-0194
         # https://rustsec.org/advisories/RUSTSEC-2026-0195
-        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+        # Need to update to py03 >=0.29.0
+        # https://rustsec.org/advisories/RUSTSEC-2026-0176
+        # https://rustsec.org/advisories/RUSTSEC-2026-0177
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0176 --ignore RUSTSEC-2026-0177
