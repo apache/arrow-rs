@@ -390,7 +390,6 @@ version = "59.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
- "arrow-data",
  "arrow-flight",
  "arrow-integration-test",
  "clap",
@@ -419,7 +418,6 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "tempfile",
- "tokio",
  "zstd",
 ]
 

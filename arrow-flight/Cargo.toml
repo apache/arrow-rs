@@ -83,8 +83,6 @@ http-body = "1.0.0"
 hyper-util = "0.1"
 pin-project-lite = "0.2"
 tempfile = "3.3"
-tracing-log = { version = "0.2" }
-tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "env-filter", "fmt"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = { version = "0.5.0", features = ["util"] }

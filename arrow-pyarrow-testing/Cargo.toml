@@ -44,7 +44,7 @@ rust-version = "1.85"
 publish = false
 
 
-[dependencies]
+[dev-dependencies]
 # Note no dependency on arrow, to ensure arrow-pyarrow can be used by itself
 arrow-array = { path = "../arrow-array" }
 arrow-schema = { path = "../arrow-schema" }
