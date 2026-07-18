@@ -547,9 +547,10 @@ pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
     }
     O::from_usize(child_count).expect("overflow");
 
+    let null_sentinel = null_sentinel(opts);
     let mut null_count = 0;
     let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
-        let valid = rows[x][0] != null_sentinel(opts);
+        let valid = rows[x][0] != null_sentinel;
         null_count += !valid as usize;
         valid
     });
