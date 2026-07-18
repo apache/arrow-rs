@@ -831,6 +831,11 @@ impl ArrayData {
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
     ///
+    /// On an import boundary this must run *before* validation, otherwise
+    /// protocol-legal but under-aligned input is rejected as an invariant
+    /// violation. Prefer [`ArrayDataBuilder::align_buffers`], which realigns
+    /// before `build` validates.
+    ///
     /// This also aligns buffers of children data
     pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
