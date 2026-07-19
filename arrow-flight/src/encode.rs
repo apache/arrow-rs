@@ -675,7 +675,7 @@ fn split_batch_for_grpc_response(
     let size = batch
         .columns()
         .iter()
-        .map(|col| col.get_buffer_memory_size())
+        .map(|col| col.to_data().get_slice_memory_size().unwrap())
         .sum::<usize>();
 
     let n_batches =
@@ -2184,10 +2184,8 @@ mod tests {
     #[test]
     fn test_encode_decode_reencode_flight_data() {
         const ROW_COUNT: usize = 5_000_000;
-        // int32 memory: 5_000_000 * 4 = 20_000_000 bytes
-
         const SPLIT_SIZE: usize = 4;
-        // Create buffers sized for the desired row counts
+
         let int_buf = create_buffer_from_data(vec![1u8; ROW_COUNT * std::mem::size_of::<u32>()]);
         let long_buf = create_buffer_from_data(vec![2u8; ROW_COUNT * std::mem::size_of::<i64>()]);
         let float_buf = create_buffer_from_data(vec![3u8; ROW_COUNT * std::mem::size_of::<f32>()]);
@@ -2227,15 +2225,8 @@ mod tests {
         .expect("failed to create long record batch");
 
         let split_short = split_batch_for_grpc_response(batch_short.clone(), 2 * 1024 * 1024);
-        println!("Short split batches count: {}", split_short.len());
-        for (i, b) in split_short.iter().enumerate() {
-            println!("Short batch {}: {} rows", i, b.num_rows());
-        }
         let split_long = split_batch_for_grpc_response(batch_long.clone(), 2 * 1024 * 1024);
-        println!("Long split batches count: {}", split_long.len());
-        for (i, b) in split_long.iter().enumerate() {
-            println!("long batch {}: {} rows", i, b.num_rows());
-        }
+        assert!(split_short.len() != split_long.len()); // more data split divided by the same max size should result in more sub-slices
 
         // Compare memory calculations for short and long batches
         let total_buffer_memory_short = batch_short
