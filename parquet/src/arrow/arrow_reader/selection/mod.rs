@@ -364,6 +364,12 @@ impl RowSelection {
         }
     }
 
+    fn from_mask_selection(mask: MaskSelection) -> Self {
+        Self {
+            inner: RowSelectionInner::Mask(Box::new(mask)),
+        }
+    }
+
     /// Returns the underlying mask if this selection is mask-backed.
     ///
     /// Public so that engines composing selections (e.g. DataFusion's
@@ -551,9 +557,26 @@ impl RowSelection {
                 RowSelectionInner::Mask(m) => m,
                 RowSelectionInner::Selectors(_) => unreachable!(),
             };
+            let total = mask.cached_count();
             let (head, tail) = split_off_mask((*mask).into_mask(), row_count);
-            self.inner = RowSelectionInner::Mask(Box::new(MaskSelection::new(tail)));
-            return Self::from_boolean_buffer(head);
+            // Popcount only the head and derive the tail by subtraction, so
+            // repeated splits stay O(bitmap) overall.
+            let (head, tail) = match total {
+                Some(total) => {
+                    let head_count = if tail.is_empty() {
+                        total
+                    } else {
+                        head.count_set_bits()
+                    };
+                    (
+                        MaskSelection::with_count(head, head_count),
+                        MaskSelection::with_count(tail, total - head_count),
+                    )
+                }
+                None => (MaskSelection::new(head), MaskSelection::new(tail)),
+            };
+            self.inner = RowSelectionInner::Mask(Box::new(tail));
+            return Self::from_mask_selection(head);
         }
 
         let selectors = self.selectors_mut();
@@ -686,7 +709,10 @@ impl RowSelection {
     pub fn selects_any(&self) -> bool {
         match &self.inner {
             RowSelectionInner::Selectors(s) => s.iter().any(|x| !x.skip),
-            RowSelectionInner::Mask(m) => m.mask().set_indices().next().is_some(),
+            RowSelectionInner::Mask(m) => match m.cached_count() {
+                Some(count) => count > 0,
+                None => m.mask().set_indices().next().is_some(),
+            },
         }
     }
 
@@ -694,7 +720,13 @@ impl RowSelection {
     pub(crate) fn trim(mut self) -> Self {
         if let RowSelectionInner::Mask(m) = &self.inner {
             if let Some(mask) = trim_mask(m.mask()) {
-                return Self::from_boolean_buffer(mask);
+                // Trimming only drops trailing unset bits; the count is unchanged.
+                return match m.cached_count() {
+                    Some(count) => {
+                        Self::from_mask_selection(MaskSelection::with_count(mask, count))
+                    }
+                    None => Self::from_boolean_buffer(mask),
+                };
             }
             return self;
         }
@@ -713,7 +745,12 @@ impl RowSelection {
 
         let mut selectors = match self.inner {
             RowSelectionInner::Mask(mask) => {
-                return Self::from_boolean_buffer(offset_mask((*mask).into_mask(), offset));
+                let count = mask.count();
+                let buffer = offset_mask((*mask).into_mask(), offset, count);
+                return Self::from_mask_selection(MaskSelection::with_count(
+                    buffer,
+                    count.saturating_sub(offset),
+                ));
             }
             RowSelectionInner::Selectors(selectors) => selectors,
         };
@@ -752,7 +789,15 @@ impl RowSelection {
     pub(crate) fn limit(self, mut limit: usize) -> Self {
         let mut selectors = match self.inner {
             RowSelectionInner::Mask(mask) => {
-                return Self::from_boolean_buffer(limit_mask((*mask).into_mask(), limit));
+                let cached = mask.cached_count();
+                let buffer = limit_mask((*mask).into_mask(), limit);
+                return match cached {
+                    Some(count) => Self::from_mask_selection(MaskSelection::with_count(
+                        buffer,
+                        count.min(limit),
+                    )),
+                    None => Self::from_boolean_buffer(buffer),
+                };
             }
             RowSelectionInner::Selectors(selectors) => selectors,
         };
@@ -795,7 +840,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(s) => {
                 s.iter().filter(|x| !x.skip).map(|x| x.row_count).sum()
             }
-            RowSelectionInner::Mask(m) => m.mask().count_set_bits(),
+            RowSelectionInner::Mask(m) => m.count(),
         }
     }
 
@@ -805,7 +850,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(s) => {
                 s.iter().filter(|x| x.skip).map(|x| x.row_count).sum()
             }
-            RowSelectionInner::Mask(m) => m.mask().len() - m.mask().count_set_bits(),
+            RowSelectionInner::Mask(m) => m.mask().len() - m.count(),
         }
     }
 

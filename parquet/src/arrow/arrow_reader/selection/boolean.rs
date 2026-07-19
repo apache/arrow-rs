@@ -19,7 +19,7 @@ use super::{RowSelection, RowSelectionInner, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
 use arrow_buffer::bit_iterator::BitSliceIterator;
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, Buffer};
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
@@ -28,10 +28,14 @@ use std::sync::OnceLock;
 /// `selectors` is only populated if callers use the borrowed [`RowSelection::iter`]
 /// compatibility API. Internal paths that can stream or consume the bitmap avoid
 /// this cache.
+///
+/// `count` caches the popcount; `RowSelection::split_off` propagates it to
+/// both halves so repeated `row_count()` calls do not rescan the bitmap.
 #[derive(Debug)]
 pub(crate) struct MaskSelection {
     mask: BooleanBuffer,
     selectors: OnceLock<Vec<RowSelector>>,
+    count: OnceLock<usize>,
 }
 
 impl MaskSelection {
@@ -39,6 +43,19 @@ impl MaskSelection {
         Self {
             mask,
             selectors: OnceLock::new(),
+            count: OnceLock::new(),
+        }
+    }
+
+    /// Create a selection whose selected-row count is already known.
+    pub(super) fn with_count(mask: BooleanBuffer, count: usize) -> Self {
+        debug_assert!(count <= mask.len());
+        let cell = OnceLock::new();
+        let _ = cell.set(count);
+        Self {
+            mask,
+            selectors: OnceLock::new(),
+            count: cell,
         }
     }
 
@@ -51,6 +68,16 @@ impl MaskSelection {
         mask
     }
 
+    /// Number of selected rows, computed once and cached.
+    pub(super) fn count(&self) -> usize {
+        *self.count.get_or_init(|| self.mask.count_set_bits())
+    }
+
+    /// The cached selected-row count, if it has been computed.
+    pub(super) fn cached_count(&self) -> Option<usize> {
+        self.count.get().copied()
+    }
+
     pub(super) fn selectors(&self) -> &[RowSelector] {
         self.selectors
             .get_or_init(|| mask_to_selectors(&self.mask))
@@ -60,7 +87,12 @@ impl MaskSelection {
 
 impl Clone for MaskSelection {
     fn clone(&self) -> Self {
-        Self::new(self.mask.clone())
+        // Drop the selector cache but keep the cheap count cache.
+        Self {
+            mask: self.mask.clone(),
+            selectors: OnceLock::new(),
+            count: self.count.clone(),
+        }
     }
 }
 
@@ -411,20 +443,41 @@ pub(super) fn split_off_mask(
     (head, tail)
 }
 
+/// Position of the highest set bit in `mask`, scanning bytes from the end.
+fn last_set_bit_position(mask: &BooleanBuffer) -> Option<usize> {
+    let values = mask.values();
+    let offset = mask.offset();
+    let end = offset + mask.len();
+    for byte_idx in (offset / 8..end.div_ceil(8)).rev() {
+        let byte_start = byte_idx * 8;
+        let mut byte = values[byte_idx];
+        if end - byte_start < 8 {
+            byte &= (1u8 << (end - byte_start)) - 1;
+        }
+        if byte_start < offset {
+            byte &= !((1u8 << (offset - byte_start)) - 1);
+        }
+        if byte != 0 {
+            return Some(byte_start + 7 - byte.leading_zeros() as usize - offset);
+        }
+    }
+    None
+}
+
 /// Trims trailing unset bits from a mask-backed selection.
 pub(super) fn trim_mask(mask: &BooleanBuffer) -> Option<BooleanBuffer> {
-    let popcount = mask.count_set_bits();
-    let new_len = if popcount == 0 {
-        0
-    } else {
-        mask.find_nth_set_bit_position(0, popcount)
-    };
-    (new_len != mask.len()).then(|| mask.slice(0, new_len))
+    let len = mask.len();
+    // Fast path: final bit set means there is nothing to trim.
+    if len == 0 || mask.value(len - 1) {
+        return None;
+    }
+    let new_len = last_set_bit_position(mask).map_or(0, |pos| pos + 1);
+    Some(mask.slice(0, new_len))
 }
 
 /// Skips the first `offset` selected rows of a mask-backed selection.
-pub(super) fn offset_mask(mask: BooleanBuffer, offset: usize) -> BooleanBuffer {
-    let popcount = mask.count_set_bits();
+/// `popcount` is the caller's (possibly cached) set-bit count of `mask`.
+pub(super) fn offset_mask(mask: BooleanBuffer, offset: usize, popcount: usize) -> BooleanBuffer {
     if offset >= popcount {
         return BooleanBuffer::new_unset(0);
     }
@@ -446,13 +499,40 @@ pub(super) fn limit_mask(mask: BooleanBuffer, limit: usize) -> BooleanBuffer {
     mask.slice(0, cut)
 }
 
+/// Set bits `[start, start + len)` in a zero-initialized little-endian bitmap.
+fn set_bit_run(buf: &mut [u8], start: usize, len: usize) {
+    if len == 0 {
+        return;
+    }
+    let end = start + len;
+    let first_byte = start / 8;
+    let last_byte = (end - 1) / 8;
+    let start_mask = 0xFFu8 << (start % 8);
+    let end_mask = 0xFFu8 >> (8 - (end - last_byte * 8));
+    if first_byte == last_byte {
+        buf[first_byte] |= start_mask & end_mask;
+    } else {
+        buf[first_byte] |= start_mask;
+        buf[first_byte + 1..last_byte].fill(0xFF);
+        buf[last_byte] |= end_mask;
+    }
+}
+
+/// Build a bitmap from a selector sequence by filling bytes directly.
+///
+/// This sits on the read hot path (`Mask` strategy over a selector-backed
+/// selection) where per-selector `append_n` calls are too slow.
 pub(super) fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanBuffer {
     let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
-    let mut builder = BooleanBufferBuilder::new(total_rows);
+    let mut buf = vec![0u8; total_rows.div_ceil(8)];
+    let mut position = 0usize;
     for selector in selectors {
-        builder.append_n(selector.row_count, !selector.skip);
+        if !selector.skip {
+            set_bit_run(&mut buf, position, selector.row_count);
+        }
+        position += selector.row_count;
     }
-    builder.finish()
+    BooleanBuffer::new(Buffer::from(buf), 0, total_rows)
 }
 
 #[cfg(test)]
@@ -958,5 +1038,97 @@ mod tests {
         assert_eq!(collected, RowSelection::default());
         assert!(collected.as_mask().is_some());
         assert_eq!(collected.as_mask().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_boolean_mask_from_selectors_fuzz_equivalence() {
+        let mut rand = rng();
+        for _ in 0..200 {
+            let n_selectors = rand.random_range(0..30);
+            let mut selectors = Vec::with_capacity(n_selectors);
+            for _ in 0..n_selectors {
+                selectors.push(RowSelector {
+                    row_count: rand.random_range(0..40),
+                    skip: rand.random_bool(0.5),
+                });
+            }
+
+            let expected = {
+                let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
+                let mut builder = BooleanBufferBuilder::new(total_rows);
+                for selector in &selectors {
+                    builder.append_n(selector.row_count, !selector.skip);
+                }
+                builder.finish()
+            };
+
+            assert_eq!(boolean_mask_from_selectors(&selectors), expected);
+        }
+    }
+
+    #[test]
+    fn test_trim_mask_fuzz_equivalence() {
+        let mut rand = rng();
+        for _ in 0..200 {
+            let len = rand.random_range(0..200);
+            let bits: Vec<bool> = (0..len).map(|_| rand.random_bool(0.3)).collect();
+            let full = BooleanBuffer::from(bits.clone());
+            // Exercise non-zero bit offsets via slicing
+            let start = rand.random_range(0..=len);
+            let slice_len = rand.random_range(0..=(len - start));
+            let mask = full.slice(start, slice_len);
+
+            let expected_len = bits[start..start + slice_len]
+                .iter()
+                .rposition(|&b| b)
+                .map_or(0, |pos| pos + 1);
+
+            match trim_mask(&mask) {
+                Some(trimmed) => {
+                    assert_ne!(expected_len, mask.len());
+                    assert_eq!(trimmed.len(), expected_len);
+                    assert_eq!(trimmed, mask.slice(0, expected_len));
+                }
+                None => assert_eq!(expected_len, mask.len()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_off_propagates_cached_count() {
+        let bits = vec![true, false, true, true, false, false, true, false];
+        let mut selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        // Populate the count cache, then verify both split halves.
+        assert_eq!(selection.row_count(), 4);
+        let head = selection.split_off(3);
+        assert_eq!(head.row_count(), 2);
+        assert_eq!(selection.row_count(), 2);
+        let tail_fresh = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, false, true, false,
+        ]));
+        assert_eq!(selection, tail_fresh);
+
+        // Splitting past the end keeps the whole selection as the head
+        let head = selection.split_off(100);
+        assert_eq!(head.row_count(), 2);
+        assert_eq!(selection.row_count(), 0);
+    }
+
+    #[test]
+    fn test_trim_and_offset_and_limit_preserve_cached_count() {
+        let bits = vec![true, true, false, true, false, false];
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits.clone()));
+        assert_eq!(selection.row_count(), 3);
+
+        let trimmed = selection.trim();
+        assert!(trimmed.as_mask().is_some());
+        assert_eq!(trimmed.as_mask().unwrap().len(), 4);
+        assert_eq!(trimmed.row_count(), 3);
+
+        let offset = trimmed.clone().offset(1);
+        assert_eq!(offset.row_count(), 2);
+
+        let limited = trimmed.limit(2);
+        assert_eq!(limited.row_count(), 2);
     }
 }
