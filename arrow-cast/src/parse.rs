@@ -481,8 +481,7 @@ fn truncate_white_space(string: &str) -> &str {
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
-            fn parse(string: &str) -> Option<Self::Native> {
-                let mut string = string;
+            fn parse(mut string: &str) -> Option<Self::Native> {
                 if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
@@ -2900,8 +2899,11 @@ mod tests {
         assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
         assert_eq!(Float64Type::parse("\t\n 20.54"), Some(20.54));
         assert_eq!(Float64Type::parse("\n2.5"), Some(2.5));
+        assert_eq!(Float64Type::parse("\n-942.5423"), Some(-942.5423));
         assert_eq!(Float64Type::parse("\n\t\n\t\n40.5123"), Some(40.5123));
         assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n-40.5123"), Some(-40.5123));
+        assert_eq!(Float64Type::parse(" -1.5"), Some(-1.5));
         assert_eq!(Int32Type::parse(" 3"), Some(3));
         assert_eq!(Int32Type::parse("          30"), Some(30));
         assert_eq!(Int32Type::parse("\n \n 100"), Some(100));
@@ -2909,5 +2911,7 @@ mod tests {
         assert_eq!(Int32Type::parse("\t800"), Some(800));
         assert_eq!(Int32Type::parse("\t  \n \t 851"), Some(851));
         assert_eq!(Int32Type::parse("\t\n\t\n\n\n\t1"), Some(1));
+        assert_eq!(Int32Type::parse(" \n-25"), Some(-25));
+        assert_eq!(Int32Type::parse("\t-800"), Some(-800));
     }
 }
