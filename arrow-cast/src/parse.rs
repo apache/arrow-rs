@@ -465,7 +465,7 @@ impl Parser for Float64Type {
             .first()
             .is_some_and(|first_byte| !first_byte.is_ascii_digit())
         {
-            string = string.trim_start()
+            string = string.trim_ascii_start()
         }
         lexical_core::parse(string.as_bytes()).ok()
     }
@@ -484,7 +484,7 @@ macro_rules! parser_primitive {
                     .first()
                     .is_some_and(|first| !first.is_ascii_digit())
                 {
-                    string = string.trim_start();
+                    string = string.trim_ascii_start();
                 };
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
                     string.as_bytes(),
