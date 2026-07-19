@@ -38,9 +38,9 @@ const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
 const BENCH_MODES: &[BenchMode] = &[
-    BenchMode::ReadSelector,
-    BenchMode::ReadMask,
-    BenchMode::ReadAuto,
+    BenchMode::Selector,
+    BenchMode::Mask,
+    BenchMode::Auto,
 ];
 const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
@@ -457,25 +457,25 @@ fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) ->
 
 #[derive(Clone, Copy)]
 enum BenchMode {
-    ReadSelector,
-    ReadMask,
-    ReadAuto,
+    Selector,
+    Mask,
+    Auto,
 }
 
 impl BenchMode {
     fn label(self) -> &'static str {
         match self {
-            BenchMode::ReadSelector => "read_selector",
-            BenchMode::ReadMask => "read_mask",
-            BenchMode::ReadAuto => "read_auto",
+            BenchMode::Selector => "read_selector",
+            BenchMode::Mask => "read_mask",
+            BenchMode::Auto => "read_auto",
         }
     }
 
     fn policy(self) -> RowSelectionPolicy {
         match self {
-            BenchMode::ReadSelector => RowSelectionPolicy::Selectors,
-            BenchMode::ReadMask => RowSelectionPolicy::Mask,
-            BenchMode::ReadAuto => RowSelectionPolicy::default(),
+            BenchMode::Selector => RowSelectionPolicy::Selectors,
+            BenchMode::Mask => RowSelectionPolicy::Mask,
+            BenchMode::Auto => RowSelectionPolicy::default(),
         }
     }
 }
