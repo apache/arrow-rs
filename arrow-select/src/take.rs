@@ -1135,7 +1135,6 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
@@ -1635,18 +1634,12 @@ mod tests {
     #[test]
     fn test_take_bool_nullable_index() {
         // indices where the masked invalid elements would be out of bounds
-        let index_data = ArrayData::try_new(
-            DataType::UInt32,
-            6,
-            Some(Buffer::from_iter(vec![
+        let index = UInt32Array::new(
+            ScalarBuffer::from(vec![99, 0, 999, 1, 9999, 2]),
+            Some(NullBuffer::from(vec![
                 false, true, false, true, false, true,
             ])),
-            0,
-            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
-            vec![],
-        )
-        .unwrap();
-        let index = UInt32Array::from(index_data);
+        );
         test_take_boolean_arrays(
             vec![Some(true), None, Some(false)],
             &index,
@@ -1658,18 +1651,12 @@ mod tests {
     #[test]
     fn test_take_bool_nullable_index_nonnull_values() {
         // indices where the masked invalid elements would be out of bounds
-        let index_data = ArrayData::try_new(
-            DataType::UInt32,
-            6,
-            Some(Buffer::from_iter(vec![
+        let index = UInt32Array::new(
+            ScalarBuffer::from(vec![99, 0, 999, 1, 9999, 2]),
+            Some(NullBuffer::from(vec![
                 false, true, false, true, false, true,
             ])),
-            0,
-            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
-            vec![],
-        )
-        .unwrap();
-        let index = UInt32Array::from(index_data);
+        );
         test_take_boolean_arrays(
             vec![Some(true), Some(true), Some(false)],
             &index,
@@ -1824,20 +1811,11 @@ mod tests {
     macro_rules! test_take_list {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
             // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
-            let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
-            // Construct offsets
-            let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
-            let value_offsets = Buffer::from_slice_ref(&value_offsets);
-            // Construct a list array from the above two
-            let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, false)));
-            let list_data = ArrayData::builder(list_data_type.clone())
-                .len(4)
-                .add_buffer(value_offsets)
-                .add_child_data(value_data)
-                .build()
-                .unwrap();
-            let list_array = $list_array_type::from(list_data);
+            let values = Arc::new(Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]));
+            let value_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 3, 6, 6, 8]));
+            let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+            let list_array = $list_array_type::new(Arc::clone(&field), value_offsets, values, None);
 
             // index returns: [[2,3], null, [-1,-2,-1], [], [0,0,0]]
             let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(2), Some(0)]);
@@ -1847,7 +1825,7 @@ mod tests {
 
             // construct a value array with expected results:
             // [[2,3], null, [-1,-2,-1], [], [0,0,0]]
-            let expected_data = Int32Array::from(vec![
+            let expected_values = Arc::new(Int32Array::from(vec![
                 Some(2),
                 Some(3),
                 Some(-1),
@@ -1856,21 +1834,16 @@ mod tests {
                 Some(0),
                 Some(0),
                 Some(0),
-            ])
-            .into_data();
-            // construct offsets
-            let expected_offsets: [$offset_type; 6] = [0, 2, 2, 5, 5, 8];
-            let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
-            // construct list array from the two
-            let expected_list_data = ArrayData::builder(list_data_type)
-                .len(5)
+            ]));
+            let expected_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 2, 2, 5, 5, 8]));
+            let expected_list_array = $list_array_type::new(
+                field,
+                expected_offsets,
+                expected_values,
                 // null buffer remains the same as only the indices have nulls
-                .nulls(index.nulls().cloned())
-                .add_buffer(expected_offsets)
-                .add_child_data(expected_data)
-                .build()
-                .unwrap();
-            let expected_list_array = $list_array_type::from(expected_list_data);
+                index.nulls().cloned(),
+            );
 
             assert_eq!(a, &expected_list_array);
         }};
@@ -1879,7 +1852,7 @@ mod tests {
     macro_rules! test_take_list_with_value_nulls {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
             // Construct a value array, [[0,null,0], [-1,-2,3], [null], [5,null]]
-            let value_data = Int32Array::from(vec![
+            let values = Arc::new(Int32Array::from(vec![
                 Some(0),
                 None,
                 Some(0),
@@ -1889,22 +1862,11 @@ mod tests {
                 None,
                 Some(5),
                 None,
-            ])
-            .into_data();
-            // Construct offsets
-            let value_offsets: [$offset_type; 5] = [0, 3, 6, 7, 9];
-            let value_offsets = Buffer::from_slice_ref(&value_offsets);
-            // Construct a list array from the above two
-            let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
-            let list_data = ArrayData::builder(list_data_type.clone())
-                .len(4)
-                .add_buffer(value_offsets)
-                .null_bit_buffer(Some(Buffer::from([0b11111111])))
-                .add_child_data(value_data)
-                .build()
-                .unwrap();
-            let list_array = $list_array_type::from(list_data);
+            ]));
+            let value_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 3, 6, 7, 9]));
+            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+            let list_array = $list_array_type::new(Arc::clone(&field), value_offsets, values, None);
 
             // index returns: [[null], null, [-1,-2,3], [2,null], [0,null,0]]
             let index = UInt32Array::from(vec![Some(2), None, Some(1), Some(3), Some(0)]);
@@ -1914,7 +1876,7 @@ mod tests {
 
             // construct a value array with expected results:
             // [[null], null, [-1,-2,3], [5,null], [0,null,0]]
-            let expected_data = Int32Array::from(vec![
+            let expected_values = Arc::new(Int32Array::from(vec![
                 None,
                 Some(-1),
                 Some(-2),
@@ -1924,21 +1886,16 @@ mod tests {
                 Some(0),
                 None,
                 Some(0),
-            ])
-            .into_data();
-            // construct offsets
-            let expected_offsets: [$offset_type; 6] = [0, 1, 1, 4, 6, 9];
-            let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
-            // construct list array from the two
-            let expected_list_data = ArrayData::builder(list_data_type)
-                .len(5)
+            ]));
+            let expected_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 1, 1, 4, 6, 9]));
+            let expected_list_array = $list_array_type::new(
+                field,
+                expected_offsets,
+                expected_values,
                 // null buffer remains the same as only the indices have nulls
-                .nulls(index.nulls().cloned())
-                .add_buffer(expected_offsets)
-                .add_child_data(expected_data)
-                .build()
-                .unwrap();
-            let expected_list_array = $list_array_type::from(expected_list_data);
+                index.nulls().cloned(),
+            );
 
             assert_eq!(a, &expected_list_array);
         }};
@@ -1947,7 +1904,7 @@ mod tests {
     macro_rules! test_take_list_with_nulls {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
             // Construct a value array, [[0,null,0], [-1,-2,3], null, [5,null]]
-            let value_data = Int32Array::from(vec![
+            let values = Arc::new(Int32Array::from(vec![
                 Some(0),
                 None,
                 Some(0),
@@ -1956,22 +1913,14 @@ mod tests {
                 Some(3),
                 Some(5),
                 None,
-            ])
-            .into_data();
-            // Construct offsets
-            let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
-            let value_offsets = Buffer::from_slice_ref(&value_offsets);
-            // Construct a list array from the above two
-            let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
-            let list_data = ArrayData::builder(list_data_type.clone())
-                .len(4)
-                .add_buffer(value_offsets)
-                .null_bit_buffer(Some(Buffer::from([0b11111011])))
-                .add_child_data(value_data)
-                .build()
-                .unwrap();
-            let list_array = $list_array_type::from(list_data);
+            ]));
+            let value_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 3, 6, 6, 8]));
+            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+            // the entry at index 2 is null
+            let list_nulls = NullBuffer::from(vec![true, true, false, true]);
+            let list_array =
+                $list_array_type::new(Arc::clone(&field), value_offsets, values, Some(list_nulls));
 
             // index returns: [null, null, [-1,-2,3], [5,null], [0,null,0]]
             let index = UInt32Array::from(vec![Some(2), None, Some(1), Some(3), Some(0)]);
@@ -1981,7 +1930,7 @@ mod tests {
 
             // construct a value array with expected results:
             // [null, null, [-1,-2,3], [5,null], [0,null,0]]
-            let expected_data = Int32Array::from(vec![
+            let expected_values = Arc::new(Int32Array::from(vec![
                 Some(-1),
                 Some(-2),
                 Some(3),
@@ -1990,25 +1939,17 @@ mod tests {
                 Some(0),
                 None,
                 Some(0),
-            ])
-            .into_data();
-            // construct offsets
-            let expected_offsets: [$offset_type; 6] = [0, 0, 0, 3, 5, 8];
-            let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
-            // construct list array from the two
-            let mut null_bits: [u8; 1] = [0; 1];
-            bit_util::set_bit(&mut null_bits, 2);
-            bit_util::set_bit(&mut null_bits, 3);
-            bit_util::set_bit(&mut null_bits, 4);
-            let expected_list_data = ArrayData::builder(list_data_type)
-                .len(5)
-                // null buffer must be recalculated as both values and indices have nulls
-                .null_bit_buffer(Some(Buffer::from(null_bits)))
-                .add_buffer(expected_offsets)
-                .add_child_data(expected_data)
-                .build()
-                .unwrap();
-            let expected_list_array = $list_array_type::from(expected_list_data);
+            ]));
+            let expected_offsets =
+                OffsetBuffer::<$offset_type>::new(ScalarBuffer::from(vec![0, 0, 0, 3, 5, 8]));
+            // null buffer must be recalculated as both values and indices have nulls
+            let expected_nulls = NullBuffer::from(vec![false, false, true, true, true]);
+            let expected_list_array = $list_array_type::new(
+                field,
+                expected_offsets,
+                expected_values,
+                Some(expected_nulls),
+            );
 
             assert_eq!(a, &expected_list_array);
         }};
@@ -2294,19 +2235,12 @@ mod tests {
     #[should_panic(expected = "index out of bounds: the len is 4 but the index is 1000")]
     fn test_take_list_out_of_bounds() {
         // Construct a value array, [[0,0,0], [-1,-2,-1], [2,3]]
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
+        let values = Arc::new(Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]));
         // Construct offsets
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
+        let value_offsets = OffsetBuffer::<i32>::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
         // Construct a list array from the above two
-        let list_data_type =
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let list_array = ListArray::from(list_data);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let list_array = ListArray::new(field, value_offsets, values, None);
 
         let index = UInt32Array::from(vec![1000]);
 
