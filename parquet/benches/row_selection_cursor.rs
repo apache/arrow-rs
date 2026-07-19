@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch, StringViewArray};
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -36,7 +37,12 @@ const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
-const BENCH_MODES: &[BenchMode] = &[BenchMode::ReadSelector, BenchMode::ReadMask];
+const BENCH_MODES: &[BenchMode] = &[
+    BenchMode::ReadSelector,
+    BenchMode::ReadMask,
+    BenchMode::ReadAuto,
+];
+const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
 struct DataProfile {
     name: &'static str,
@@ -228,22 +234,25 @@ fn bench_over_lengths(
             (stats.select_ratio * 100.0).round() as u32
         );
 
-        let bench_input = BenchInput {
-            parquet_data: parquet_data.clone(),
-            selection,
-        };
+        for &backing in BACKINGS {
+            let bench_input = BenchInput {
+                parquet_data: parquet_data.clone(),
+                selection: backing.convert(&selection),
+            };
 
-        for &mode in BENCH_MODES {
-            c.bench_with_input(
-                BenchmarkId::new(mode.label(), &suffix),
-                &bench_input,
-                |b, input| {
-                    b.iter(|| {
-                        let total = run_read(&input.parquet_data, &input.selection, mode.policy());
-                        hint::black_box(total);
-                    });
-                },
-            );
+            for &mode in BENCH_MODES {
+                c.bench_with_input(
+                    BenchmarkId::new(backing.function_name(mode), &suffix),
+                    &bench_input,
+                    |b, input| {
+                        b.iter(|| {
+                            let total =
+                                run_read(&input.parquet_data, &input.selection, mode.policy());
+                            hint::black_box(total);
+                        });
+                    },
+                );
+            }
         }
     }
 }
@@ -450,6 +459,7 @@ fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) ->
 enum BenchMode {
     ReadSelector,
     ReadMask,
+    ReadAuto,
 }
 
 impl BenchMode {
@@ -457,6 +467,7 @@ impl BenchMode {
         match self {
             BenchMode::ReadSelector => "read_selector",
             BenchMode::ReadMask => "read_mask",
+            BenchMode::ReadAuto => "read_auto",
         }
     }
 
@@ -464,6 +475,39 @@ impl BenchMode {
         match self {
             BenchMode::ReadSelector => RowSelectionPolicy::Selectors,
             BenchMode::ReadMask => RowSelectionPolicy::Mask,
+            BenchMode::ReadAuto => RowSelectionPolicy::default(),
+        }
+    }
+}
+
+/// Which representation backs the input [`RowSelection`] handed to the reader.
+#[derive(Clone, Copy)]
+enum Backing {
+    Selectors,
+    Mask,
+}
+
+impl Backing {
+    /// Benchmark function name for this backing/mode pair. Selector-backed
+    /// inputs keep the historical names so results stay comparable with runs
+    /// from before mask-backed selections existed.
+    fn function_name(self, mode: BenchMode) -> String {
+        match self {
+            Backing::Selectors => mode.label().to_string(),
+            Backing::Mask => format!("{}_mask_backed", mode.label()),
+        }
+    }
+
+    fn convert(self, selection: &RowSelection) -> RowSelection {
+        match self {
+            Backing::Selectors => selection.clone(),
+            Backing::Mask => {
+                let mut builder = BooleanBufferBuilder::new(TOTAL_ROWS);
+                for selector in selection.iter() {
+                    builder.append_n(selector.row_count, !selector.skip);
+                }
+                RowSelection::from_boolean_buffer(builder.finish())
+            }
         }
     }
 }
