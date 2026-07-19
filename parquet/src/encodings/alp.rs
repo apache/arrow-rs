@@ -455,17 +455,11 @@ pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = S
     /// (which would come back as `+0.0` and lose its sign).
     fn is_impossible_to_encode(self) -> bool;
 
-    /// Round to the nearest integer by the "magic number" technique: adding and
-    /// then subtracting the magic number lands the value in a binade where the
-    /// unit in the last place is exactly 1.0, so the fractional bits fall off.
-    ///
-    /// The magic number must carry the sign of the value: negatives round in the
-    /// corresponding negative binade, so the constant is `copysign`ed onto the
-    /// input rather than branched on. This is byte-identical to the equivalent
-    /// `if self >= 0 { +magic } else { -magic }` form but has no data-dependent
-    /// branch, which keeps the per-value encode loop autovectorizable. The
-    /// `+ magic - magic` cannot be algebraically cancelled - the rounding *is*
-    /// the intermediate loss of precision.
+    /// Round to nearest by the "magic number" technique: `(x + magic) - magic`
+    /// lands `x` where the ULP is 1.0, dropping the fraction. The magic carries
+    /// the sign of `x` (`copysign`) so negatives round in their own binade -
+    /// byte-identical to branching on the sign but branchless, so the encode loop
+    /// vectorizes. The add/sub must not be cancelled: it *is* the rounding.
     fn fast_round(self) -> <Self::Exact as AlpExact>::Signed;
 
     /// Encode one value with a precomputed [`AlpFloat::encode_scale`].
