@@ -22,7 +22,6 @@ extern crate criterion;
 use criterion::Criterion;
 
 use arrow::array::*;
-use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow_string::concat_elements::concat_elements_dyn;
 use std::hint;
