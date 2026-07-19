@@ -19,6 +19,9 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
+use crate::arrow::arrow_reader::metrics::{
+    ArrowReaderMetrics, FilterDeferralDecisionReason, FilterSelectivityStat,
+};
 use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
@@ -29,6 +32,102 @@ use arrow_array::{Array, BooleanArray};
 use arrow_buffer::BooleanBuffer;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+
+// Fixed gates for the filter-deferral heuristic. They sit alongside the
+// user-tunable knob on
+// [`ArrowReaderBuilder::with_long_skip_share_threshold`], which controls
+// the long-skip-share requirement; these three are intentionally not
+// exposed as a public API to keep the surface area small. Predicate results
+// are kept applied only when every gate is satisfied; otherwise the result
+// is deferred until [`ReadPlanBuilder::build`].
+
+/// Run length at or above this value is treated as "long" for skip-island stats.
+const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 100;
+/// Minimum cumulative skip selectivity (`skipped_rows / row_count`) required to
+/// avoid deferral once fragmentation increases.
+const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
+/// Minimum *incremental* skip selectivity contributed by a single predicate
+/// (`new_skipped_rows / row_count`) required to avoid deferral once
+/// fragmentation increases.
+const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
+
+/// Histogram-like stats for selector runs, focused on skipped-row contiguity.
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+struct SelectionRunStats {
+    total_rows: usize,
+    effective_count: usize,
+    skipped_rows: usize,
+    long_skip_rows: usize,
+}
+
+impl SelectionRunStats {
+    fn from_selection(selection: &RowSelection, long_threshold: usize) -> Self {
+        selection
+            .iter()
+            .fold(Self::default(), |mut stats, selector| {
+                let row_count = selector.row_count;
+                if row_count == 0 {
+                    return stats;
+                }
+
+                stats.total_rows += row_count;
+                stats.effective_count += 1;
+
+                if selector.skip {
+                    stats.skipped_rows += row_count;
+                }
+
+                if selector.skip && row_count >= long_threshold {
+                    stats.long_skip_rows += row_count;
+                }
+
+                stats
+            })
+    }
+
+    fn skip_selectivity(self, row_count: usize) -> f64 {
+        if row_count == 0 {
+            return 0.0;
+        }
+        self.skipped_rows as f64 / row_count as f64
+    }
+
+    fn long_skip_share(self) -> f64 {
+        if self.skipped_rows == 0 {
+            return 0.0;
+        }
+        self.long_skip_rows as f64 / self.skipped_rows as f64
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeferralDecision {
+    should_defer: bool,
+    reason: FilterDeferralDecisionReason,
+    current_stats: SelectionRunStats,
+    absolute_stats: SelectionRunStats,
+    absolute_skip_selectivity: f64,
+    absolute_long_skip_share: f64,
+    delta_skip_selectivity: f64,
+    delta_long_skip_share: f64,
+}
+
+impl DeferralDecision {
+    /// Decision used by the all-selected fast path: predicate accepted every
+    /// row, no selection was materialized, all stats are zero.
+    fn all_selected_fast_path() -> Self {
+        Self {
+            should_defer: false,
+            reason: FilterDeferralDecisionReason::AllSelectedFastPath,
+            current_stats: SelectionRunStats::default(),
+            absolute_stats: SelectionRunStats::default(),
+            absolute_skip_selectivity: 0.0,
+            absolute_long_skip_share: 0.0,
+            delta_skip_selectivity: 0.0,
+            delta_long_skip_share: 0.0,
+        }
+    }
+}
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
@@ -74,6 +173,15 @@ impl<'a> PredicateOptions<'a> {
         self.total_rows = total_rows;
         self
     }
+
+    /// Set the row group's total row count without enabling a limit.
+    ///
+    /// The value is used to record per-predicate selectivity metrics
+    /// regardless of whether early termination is active.
+    pub fn with_total_rows(mut self, total_rows: usize) -> Self {
+        self.total_rows = total_rows;
+        self
+    }
 }
 
 /// A builder for [`ReadPlan`]
@@ -84,6 +192,18 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Optional metrics sink for observability.
+    metrics: ArrowReaderMetrics,
+    /// Number of predicates evaluated so far.
+    predicate_index: usize,
+    /// Minimum long-skip-share required for a fragmented predicate result to
+    /// remain applied; `None` disables deferral. See
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`] for semantics.
+    ///
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`]: crate::arrow::arrow_reader::ArrowReaderBuilder::with_long_skip_share_threshold
+    long_skip_share_threshold: Option<f64>,
+    /// Accumulated deferred selections, merged via `intersection` at build time.
+    deferred_selection: Option<RowSelection>,
 }
 
 impl ReadPlanBuilder {
@@ -93,6 +213,10 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            metrics: ArrowReaderMetrics::disabled(),
+            predicate_index: 0,
+            long_skip_share_threshold: None,
+            deferred_selection: None,
         }
     }
 
@@ -110,9 +234,25 @@ impl ReadPlanBuilder {
         self
     }
 
+    /// Configure metrics collection for this read plan.
+    pub(crate) fn with_metrics(mut self, metrics: ArrowReaderMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
     /// Returns the current row selection policy
     pub fn row_selection_policy(&self) -> &RowSelectionPolicy {
         &self.row_selection_policy
+    }
+
+    /// Set the long-skip-share threshold for filter deferral.
+    ///
+    /// See [`ArrowReaderBuilder::with_long_skip_share_threshold`] for full semantics.
+    ///
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`]: crate::arrow::arrow_reader::ArrowReaderBuilder::with_long_skip_share_threshold
+    pub fn with_long_skip_share_threshold(mut self, threshold: Option<f64>) -> Self {
+        self.long_skip_share_threshold = threshold;
+        self
     }
 
     /// Returns the current selection, if any
@@ -194,8 +334,11 @@ impl ReadPlanBuilder {
         self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
+        row_count: usize,
     ) -> Result<Self> {
-        self.with_predicate_options(PredicateOptions::new(array_reader, predicate))
+        self.with_predicate_options(
+            PredicateOptions::new(array_reader, predicate).with_total_rows(row_count),
+        )
     }
 
     /// Evaluates an [`ArrowPredicate`] with the given [`PredicateOptions`],
@@ -212,6 +355,25 @@ impl ReadPlanBuilder {
             total_rows,
         } = options;
 
+        // `total_rows` doubles as the row group size used by per-predicate
+        // selectivity metrics, regardless of whether a limit was set.
+        let row_count = total_rows;
+
+        // Build a ReadPlan for the predicate reader using only the current
+        // applied selection (excluding `deferred_selection`). Deferred
+        // predicates have not been intersected with `selection` yet, and
+        // re-applying them here would short-circuit the next predicate's
+        // read against rows it should still evaluate.
+        let plan_for_reader = ReadPlanBuilder {
+            batch_size: self.batch_size,
+            selection: self.selection.clone(),
+            row_selection_policy: self.row_selection_policy,
+            metrics: ArrowReaderMetrics::disabled(),
+            predicate_index: 0,
+            long_skip_share_threshold: None,
+            deferred_selection: None,
+        };
+
         // Target length for the concatenated filter output:
         // - Prior selection ⇒ the reader yields that many rows; `and_then`
         //   below requires the filter output to match.
@@ -223,7 +385,7 @@ impl ReadPlanBuilder {
             None => limit.map(|_| total_rows),
         };
 
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        let reader = ParquetRecordBatchReader::new(array_reader, plan_for_reader.build());
         let mut filters = vec![];
         let mut processed_rows: usize = 0;
         let mut matched_rows: usize = 0;
@@ -280,18 +442,203 @@ impl ReadPlanBuilder {
         // and keeps selection as None which enables coalesced page fetches.
         let all_selected = filters.iter().all(|f| f.true_count() == f.len());
         if all_selected && self.selection.is_none() {
+            self.record_predicate_stat(
+                row_count,
+                0,
+                0,
+                &DeferralDecision::all_selected_fast_path(),
+            );
             return Ok(self);
         }
         let raw = RowSelection::from_filters(&filters);
-        self.selection = match self.selection.take() {
-            Some(selection) => Some(selection.and_then(&raw)),
-            None => Some(raw),
+
+        // Compute the absolute-position result
+        let absolute = match self.selection.as_ref() {
+            Some(selection) => selection.and_then(&raw),
+            None => raw,
         };
+
+        let current_stats = self
+            .selection
+            .as_ref()
+            .map_or_else(SelectionRunStats::default, |s| {
+                SelectionRunStats::from_selection(s, DEFERRAL_LONG_RUN_THRESHOLD_ROWS)
+            });
+        let current_selectors = self.selection.as_ref().map_or(0, |s| s.selector_count());
+        let decision =
+            self.evaluate_deferral(&absolute, row_count, current_selectors, current_stats);
+        let should_defer = decision.should_defer;
+
+        self.record_predicate_stat(
+            row_count,
+            current_selectors,
+            absolute.selector_count(),
+            &decision,
+        );
+
+        if should_defer {
+            self.deferred_selection = Some(match self.deferred_selection.take() {
+                Some(existing) => existing.intersection(&absolute),
+                None => absolute,
+            });
+        } else {
+            self.selection = Some(absolute);
+        }
+
         Ok(self)
+    }
+
+    /// Emit a per-predicate selectivity stat and advance `predicate_index`.
+    fn record_predicate_stat(
+        &mut self,
+        row_count: usize,
+        current_selectors: usize,
+        absolute_selectors: usize,
+        decision: &DeferralDecision,
+    ) {
+        self.metrics
+            .record_filter_selectivity_stat(FilterSelectivityStat {
+                predicate_index: self.predicate_index,
+                row_count,
+                current_selector_count: current_selectors,
+                absolute_selector_count: absolute_selectors,
+                current_skipped_rows: decision.current_stats.skipped_rows,
+                absolute_skipped_rows: decision.absolute_stats.skipped_rows,
+                current_long_skip_rows: decision.current_stats.long_skip_rows,
+                absolute_long_skip_rows: decision.absolute_stats.long_skip_rows,
+                absolute_skip_selectivity: decision.absolute_skip_selectivity,
+                absolute_long_skip_share: decision.absolute_long_skip_share,
+                delta_skip_selectivity: decision.delta_skip_selectivity,
+                delta_long_skip_share: decision.delta_long_skip_share,
+                long_skip_share_threshold: self.long_skip_share_threshold,
+                deferred: decision.should_defer,
+                decision_reason: decision.reason,
+            });
+        self.predicate_index += 1;
+    }
+
+    /// Decide whether the predicate's result should be deferred or applied,
+    /// and return the supporting stats for metrics.
+    ///
+    /// Short-circuits, in order, before the four-gate test:
+    /// 1. **Threshold disabled** (`long_skip_share_threshold == None`) — never
+    ///    defer; the heuristic is opt-in.
+    /// 2. **Zero row count** — selectivity ratios are undefined, so keep
+    ///    applied.
+    /// 3. **Fragmentation did not increase** (`absolute.selector_count() <=
+    ///    current_selectors`) — deferral only fires when applying the
+    ///    predicate would make the selection more fragmented than it already
+    ///    is.
+    ///
+    /// Only after all three checks pass do the four gates
+    /// (`DEFERRAL_SKIP_SELECTIVITY_FLOOR`, `long_skip_share_threshold`,
+    /// `DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR`, `long_skip_share_threshold`)
+    /// determine whether the predicate stays applied.
+    fn evaluate_deferral(
+        &self,
+        absolute: &RowSelection,
+        row_count: usize,
+        current_selectors: usize,
+        current_stats: SelectionRunStats,
+    ) -> DeferralDecision {
+        let absolute_stats =
+            SelectionRunStats::from_selection(absolute, DEFERRAL_LONG_RUN_THRESHOLD_ROWS);
+
+        let absolute_skip_selectivity = absolute_stats.skip_selectivity(row_count);
+        let absolute_long_skip_share = absolute_stats.long_skip_share();
+        let delta_skipped_rows = absolute_stats
+            .skipped_rows
+            .saturating_sub(current_stats.skipped_rows);
+        let delta_long_skip_rows = absolute_stats
+            .long_skip_rows
+            .saturating_sub(current_stats.long_skip_rows);
+        let delta_skip_selectivity = if row_count == 0 {
+            0.0
+        } else {
+            delta_skipped_rows as f64 / row_count as f64
+        };
+        let delta_long_skip_share = if delta_skipped_rows == 0 {
+            0.0
+        } else {
+            delta_long_skip_rows as f64 / delta_skipped_rows as f64
+        };
+
+        let Some(long_skip_share_threshold) = self.long_skip_share_threshold else {
+            return DeferralDecision {
+                should_defer: false,
+                reason: FilterDeferralDecisionReason::ThresholdDisabled,
+                current_stats,
+                absolute_stats,
+                absolute_skip_selectivity,
+                absolute_long_skip_share,
+                delta_skip_selectivity,
+                delta_long_skip_share,
+            };
+        };
+
+        if row_count == 0 {
+            return DeferralDecision {
+                should_defer: false,
+                reason: FilterDeferralDecisionReason::ZeroRowCount,
+                current_stats,
+                absolute_stats,
+                absolute_skip_selectivity,
+                absolute_long_skip_share,
+                delta_skip_selectivity,
+                delta_long_skip_share,
+            };
+        }
+
+        // If the predicate does not increase fragmentation, keep it applied.
+        if absolute.selector_count() <= current_selectors {
+            return DeferralDecision {
+                should_defer: false,
+                reason: FilterDeferralDecisionReason::FragmentationNotIncreased,
+                current_stats,
+                absolute_stats,
+                absolute_skip_selectivity,
+                absolute_long_skip_share,
+                delta_skip_selectivity,
+                delta_long_skip_share,
+            };
+        }
+
+        let should_keep_applied = absolute_skip_selectivity >= DEFERRAL_SKIP_SELECTIVITY_FLOOR
+            && absolute_long_skip_share >= long_skip_share_threshold
+            && delta_skip_selectivity >= DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR
+            && delta_long_skip_share >= long_skip_share_threshold;
+
+        DeferralDecision {
+            should_defer: !should_keep_applied,
+            reason: if should_keep_applied {
+                FilterDeferralDecisionReason::GatesPassed
+            } else {
+                FilterDeferralDecisionReason::GatesFailedDeferred
+            },
+            current_stats,
+            absolute_stats,
+            absolute_skip_selectivity,
+            absolute_long_skip_share,
+            delta_skip_selectivity,
+            delta_long_skip_share,
+        }
+    }
+
+    /// Merge any deferred selection into the main selection.
+    fn merge_deferred(&mut self) {
+        if let Some(deferred) = self.deferred_selection.take() {
+            self.selection = Some(match self.selection.take() {
+                Some(selection) => selection.intersection(&deferred),
+                None => deferred,
+            });
+        }
     }
 
     /// Create a final `ReadPlan` the read plan for the scan
     pub fn build(mut self) -> ReadPlan {
+        // Merge any deferred selection before finalizing
+        self.merge_deferred();
+
         // If selection is empty, truncate
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
@@ -304,6 +651,10 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            metrics: _,
+            predicate_index: _,
+            long_skip_share_threshold: _,
+            deferred_selection: _,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -375,6 +726,10 @@ impl LimitedReadPlanBuilder {
             offset,
             limit,
         } = self;
+
+        // Merge deferred selection before applying offset/limit so that
+        // offset and limit operate on the correctly filtered row set.
+        inner.merge_deferred();
 
         // If the selection is empty, truncate
         if !inner.selects_any() {
@@ -451,6 +806,12 @@ impl ReadPlan {
 mod tests {
     use super::*;
 
+    const TEST_LONG_SKIP_SHARE_THRESHOLD: f64 = 0.75;
+
+    fn stats(selection: &RowSelection) -> SelectionRunStats {
+        SelectionRunStats::from_selection(selection, DEFERRAL_LONG_RUN_THRESHOLD_ROWS)
+    }
+
     fn builder_with_selection(selection: RowSelection) -> ReadPlanBuilder {
         ReadPlanBuilder::new(1024).with_selection(Some(selection))
     }
@@ -473,6 +834,278 @@ mod tests {
         assert_eq!(
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
+        );
+    }
+
+    /// Helper to build a `ReadPlanBuilder` with deferred selection set directly
+    fn builder_with_deferred(
+        selection: Option<RowSelection>,
+        deferred: RowSelection,
+    ) -> ReadPlanBuilder {
+        ReadPlanBuilder {
+            batch_size: 1024,
+            selection,
+            row_selection_policy: RowSelectionPolicy::default(),
+            metrics: ArrowReaderMetrics::disabled(),
+            predicate_index: 0,
+            long_skip_share_threshold: None,
+            deferred_selection: Some(deferred),
+        }
+    }
+
+    #[test]
+    fn merge_deferred_no_prior_selection() {
+        // Deferred selection with no main selection: result = deferred
+        let deferred = RowSelection::from(vec![RowSelector::select(90), RowSelector::skip(10)]);
+        let mut builder = builder_with_deferred(None, deferred);
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 90);
+        assert_eq!(sel.skipped_row_count(), 10);
+        assert!(builder.deferred_selection.is_none());
+    }
+
+    #[test]
+    fn merge_deferred_with_prior_selection() {
+        // Main selects first 50, deferred selects rows 0..40 and 50..100
+        // Intersection should select rows 0..40 (first 40 of 100)
+        let main_sel = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
+        let deferred = RowSelection::from(vec![
+            RowSelector::select(40),
+            RowSelector::skip(10),
+            RowSelector::select(50),
+        ]);
+        let mut builder = builder_with_deferred(Some(main_sel), deferred);
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 40);
+    }
+
+    #[test]
+    fn merge_deferred_in_build() {
+        // Verify that build() merges deferred before creating the ReadPlan
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let builder = builder_with_deferred(None, deferred);
+        // build() should merge and produce a plan that selects 80 rows
+        let _plan = builder.build();
+        // If it didn't panic, the merge worked (selection was properly set)
+    }
+
+    #[test]
+    fn merge_deferred_in_build_limited() {
+        // Verify that build_limited() merges deferred before applying offset/limit
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let builder = builder_with_deferred(None, deferred);
+        let limited = builder.limited(100).with_limit(Some(50)).build_limited();
+        let sel = limited.selection.unwrap();
+        // After merge: 80 selected, 20 skipped. After limit(50): 50 selected.
+        assert_eq!(sel.row_count(), 50);
+    }
+
+    #[test]
+    fn long_skip_share_threshold_setter() {
+        let builder = ReadPlanBuilder::new(1024);
+        assert!(builder.long_skip_share_threshold.is_none());
+        assert!(builder.deferred_selection.is_none());
+
+        let builder = builder.with_long_skip_share_threshold(Some(0.9));
+        assert_eq!(builder.long_skip_share_threshold, Some(0.9));
+    }
+
+    #[test]
+    fn no_deferred_when_threshold_disabled() {
+        // Without threshold, deferred_selection should always remain None
+        let builder = ReadPlanBuilder::new(1024);
+        assert!(builder.long_skip_share_threshold.is_none());
+        assert!(builder.deferred_selection.is_none());
+    }
+
+    #[test]
+    fn multiple_deferred_selections_intersected() {
+        // Two deferred selections should be intersected
+        let deferred1 = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let deferred2 = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(70),
+            RowSelector::skip(20),
+        ]);
+        // intersection: only rows 10..80 (70 rows)
+        let mut builder = builder_with_deferred(None, deferred1);
+        builder.deferred_selection =
+            Some(builder.deferred_selection.unwrap().intersection(&deferred2));
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 70);
+    }
+
+    #[test]
+    fn selection_run_stats_tracks_skip_selectivity_and_long_skip_share() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(4),
+            RowSelector::skip(3),
+            RowSelector::select(200),
+            RowSelector::skip(256),
+            RowSelector::select(40),
+        ]);
+
+        let stats = SelectionRunStats::from_selection(&selection, 100);
+        assert_eq!(stats.total_rows, 503);
+        assert_eq!(stats.effective_count, 5);
+        assert_eq!(stats.skipped_rows, 259);
+        assert_eq!(stats.long_skip_rows, 256);
+
+        let eps = 1e-12;
+        assert!((stats.skip_selectivity(503) - (259.0 / 503.0)).abs() < eps);
+        assert!((stats.long_skip_share() - (256.0 / 259.0)).abs() < eps);
+    }
+
+    #[test]
+    fn should_not_defer_when_fragmentation_not_increased() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(40),
+            RowSelector::skip(20),
+            RowSelector::select(40),
+        ]);
+
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 100, 3, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_not_defer_when_both_non_deferral_gates_pass() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(50),
+            RowSelector::skip(100),
+            RowSelector::select(50),
+            RowSelector::skip(10),
+        ]);
+
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 210, 1, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_defer_when_only_selectivity_gate_fails() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(1000),
+            RowSelector::skip(100),
+            RowSelector::select(1000),
+        ]);
+
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 2100, 1, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_defer_when_only_long_skip_share_gate_fails() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(20),
+            RowSelector::skip(60),
+            RowSelector::select(20),
+            RowSelector::skip(20),
+        ]);
+
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 120, 1, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_defer_when_both_non_deferral_gates_fail() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(500),
+            RowSelector::skip(50),
+            RowSelector::select(500),
+            RowSelector::skip(10),
+        ]);
+
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 1060, 1, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn long_run_threshold_counts_exactly_100_rows_as_long() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(100),
+            RowSelector::select(10),
+            RowSelector::skip(20),
+        ]);
+
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 140, 1, SelectionRunStats::default())
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_defer_when_absolute_gates_pass_but_delta_selectivity_is_too_small() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(400),
+            RowSelector::skip(100),
+            RowSelector::select(499),
+            RowSelector::skip(1),
+        ]);
+        // Previously skipped 100/1000 rows already in long runs.
+        let current_stats = SelectionRunStats {
+            skipped_rows: 100,
+            long_skip_rows: 100,
+            ..SelectionRunStats::default()
+        };
+
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 1000, 1, current_stats)
+                .should_defer
+        );
+    }
+
+    #[test]
+    fn should_defer_when_absolute_gates_pass_but_delta_long_skip_share_is_too_small() {
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(50),
+            RowSelector::skip(100),
+            RowSelector::select(50),
+            RowSelector::skip(10),
+        ]);
+        // Absolute long-skip-share is high, but this predicate adds only short skips.
+        let current = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(100)]);
+
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 210, 1, stats(&current))
+                .should_defer
         );
     }
 
