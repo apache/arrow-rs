@@ -37,11 +37,7 @@ const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
-const BENCH_MODES: &[BenchMode] = &[
-    BenchMode::Selector,
-    BenchMode::Mask,
-    BenchMode::Auto,
-];
+const BENCH_MODES: &[BenchMode] = &[BenchMode::Selector, BenchMode::Mask, BenchMode::Auto];
 const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
 struct DataProfile {
