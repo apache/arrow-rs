@@ -23,6 +23,7 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+use selection::MaskCursor;
 pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -1350,6 +1351,123 @@ pub struct ParquetRecordBatchReader {
     read_plan: ReadPlan,
 }
 
+/// Accumulates filter masks for decoded chunks in one logical output batch.
+///
+/// The first chunk keeps its [`BooleanBuffer`] without copying. A second chunk
+/// promotes the accumulator to a [`BooleanBufferBuilder`], and later chunks are
+/// appended to it. For example, chunks `1000` and `1` become `10001`.
+#[derive(Default)]
+enum FilterMaskAccumulator {
+    #[default]
+    Empty,
+    Single(BooleanBuffer),
+    Combined(BooleanBufferBuilder),
+}
+
+impl FilterMaskAccumulator {
+    fn append(&mut self, mask: BooleanBuffer) {
+        *self = match std::mem::take(self) {
+            Self::Empty => Self::Single(mask),
+            Self::Single(first) => {
+                let mut combined = BooleanBufferBuilder::new(first.len() + mask.len());
+                combined.append_buffer(&first);
+                combined.append_buffer(&mask);
+                Self::Combined(combined)
+            }
+            Self::Combined(mut combined) => {
+                combined.append_buffer(&mask);
+                Self::Combined(combined)
+            }
+        };
+    }
+
+    fn finish(self) -> Option<BooleanBuffer> {
+        match self {
+            Self::Empty => None,
+            Self::Single(mask) => Some(mask),
+            Self::Combined(combined) => Some(combined.build()),
+        }
+    }
+}
+
+/// Converts the projection buffered by `array_reader` into a record batch.
+fn consume_record_batch(array_reader: &mut dyn ArrayReader) -> Result<RecordBatch> {
+    let array = array_reader.consume_batch()?;
+    let struct_array = array.as_struct_opt().ok_or_else(|| {
+        ArrowError::ParquetError("Struct array reader should return struct array".to_string())
+    })?;
+    Ok(RecordBatch::from(struct_array))
+}
+
+/// Reads one logical Mask batch, potentially spanning multiple loaded ranges.
+///
+/// Each [`MaskCursor`] chunk is safe to decode because it stays within loaded
+/// pages. Gaps are crossed with [`ArrayReader::skip_records`], while decoded
+/// arrays and their mask fragments remain buffered. Once `batch_size` selected
+/// rows have accumulated, this consumes the underlying batch and filters it
+/// once with the combined mask.
+fn read_mask_batch(
+    array_reader: &mut dyn ArrayReader,
+    mask_cursor: &mut MaskCursor,
+    batch_size: usize,
+) -> Result<Option<RecordBatch>> {
+    let mut selected_rows = 0;
+    let mut filter_mask = FilterMaskAccumulator::default();
+
+    while selected_rows < batch_size && !mask_cursor.is_empty() {
+        let mask_chunk = mask_cursor.next_chunk(batch_size - selected_rows)?;
+
+        if mask_chunk.initial_skip > 0 {
+            let skipped = array_reader.skip_records(mask_chunk.initial_skip)?;
+            if skipped != mask_chunk.initial_skip {
+                return Err(general_err!(
+                    "failed to skip rows, expected {}, got {}",
+                    mask_chunk.initial_skip,
+                    skipped
+                ));
+            }
+        }
+
+        let mask = mask_cursor.mask_values_for(&mask_chunk)?;
+        let read = array_reader.read_records(mask_chunk.chunk_rows)?;
+        if read == 0 {
+            return Err(general_err!(
+                "reached end of column while expecting {} rows",
+                mask_chunk.chunk_rows
+            ));
+        }
+        if read != mask_chunk.chunk_rows {
+            return Err(general_err!(
+                "insufficient rows read from array reader - expected {}, got {}",
+                mask_chunk.chunk_rows,
+                read
+            ));
+        }
+
+        filter_mask.append(mask.values().clone());
+        selected_rows += mask_chunk.selected_rows;
+    }
+
+    if selected_rows == 0 {
+        return Ok(None);
+    }
+
+    let filter_mask = filter_mask
+        .finish()
+        .ok_or_else(|| general_err!("Internal Error: decoded Mask batch has no filter values"))?;
+    let batch = consume_record_batch(array_reader)?;
+    let filtered_batch = filter_record_batch(&batch, &BooleanArray::from(filter_mask))?;
+    if filtered_batch.num_rows() != selected_rows {
+        return Err(general_err!(
+            "filtered rows mismatch selection - expected {}, got {}",
+            selected_rows,
+            filtered_batch.num_rows()
+        ));
+    }
+
+    Ok(Some(filtered_batch))
+}
+
 impl Debug for ParquetRecordBatchReader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchReader")
@@ -1382,80 +1500,9 @@ impl ParquetRecordBatchReader {
         if batch_size == 0 {
             return Ok(None);
         }
-        let filter_mask = match self.read_plan.row_selection_cursor_mut() {
+        match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
-                let mut first_filter_mask: Option<BooleanBuffer> = None;
-                let mut combined_filter_mask: Option<BooleanBufferBuilder> = None;
-
-                // Each chunk stays within loaded pages, while the in-progress array and
-                // filter mask accumulate chunks until the logical batch is full.
-                while read_records < batch_size && !mask_cursor.is_empty() {
-                    let remaining = batch_size - read_records;
-                    let Some(mask_chunk) = mask_cursor.next_chunk(remaining)? else {
-                        break;
-                    };
-
-                    if mask_chunk.initial_skip > 0 {
-                        let skipped = self.array_reader.skip_records(mask_chunk.initial_skip)?;
-                        if skipped != mask_chunk.initial_skip {
-                            return Err(general_err!(
-                                "failed to skip rows, expected {}, got {}",
-                                mask_chunk.initial_skip,
-                                skipped
-                            ));
-                        }
-                    }
-
-                    if mask_chunk.chunk_rows == 0 {
-                        if mask_cursor.is_empty() && mask_chunk.selected_rows == 0 {
-                            break;
-                        }
-                        continue;
-                    }
-
-                    let mask = mask_cursor.mask_values_for(&mask_chunk)?;
-
-                    let read = self.array_reader.read_records(mask_chunk.chunk_rows)?;
-                    if read == 0 {
-                        return Err(general_err!(
-                            "reached end of column while expecting {} rows",
-                            mask_chunk.chunk_rows
-                        ));
-                    }
-                    if read != mask_chunk.chunk_rows {
-                        return Err(general_err!(
-                            "insufficient rows read from array reader - expected {}, got {}",
-                            mask_chunk.chunk_rows,
-                            read
-                        ));
-                    }
-                    match combined_filter_mask.as_mut() {
-                        Some(combined) => combined.append_buffer(mask.values()),
-                        None => match first_filter_mask.take() {
-                            Some(first) => {
-                                let mut combined =
-                                    BooleanBufferBuilder::new(first.len() + mask.len());
-                                combined.append_buffer(&first);
-                                combined.append_buffer(mask.values());
-                                combined_filter_mask = Some(combined);
-                            }
-                            None => first_filter_mask = Some(mask.values().clone()),
-                        },
-                    }
-                    read_records += mask_chunk.selected_rows;
-                }
-
-                if read_records == 0 {
-                    return Ok(None);
-                }
-
-                let filter_mask = match combined_filter_mask {
-                    Some(combined) => combined.build(),
-                    None => first_filter_mask.ok_or_else(|| {
-                        general_err!("Internal Error: decoded Mask batch has no filter values")
-                    })?,
-                };
-                Some(BooleanArray::from(filter_mask))
+                return read_mask_batch(self.array_reader.as_mut(), mask_cursor, batch_size);
             }
             RowSelectionCursor::Selectors(selectors_cursor) => {
                 while read_records < batch_size && !selectors_cursor.is_empty() {
@@ -1495,35 +1542,13 @@ impl ParquetRecordBatchReader {
                         rec => read_records += rec,
                     };
                 }
-                None
             }
             RowSelectionCursor::All => {
                 self.array_reader.read_records(batch_size)?;
-                None
             }
-        };
+        }
 
-        let array = self.array_reader.consume_batch()?;
-        let struct_array = array.as_struct_opt().ok_or_else(|| {
-            ArrowError::ParquetError("Struct array reader should return struct array".to_string())
-        })?;
-
-        let batch = RecordBatch::from(struct_array);
-        let batch = match filter_mask {
-            Some(mask) => {
-                let filtered_batch = filter_record_batch(&batch, &mask)?;
-                if filtered_batch.num_rows() != read_records {
-                    return Err(general_err!(
-                        "filtered rows mismatch selection - expected {}, got {}",
-                        read_records,
-                        filtered_batch.num_rows()
-                    ));
-                }
-                filtered_batch
-            }
-            None => batch,
-        };
-
+        let batch = consume_record_batch(self.array_reader.as_mut())?;
         Ok(if batch.num_rows() > 0 {
             Some(batch)
         } else {
@@ -1646,13 +1671,35 @@ pub(crate) mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
+    use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
+
+    #[test]
+    fn filter_mask_accumulator_handles_empty_single_and_multiple_chunks() {
+        let first = BooleanBuffer::from(vec![true, false, false, false]);
+        let second = BooleanBuffer::from(vec![true]);
+        let third = BooleanBuffer::from(vec![false, true]);
+
+        assert!(super::FilterMaskAccumulator::default().finish().is_none());
+
+        let mut single = super::FilterMaskAccumulator::default();
+        single.append(first.clone());
+        assert_eq!(single.finish().unwrap(), first);
+
+        let mut combined = super::FilterMaskAccumulator::default();
+        combined.append(BooleanBuffer::from(vec![true, false, false, false]));
+        combined.append(second);
+        combined.append(third);
+        assert_eq!(
+            combined.finish().unwrap(),
+            BooleanBuffer::from(vec![true, false, false, false, true, false, true])
+        );
+    }
 
     #[test]
     fn test_arrow_reader_all_columns() {

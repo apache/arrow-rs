@@ -214,6 +214,46 @@ async fn test_mask_coalesces_loaded_ranges_to_batch_size() {
 }
 
 #[tokio::test]
+async fn test_mask_stops_after_trailing_skipped_pages() {
+    let values = (0..8).collect::<Vec<i64>>();
+    let data = make_two_column_i64_file(&values, 2);
+    let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+        TestReader::new(data),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .await
+    .unwrap()
+    .with_row_selection(RowSelection::from(vec![
+        RowSelector::select(1),
+        RowSelector::skip(4),
+        RowSelector::select(1),
+        RowSelector::skip(2),
+    ]))
+    .with_batch_size(8)
+    .with_row_selection_policy(RowSelectionPolicy::Mask)
+    .build()
+    .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(RecordBatch::num_rows)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .values(),
+        &[0, 5]
+    );
+}
+
+#[tokio::test]
 async fn test_mask_nested_projection_with_different_page_boundaries() {
     use arrow_array::{
         Array, UInt32Array,

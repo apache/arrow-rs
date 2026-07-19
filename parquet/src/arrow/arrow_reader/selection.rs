@@ -757,6 +757,25 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 ///
 /// This is best for dense selections where there are many small skips
 /// or selections. For example, selecting every other row.
+///
+/// When page pruning produces sparse column data, `loaded_row_ranges` limits
+/// each decoded chunk to rows whose pages are loaded for every projected leaf.
+/// For example, two projected columns can have different page boundaries:
+///
+/// ```text
+/// Row ranges:       [0, 4) [4, 6) [6, 8) [8, 10) [10, 12)
+/// Selection mask:   1000   00     00     00      01
+/// Column A pages:   loaded | missing [4, 8) | loaded [8, 12)
+/// Column B pages:   loaded [0, 6) | missing [6, 10) | loaded
+/// LoadedRowRanges:  [0, 4)                         [10, 12)
+/// ```
+///
+/// The first chunk decodes `[0, 4)` with mask `1000`. The next chunk skips to
+/// row 11 and decodes `[11, 12)` with mask `1`. The loaded ranges are decode
+/// boundaries, not output batch boundaries: [`ParquetRecordBatchReader`]
+/// accumulates both chunks and applies the combined mask `10001` once.
+///
+/// [`ParquetRecordBatchReader`]: super::ParquetRecordBatchReader
 #[derive(Debug)]
 pub struct MaskCursor {
     mask: BooleanBuffer,
@@ -774,13 +793,19 @@ impl MaskCursor {
 
     /// Advance through the mask representation, producing the next chunk summary
     pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+        if self.is_empty() {
+            return None;
+        }
+
+        Some(self.next_mask_chunk_non_empty(batch_size))
+    }
+
+    /// Produces the next chunk for a non-empty, trailing-skip-free mask.
+    fn next_mask_chunk_non_empty(&mut self, batch_size: usize) -> MaskChunk {
+        debug_assert!(!self.is_empty());
+
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
-
-            if self.position >= mask.len() {
-                return None;
-            }
-
             let start_position = self.position;
             let mut cursor = start_position;
             let mut initial_skip = 0;
@@ -789,6 +814,10 @@ impl MaskCursor {
                 initial_skip += 1;
                 cursor += 1;
             }
+            debug_assert!(
+                cursor < mask.len(),
+                "ReadPlan must remove trailing skips from Mask selections"
+            );
 
             let mask_start = cursor;
             let mut chunk_rows = 0;
@@ -810,21 +839,25 @@ impl MaskCursor {
 
         self.position = end_position;
 
-        Some(MaskChunk {
+        MaskChunk {
             initial_skip,
             chunk_rows,
             selected_rows,
             mask_start,
-        })
+        }
     }
 
-    /// Returns the next mask chunk without crossing a row range that was not loaded.
-    pub(crate) fn next_chunk(
-        &mut self,
-        batch_size: usize,
-    ) -> Result<Option<MaskChunk>, ParquetError> {
+    /// Returns the next non-empty mask chunk without crossing an unloaded row range.
+    ///
+    /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
+    /// skips before constructing this cursor. Callers therefore only invoke
+    /// this method for a non-empty mask that has another selected row.
+    pub(crate) fn next_chunk(&mut self, batch_size: usize) -> Result<MaskChunk, ParquetError> {
+        debug_assert!(batch_size > 0);
+        debug_assert!(!self.is_empty());
+
         if self.loaded_row_ranges.is_none() {
-            return Ok(self.next_mask_chunk(batch_size));
+            return Ok(self.next_mask_chunk_non_empty(batch_size));
         }
 
         let start_position = self.position;
@@ -833,10 +866,10 @@ impl MaskCursor {
             cursor += 1;
         }
 
-        if cursor == self.mask.len() {
-            self.position = cursor;
-            return Ok(None);
-        }
+        debug_assert!(
+            cursor < self.mask.len(),
+            "ReadPlan must remove trailing skips from Mask selections"
+        );
 
         let loaded_range_end = self
             .loaded_row_ranges
@@ -858,12 +891,12 @@ impl MaskCursor {
         }
 
         self.position = cursor;
-        Ok(Some(MaskChunk {
+        Ok(MaskChunk {
             initial_skip: mask_start - start_position,
             chunk_rows: cursor - mask_start,
             selected_rows,
             mask_start,
-        }))
+        })
     }
 
     /// Materialise the boolean values for a mask-backed chunk
@@ -981,6 +1014,13 @@ impl RowSelectionCursor {
         selectors: Vec<RowSelector>,
         loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
     ) -> Self {
+        debug_assert!(
+            selectors
+                .last()
+                .map(|selector| !selector.skip)
+                .unwrap_or(true),
+            "Mask selectors must not end with a skip"
+        );
         Self::Mask(MaskCursor {
             mask: boolean_mask_from_selectors(&selectors),
             position: 0,
@@ -1633,9 +1673,36 @@ mod tests {
             unreachable!()
         };
 
-        let chunk = cursor.next_chunk(10).unwrap().unwrap();
+        let chunk = cursor.next_chunk(10).unwrap();
         assert_eq!(chunk.chunk_rows, 1);
         assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn test_next_mask_chunk_until_cursor_is_empty() {
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionCursor::new_mask_from_selectors(
+            vec![
+                RowSelector::skip(2),
+                RowSelector::select(2),
+                RowSelector::skip(1),
+                RowSelector::select(1),
+            ],
+            None,
+        ) else {
+            unreachable!()
+        };
+
+        let first = cursor.next_mask_chunk(2).unwrap();
+        assert_eq!(first.initial_skip, 2);
+        assert_eq!(first.chunk_rows, 2);
+        assert_eq!(first.selected_rows, 2);
+
+        let second = cursor.next_mask_chunk(2).unwrap();
+        assert_eq!(second.initial_skip, 1);
+        assert_eq!(second.chunk_rows, 1);
+        assert_eq!(second.selected_rows, 1);
+
+        assert!(cursor.next_mask_chunk(2).is_none());
     }
 
     #[test]

@@ -321,8 +321,7 @@ impl ReadPlanBuilder {
 
         let row_selection_cursor = selection
             .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
+                let selectors: Vec<RowSelector> = s.into();
                 match selection_strategy {
                     RowSelectionStrategy::Mask => {
                         RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
@@ -485,6 +484,25 @@ mod tests {
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
+    }
+
+    #[test]
+    fn mask_plan_trims_trailing_skips_before_chunking() {
+        let mut plan = ReadPlanBuilder::new(8)
+            .with_selection(Some(RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(7),
+            ])))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        let chunk = cursor.next_chunk(8).unwrap();
+        assert_eq!(chunk.chunk_rows, 1);
+        assert_eq!(chunk.selected_rows, 1);
+        assert!(cursor.is_empty());
     }
 
     #[test]
