@@ -2183,12 +2183,11 @@ mod tests {
 
     #[test]
     fn test_encode_decode_reencode_flight_data() {
-        // Keep row counts fixed in the sink: 250,000 rows per column.
+        const ROW_COUNT: usize = 5_000_000;
+        // int32 memory: 5_000_000 * 4 = 20_000_000 bytes
 
-        const ROW_COUNT: usize = 250_000;
-        // int32 memory: 250_000 * 4 = 1_000_000 bytes
-
-        // Create buffers sized for the desired row counts (memory size itself isn't important)
+        const SPLIT_SIZE: usize = 4;
+        // Create buffers sized for the desired row counts
         let int_buf = create_buffer_from_data(vec![1u8; ROW_COUNT * std::mem::size_of::<u32>()]);
         let long_buf = create_buffer_from_data(vec![2u8; ROW_COUNT * std::mem::size_of::<i64>()]);
         let float_buf = create_buffer_from_data(vec![3u8; ROW_COUNT * std::mem::size_of::<f32>()]);
@@ -2196,15 +2195,14 @@ mod tests {
         let int8_buf = create_buffer_from_data(vec![0u8; ROW_COUNT * std::mem::size_of::<i8>()]);
 
         // Short arrays / batch
-        // Build short arrays: set each column to ROW_COUNT rows
         let int_array_short =
-            build_array_from_buffer(int_buf.clone(), DataType::UInt32, ROW_COUNT / 2);
+            build_array_from_buffer(int_buf.clone(), DataType::UInt32, ROW_COUNT / SPLIT_SIZE);
         let long_array_short =
-            build_array_from_buffer(long_buf.clone(), DataType::Int64, ROW_COUNT / 2);
+            build_array_from_buffer(long_buf.clone(), DataType::Int64, ROW_COUNT / SPLIT_SIZE);
         let float_array_short =
-            build_array_from_buffer(float_buf.clone(), DataType::Float32, ROW_COUNT / 2);
+            build_array_from_buffer(float_buf.clone(), DataType::Float32, ROW_COUNT / SPLIT_SIZE);
         let int8_array_short =
-            build_array_from_buffer(int8_buf.clone(), DataType::Int8, ROW_COUNT / 2);
+            build_array_from_buffer(int8_buf.clone(), DataType::Int8, ROW_COUNT / SPLIT_SIZE);
 
         let batch_short = RecordBatch::try_from_iter(vec![
             ("int_col", int_array_short),
@@ -2214,8 +2212,7 @@ mod tests {
         ])
         .expect("failed to create short record batch");
 
-        // Long arrays / batch
-        // Build long arrays: also set each column to ROW_COUNT rows
+        // Build long arrays:  set each column to ROW_COUNT rows
         let int_array_long = build_array_from_buffer(int_buf, DataType::UInt32, ROW_COUNT);
         let long_array_long = build_array_from_buffer(long_buf, DataType::Int64, ROW_COUNT);
         let float_array_long = build_array_from_buffer(float_buf, DataType::Float32, ROW_COUNT);
@@ -2229,7 +2226,7 @@ mod tests {
         ])
         .expect("failed to create long record batch");
 
-        /*let split_short = split_batch_for_grpc_response(batch_short.clone(), 2 * 1024 * 1024);
+        let split_short = split_batch_for_grpc_response(batch_short.clone(), 2 * 1024 * 1024);
         println!("Short split batches count: {}", split_short.len());
         for (i, b) in split_short.iter().enumerate() {
             println!("Short batch {}: {} rows", i, b.num_rows());
@@ -2238,33 +2235,31 @@ mod tests {
         println!("Long split batches count: {}", split_long.len());
         for (i, b) in split_long.iter().enumerate() {
             println!("long batch {}: {} rows", i, b.num_rows());
-        }*/
+        }
 
-        // Compare memory calculations for short and long batches (run after splitting)
-        let buf_sum_short = batch_short
+        // Compare memory calculations for short and long batches
+        let total_buffer_memory_short = batch_short
             .columns()
             .iter()
             .map(|col| col.get_buffer_memory_size())
             .sum::<usize>();
-        let slice_sum_short = batch_short
+        let total_slice_memory_short = batch_short
             .columns()
             .iter()
             .map(|col| col.to_data().get_slice_memory_size().unwrap())
             .sum::<usize>();
-        println!("Short batch buffer-sum: {} bytes", buf_sum_short);
-        println!("Short batch slice-sum: {} bytes", slice_sum_short);
 
-        let buf_sum_long = batch_long
+        let total_buffer_memory_long = batch_long
             .columns()
             .iter()
             .map(|col| col.get_buffer_memory_size())
             .sum::<usize>();
-        let slice_sum_long = batch_long
+        let total_slice_memory_long = batch_long
             .columns()
             .iter()
             .map(|col| col.to_data().get_slice_memory_size().unwrap())
             .sum::<usize>();
-        println!("Long batch buffer-sum: {} bytes", buf_sum_long);
-        println!("Long batch slice-sum: {} bytes", slice_sum_long);
+        assert!(total_buffer_memory_short > total_slice_memory_short); // 85 mb > 21mb
+        assert_eq!(total_buffer_memory_long, total_slice_memory_long); // 85 MB == 85 mb
     }
 }
