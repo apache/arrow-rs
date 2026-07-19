@@ -459,10 +459,13 @@ pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = S
     /// then subtracting the magic number lands the value in a binade where the
     /// unit in the last place is exactly 1.0, so the fractional bits fall off.
     ///
-    /// The sign branch is load-bearing, not a micro-optimization: negative
-    /// values must use `- magic + magic` to land in the corresponding negative
-    /// binade. Nor can the `+ magic - magic` be algebraically cancelled - the
-    /// rounding *is* the intermediate loss of precision.
+    /// The magic number must carry the sign of the value: negatives round in the
+    /// corresponding negative binade, so the constant is `copysign`ed onto the
+    /// input rather than branched on. This is byte-identical to the equivalent
+    /// `if self >= 0 { +magic } else { -magic }` form but has no data-dependent
+    /// branch, which keeps the per-value encode loop autovectorizable. The
+    /// `+ magic - magic` cannot be algebraically cancelled - the rounding *is*
+    /// the intermediate loss of precision.
     fn fast_round(self) -> <Self::Exact as AlpExact>::Signed;
 
     /// Encode one value with a precomputed [`AlpFloat::encode_scale`].
@@ -531,12 +534,8 @@ impl AlpFloat for f32 {
     }
 
     fn fast_round(self) -> i32 {
-        let rounded = if self >= 0.0 {
-            (self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER
-        } else {
-            (self - Self::MAGIC_NUMBER) + Self::MAGIC_NUMBER
-        };
-        rounded as i32
+        let magic = Self::MAGIC_NUMBER.copysign(self);
+        ((self + magic) - magic) as i32
     }
 }
 
@@ -592,11 +591,7 @@ impl AlpFloat for f64 {
     }
 
     fn fast_round(self) -> i64 {
-        let rounded = if self >= 0.0 {
-            (self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER
-        } else {
-            (self - Self::MAGIC_NUMBER) + Self::MAGIC_NUMBER
-        };
-        rounded as i64
+        let magic = Self::MAGIC_NUMBER.copysign(self);
+        ((self + magic) - magic) as i64
     }
 }
