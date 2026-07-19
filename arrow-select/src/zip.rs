@@ -886,6 +886,32 @@ mod test {
     use arrow_array::types::Int32Type;
 
     #[test]
+    fn test_count_true_runs() {
+        let assert_runs = |values: &[bool], expected| {
+            let mask: BooleanBuffer = values.iter().copied().collect();
+            assert_eq!(count_true_runs(&mask), expected, "mask: {values:?}");
+        };
+
+        assert_runs(&[], 0);
+        assert_runs(&[false, false, false], 0);
+        assert_runs(&[true, true, true], 1);
+        assert_runs(&[true, false, true, true, false, true], 3);
+
+        // Exercise runs crossing 64-bit chunk boundaries and trailing padding.
+        let mut values = vec![false; 130];
+        values[0] = true;
+        values[63..66].fill(true);
+        values[128..].fill(true);
+        assert_runs(&values, 3);
+
+        // Exercise a non-zero bit offset, as masks may be sliced.
+        let mut offset_values = vec![false; 135];
+        offset_values[3..133].copy_from_slice(&values);
+        let offset_mask: BooleanBuffer = offset_values.into_iter().collect();
+        assert_eq!(count_true_runs(&offset_mask.slice(3, 130)), 3);
+    }
+
+    #[test]
     fn test_should_use_interleave() {
         let short: BooleanBuffer = (0..64).map(|i| i % 2 == 0).collect();
         assert!(!should_use_interleave(&short));
