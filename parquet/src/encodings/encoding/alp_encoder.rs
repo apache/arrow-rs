@@ -270,6 +270,9 @@ fn select_params<F: AlpFloat>(
 struct Scratch<F: AlpFloat> {
     /// Decimal-encoded integers, overwritten in place with their FOR deltas.
     encoded: Vec<<F::Exact as AlpExact>::Signed>,
+    /// Per-value exception flag (`1` = round-trip failed). A byte, not a bitset,
+    /// so the map loop's per-lane store stays vectorizable.
+    exc_mask: Vec<u8>,
     exception_positions: Vec<u16>,
     exception_values: Vec<F>,
     sample: Vec<F>,
@@ -279,6 +282,7 @@ impl<F: AlpFloat> Scratch<F> {
     fn new() -> Self {
         Self {
             encoded: Vec::new(),
+            exc_mask: Vec::new(),
             exception_positions: Vec::new(),
             exception_values: Vec::new(),
             sample: Vec::new(),
@@ -287,6 +291,7 @@ impl<F: AlpFloat> Scratch<F> {
 
     fn estimated_memory_size(&self) -> usize {
         self.encoded.capacity() * std::mem::size_of::<<F::Exact as AlpExact>::Signed>()
+            + self.exc_mask.capacity()
             + self.exception_positions.capacity() * std::mem::size_of::<u16>()
             + self.exception_values.capacity() * std::mem::size_of::<F>()
             + self.sample.capacity() * std::mem::size_of::<F>()
@@ -306,26 +311,38 @@ fn encode_vector<F: AlpFloat>(
 
     let Scratch {
         encoded,
+        exc_mask,
         exception_positions,
         exception_values,
         ..
     } = scratch;
-    encoded.clear();
-    exception_positions.clear();
+
+    let zero = F::Exact::default().reinterpret_as_signed();
+    let n_values = values.len();
+    encoded.resize(n_values, zero);
+    exc_mask.resize(n_values, 0);
     exception_values.clear();
 
-    // A value is an exception when it does not survive the round trip. Values
-    // ALP cannot represent at all (NaN, the infinities, -0.0) encode to a
-    // sentinel whose round trip is guaranteed to mismatch, so they need no
-    // separate test here. Note that `-0.0 == 0.0`, so a naive equality check
-    // against the *input* would let -0.0 through and silently lose its sign.
-    for (idx, &value) in values.iter().enumerate() {
+    // Comparing the *decoded* value to the input (not the input to itself) flags
+    // -0.0, which encodes to +0.0.
+    for ((&value, enc_slot), mask_slot) in values
+        .iter()
+        .zip(encoded.iter_mut())
+        .zip(exc_mask.iter_mut())
+    {
         let encoded_value = value.encode_value(encode_scale);
-        encoded.push(encoded_value);
-        if F::decode_value(encoded_value, decode_scale) != value {
-            exception_positions.push(idx as u16);
-        }
+        *enc_slot = encoded_value;
+        *mask_slot = u8::from(F::decode_value(encoded_value, decode_scale) != value);
     }
+
+    // Branchless compaction: always write the index, advance only when flagged.
+    exception_positions.resize(n_values, 0);
+    let mut num_exceptions_usize = 0usize;
+    for (idx, &is_exception) in exc_mask.iter().enumerate() {
+        exception_positions[num_exceptions_usize] = idx as u16;
+        num_exceptions_usize += usize::from(is_exception);
+    }
+    exception_positions.truncate(num_exceptions_usize);
 
     let num_exceptions = u16::try_from(exception_positions.len()).map_err(|_| {
         general_err!(
@@ -334,17 +351,15 @@ fn encode_vector<F: AlpFloat>(
         )
     })?;
 
-    // An exception still occupies a slot in the packed section. Filling it with
-    // a real encoded value - rather than leaving the sentinel there - keeps the
-    // FOR range tight, which is what the bit width is derived from. The true
-    // value is written verbatim into the exception section.
+    // Fill each exception's packed slot with a real value (not the sentinel) so
+    // the FOR range - and thus the bit width - stays tight; the true value goes
+    // in the exception section.
     let placeholder = first_non_exception_value::<F>(encoded, exception_positions);
     for &position in exception_positions.iter() {
         exception_values.push(values[position as usize]);
         encoded[position as usize] = placeholder;
     }
 
-    let zero = F::Exact::default().reinterpret_as_signed();
     let min = encoded.iter().copied().min().unwrap_or(zero);
     let max = encoded.iter().copied().max().unwrap_or(zero);
 
