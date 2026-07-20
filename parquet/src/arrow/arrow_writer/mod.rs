@@ -20,7 +20,7 @@
 use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
@@ -769,24 +769,22 @@ impl ArrowColumnChunkData {
     }
 }
 
-/// A streaming [`Read`] over one column chunk's buffered pages, in final file
-/// order: the dictionary page (if any) first, then the data pages.
+/// A streaming iterator over one column chunk's buffered page blobs, in final
+/// file order: the dictionary page (if any) first, then the data pages.
 ///
 /// Each blob is taken back out of the [`PageStore`] *as it is
 /// consumed* and released immediately afterwards, so splicing a chunk into the
 /// output file never materializes more than a single page in memory at a time.
 /// This is what keeps the splice phase within the memory bound for a spilling
 /// backend (an in-memory store already holds the bytes, so it is unaffected).
-struct StreamingColumnChunkReader {
+struct StreamingColumnChunkPages {
     store: Box<dyn PageStore>,
     /// Page handles in final file order: the dictionary page first (if any),
     /// then the data pages.
     keys: IntoIter<PageKey>,
-    /// The blob currently being drained into the output; emptied as it is read.
-    current: Bytes,
 }
 
-impl StreamingColumnChunkReader {
+impl StreamingColumnChunkPages {
     fn new(data: ArrowColumnChunkData) -> Self {
         // The dictionary page must be emitted first, ahead of the data pages,
         // even though it was the last page produced.
@@ -801,27 +799,16 @@ impl StreamingColumnChunkReader {
         Self {
             store: data.store,
             keys: keys.into_iter(),
-            current: Bytes::new(),
         }
     }
 }
 
-impl Read for StreamingColumnChunkReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        // Refill from the next blob whenever the current one is drained: the
-        // dictionary page first, then each data page, all taken from the store.
-        while self.current.is_empty() {
-            if let Some(key) = self.keys.next() {
-                self.current = self.store.take(key).map_err(std::io::Error::other)?;
-            } else {
-                return Ok(0);
-            }
-        }
+impl Iterator for StreamingColumnChunkPages {
+    type Item = Result<Bytes>;
 
-        let len = self.current.len().min(out.len());
-        let b = self.current.split_to(len);
-        out[..len].copy_from_slice(&b);
-        Ok(len)
+    fn next(&mut self) -> Option<Self::Item> {
+        let key = self.keys.next()?;
+        Some(self.store.take(key))
     }
 }
 
@@ -998,8 +985,8 @@ impl ArrowColumnChunk {
         // it ahead of the data pages in the recorded offsets before the splice.
         let close = close.update_dictionary_location(data.dictionary_len)?;
 
-        let reader = StreamingColumnChunkReader::new(data);
-        writer.append_column_from_read(reader, close)
+        let pages = StreamingColumnChunkPages::new(data);
+        writer.append_column_from_pages(pages, close)
     }
 }
 

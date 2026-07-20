@@ -42,3 +42,10 @@ arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "decimal_arithmetic"
+harness = false

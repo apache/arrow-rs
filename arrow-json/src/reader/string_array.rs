@@ -120,7 +120,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     builder.append_value(int_formatter.format(n));
                 }
                 TapeElement::F32(n) if coerce_primitive => {
-                    builder.append_value(int_formatter.format(n));
+                    builder.append_value(float_formatter.format_finite(f32::from_bits(n)));
                 }
                 TapeElement::F64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
