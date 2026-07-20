@@ -276,28 +276,31 @@ pub(crate) fn mask_to_selectors(mask: &BooleanBuffer) -> Vec<RowSelector> {
     selectors
 }
 
-pub(super) fn mask_run_count(mask: &BooleanBuffer) -> usize {
+/// Returns whether `mask` contains at least `min_runs` alternating set/unset runs.
+///
+/// Stops as soon as the requested number of runs is found, avoiding a full scan
+/// when callers only need to know whether a boundary has been crossed.
+pub(super) fn mask_has_at_least_runs(mask: &BooleanBuffer, min_runs: usize) -> bool {
+    if min_runs == 0 {
+        return true;
+    }
+
     let total_rows = mask.len();
     if total_rows == 0 {
-        return 0;
+        return false;
     }
 
     let mut run_count = 0;
     let mut last_end = 0;
     for (start, end) in mask.set_slices() {
-        if start > last_end {
-            run_count += 1;
-        }
-        if end > start {
-            run_count += 1;
+        run_count += usize::from(start > last_end) + 1;
+        if run_count >= min_runs {
+            return true;
         }
         last_end = end;
     }
-    if last_end < total_rows {
-        run_count += 1;
-    }
 
-    run_count
+    run_count + usize::from(last_end < total_rows) >= min_runs
 }
 
 /// Bitwise AND of two mask-backed selections. Longer side's tail passes through.
@@ -1063,6 +1066,33 @@ mod tests {
             };
 
             assert_eq!(boolean_mask_from_selectors(&selectors), expected);
+        }
+    }
+
+    #[test]
+    fn test_mask_has_at_least_runs() {
+        fn assert_run_count(bits: Vec<bool>, expected_runs: usize) {
+            let mask = BooleanBuffer::from(bits);
+            for min_runs in 0..=expected_runs + 2 {
+                assert_eq!(
+                    mask_has_at_least_runs(&mask, min_runs),
+                    expected_runs >= min_runs,
+                    "expected {expected_runs} runs with boundary {min_runs}"
+                );
+            }
+        }
+
+        assert_run_count(vec![], 0);
+        assert_run_count(vec![false; 8], 1);
+        assert_run_count(vec![true; 8], 1);
+        assert_run_count(vec![false, false, true, true, false], 3);
+        assert_run_count(vec![true, false, true, false, true, false], 6);
+
+        // Exercise the unaligned iterator path as mask-backed selections can be slices.
+        let mask = BooleanBuffer::from(vec![true, false, false, true, true, false, true, true])
+            .slice(1, 6);
+        for min_runs in 0..=6 {
+            assert_eq!(mask_has_at_least_runs(&mask, min_runs), 4 >= min_runs);
         }
     }
 

@@ -509,6 +509,62 @@ mod tests {
     }
 
     #[test]
+    fn preferred_selection_strategy_preserves_mask_threshold_boundaries() {
+        let mask = BooleanBuffer::from(vec![true; 8]);
+
+        let empty = builder_with_selection(RowSelection::from_boolean_buffer(
+            BooleanBuffer::new_unset(0),
+        ));
+        assert_eq!(
+            empty.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+
+        let disabled = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 0 });
+        assert_eq!(
+            disabled.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
+
+        // Equality does not satisfy the policy's strict inequality: 8 < 1 * 8.
+        let equal = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 8 });
+        assert_eq!(
+            equal.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
+
+        let above = builder_with_selection(RowSelection::from_boolean_buffer(mask))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 9 });
+        assert_eq!(
+            above.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_mask_matches_selector_backing() {
+        use rand::{Rng, rng};
+
+        let mut rand = rng();
+        for _ in 0..200 {
+            let len = rand.random_range(0..256);
+            let bits: Vec<_> = (0..len).map(|_| rand.random_bool(0.5)).collect();
+            let mask_backed = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits.clone()));
+            let selector_backed = RowSelection::from_filters(&[BooleanArray::from(bits)]);
+
+            for threshold in [0, 1, 2, 8, 32, 64, usize::MAX] {
+                assert_eq!(
+                    mask_backed.auto_selection_strategy(threshold),
+                    selector_backed.auto_selection_strategy(threshold),
+                    "strategy differs for len {len} and threshold {threshold}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn with_predicate_options_limit_pads_tail_when_no_prior_selection() {
         use crate::arrow::ProjectionMask;
         use crate::arrow::array_reader::StructArrayReader;

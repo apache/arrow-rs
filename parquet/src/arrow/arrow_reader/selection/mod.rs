@@ -29,7 +29,7 @@ pub use boolean::MaskRunIter;
 pub(crate) use boolean::mask_to_selectors;
 use boolean::{
     MaskCursor, MaskSelection, and_then_mask, boolean_mask_from_selectors, intersect_masks,
-    limit_mask, mask_run_count, offset_mask, split_off_mask, trim_mask, union_masks,
+    limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask, union_masks,
 };
 
 /// Policy for picking a strategy to materialize [`RowSelection`] during execution.
@@ -404,7 +404,28 @@ impl RowSelection {
             RowSelectionInner::Mask(mask) => {
                 let mask = mask.mask();
                 let total_rows = mask.len();
-                (total_rows, mask_run_count(mask))
+
+                if total_rows == 0 {
+                    return RowSelectionStrategy::Mask;
+                }
+
+                // A mask is preferred when:
+                //
+                // total_rows < run_count * threshold
+                //
+                // Therefore only scan until the first run count that can make
+                // the inequality true. Fragmented masks normally reach this
+                // boundary near the start instead of enumerating every run.
+                let min_mask_runs = total_rows
+                    .checked_div(threshold)
+                    .and_then(|max_selector_runs| max_selector_runs.checked_add(1));
+
+                return match min_mask_runs {
+                    Some(min_runs) if mask_has_at_least_runs(mask, min_runs) => {
+                        RowSelectionStrategy::Mask
+                    }
+                    _ => RowSelectionStrategy::Selectors,
+                };
             }
         };
 
