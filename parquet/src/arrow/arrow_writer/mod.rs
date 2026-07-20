@@ -21,6 +21,7 @@ use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::Write;
+use std::mem::MaybeUninit;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
@@ -1821,15 +1822,12 @@ fn get_interval_ym_array_slice(
     array: &arrow_array::IntervalYearMonthArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    const VALUE_SIZE: usize = 12;
-    let mut arena = Vec::with_capacity(indices.len() * VALUE_SIZE);
-    for i in indices {
-        let mut out = [0; 12];
+    chunk_array_slice(12, indices, move |i, chunk| {
         let value = array.value(i);
-        out[0..4].copy_from_slice(&value.to_le_bytes());
-        arena.extend_from_slice(&out);
-    }
-    chunk_contiguous_vec(arena, VALUE_SIZE)
+        chunk[0..4].write_copy_of_slice(&value.to_le_bytes());
+        chunk[4..12].fill(MaybeUninit::new(0));
+        unsafe { chunk.assume_init_mut() }
+    })
 }
 
 /// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
@@ -1838,16 +1836,13 @@ fn get_interval_dt_array_slice(
     array: &arrow_array::IntervalDayTimeArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    const VALUE_SIZE: usize = 12;
-    let mut arena = Vec::with_capacity(indices.len() * VALUE_SIZE);
-    for i in indices {
-        let mut out = [0; VALUE_SIZE];
+    chunk_array_slice(12, indices, move |i, chunk| {
         let value = array.value(i);
-        out[4..8].copy_from_slice(&value.days.to_le_bytes());
-        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
-        arena.extend_from_slice(&out);
-    }
-    chunk_contiguous_vec(arena, VALUE_SIZE)
+        chunk[0..4].fill(MaybeUninit::new(0));
+        chunk[4..8].write_copy_of_slice(&value.days.to_le_bytes());
+        chunk[8..12].write_copy_of_slice(&value.milliseconds.to_le_bytes());
+        unsafe { chunk.assume_init_mut() }
+    })
 }
 
 trait NativeDecimalType: DecimalType {
@@ -1888,55 +1883,63 @@ fn get_decimal_array_slice<T: NativeDecimalType>(
     array: &PrimitiveArray<T>,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let value_size = decimal_length_from_precision(array.precision());
-    let mut arena = Vec::with_capacity(indices.len() * value_size);
+    let chunk_size = decimal_length_from_precision(array.precision());
+    assert!(chunk_size <= T::BYTE_LENGTH);
 
-    if value_size == T::BYTE_LENGTH {
-        for i in indices {
+    if chunk_size == T::BYTE_LENGTH {
+        // Special-case that allows inlining memcpy.
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
             let as_be_bytes = T::to_be_bytes(array.value(i));
-            arena.extend_from_slice(as_be_bytes.as_ref());
-        }
+            chunk.write_copy_of_slice(as_be_bytes.as_ref())
+        })
     } else {
-        for i in indices {
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
             let as_be_bytes = T::to_be_bytes(array.value(i));
-            let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - value_size)..];
-            arena.extend_from_slice(resized_value);
-        }
+            let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - chunk.len())..];
+            chunk.write_copy_of_slice(resized_value)
+        })
     }
-    chunk_contiguous_vec(arena, value_size)
 }
 
 fn get_float_16_array_slice(
     array: &arrow_array::Float16Array,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    const VALUE_SIZE: usize = size_of::<<Float16Type as ArrowPrimitiveType>::Native>();
-    let mut arena = Vec::with_capacity(indices.len() * VALUE_SIZE);
-    for i in indices {
+    chunk_array_slice(2, indices, move |i, chunk| {
         let value = array.value(i).to_le_bytes();
-        arena.extend_from_slice(&value);
-    }
-    chunk_contiguous_vec(arena, VALUE_SIZE)
+        chunk.write_copy_of_slice(&value)
+    })
 }
 
 fn get_fsb_array_slice(
     array: &arrow_array::FixedSizeBinaryArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let value_size = array.value_length() as usize;
-    let mut arena = Vec::with_capacity(indices.len() * value_size);
-    for i in indices {
+    chunk_array_slice(array.value_size(), indices, move |i, chunk| {
         let value = array.value(i);
-        arena.extend_from_slice(value);
-    }
-    chunk_contiguous_vec(arena, value_size)
+        chunk.write_copy_of_slice(value)
+    })
 }
 
-fn chunk_contiguous_vec(arena: Vec<u8>, value_size: usize) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(arena.len() / value_size);
+#[inline]
+fn chunk_array_slice(
+    chunk_size: usize,
+    indices: impl ExactSizeIterator<Item = usize>,
+    writer: impl Fn(usize, &mut [MaybeUninit<u8>]) -> &mut [u8],
+) -> Vec<FixedLenByteArray> {
+    let mut arena = Vec::with_capacity(indices.len() * chunk_size);
+    for (i, chunk) in indices.zip(arena.spare_capacity_mut().chunks_exact_mut(chunk_size)) {
+        let filled_chunk = writer(i, chunk);
+        debug_assert_eq!(filled_chunk.len(), chunk_size);
+    }
+    chunk_contiguous_vec(arena, chunk_size)
+}
+
+fn chunk_contiguous_vec(arena: Vec<u8>, chunk_size: usize) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(arena.len() / chunk_size);
     let mut arena = Bytes::from(arena);
-    while arena.len() >= value_size {
-        let slice = arena.split_to(value_size);
+    while arena.len() >= chunk_size {
+        let slice = arena.split_to(chunk_size);
         values.push(FixedLenByteArray::from(ByteArray::from(slice)));
     }
     values
