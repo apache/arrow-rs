@@ -38,7 +38,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
+    ScalarBuffer,
 };
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
@@ -429,6 +430,16 @@ where
         return Ok(new_empty_array(arrays[0].data_type()));
     }
 
+    // Reject lengths that do not fit in `R` before any `R::Native` arithmetic can wrap.
+    let total_len: usize = run_arrays.iter().map(|r| r.len()).sum();
+    if R::Native::from_usize(total_len).is_none() {
+        return Err(ArrowError::ComputeError(format!(
+            "Concatenating RunArrays results in a logical length of {total_len}, \
+             which overflows the run-end type {}",
+            R::DATA_TYPE
+        )));
+    }
+
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
     let needed_run_end_adjustments = std::iter::once(R::default_value())
         .chain(
@@ -459,10 +470,15 @@ where
 
     let all_values = concat(&values_slices.iter().map(|x| x.as_ref()).collect::<Vec<_>>())?;
 
-    Ok(Arc::new(RunArray::<R>::try_new(
-        &run_ends_array,
-        all_values.as_ref(),
-    )?))
+    let data_type = run_arrays[0].data_type().clone();
+    let (_, run_ends_values, _) = run_ends_array.into_parts();
+
+    // Safety: inputs are valid RunArrays; adjusted run ends are strictly increasing
+    // and end at `total_len`. Physical length matches `all_values`.
+    let run_ends = unsafe { RunEndBuffer::new_unchecked(run_ends_values, 0, total_len) };
+    Ok(Arc::new(unsafe {
+        RunArray::<R>::new_unchecked(data_type, run_ends, all_values)
+    }))
 }
 
 macro_rules! dict_helper {
@@ -1878,6 +1894,27 @@ mod tests {
             .unwrap();
         assert_eq!(values.len(), 4);
         assert_eq!(&[10, 20, 30, 40], values.values());
+    }
+
+    #[test]
+    fn test_concat_run_array_length_overflows_run_end_type() {
+        // 20_000 + 20_000 exceeds i16::MAX.
+        let array1 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![20_000]),
+            &Int16Array::from(vec![1]),
+        )
+        .unwrap();
+        let array2 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![20_000]),
+            &Int16Array::from(vec![2]),
+        )
+        .unwrap();
+
+        let err = concat(&[&array1, &array2]).unwrap_err();
+        assert!(
+            err.to_string().contains("overflows the run-end type"),
+            "expected a run-end overflow error, got: {err}"
+        );
     }
 
     #[test]
