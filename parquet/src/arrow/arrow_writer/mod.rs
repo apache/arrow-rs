@@ -1927,10 +1927,15 @@ fn chunk_array_slice(
     indices: impl ExactSizeIterator<Item = usize>,
     writer: impl Fn(usize, &mut [MaybeUninit<u8>]) -> &mut [u8],
 ) -> Vec<FixedLenByteArray> {
-    let mut arena = Vec::with_capacity(indices.len() * chunk_size);
+    let capacity = indices.len() * chunk_size;
+    let mut arena = Vec::with_capacity(capacity);
     for (i, chunk) in indices.zip(arena.spare_capacity_mut().chunks_exact_mut(chunk_size)) {
         let filled_chunk = writer(i, chunk);
-        debug_assert_eq!(filled_chunk.len(), chunk_size);
+        assert_eq!(filled_chunk.len(), chunk_size);
+    }
+    // SAFETY: all chunks were initialized with writer closure 
+    unsafe {
+        arena.set_len(capacity);
     }
     chunk_contiguous_vec(arena, chunk_size)
 }
