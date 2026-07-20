@@ -23,7 +23,8 @@ use std::sync::Arc;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, ByteViewType,
+    LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type,
 };
 use arrow_array::*;
 use arrow_buffer::{
@@ -556,6 +557,19 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::FixedSizeBinary(_) => {
                 Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
             }
+            DataType::FixedSizeList(_, _) => {
+                Ok(Arc::new(filter_fixed_size_list(values.as_fixed_size_list(), predicate)?))
+            }
+            // For dense `Map` filters only specialize when the filter is selective enough to win.
+            DataType::Map(_, _) if !filter_keeps_most(predicate, values.len()) => {
+                Ok(Arc::new(filter_map(values.as_map(), predicate)?))
+            }
+            DataType::List(field) if filter_list_child_is_fast(field.data_type()) => {
+                Ok(Arc::new(filter_list::<i32>(values.as_list::<i32>(), predicate)?))
+            }
+            DataType::LargeList(field) if filter_list_child_is_fast(field.data_type()) => {
+                Ok(Arc::new(filter_list::<i64>(values.as_list::<i64>(), predicate)?))
+            }
             DataType::ListView(_) => {
                 Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
             }
@@ -606,6 +620,22 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
         },
     }
+}
+
+/// Whether the specialized [`filter_list`] is beneficial for a `List`/`LargeList`
+/// with the given child data type.
+///
+/// Left on the fallback, for distinct reasons:
+/// - dense `Union`: filtering it requires a per-row, per-type compacting
+///   gather (no contiguous range copy), so the specialized path can only match
+///   the `MutableArrayData` fallback, not beat it.
+/// - `RunEndEncoded`: its kernel reads `predicate.filter` directly, which the
+///   streamed range predicate does not populate.
+fn filter_list_child_is_fast(child: &DataType) -> bool {
+    !matches!(
+        child,
+        DataType::Union(_, UnionMode::Dense) | DataType::RunEndEncoded(_, _)
+    )
 }
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
@@ -687,6 +717,21 @@ pub(crate) fn filter_null_mask(
     Some((null_count, nulls))
 }
 
+/// Appends the packed bits of the selected `[start, end)` runs of `src` (a bit
+/// buffer starting at `offset`) to `builder`. Shared by the range-based
+/// [`filter_bits`] strategies and [`filter_validity`].
+#[inline]
+fn append_validity_runs(
+    builder: &mut BooleanBufferBuilder,
+    runs: impl Iterator<Item = (usize, usize)>,
+    offset: usize,
+    src: &[u8],
+) {
+    for (start, end) in runs {
+        builder.append_packed_range(start + offset..end + offset, src);
+    }
+}
+
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
@@ -714,16 +759,17 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
         }
         IterationStrategy::SlicesIterator => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                builder.append_packed_range(start + offset..end + offset, src)
-            }
+            append_validity_runs(
+                &mut builder,
+                SlicesIterator::new(&predicate.filter),
+                offset,
+                src,
+            );
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
-            for (start, end) in slices {
-                builder.append_packed_range(*start + offset..*end + offset, src)
-            }
+            append_validity_runs(&mut builder, slices.iter().copied(), offset, src);
             builder.into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
@@ -739,6 +785,25 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::new(values, nulls)
 }
 
+/// Copies the selected `[start, end)` runs of `values` into a fresh `Vec`.
+///
+/// Assumes `runs` `[start, end)` are within `values`.
+#[inline]
+fn copy_runs<T: ArrowNativeType>(
+    values: &[T],
+    runs: impl Iterator<Item = (usize, usize)>,
+    count: usize,
+) -> Vec<T> {
+    let mut buffer = Vec::with_capacity(count);
+    for (start, end) in runs {
+        // SAFETY: runs are derived from a validated `FilterPredicate` (top-level
+        // filters) or from list offsets (list children), so `[start, end)` is
+        // always within `values`.
+        buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
+    }
+    buffer
+}
+
 #[inline(never)]
 pub(crate) fn filter_native<T: ArrowNativeType>(
     values: &[T],
@@ -747,21 +812,14 @@ pub(crate) fn filter_native<T: ArrowNativeType>(
     assert!(values.len() >= predicate.filter.len());
 
     match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
-            }
-            buffer.into()
-        }
+        IterationStrategy::SlicesIterator => copy_runs(
+            values,
+            SlicesIterator::new(&predicate.filter),
+            predicate.count,
+        )
+        .into(),
         IterationStrategy::Slices(slices) => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in slices {
-                // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { values.get_unchecked(*start..*end) });
-            }
-            buffer.into()
+            copy_runs(values, slices.iter().copied(), predicate.count).into()
         }
         IterationStrategy::IndexIterator => {
             // SAFETY: indices were derived from the filter predicate
@@ -839,16 +897,6 @@ where
         self.src_offsets[idx].as_usize()
     }
 
-    /// Returns the start and end of the value at index `idx` along with its length
-    #[inline]
-    fn get_value_range(&self, idx: usize) -> (usize, usize, OffsetSize) {
-        // These can only fail if `array` contains invalid data
-        let start = self.get_value_offset(idx);
-        let end = self.get_value_offset(idx + 1);
-        let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
-        (start, end, len)
-    }
-
     fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
             let start = self.src_offsets[idx].as_usize();
@@ -875,12 +923,22 @@ where
     fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
         self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
-            // These can only fail if `array` contains invalid data
-            for idx in start..end {
-                let (_, _, len) = self.get_value_range(idx);
-                self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset);
-            }
+            // A retained run is contiguous in the source, so its source offsets are
+            // monotonic and the run's new offsets are just that slice shifted by a
+            // constant (`base - src_base`). Emitting them as a `map` over the
+            // contiguous source slice avoids the loop-carried `cur_offset += len`
+            // dependency of a per-element accumulation, letting the compiler
+            // vectorize the rebuild (matters at high selectivity, where the run
+            // covers most elements).
+            let base = self.cur_offset.as_usize();
+            let src_base = self.src_offsets[start].as_usize();
+            self.dst_offsets.extend(
+                self.src_offsets[start + 1..=end]
+                    .iter()
+                    .map(|&o| OffsetSize::usize_as(base + (o.as_usize() - src_base))),
+            );
+            self.cur_offset =
+                OffsetSize::usize_as(base + (self.src_offsets[end].as_usize() - src_base));
         }
     }
 
@@ -905,17 +963,26 @@ fn filter_bytes<T>(array: &GenericByteArray<T>, predicate: &FilterPredicate) -> 
 where
     T: ByteArrayType,
 {
-    let mut filter = FilterBytes::new(predicate.count, array);
-
+    // Range strategies reuse the shared range-driven builder (also used by
+    // list-child byte filtering), keeping the offset-rebuild + value-copy in one
+    // place and streaming the ranges (no `Vec` materialization).
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
-            filter.extend_slices(SlicesIterator::new(&predicate.filter))
+            return filter_bytes_runs(
+                array,
+                || SlicesIterator::new(&predicate.filter),
+                predicate.count,
+            );
         }
         IterationStrategy::Slices(slices) => {
-            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
-            filter.extend_slices(slices.iter().cloned())
+            return filter_bytes_runs(array, || slices.iter().copied(), predicate.count);
         }
+        _ => {}
+    }
+
+    // Index strategies gather element-wise, with predicate-driven nulls.
+    let mut filter = FilterBytes::new(predicate.count, array);
+    match &predicate.strategy {
         IterationStrategy::IndexIterator => {
             filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
@@ -924,10 +991,10 @@ where
             filter.extend_offsets_idx(indices.iter().cloned());
             filter.extend_idx(indices.iter().cloned())
         }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+        _ => unreachable!(),
     }
 
-    // SAFETY: `dst_offsets` starts at `[0]` and only grows by the running
+    // SAFETY: `dst_offsets` starts at `[0]` and grows by a non-negative
     // `cur_offset`, so it is monotonically non-decreasing.
     let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
     let nulls = predicate.filter_nulls(array.nulls());
@@ -1062,6 +1129,354 @@ fn filter_sparse_union(
     Ok(unsafe {
         UnionArray::new_unchecked(fields.clone(), type_ids.into_parts().1, None, children)
     })
+}
+
+/// Whether the filter retains most of `len` rows (a "dense" filter)
+fn filter_keeps_most(predicate: &FilterPredicate, len: usize) -> bool {
+    predicate.count as f64 > len as f64 * FILTER_SLICES_SELECTIVITY_THRESHOLD
+}
+
+/// An iterator of `[start, end)` ranges. Used for both retained parent-row ranges and
+///  the child element ranges they map to.
+type RangeIter<'a> = Box<dyn Iterator<Item = (usize, usize)> + 'a>;
+
+/// Iterates the retained rows of `predicate` as `[start, end)` ranges according
+/// to its strategy.
+fn predicate_row_ranges(predicate: &FilterPredicate) -> RangeIter<'_> {
+    match &predicate.strategy {
+        IterationStrategy::Slices(slices) => Box::new(slices.iter().copied()),
+        IterationStrategy::SlicesIterator => Box::new(SlicesIterator::new(&predicate.filter)),
+        IterationStrategy::IndexIterator => {
+            Box::new(IndexIterator::new(&predicate.filter, predicate.count).map(|i| (i, i + 1)))
+        }
+        IterationStrategy::Indices(indices) => Box::new(indices.iter().map(|&i| (i, i + 1))),
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+    }
+}
+
+/// `filter` for `List`/`LargeList`: returns a new list array containing only the
+/// rows selected by `predicate`.
+///
+/// # How it works
+///
+/// A `List`/`LargeList` stores child elements contiguously. Because the offsets are
+/// monotonically non-decreasing, a *run* of consecutive retained rows
+/// `[start, end)` maps to a single contiguous block of child elements
+/// `[offsets[start], offsets[end])`. Filtering a list is therefore two steps:
+///
+/// 1. Rebuild the offset buffer from the retained rows' lengths.
+/// 2. Filter the child `values` down to those contiguous element ranges.
+///
+/// ```text
+///  input:   [ [a,b,c]   [d,e]   [f,g,h]   [i,j,k] ]      keep rows 0, 2, 3
+///  offsets:   0       3       5         8         11
+///  values:  [ a  b  c   d  e   f  g  h   i  j  k  ]
+///             └──────┘  (drop)  └──────────────────┘
+///
+///  retained row runs   ->   [0, 1)          [2, 4)
+///  child element blocks =   [offsets[0],    [offsets[2],
+///                            offsets[1])     offsets[4])
+///                         =  [0, 3)          [5, 11)        rows 2 & 3 are
+///                            a b c           f g h i j k    adjacent -> one copy
+///
+///  output:  [ [a,b,c]   [f,g,h]   [i,j,k] ]      new offsets: 0, 3, 6, 9
+/// ```
+///
+fn filter_list<OffsetType: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetType>,
+    predicate: &FilterPredicate,
+) -> Result<GenericListArray<OffsetType>, ArrowError> {
+    let make_row_ranges = || predicate_row_ranges(predicate);
+    filter_list_inner(array, &make_row_ranges, predicate.count)
+}
+
+/// Core of [`filter_list`], driven by a function producing the retained *row*
+/// ranges (`[start, end)`) of `array` rather than a [`FilterPredicate`]. This
+/// lets nested lists recurse with streamed child ranges. The range source is
+/// type-erased (`&dyn Fn` returning a boxed iterator) so the recursion is a
+/// single instantiation per offset type, not an unbounded tower of closure
+/// types.
+fn filter_list_inner<'a, OffsetType: OffsetSizeTrait>(
+    array: &'a GenericListArray<OffsetType>,
+    make_row_ranges: &dyn Fn() -> RangeIter<'a>,
+    count: usize,
+) -> Result<GenericListArray<OffsetType>, ArrowError> {
+    let (offsets, filtered_values) =
+        filter_list_offsets_and_child(array.offsets(), array.values(), make_row_ranges, count)?;
+
+    let field = match array.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => field.clone(),
+        _ => unreachable!(),
+    };
+    let nulls = filter_validity(array.nulls(), make_row_ranges(), count);
+
+    Ok(GenericListArray::new(
+        field,
+        offsets,
+        filtered_values,
+        nulls,
+    ))
+}
+
+/// Rebuilds the offset buffer for the retained rows and filters the child `values` by the corresponding contiguous element ranges.
+///
+/// Returns the new, filtered [`OffsetBuffer`] and [`ArrayRef`].
+fn filter_list_offsets_and_child<'a, O: OffsetSizeTrait>(
+    offsets: &'a OffsetBuffer<O>,
+    values: &'a ArrayRef,
+    make_row_ranges: &dyn Fn() -> RangeIter<'a>,
+    count: usize,
+) -> Result<(OffsetBuffer<O>, ArrayRef), ArrowError> {
+    // Rebuild offsets from the retained rows' lengths, reading consecutive
+    // offsets sequentially (mirrors arrow-data's `try_extend_offsets`).
+    let mut new_offsets = Vec::with_capacity(count + 1);
+    new_offsets.push(O::usize_as(0));
+    let mut acc = 0usize; // running length of selected child elements
+    for (start, end) in make_row_ranges() {
+        // Offsets within a retained run are contiguous and monotonic, so the new
+        // offsets are the source slice shifted by a constant (`acc - src_base`).
+        // Mapping over the contiguous slice avoids the loop-carried `acc +=`
+        // dependency of the per-window accumulation and vectorizes.
+        let src_base = offsets[start].as_usize();
+        new_offsets.extend(
+            offsets[start + 1..=end]
+                .iter()
+                .map(|&o| O::usize_as(acc + (o.as_usize() - src_base))),
+        );
+        acc += offsets[end].as_usize() - src_base;
+    }
+
+    // Each retained row run maps to one contiguous block of child elements.
+    let make_child_ranges = || -> RangeIter<'a> {
+        Box::new(
+            make_row_ranges()
+                .map(|(start, end)| (offsets[start].as_usize(), offsets[end].as_usize())),
+        )
+    };
+    let filtered = filter_list_child(values, &make_child_ranges, acc)?;
+
+    Ok((OffsetBuffer::new(ScalarBuffer::from(new_offsets)), filtered))
+}
+
+/// Specialised method to filter a [`FixedSizeListArray`] by a [`FilterPredicate`].
+///
+/// Each list occupies exactly `size` contiguous child elements (no offsets), so
+/// a run of retained rows `[start, end)` maps to one contiguous child block
+/// `[start * size, end * size)`. The child is filtered with those blocks via the
+/// shared [`filter_list_child`] machinery, reusing the specialized per-type
+/// kernels instead of [`MutableArrayData`].
+fn filter_fixed_size_list(
+    array: &FixedSizeListArray,
+    predicate: &FilterPredicate,
+) -> Result<FixedSizeListArray, ArrowError> {
+    let size = array.value_length() as usize;
+    let child_count = predicate.count * size;
+
+    let child_ranges = || -> RangeIter<'_> {
+        Box::new(
+            predicate_row_ranges(predicate).map(move |(start, end)| (start * size, end * size)),
+        )
+    };
+    let filtered_values = filter_list_child(array.values(), &child_ranges, child_count)?;
+
+    let field = match array.data_type() {
+        DataType::FixedSizeList(field, _) => field.clone(),
+        _ => unreachable!(),
+    };
+    let nulls = predicate.filter_nulls(array.nulls());
+    Ok(FixedSizeListArray::new(
+        field,
+        size as i32,
+        filtered_values,
+        nulls,
+    ))
+}
+
+/// A map is structurally a `List<Struct<key, value>>`: i32 offsets over a struct
+/// `entries` child. Filter the `entries` struct with the offsets from the retained rows (via
+/// shared [`filter_list_child`]).
+fn filter_map(array: &MapArray, predicate: &FilterPredicate) -> Result<MapArray, ArrowError> {
+    let make_row_ranges = || predicate_row_ranges(predicate);
+    let entries: ArrayRef = Arc::new(array.entries().clone());
+    let (offsets, filtered_entries) = filter_list_offsets_and_child(
+        array.offsets(),
+        &entries,
+        &make_row_ranges,
+        predicate.count,
+    )?;
+
+    let (field, ordered) = match array.data_type() {
+        DataType::Map(field, ordered) => (field.clone(), *ordered),
+        _ => unreachable!(),
+    };
+    let nulls = predicate.filter_nulls(array.nulls());
+    Ok(MapArray::new(
+        field,
+        offsets,
+        filtered_entries.as_struct().clone(),
+        nulls,
+        ordered,
+    ))
+}
+
+/// Filters the `values` child of a list-like array (`List`/`LargeList`/
+/// `FixedSizeList`) given a function producing the retained child-element
+/// ranges. Byte children stream into [`FilterBytes`]; other children reuse the
+/// specialized [`filter_array`] kernels via a `Slices` predicate (which copies
+/// directly from the ranges and never reads `FilterPredicate::filter`, so an
+/// empty filter suffices).
+#[allow(
+    clippy::needless_lifetimes,
+    reason = "`'a` couples the boxed iterator's lifetime to `values` so the nested-list \
+              recursion typechecks; eliding it does not compile (E0106)"
+)]
+fn filter_list_child<'a>(
+    values: &'a ArrayRef,
+    make_ranges: &dyn Fn() -> RangeIter<'a>,
+    child_count: usize,
+) -> Result<ArrayRef, ArrowError> {
+    Ok(match values.data_type() {
+        DataType::Utf8 => Arc::new(filter_bytes_runs::<Utf8Type, _, _>(
+            values.as_string::<i32>(),
+            make_ranges,
+            child_count,
+        )),
+        DataType::LargeUtf8 => Arc::new(filter_bytes_runs::<LargeUtf8Type, _, _>(
+            values.as_string::<i64>(),
+            make_ranges,
+            child_count,
+        )),
+        DataType::Binary => Arc::new(filter_bytes_runs::<BinaryType, _, _>(
+            values.as_binary::<i32>(),
+            make_ranges,
+            child_count,
+        )),
+        DataType::LargeBinary => Arc::new(filter_bytes_runs::<LargeBinaryType, _, _>(
+            values.as_binary::<i64>(),
+            make_ranges,
+            child_count,
+        )),
+        // Nested lists recurse with the same streamed ranges (the child element
+        // ranges are exactly the inner list's retained row ranges).
+        DataType::List(_) => Arc::new(filter_list_inner::<i32>(
+            values.as_list::<i32>(),
+            make_ranges,
+            child_count,
+        )?),
+        DataType::LargeList(_) => Arc::new(filter_list_inner::<i64>(
+            values.as_list::<i64>(),
+            make_ranges,
+            child_count,
+        )?),
+        // Primitive children stream native values straight into a buffer (like the
+        // byte path), avoiding the `Vec<(usize, usize)>` range collection and the
+        // `filter_array`/`FilterPredicate` re-dispatch. That overhead is what made
+        // the generic fallback win at ~50% selectivity on x86 for non-byte children,
+        // where the retained runs are short and the copy work is tiny.
+        dt if dt.is_primitive() => {
+            let arr: &dyn Array = values.as_ref();
+            downcast_primitive_array! {
+                arr => {
+                    let out: ArrayRef =
+                        Arc::new(filter_list_primitive(arr, make_ranges, child_count));
+                    out
+                }
+                _ => unreachable!("{dt} passed is_primitive()"),
+            }
+        }
+        _ => {
+            let ranges: Vec<(usize, usize)> = make_ranges().collect();
+            let child_predicate = FilterPredicate {
+                filter: BooleanArray::from(Vec::<bool>::new()),
+                count: child_count,
+                strategy: IterationStrategy::Slices(ranges),
+            };
+            filter_array(values, &child_predicate)?
+        }
+    })
+}
+
+/// Filters a primitive child of a list from streamed child-element ranges.
+fn filter_list_primitive<T, F, I>(
+    child: &PrimitiveArray<T>,
+    make_ranges: F,
+    child_count: usize,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    F: Fn() -> I,
+    I: Iterator<Item = (usize, usize)>,
+{
+    let buffer = copy_runs(child.values(), make_ranges(), child_count);
+    let nulls = filter_validity(child.nulls(), make_ranges(), child_count);
+    let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(buffer), nulls);
+    // Preserve the concrete logical type (timestamps with tz, decimals, etc.).
+    if child.data_type() == &T::DATA_TYPE {
+        arr
+    } else {
+        arr.with_data_type(child.data_type().clone())
+    }
+}
+
+/// Range-driven byte-array filter, shared by [`filter_bytes`] (its `Slices` /
+/// `SlicesIterator` strategies) and list-child byte filtering.
+///
+/// Streams the `[start, end)` element runs into [`FilterBytes`] — rebuilding
+/// offsets and copying values without an intermediate `Vec` of ranges.
+/// `make_ranges` yields a fresh iterator each call (one per pass: offsets,
+/// values, nulls).
+fn filter_bytes_runs<T, F, I>(
+    array: &GenericByteArray<T>,
+    make_ranges: F,
+    child_count: usize,
+) -> GenericByteArray<T>
+where
+    T: ByteArrayType,
+    F: Fn() -> I,
+    I: Iterator<Item = (usize, usize)>,
+{
+    let mut filter = FilterBytes::new(child_count, array);
+    filter.extend_offsets_slices(make_ranges(), child_count);
+    filter.extend_slices(make_ranges());
+
+    // SAFETY: `dst_offsets` starts at `[0]` and is monotonically non-decreasing:
+    // each retained run emits source offsets (themselves monotonic) shifted by a
+    // non-decreasing base.
+    let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
+    let nulls = filter_validity(array.nulls(), make_ranges(), child_count);
+    // SAFETY: `offsets` index into `dst_values` by construction, and each slot is a
+    // byte-for-byte copy from `array`, so UTF-8 validity (if any) is preserved.
+    // Length invariant: `offsets.len() - 1 == child_count == nulls.len()`.
+    unsafe { GenericByteArray::new_unchecked(offsets, filter.dst_values.into(), nulls) }
+}
+
+/// Builds a filtered [`NullBuffer`] by copying the validity bits of the selected
+/// `[start, end)` runs (via the shared [`append_validity_runs`] loop), returning
+/// `None` when the result has no nulls. Used by the list-child filters; the
+/// top-level null path goes through [`FilterPredicate::filter_nulls`] →
+/// [`filter_bits`], which shares the same run loop.
+fn filter_validity(
+    nulls: Option<&NullBuffer>,
+    ranges: impl Iterator<Item = (usize, usize)>,
+    count: usize,
+) -> Option<NullBuffer> {
+    let nulls = nulls?;
+    if nulls.null_count() == 0 {
+        return None;
+    }
+    let inner = nulls.inner();
+    let src = inner.values();
+    let offset = inner.offset();
+
+    let mut builder = BooleanBufferBuilder::new(count);
+    append_validity_runs(&mut builder, ranges, offset, src);
+    let buffer = builder.finish();
+    let null_count = count - buffer.count_set_bits();
+    if null_count == 0 {
+        return None;
+    }
+    // SAFETY: `null_count` was derived from `buffer` above.
+    Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
 }
 
 /// `filter` implementation for list views
@@ -1647,6 +2062,376 @@ mod tests {
 
         test_case_filter_sliced_list_view::<i32>();
         test_case_filter_sliced_list_view::<i64>();
+    }
+
+    #[test]
+    fn test_filter_list_string_child() {
+        // [["a","b"], null, [], ["c"], ["d","e","f"]]
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        builder.values().append_value("a");
+        builder.values().append_value("b");
+        builder.append(true);
+        builder.append(false);
+        builder.append(true);
+        builder.values().append_value("c");
+        builder.append(true);
+        builder.values().append_value("d");
+        builder.values().append_value("e");
+        builder.values().append_value("f");
+        builder.append(true);
+        let array = builder.finish();
+
+        // keep rows 0, 2, 4 -> [["a","b"], [], ["d","e","f"]]
+        let mask = BooleanArray::from(vec![true, false, true, false, true]);
+        let result = filter(&array, &mask).unwrap();
+
+        let mut expected = ListBuilder::new(StringBuilder::new());
+        expected.values().append_value("a");
+        expected.values().append_value("b");
+        expected.append(true);
+        expected.append(true);
+        expected.values().append_value("d");
+        expected.values().append_value("e");
+        expected.values().append_value("f");
+        expected.append(true);
+        let expected = expected.finish();
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+    }
+
+    #[test]
+    fn test_filter_nested_list() {
+        // List<List<Int32>> exercises the recursive child filter path.
+        let mut builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+        // row 0: [[1], [2, 3]]
+        builder.values().values().append_value(1);
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().values().append_value(3);
+        builder.values().append(true);
+        builder.append(true);
+        // row 1: [[4]]
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        // row 2: null
+        builder.append(false);
+        let array = builder.finish();
+
+        let mask = BooleanArray::from(vec![false, true, true]);
+        let result = filter(&array, &mask).unwrap();
+
+        // Cross-check against the independently-implemented `take` kernel.
+        let indices = UInt32Array::from(vec![1, 2]);
+        let expected = crate::take::take(&array, &indices, None).unwrap();
+        assert_eq!(&result, &expected);
+    }
+
+    /// Randomized cross-check of `filter` for `List`/`LargeList` against the
+    /// independently-implemented `take` kernel: `filter(a, mask)` must be
+    /// logically equal to `take(a, indices_of_true(mask))`.
+    #[test]
+    fn test_filter_list_matches_take() {
+        let mut rng = rng();
+
+        for _ in 0..200 {
+            let n = rng.random_range(1..96usize);
+
+            // List<Int32> (specialized path)
+            let mut int_builder = ListBuilder::new(Int32Builder::new());
+            // List<Utf8View> (specialized view path)
+            let mut view_builder = ListBuilder::new(StringViewBuilder::new());
+            // List<FixedSizeBinary> (specialized path)
+            let mut fsb_builder = ListBuilder::new(FixedSizeBinaryBuilder::new(4));
+            // List<Dictionary<Int32, Utf8>> (specialized path)
+            let mut dict_builder = ListBuilder::new(StringDictionaryBuilder::<Int32Type>::new());
+            // List<Utf8> / <LargeUtf8> / <Binary> / <LargeBinary> (specialized
+            // byte paths, incl. the i64-offset variants)
+            let mut str_builder = ListBuilder::new(StringBuilder::new());
+            let mut lstr_builder = ListBuilder::new(LargeStringBuilder::new());
+            let mut bin_builder = ListBuilder::new(BinaryBuilder::new());
+            let mut lbin_builder = ListBuilder::new(LargeBinaryBuilder::new());
+            // List<List<Int32>> (falls back; exercises nested correctness)
+            let mut nested_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+
+            for _ in 0..n {
+                if rng.random_bool(0.2) {
+                    int_builder.append_null();
+                    view_builder.append_null();
+                    fsb_builder.append_null();
+                    dict_builder.append_null();
+                    str_builder.append_null();
+                    lstr_builder.append_null();
+                    bin_builder.append_null();
+                    lbin_builder.append_null();
+                    nested_builder.append_null();
+                    continue;
+                }
+                let len = rng.random_range(0..6);
+                for _ in 0..len {
+                    if rng.random_bool(0.2) {
+                        int_builder.values().append_null();
+                        view_builder.values().append_null();
+                        fsb_builder.values().append_null();
+                        dict_builder.values().append_null();
+                        str_builder.values().append_null();
+                        lstr_builder.values().append_null();
+                        bin_builder.values().append_null();
+                        lbin_builder.values().append_null();
+                        nested_builder.values().append_null();
+                    } else {
+                        let v = rng.random_range(0..100u8);
+                        int_builder.values().append_value(v as i32);
+                        // Mix inline (<=12 byte) and non-inline view strings
+                        view_builder
+                            .values()
+                            .append_value("y".repeat(rng.random_range(0..20)));
+                        fsb_builder.values().append_value([v; 4]).unwrap();
+                        dict_builder.values().append_value(format!("{}", v % 8));
+                        let s = "x".repeat(rng.random_range(0..16));
+                        str_builder.values().append_value(&s);
+                        lstr_builder.values().append_value(&s);
+                        bin_builder.values().append_value(s.as_bytes());
+                        lbin_builder.values().append_value(s.as_bytes());
+                        for _ in 0..rng.random_range(0..3) {
+                            nested_builder
+                                .values()
+                                .values()
+                                .append_value(rng.random_range(0..100));
+                        }
+                        nested_builder.values().append(true);
+                    }
+                }
+                int_builder.append(true);
+                view_builder.append(true);
+                fsb_builder.append(true);
+                dict_builder.append(true);
+                str_builder.append(true);
+                lstr_builder.append(true);
+                bin_builder.append(true);
+                lbin_builder.append(true);
+                nested_builder.append(true);
+            }
+            let arrays: [ArrayRef; 9] = [
+                Arc::new(int_builder.finish()),
+                Arc::new(view_builder.finish()),
+                Arc::new(fsb_builder.finish()),
+                Arc::new(dict_builder.finish()),
+                Arc::new(str_builder.finish()),
+                Arc::new(lstr_builder.finish()),
+                Arc::new(bin_builder.finish()),
+                Arc::new(lbin_builder.finish()),
+                Arc::new(nested_builder.finish()),
+            ];
+
+            for array in &arrays {
+                check_filter_matches_take(array.as_ref(), &mut rng);
+                // Also exercise sliced inputs (offsets[0] != 0).
+                if n > 3 {
+                    let offset = rng.random_range(0..n / 2);
+                    let length = rng.random_range(1..(n - offset));
+                    check_filter_matches_take(&array.slice(offset, length), &mut rng);
+                }
+            }
+        }
+    }
+
+    fn check_filter_matches_take(arr: &dyn Array, rng: &mut impl Rng) {
+        let len = arr.len();
+        let mask: BooleanArray = (0..len).map(|_| rng.random_bool(0.5)).collect();
+        let filtered = filter(arr, &mask).unwrap();
+        let indices: UInt32Array = mask
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| (b == Some(true)).then_some(i as u32))
+            .collect();
+        let expected = crate::take::take(arr, &indices, None).unwrap();
+        assert_eq!(&filtered, &expected, "len={len}");
+    }
+
+    /// Cross-check `filter` for exotic list children against `take`:
+    /// `ListView` (specialized), `FixedSizeList` and `RunEndEncoded` (fallback).
+    /// All children are length `total` and wrapped in a `List` with random
+    /// per-row lengths + validity.
+    #[test]
+    fn test_filter_list_exotic_children_match_take() {
+        let mut rng = rng();
+
+        for _ in 0..100 {
+            let n = rng.random_range(1..48usize);
+            let mut row_lens: Vec<Option<usize>> = Vec::with_capacity(n);
+            let mut total = 0usize;
+            for _ in 0..n {
+                if rng.random_bool(0.2) {
+                    row_lens.push(None);
+                } else {
+                    let l = rng.random_range(0..5);
+                    total += l;
+                    row_lens.push(Some(l));
+                }
+            }
+
+            // Build the three child arrays, each of length `total`.
+            let mut lv = GenericListViewBuilder::<i32, _>::new(Int32Builder::new());
+            let mut fsl = FixedSizeListBuilder::new(Int32Builder::new(), 2);
+            let mut ree = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+            for _ in 0..total {
+                lv.values().append_value(rng.random_range(0..50));
+                lv.values().append_value(rng.random_range(0..50));
+                lv.append(true);
+                fsl.values().append_value(rng.random_range(0..50));
+                fsl.values().append_value(rng.random_range(0..50));
+                fsl.append(true);
+                ree.append_value(rng.random_range(0..5));
+            }
+            let children: [ArrayRef; 3] = [
+                Arc::new(lv.finish()),
+                Arc::new(fsl.finish()),
+                Arc::new(ree.finish()),
+            ];
+
+            // Wrap each child in a List with offsets/validity from `row_lens`.
+            let mut offsets = vec![0i32];
+            let mut acc = 0i32;
+            let mut validity = BooleanBufferBuilder::new(n);
+            for rl in &row_lens {
+                if let Some(l) = rl {
+                    acc += *l as i32;
+                    validity.append(true);
+                } else {
+                    validity.append(false);
+                }
+                offsets.push(acc);
+            }
+            let nulls = NullBuffer::new(validity.finish());
+
+            for child in &children {
+                let field = Arc::new(Field::new_list_field(child.data_type().clone(), true));
+                let list = ListArray::new(
+                    field,
+                    OffsetBuffer::new(offsets.clone().into()),
+                    Arc::clone(child),
+                    Some(nulls.clone()),
+                );
+                check_filter_matches_take(&list, &mut rng);
+                if n > 3 {
+                    let offset = rng.random_range(0..n / 2);
+                    let length = rng.random_range(1..(n - offset));
+                    check_filter_matches_take(&list.slice(offset, length), &mut rng);
+                }
+            }
+        }
+    }
+
+    /// Cross-check `filter` for `List<Struct>`, `List<Map>` and `List<Union>`
+    /// against `take`. `Struct`/sparse `Union` take the specialized path; `Map`
+    /// uses the fallback — both must agree with `take`.
+    #[test]
+    fn test_filter_list_struct_map_union_match_take() {
+        let mut rng = rng();
+
+        for _ in 0..100 {
+            let n = rng.random_range(1..64usize);
+
+            // List<Struct<{a: Int32}>>
+            let struct_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+            let mut struct_builder =
+                ListBuilder::new(StructBuilder::from_fields(struct_fields.clone(), 0));
+            // List<Map<Int32, Int32>>
+            let mut map_builder = ListBuilder::new(MapBuilder::new(
+                None,
+                Int32Builder::new(),
+                Int32Builder::new(),
+            ));
+
+            // List<Union> built manually (no union builder): per-row lengths drive
+            // a sparse union child and the list offsets/validity.
+            let union_fields = [
+                (0_i8, Arc::new(Field::new("a", DataType::Int32, false))),
+                (1_i8, Arc::new(Field::new("b", DataType::Float64, false))),
+            ]
+            .into_iter()
+            .collect::<UnionFields>();
+            let mut type_ids: Vec<i8> = Vec::new();
+            let mut ua = Int32Builder::new();
+            let mut ub = Float64Builder::new();
+            let mut union_offsets: Vec<i32> = vec![0];
+            let mut union_validity = BooleanBufferBuilder::new(n);
+            let mut union_acc = 0i32;
+
+            for _ in 0..n {
+                let row_null = rng.random_bool(0.2);
+                let len = if row_null { 0 } else { rng.random_range(0..6) };
+
+                // struct
+                if row_null {
+                    struct_builder.append_null();
+                } else {
+                    for _ in 0..len {
+                        let sb = struct_builder.values();
+                        sb.field_builder::<Int32Builder>(0)
+                            .unwrap()
+                            .append_value(rng.random_range(0..100));
+                        sb.append(true);
+                    }
+                    struct_builder.append(true);
+                }
+
+                // map
+                if row_null {
+                    map_builder.append_null();
+                } else {
+                    for _ in 0..len {
+                        let mb = map_builder.values();
+                        for _ in 0..rng.random_range(0..3) {
+                            mb.keys().append_value(rng.random_range(0..10));
+                            mb.values().append_value(rng.random_range(0..100));
+                        }
+                        mb.append(true).unwrap();
+                    }
+                    map_builder.append(true);
+                }
+
+                // union
+                for _ in 0..len {
+                    type_ids.push(rng.random_range(0..2) as i8);
+                    ua.append_value(rng.random_range(0..100));
+                    ub.append_value(rng.random_range(0..100) as f64);
+                }
+                union_acc += len as i32;
+                union_offsets.push(union_acc);
+                union_validity.append(!row_null);
+            }
+
+            let union = UnionArray::try_new(
+                union_fields,
+                ScalarBuffer::from(type_ids),
+                None,
+                vec![Arc::new(ua.finish()), Arc::new(ub.finish())],
+            )
+            .unwrap();
+            let union_field = Arc::new(Field::new_list_field(union.data_type().clone(), true));
+            let union_list = ListArray::new(
+                union_field,
+                OffsetBuffer::new(union_offsets.into()),
+                Arc::new(union),
+                Some(NullBuffer::new(union_validity.finish())),
+            );
+
+            let arrays: [ArrayRef; 3] = [
+                Arc::new(struct_builder.finish()),
+                Arc::new(map_builder.finish()),
+                Arc::new(union_list),
+            ];
+            for array in &arrays {
+                check_filter_matches_take(array.as_ref(), &mut rng);
+                if n > 3 {
+                    let offset = rng.random_range(0..n / 2);
+                    let length = rng.random_range(1..(n - offset));
+                    check_filter_matches_take(&array.slice(offset, length), &mut rng);
+                }
+            }
+        }
     }
 
     #[test]
