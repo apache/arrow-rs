@@ -5419,6 +5419,68 @@ mod test {
     }
 
     #[test]
+    fn get_variant_as_union_with_map_field() {
+        // With no Struct field in the union, an object routes to the Map child.
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("map", map_data_type(DataType::Int64), true),
+                Field::new("str", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let json = StringArray::from(vec![r#"{"a": 1, "b": 2}"#, "\"hi\""]);
+        let array = ArrayRef::from(json_to_variant(&(Arc::new(json) as ArrayRef)).unwrap());
+
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+
+        let mut map_builder = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        map_builder.keys().append_value("a");
+        map_builder.values().append_value(1);
+        map_builder.keys().append_value("b");
+        map_builder.values().append_value(2);
+        map_builder.append(true).unwrap();
+        let expected: ArrayRef = Arc::new(
+            UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![0i8, 1]),
+                Some(ScalarBuffer::from(vec![0i32, 0])),
+                vec![
+                    Arc::new(map_builder.finish()),
+                    Arc::new(StringArray::from(vec!["hi"])),
+                ],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_prefers_struct_over_map() {
+        // Both a Struct and a Map field can hold an object; the object routes to Struct because
+        // it represents the object more exactly (rank 0 vs 1).
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("map", map_data_type(DataType::Int64), true),
+                Field::new(
+                    "struct",
+                    DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)])),
+                    true,
+                ),
+            ],
+        )
+        .unwrap();
+        let json = StringArray::from(vec![r#"{"a": 1}"#]);
+        let array = ArrayRef::from(json_to_variant(&(Arc::new(json) as ArrayRef)).unwrap());
+
+        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+        let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+        // type_id 1 == the struct child
+        assert_eq!(union.type_ids(), &[1i8]);
+    }
+
+    #[test]
     fn get_variant_as_union_no_matching_field() {
         let fields =
             UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, true)]).unwrap();

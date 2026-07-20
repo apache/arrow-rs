@@ -874,7 +874,6 @@ fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8>
         (Variant::Binary(_), Binary | LargeBinary | BinaryView) => 0,
         (Variant::Uuid(_), FixedSizeBinary(16)) => 0,
         (Variant::Object(_), Struct(_)) => 0,
-        // unreachable until casting Variant to Map lands (#10012)
         (Variant::Object(_), Map(..)) => 1,
         (Variant::List(_), List(_)) => 0,
         (Variant::List(_), LargeList(_)) => 1,
