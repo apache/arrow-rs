@@ -34,7 +34,7 @@ use tokio::io::AsyncWriteExt;
 /// your own codebase. See [#10308] for more details.
 ///
 /// [`object_store` example]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs
-/// [#10308]: https://github.com/apache/arrow-rs/issues/10308/// [`object_store` example]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs
+/// [#10308]: https://github.com/apache/arrow-rs/issues/10308
 ///
 /// ```
 /// # #![allow(deprecated)]
