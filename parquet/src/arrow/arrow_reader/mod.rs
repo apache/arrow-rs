@@ -1355,7 +1355,24 @@ pub struct ParquetRecordBatchReader {
 ///
 /// The first chunk keeps its [`BooleanBuffer`] without copying. A second chunk
 /// promotes the accumulator to a [`BooleanBufferBuilder`], and later chunks are
-/// appended to it. For example, chunks `1000` and `1` become `10001`.
+/// appended to it. For example, chunks `1000` and `1` become `10001`:
+///
+/// ```text
+///           append(1000)             append(1)
+///   Empty ───────────────▶ Single ───────────────▶ Combined
+///                          1000                    10001
+///                          (zero copy)             (promoted to builder)
+/// ```
+///
+/// The combined mask lines up with the rows that [`ArrayReader::read_records`]
+/// buffered across the decoded chunks (see [`read_mask_batch`]). Consuming the
+/// buffered batch and filtering it with the accumulated mask yields the output.
+///
+/// ```text
+///   decoded rows:   0 1 2 3   11   <-- buffered by the array reader
+///   chunk masks:   [1 0 0 0] [1]
+///   finish():       1 0 0 0   1    <-- filters the whole batch in one pass
+/// ```
 #[derive(Default)]
 enum FilterMaskAccumulator {
     #[default]
