@@ -1823,10 +1823,10 @@ fn get_interval_ym_array_slice(
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(12, indices, move |i, chunk| {
+        let mut out = [0; 12];
         let value = array.value(i);
-        chunk[0..4].write_copy_of_slice(&value.to_le_bytes());
-        chunk[4..12].fill(MaybeUninit::new(0));
-        unsafe { chunk.assume_init_mut() }
+        out[0..4].copy_from_slice(&value.to_le_bytes());
+        chunk.write_copy_of_slice(&out)
     })
 }
 
@@ -1837,11 +1837,11 @@ fn get_interval_dt_array_slice(
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(12, indices, move |i, chunk| {
+        let mut out = [0; 12];
         let value = array.value(i);
-        chunk[0..4].fill(MaybeUninit::new(0));
-        chunk[4..8].write_copy_of_slice(&value.days.to_le_bytes());
-        chunk[8..12].write_copy_of_slice(&value.milliseconds.to_le_bytes());
-        unsafe { chunk.assume_init_mut() }
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+        chunk.write_copy_of_slice(&out)
     })
 }
 
@@ -1933,7 +1933,7 @@ fn chunk_array_slice(
         let filled_chunk = writer(i, chunk);
         assert_eq!(filled_chunk.len(), chunk_size);
     }
-    // SAFETY: all chunks were initialized with writer closure 
+    // SAFETY: all chunks were initialized with writer closure
     unsafe {
         arena.set_len(capacity);
     }
