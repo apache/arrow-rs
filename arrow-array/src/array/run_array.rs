@@ -116,30 +116,60 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// - If `run_ends` has any null values
     /// - If `run_ends` doesn't consist of strictly increasing positive integers
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
-        let run_ends_type = run_ends.data_type().clone();
-        let values_type = values.data_type().clone();
-        let ree_array_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", run_ends_type, false)),
-            Arc::new(Field::new("values", values_type, true)),
+        // 1. run_ends and values must have the same (physical) length.
+        if run_ends.len() != values.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
+                run_ends.len(),
+                values.len()
+            )));
+        }
+
+        // 2. run_ends must not contain null values.
+        if run_ends.nulls().is_some() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Found null values in run_ends array. The run_ends array should not have null values."
+                    .to_string(),
+            ));
+        }
+
+        // 3. run_ends must be strictly increasing, strictly positive integers.
+        let mut prev_value: i64 = 0;
+        for (ix, &run_end) in run_ends.values().iter().enumerate() {
+            let value = run_end.to_i64().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Value at position {ix} out of bounds: {run_end:?} (can not convert to i64)"
+                ))
+            })?;
+            if value <= 0 {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly positive. Found value {value} at index {ix} that does not match the criteria."
+                )));
+            }
+            if ix > 0 && value <= prev_value {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly increasing. Found value {value} at index {ix} with previous value {prev_value} that does not match the criteria."
+                )));
+            }
+            prev_value = value;
+        }
+
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", run_ends.data_type().clone(), false)),
+            Arc::new(Field::new("values", values.data_type().clone(), true)),
         );
-        let len = RunArray::logical_len(run_ends);
-        let builder = ArrayDataBuilder::new(ree_array_type)
-            .len(len)
-            .add_child_data(run_ends.to_data())
-            .add_child_data(values.to_data());
 
-        // `build_unchecked` is used to avoid recursive validation of child arrays.
-        let array_data = unsafe { builder.build_unchecked() };
+        let logical_len = RunArray::logical_len(run_ends);
+        // Safety: validated above that the run ends are strictly increasing, strictly
+        // positive integers, so the last value equals the logical length.
+        let run_ends_buffer =
+            unsafe { RunEndBuffer::new_unchecked(run_ends.values().clone(), 0, logical_len) };
 
-        // Safety: `validate_data` checks below
-        //    1. The given array data has exactly two child arrays.
-        //    2. The first child array (run_ends) has valid data type.
-        //    3. run_ends array does not have null values
-        //    4. run_ends array has non-zero and strictly increasing values.
-        //    5. The length of run_ends array and values array are the same.
-        array_data.validate_data()?;
-
-        Ok(array_data.into())
+        Ok(Self {
+            data_type,
+            run_ends: run_ends_buffer,
+            values: values.slice(0, values.len()),
+        })
     }
 
     /// Create a new [`RunArray`] from the provided parts, without validation

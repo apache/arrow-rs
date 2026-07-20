@@ -109,5 +109,9 @@ harness = false
 name = "boolean_array"
 harness = false
 
+[[bench]]
+name = "run_array"
+harness = false
+
 [lints]
 workspace = true
