@@ -1842,7 +1842,7 @@ fn get_interval_dt_array_slice(
     let mut arena = Vec::with_capacity(indices.len() * VALUE_SIZE);
     for i in indices {
         let mut out = [0; VALUE_SIZE];
-        let value = array.value(*i);
+        let value = array.value(i);
         out[4..8].copy_from_slice(&value.days.to_le_bytes());
         out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
         arena.extend_from_slice(&out);
@@ -1893,12 +1893,12 @@ fn get_decimal_array_slice<T: NativeDecimalType>(
 
     if value_size == T::BYTE_LENGTH {
         for i in indices {
-            let as_be_bytes = T::to_be_bytes(array.value(*i));
+            let as_be_bytes = T::to_be_bytes(array.value(i));
             arena.extend_from_slice(as_be_bytes.as_ref());
         }
     } else {
         for i in indices {
-            let as_be_bytes = T::to_be_bytes(array.value(*i));
+            let as_be_bytes = T::to_be_bytes(array.value(i));
             let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - value_size)..];
             arena.extend_from_slice(resized_value);
         }
@@ -1926,7 +1926,7 @@ fn get_fsb_array_slice(
     let value_size = array.value_length() as usize;
     let mut arena = Vec::with_capacity(indices.len() * value_size);
     for i in indices {
-        let value = array.value(*i);
+        let value = array.value(i);
         arena.extend_from_slice(value);
     }
     chunk_contiguous_vec(arena, value_size)
