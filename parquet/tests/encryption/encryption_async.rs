@@ -443,6 +443,7 @@ async fn get_encrypted_meta_store() -> (
 
 #[tokio::test]
 #[cfg(feature = "object_store")]
+#[allow(deprecated)]
 async fn test_read_encrypted_file_from_object_store() {
     use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     let (meta, store) = get_encrypted_meta_store().await;
