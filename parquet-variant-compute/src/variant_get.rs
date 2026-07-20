@@ -494,9 +494,10 @@ mod test {
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
         FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
         Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
-        LargeStringArray, ListArray, ListBuilder, ListViewArray, NullArray, NullBuilder,
-        StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UnionArray,
+        LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
+        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
@@ -4433,6 +4434,164 @@ mod test {
             Some("banana"),
         ]);
         assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    /// Map data type with `MapBuilder`'s default field names, so results can be
+    /// compared against arrays built by `MapBuilder`.
+    fn map_data_type(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("keys", DataType::Utf8, false),
+                    Field::new("values", value_type, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    fn map_get_options(data_type: &DataType) -> GetOptions<'static> {
+        GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "map",
+            data_type.clone(),
+            true,
+        ))))
+    }
+
+    #[test]
+    fn get_variant_as_map() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": 1, "b": 2}"#),
+            Some(r#"{"c": 3}"#),
+            None,
+            Some("{}"),
+            Some(r#"{"d": null}"#),
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        let data_type = map_data_type(DataType::Int64);
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let mut expected = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        expected.keys().append_value("a");
+        expected.values().append_value(1);
+        expected.keys().append_value("b");
+        expected.values().append_value(2);
+        expected.append(true).unwrap();
+        expected.keys().append_value("c");
+        expected.values().append_value(3);
+        expected.append(true).unwrap();
+        expected.append(false).unwrap(); // null row
+        expected.append(true).unwrap(); // empty object -> empty map
+        expected.keys().append_value("d");
+        expected.values().append_null(); // variant null -> null map value
+        expected.append(true).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_map_of_lists() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": [1, 2], "b": []}"#),
+            Some(r#"{"c": [3]}"#),
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        let data_type = map_data_type(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Int64,
+            true,
+        ))));
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let mut expected = MapBuilder::new(
+            None,
+            StringBuilder::new(),
+            ListBuilder::new(Int64Builder::new()),
+        );
+        expected.keys().append_value("a");
+        expected.values().append_value([Some(1), Some(2)]);
+        expected.keys().append_value("b");
+        expected.values().append_value([]);
+        expected.append(true).unwrap();
+        expected.keys().append_value("c");
+        expected.values().append_value([Some(3)]);
+        expected.append(true).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_map_non_object_rows() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": 1}"#),
+            Some("42"), // not an object
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+        let data_type = map_data_type(DataType::Int64);
+
+        // With safe casting (the default), non-object rows become null
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        let mut expected = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        expected.keys().append_value("a");
+        expected.values().append_value(1);
+        expected.append(true).unwrap();
+        expected.append(false).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+
+        // With strict casting, non-object rows are an error
+        let options = map_get_options(&data_type).with_cast_options(CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to extract object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn get_variant_as_map_invalid_entries() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![Some(r#"{"a": 1}"#)]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        // Entries type is not a struct
+        let data_type = DataType::Map(
+            Arc::new(Field::new("entries", DataType::Int32, false)),
+            false,
+        );
+        let err = variant_get(&variant_array, map_get_options(&data_type)).unwrap_err();
+        assert!(
+            err.to_string().contains("Map entries must be Struct"),
+            "unexpected error: {err}"
+        );
+
+        // Entries struct does not have exactly two fields
+        let data_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "keys",
+                    DataType::Utf8,
+                    false,
+                )])),
+                false,
+            )),
+            false,
+        );
+        let err = variant_get(&variant_array, map_get_options(&data_type)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Map entries must have exactly two fields"),
+            "unexpected error: {err}"
+        );
     }
 
     fn invalid_time_variant_array() -> ArrayRef {

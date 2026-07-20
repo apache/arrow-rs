@@ -412,8 +412,14 @@ pub fn make_encoder<'a>(
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
                 let encoder = make_encoder(field, array, options)?;
-                Ok(FieldEncoder{
-                    field: field.clone(),
+
+                // For typical ASCII names, this will be the exact length (includes 2x quotes, 1x colon).
+                let mut field_name = Vec::with_capacity(field.name().len() + 3);
+                encode_string(field.name(), &mut field_name);
+                field_name.push(b':');
+
+                Ok(FieldEncoder {
+                    field_name,
                     encoder,
                 })
             }).collect::<Result<Vec<_>, ArrowError>>()?;
@@ -471,7 +477,7 @@ fn encode_binary(bytes: &[u8], out: &mut Vec<u8>) {
 }
 
 struct FieldEncoder<'a> {
-    field: FieldRef,
+    field_name: Vec<u8>,
     encoder: NullableEncoder<'a>,
 }
 
@@ -509,8 +515,7 @@ impl Encoder for StructArrayEncoder<'_> {
             is_first = false;
 
             if self.struct_mode == StructMode::ObjectOnly {
-                encode_string(field_encoder.field.name(), out);
-                out.push(b':');
+                out.extend_from_slice(&field_encoder.field_name);
             }
 
             if is_null {

@@ -2748,7 +2748,7 @@ mod tests {
 
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
-            "keys",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             false,
             1,
@@ -2756,7 +2756,7 @@ mod tests {
         ));
         #[allow(deprecated)]
         let values_field = Arc::new(Field::new_dict(
-            "values",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             2,
@@ -2768,7 +2768,7 @@ mod tests {
         ]);
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -2959,7 +2959,7 @@ mod tests {
         let key_dict_array = DictionaryArray::new(key_dict_keys, utf8_view_array.clone());
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
-            "keys",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8View)),
             false,
             1,
@@ -2970,7 +2970,7 @@ mod tests {
         let value_dict_array = DictionaryArray::new(value_dict_keys, bin_view_array);
         #[allow(deprecated)]
         let values_field = Arc::new(Field::new_dict(
-            "values",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::BinaryView)),
             true,
             2,
@@ -2983,7 +2983,7 @@ mod tests {
 
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 entry_struct.data_type().clone(),
                 false,
             )),

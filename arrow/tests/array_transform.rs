@@ -798,11 +798,19 @@ fn test_map_nulls_append() {
 
     let expected_entry_array = StructArray::from(vec![
         (
-            Arc::new(Field::new("keys", DataType::Int64, false)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
             Arc::new(expected_key_array) as ArrayRef,
         ),
         (
-            Arc::new(Field::new("values", DataType::Int64, true)),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                true,
+            )),
             Arc::new(expected_value_array) as ArrayRef,
         ),
     ]);
@@ -812,10 +820,10 @@ fn test_map_nulls_append() {
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("keys", DataType::Int64, false),
-                    Field::new("values", DataType::Int64, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int64, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int64, true),
                 ])),
                 false,
             )),

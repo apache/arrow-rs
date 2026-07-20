@@ -19,8 +19,9 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{
+    LoadedRowRanges, RowSelectionPolicy, RowSelectionStrategy,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
@@ -29,6 +30,7 @@ use arrow_array::{Array, BooleanArray};
 use arrow_buffer::BooleanBuffer;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
@@ -84,6 +86,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Row ranges with page data loaded for the current projection.
+    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
 }
 
 impl ReadPlanBuilder {
@@ -93,6 +97,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            loaded_row_ranges: None,
         }
     }
 
@@ -107,6 +112,11 @@ impl ReadPlanBuilder {
     /// Defaults to [`RowSelectionPolicy::Auto`]
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_loaded_row_ranges(mut self, ranges: Option<LoadedRowRanges>) -> Self {
+        self.loaded_row_ranges = ranges.map(Arc::new);
         self
     }
 
@@ -304,17 +314,17 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            loaded_row_ranges,
         } = self;
 
         let selection = selection.map(|s| s.trim());
 
         let row_selection_cursor = selection
             .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
+                let selectors: Vec<RowSelector> = s.into();
                 match selection_strategy {
                     RowSelectionStrategy::Mask => {
-                        RowSelectionCursor::new_mask_from_selectors(selectors)
+                        RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
                     }
                     RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
                 }
@@ -474,6 +484,25 @@ mod tests {
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
+    }
+
+    #[test]
+    fn mask_plan_trims_trailing_skips_before_chunking() {
+        let mut plan = ReadPlanBuilder::new(8)
+            .with_selection(Some(RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(7),
+            ])))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        let chunk = cursor.next_chunk(8).unwrap();
+        assert_eq!(chunk.chunk_rows, 1);
+        assert_eq!(chunk.selected_rows, 1);
+        assert!(cursor.is_empty());
     }
 
     #[test]

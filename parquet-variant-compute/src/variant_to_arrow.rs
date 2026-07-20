@@ -28,9 +28,9 @@ use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewBuilder,
     BooleanBuilder, FixedSizeBinaryBuilder, FixedSizeListArray, GenericListArray,
-    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
-    OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
-    StructArray, UnionArray,
+    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, MapArray, NullArray,
+    NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder,
+    StringViewBuilder, StructArray, UnionArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
@@ -49,6 +49,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     Array(ArrayVariantToArrowRowBuilder<'a>),
     Struct(StructVariantToArrowRowBuilder<'a>),
     Union(UnionVariantToArrowRowBuilder<'a>),
+    Map(MapVariantToArrowRowBuilder<'a>),
     Encoded(EncodedVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
@@ -64,6 +65,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Array(b) => b.append_null(),
             Struct(b) => b.append_null(),
             Union(b) => b.append_null(),
+            Map(b) => b.append_null(),
             Encoded(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
@@ -77,6 +79,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Array(b) => b.append_value(&value),
             Struct(b) => b.append_value(&value),
             Union(b) => b.append_value(&value),
+            Map(b) => b.append_value(&value),
             Encoded(b) => b.append_value(value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
@@ -90,6 +93,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Array(b) => b.finish(),
             Struct(b) => b.finish(),
             Union(b) => b.finish(),
+            Map(b) => b.finish(),
             Encoded(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
@@ -126,6 +130,15 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
                 capacity,
             )?;
             Ok(Union(builder))
+        }
+        DataType::Map(entries_field, ordered) => {
+            let builder = MapVariantToArrowRowBuilder::try_new(
+                entries_field,
+                *ordered,
+                cast_options,
+                capacity,
+            )?;
+            Ok(Map(builder))
         }
         DataType::Dictionary(_, value_type) => {
             let builder = EncodedVariantToArrowRowBuilder::try_new(
@@ -872,6 +885,144 @@ fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8>
     Some(rank)
 }
 
+/// Builder for converting variant objects into Arrow `MapArray`s.
+///
+/// Each variant object field becomes one map entry: the field name is the map key and the field
+/// value is converted to the requested value type. Variant objects store their fields in
+/// lexicographic key order, so maps with string keys come out sorted by key.
+pub(crate) struct MapVariantToArrowRowBuilder<'a> {
+    entries_field: &'a FieldRef,
+    key_field: &'a FieldRef,
+    value_field: &'a FieldRef,
+    ordered: bool,
+    key_builder: Box<VariantToArrowRowBuilder<'a>>,
+    value_builder: Box<VariantToArrowRowBuilder<'a>>,
+    offsets: Vec<i32>,
+    current_offset: i32,
+    nulls: NullBufferBuilder,
+    cast_options: &'a CastOptions<'a>,
+}
+
+impl<'a> MapVariantToArrowRowBuilder<'a> {
+    fn try_new(
+        entries_field: &'a FieldRef,
+        ordered: bool,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        let DataType::Struct(entry_fields) = entries_field.data_type() else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Map entries must be Struct, got {:?}",
+                entries_field.data_type()
+            )));
+        };
+        let (key_field, value_field) = match entry_fields.as_ref() {
+            [key_field, value_field] => (key_field, value_field),
+            fields => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Map entries must have exactly two fields (key, value), got {}",
+                    fields.len()
+                )));
+            }
+        };
+        let key_builder = Box::new(make_typed_variant_to_arrow_row_builder(
+            key_field.data_type(),
+            cast_options,
+            capacity,
+        )?);
+        let value_builder = Box::new(make_typed_variant_to_arrow_row_builder(
+            value_field.data_type(),
+            cast_options,
+            capacity,
+        )?);
+        if capacity >= isize::MAX as usize {
+            return Err(ArrowError::ComputeError(
+                "Capacity exceeds isize::MAX when reserving map offsets".to_string(),
+            ));
+        }
+        let mut offsets = Vec::with_capacity(capacity + 1);
+        offsets.push(0);
+        Ok(Self {
+            entries_field,
+            key_field,
+            value_field,
+            ordered,
+            key_builder,
+            value_builder,
+            offsets,
+            current_offset: 0,
+            nulls: NullBufferBuilder::new(capacity),
+            cast_options,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.offsets.push(self.current_offset);
+        self.nulls.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match variant_cast_with_options(value, self.cast_options, Variant::as_object) {
+            Ok(Some(obj)) => {
+                for (key, field_value) in obj.iter() {
+                    // Map keys cannot be null, so a failed key conversion is an error even when
+                    // cast_options.safe is true.
+                    if !self.key_builder.append_value(Variant::from(key))? {
+                        return Err(ArrowError::CastError(format!(
+                            "Failed to cast map key {key:?} to {:?}",
+                            self.key_field.data_type()
+                        )));
+                    }
+                    self.value_builder.append_value(field_value)?;
+                    self.current_offset = self.current_offset.add_checked(1)?;
+                }
+                self.offsets.push(self.current_offset);
+                self.nulls.append_non_null();
+                Ok(true)
+            }
+            Ok(None) => {
+                self.append_null()?;
+                Ok(false)
+            }
+            Err(_) => Err(ArrowError::CastError(format!(
+                "Failed to extract object from variant {value:?}"
+            ))),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let keys = self.key_builder.finish()?;
+        let values = self.value_builder.finish()?;
+
+        let entry_fields = Fields::from(vec![
+            self.key_field
+                .as_ref()
+                .clone()
+                .with_data_type(keys.data_type().clone()),
+            self.value_field
+                .as_ref()
+                .clone()
+                .with_data_type(values.data_type().clone()),
+        ]);
+        let entries = StructArray::try_new(entry_fields.clone(), vec![keys, values], None)?;
+        let entries_field = Arc::new(
+            self.entries_field
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(entry_fields)),
+        );
+        let map_array = MapArray::try_new(
+            entries_field,
+            OffsetBuffer::new(ScalarBuffer::from(self.offsets)),
+            entries,
+            self.nulls.finish(),
+            self.ordered,
+        )?;
+        Ok(Arc::new(map_array))
+    }
+}
+
 impl<'a> ArrayVariantToArrowRowBuilder<'a> {
     /// Creates a new list builder for the given data type.
     ///
@@ -1533,10 +1684,10 @@ mod tests {
         let item_field = Arc::new(Field::new("item", DataType::Int32, true));
         let struct_fields = Fields::from(vec![Field::new("child", DataType::Int32, true)]);
         let map_entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Float64, true),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Float64, true),
             ])),
             true,
         ));

@@ -355,9 +355,19 @@ where
         self.offsets_builder.as_slice()
     }
 
+    /// Returns the current offsets buffer capacity, in offsets.
+    pub fn offsets_capacity(&self) -> usize {
+        self.offsets_builder.capacity()
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 }
 
