@@ -593,8 +593,19 @@ impl BooleanArray {
             return self;
         };
 
-        let mut builder = BooleanBufferBuilder::new(len);
-        builder.append_buffer(&self.values.slice(0, end));
+        let mut builder = match self.values.try_into_builder() {
+            Ok(mut builder) => {
+                // reuse allocation, just resize buffer
+                builder.truncate(end);
+                builder
+            }
+            Err(values) => {
+                // copy only retained prefix
+                let mut builder = BooleanBufferBuilder::new(len);
+                builder.append_buffer(&values.slice(0, end));
+                builder
+            }
+        };
         builder.append_n(len - end, false);
         BooleanArray::new(builder.finish(), self.nulls)
     }
@@ -1652,6 +1663,24 @@ mod tests {
         let r = a.take_n_true(0);
         assert_eq!(r.len(), 3);
         assert_eq!(r.true_count(), 0);
+    }
+
+    #[test]
+    fn test_take_n_true_unshared_reuses_allocation() {
+        let a = BooleanArray::from(vec![true, false, true, true]);
+        let ptr = a.values().values().as_ptr();
+        let r = a.take_n_true(1);
+        assert_eq!(r, BooleanArray::from(vec![true, false, false, false]));
+        // the values buffer was not shared so its allocation is reused
+        assert_eq!(r.values().values().as_ptr(), ptr);
+    }
+
+    #[test]
+    fn test_take_n_true_sliced() {
+        let a = BooleanArray::from(vec![false, true, true, true, false, true]);
+        let r = a.slice(1, 5).take_n_true(2);
+        // values: [true, true, true, false, true], keep the first 2 trues
+        assert_eq!(r, BooleanArray::from(vec![true, true, false, false, false]));
     }
 
     #[test]
