@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
 
 use arrow::util::bench_util::create_boolean_array;
 
@@ -79,5 +79,39 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("not_slice_24", |b| b.iter(|| bench_not(&array1_sliced_24)));
 }
 
-criterion_group!(benches, add_benchmark);
+fn add_take_n_true_benchmark(c: &mut Criterion) {
+    let size = 2usize.pow(13); // 8K
+    // keep roughly the first half of the set bits
+    let n = size / 4;
+
+    // the clone in each iteration shares the values buffer, so `take_n_true`
+    // cannot reuse the allocation and must copy the retained prefix
+    let array = create_boolean_array(size, 0.0, 0.5);
+    c.bench_function("take_n_true shared", |b| {
+        b.iter(|| hint::black_box(array.clone().take_n_true(n)))
+    });
+
+    // a fresh array per iteration (built in setup, excluded from timing) has
+    // an unshared values buffer, allowing the allocation to be reused
+    let values: Vec<bool> = array.values().iter().collect();
+    c.bench_function("take_n_true unshared", |b| {
+        b.iter_batched(
+            || BooleanArray::from(values.clone()),
+            |array| array.take_n_true(n),
+            BatchSize::SmallInput,
+        )
+    });
+
+    let array_nulls = create_boolean_array(size, 0.1, 0.5);
+    c.bench_function("take_n_true nulls shared", |b| {
+        b.iter(|| hint::black_box(array_nulls.clone().take_n_true(n)))
+    });
+
+    // fewer than n set bits: scans but returns self unchanged
+    c.bench_function("take_n_true no truncation", |b| {
+        b.iter(|| hint::black_box(array.clone().take_n_true(size)))
+    });
+}
+
+criterion_group!(benches, add_benchmark, add_take_n_true_benchmark);
 criterion_main!(benches);
