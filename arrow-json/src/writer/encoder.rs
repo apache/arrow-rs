@@ -317,10 +317,10 @@ pub fn make_encoder<'a>(
         }};
     }
 
-    if let Some(factory) = options.encoder_factory() {
-        if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
-            return Ok(encoder);
-        }
+    if let Some(factory) = options.encoder_factory()
+        && let Some(encoder) = factory.make_default_encoder(field, array, options)?
+    {
+        return Ok(encoder);
     }
 
     let nulls = array.nulls().cloned();

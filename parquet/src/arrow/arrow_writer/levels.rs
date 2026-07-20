@@ -870,11 +870,12 @@ impl LevelInfoBuilder {
         let len = range.end - range.start;
 
         // Fast path: entire leaf array is null
-        if let Some(nulls) = &info.logical_nulls {
-            if !matches!(info.def_levels, LevelData::Absent) && nulls.null_count() == nulls.len() {
-                info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
-                return;
-            }
+        if let Some(nulls) = &info.logical_nulls
+            && !matches!(info.def_levels, LevelData::Absent)
+            && nulls.null_count() == nulls.len()
+        {
+            info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
+            return;
         }
 
         if matches!(info.def_levels, LevelData::Absent) {

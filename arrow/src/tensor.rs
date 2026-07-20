@@ -177,20 +177,20 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
             }
 
             Some(ref s) => {
-                if let Some(ref st) = strides {
-                    if st.len() != s.len() {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "shape and stride dimensions differ".to_string(),
-                        ));
-                    }
+                if let Some(ref st) = strides
+                    && st.len() != s.len()
+                {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "shape and stride dimensions differ".to_string(),
+                    ));
                 }
 
-                if let Some(ref n) = names {
-                    if n.len() != s.len() {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "number of dimensions and number of dimension names differ".to_string(),
-                        ));
-                    }
+                if let Some(ref n) = names
+                    && n.len() != s.len()
+                {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "number of dimensions and number of dimension names differ".to_string(),
+                    ));
                 }
 
                 let total_elements: usize = s.iter().product();

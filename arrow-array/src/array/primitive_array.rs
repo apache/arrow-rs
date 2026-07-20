@@ -655,14 +655,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != values.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
-                    values.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != values.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                values.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {

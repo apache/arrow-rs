@@ -811,17 +811,17 @@ mod arrow_tests {
                     let arr: BooleanArray = (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
-                                Some(val % 2 == 0)
+                                Some(val.is_multiple_of(2))
                             }
                         })
                         .collect();
                     Arc::new(arr)
                 } else {
                     let arr: BooleanArray = (0..length)
-                        .map(|i| Some(test_hash(seed, i as u64) % 2 == 0))
+                        .map(|i| Some(test_hash(seed, i as u64).is_multiple_of(2)))
                         .collect();
                     Arc::new(arr)
                 }
@@ -839,7 +839,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("str_{val}"))
@@ -858,7 +858,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("bin_{val}").into_bytes())
@@ -877,7 +877,7 @@ mod arrow_tests {
                 let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::new(size);
                 for i in 0..length {
                     let val = test_hash(seed, i as u64);
-                    if nullable && val % 10 == 0 {
+                    if nullable && val.is_multiple_of(10) {
                         builder.append_null();
                     } else {
                         let s = format!("bin_{val}");

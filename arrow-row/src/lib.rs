@@ -2367,13 +2367,13 @@ unsafe fn decode_column(
                         let null_row_bytes: &[u8] = &null_rows[field_idx].data;
 
                         for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
-                                if *next_idx == idx {
-                                    sparse_data.push(*bytes);
+                            if let Some((next_idx, bytes)) = field_row_iter.peek()
+                                && *next_idx == idx
+                            {
+                                sparse_data.push(*bytes);
 
-                                    field_row_iter.next();
-                                    continue;
-                                }
+                                field_row_iter.next();
+                                continue;
                             }
                             sparse_data.push(null_row_bytes);
                         }

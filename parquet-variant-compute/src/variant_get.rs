@@ -337,26 +337,26 @@ fn shredded_get_path(
     //
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
-    if !as_field.has_valid_extension_type::<VariantType>() {
-        if let DataType::Struct(fields) = as_field.data_type() {
-            if target.typed_value_column().is_none() {
-                return shred_basic_variant(target, VariantPath::default(), Some(as_field));
-            }
-
-            let children = fields
-                .iter()
-                .map(|field| {
-                    let path = &[VariantPathElement::from(field.name().as_str())];
-                    shredded_get_path(&target, path, Some(field), cast_options)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            return Ok(Arc::new(StructArray::try_new(
-                fields.clone(),
-                children,
-                target.nulls().cloned(),
-            )?));
+    if !as_field.has_valid_extension_type::<VariantType>()
+        && let DataType::Struct(fields) = as_field.data_type()
+    {
+        if target.typed_value_column().is_none() {
+            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
+
+        let children = fields
+            .iter()
+            .map(|field| {
+                let path = &[VariantPathElement::from(field.name().as_str())];
+                shredded_get_path(&target, path, Some(field), cast_options)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        return Ok(Arc::new(StructArray::try_new(
+            fields.clone(),
+            children,
+            target.nulls().cloned(),
+        )?));
     }
 
     // Not a struct, so directly shred the variant as the requested type

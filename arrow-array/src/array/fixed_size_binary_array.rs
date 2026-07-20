@@ -149,8 +149,29 @@ impl FixedSizeBinaryArray {
         })?;
 
         let len = match values.len().checked_div(value_size) {
-            Some(len) => len,
-            None => nulls.as_ref().map(|n| n.len()).unwrap_or(0),
+            Some(len) => {
+                if let Some(n) = nulls.as_ref()
+                    && n.len() != len
+                {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                        len,
+                        n.len(),
+                    )));
+                }
+
+                len
+            }
+            None => {
+                if !values.is_empty() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Buffer cannot have non-zero length if the value length is zero".to_owned(),
+                    ));
+                }
+
+                // If the value length is zero, try to determine the length from the null buffer
+                nulls.as_ref().map(|n| n.len()).unwrap_or(0)
+            }
         };
 
         Self::try_new_with_len(value_length, values, nulls, len)
@@ -180,14 +201,14 @@ impl FixedSizeBinaryArray {
             ))
         })?;
 
-        if let Some(nulls) = &nulls {
-            if nulls.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                    len,
-                    nulls.len(),
-                )));
-            }
+        if let Some(nulls) = &nulls
+            && nulls.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                len,
+                nulls.len(),
+            )));
         }
 
         if value_size != 0 && values.len() / value_size != len {

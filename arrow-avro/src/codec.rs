@@ -218,12 +218,10 @@ impl AvroDataType {
     /// Returns an arrow [`Field`] with the given name
     pub(crate) fn field_with_name(&self, name: &str) -> Field {
         let mut nullable = self.nullability.is_some();
-        if !nullable {
-            if let Codec::Union(children, _, _) = self.codec() {
-                // If any encoded branch is `null`, mark field as nullable
-                if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
-                    nullable = true;
-                }
+        if !nullable && let Codec::Union(children, _, _) = self.codec() {
+            // If any encoded branch is `null`, mark field as nullable
+            if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
+                nullable = true;
             }
         }
         let data_type = self.codec.data_type();
@@ -282,13 +280,13 @@ impl AvroDataType {
                 }
                 out.push(cp as u8);
             }
-            if let Some(len) = expected_len {
-                if out.len() != len {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Default length {} does not match expected fixed size {len}",
-                        out.len(),
-                    )));
-                }
+            if let Some(len) = expected_len
+                && out.len() != len
+            {
+                return Err(ArrowError::SchemaError(format!(
+                    "Default length {} does not match expected fixed size {len}",
+                    out.len(),
+                )));
             }
             Ok(out)
         }
@@ -1362,16 +1360,16 @@ fn union_first_duplicate<'a>(
 ) -> Option<String> {
     let mut seen = HashSet::with_capacity(branches.len());
     for schema in branches {
-        if let Some(key) = branch_key_of(schema, enclosing_ns) {
-            if !seen.insert(key.clone()) {
-                let msg = match key {
-                    UnionBranchKey::Named(full) => format!("named type {full}"),
-                    UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
-                    UnionBranchKey::Array => "array".to_string(),
-                    UnionBranchKey::Map => "map".to_string(),
-                };
-                return Some(msg);
-            }
+        if let Some(key) = branch_key_of(schema, enclosing_ns)
+            && !seen.insert(key.clone())
+        {
+            let msg = match key {
+                UnionBranchKey::Named(full) => format!("named type {full}"),
+                UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
+                UnionBranchKey::Array => "array".to_string(),
+                UnionBranchKey::Map => "map".to_string(),
+            };
+            return Some(msg);
         }
     }
     None
@@ -1777,17 +1775,15 @@ impl<'a> Maker<'a> {
                     }
                     (None, _) => {}
                 }
-                if matches!(field.codec, Codec::Int64) {
-                    if let Some(unit) = t
+                if matches!(field.codec, Codec::Int64)
+                    && let Some(unit) = t
                         .attributes
                         .additional
                         .get("arrowTimeUnit")
                         .and_then(|v| v.as_str())
-                    {
-                        if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(Some(self.tz));
-                        }
-                    }
+                    && unit == "nanosecond"
+                {
+                    field.codec = Codec::TimestampNanos(Some(self.tz));
                 }
                 if !t.attributes.additional.is_empty() {
                     for (k, v) in &t.attributes.additional {

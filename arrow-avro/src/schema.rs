@@ -517,10 +517,8 @@ impl AvroSchema {
         let opts = options.unwrap_or_default();
         let order = opts.null_order.unwrap_or_default();
         let strip = opts.strip_metadata;
-        if !strip {
-            if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-                return Ok(AvroSchema::new(json.clone()));
-            }
+        if !strip && let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+            return Ok(AvroSchema::new(json.clone()));
         }
         let mut name_gen = NameGenerator::default();
         let fields_json = schema

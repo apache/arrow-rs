@@ -619,17 +619,17 @@ impl Type {
 
         match leaf_type {
             Type::Array(first_type, _length) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return PhysicalType::FixedLenByteArray;
-                    }
+                if let Type::TypePath(_) = **first_type
+                    && last_part == "u8"
+                {
+                    return PhysicalType::FixedLenByteArray;
                 }
             }
             Type::Vec(first_type) | Type::Slice(first_type) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return PhysicalType::ByteArray;
-                    }
+                if let Type::TypePath(_) = **first_type
+                    && last_part == "u8"
+                {
+                    return PhysicalType::ByteArray;
                 }
             }
             _ => (),
@@ -660,12 +660,11 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         // `[u8; N]` => Some(N)
-        if let Type::Array(first_type, length) = leaf_type {
-            if let Type::TypePath(_) = **first_type {
-                if last_part == "u8" {
-                    return Some(length.clone());
-                }
-            }
+        if let Type::Array(first_type, length) = leaf_type
+            && let Type::TypePath(_) = **first_type
+            && last_part == "u8"
+        {
+            return Some(length.clone());
         }
 
         match last_part.trim() {
@@ -681,17 +680,17 @@ impl Type {
 
         match leaf_type {
             Type::Array(first_type, _length) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return quote! { None };
-                    }
+                if let Type::TypePath(_) = **first_type
+                    && last_part == "u8"
+                {
+                    return quote! { None };
                 }
             }
             Type::Vec(first_type) | Type::Slice(first_type) => {
-                if let Type::TypePath(_) = **first_type {
-                    if last_part == "u8" {
-                        return quote! { None };
-                    }
+                if let Type::TypePath(_) = **first_type
+                    && last_part == "u8"
+                {
+                    return quote! { None };
                 }
             }
             _ => (),

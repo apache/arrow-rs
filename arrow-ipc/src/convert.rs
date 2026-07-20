@@ -215,10 +215,10 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
             let kv = md_fields.get(i);
             let k_str = kv.key();
             let v_str = kv.value();
-            if let Some(k) = k_str {
-                if let Some(v) = v_str {
-                    metadata.insert(k.to_string(), v.to_string());
-                }
+            if let Some(k) = k_str
+                && let Some(v) = v_str
+            {
+                metadata.insert(k.to_string(), v.to_string());
             }
         }
     }
@@ -294,25 +294,22 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
 
 /// Get the Arrow data type from the flatbuffer Field table
 pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> DataType {
-    if let Some(dictionary) = field.dictionary() {
-        if may_be_dictionary {
-            let int = dictionary.indexType().unwrap();
-            let index_type = match (int.bitWidth(), int.is_signed()) {
-                (8, true) => DataType::Int8,
-                (8, false) => DataType::UInt8,
-                (16, true) => DataType::Int16,
-                (16, false) => DataType::UInt16,
-                (32, true) => DataType::Int32,
-                (32, false) => DataType::UInt32,
-                (64, true) => DataType::Int64,
-                (64, false) => DataType::UInt64,
-                _ => panic!("Unexpected bitwidth and signed"),
-            };
-            return DataType::Dictionary(
-                Box::new(index_type),
-                Box::new(get_data_type(field, false)),
-            );
-        }
+    if let Some(dictionary) = field.dictionary()
+        && may_be_dictionary
+    {
+        let int = dictionary.indexType().unwrap();
+        let index_type = match (int.bitWidth(), int.is_signed()) {
+            (8, true) => DataType::Int8,
+            (8, false) => DataType::UInt8,
+            (16, true) => DataType::Int16,
+            (16, false) => DataType::UInt16,
+            (32, true) => DataType::Int32,
+            (32, false) => DataType::UInt32,
+            (64, true) => DataType::Int64,
+            (64, false) => DataType::UInt64,
+            _ => panic!("Unexpected bitwidth and signed"),
+        };
+        return DataType::Dictionary(Box::new(index_type), Box::new(get_data_type(field, false)));
     }
 
     match field.type_type() {

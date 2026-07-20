@@ -1110,10 +1110,10 @@ fn typed_value_to_variant<'a>(
 /// verify that all data types in the struct are legal for a variant array.
 fn canonicalize_shredded_types(array: &dyn Array) -> Result<ArrayRef> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
-    if let Cow::Borrowed(_) = new_type {
-        if let Some(array) = array.as_struct_opt() {
-            return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
-        }
+    if let Cow::Borrowed(_) = new_type
+        && let Some(array) = array.as_struct_opt()
+    {
+        return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
     }
     cast(array, new_type.as_ref())
 }

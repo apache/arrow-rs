@@ -1721,10 +1721,10 @@ mod test {
                 }
                 Value::Array(arr) => {
                     for b in arr.iter_mut() {
-                        if let Value::Object(map) = b {
-                            if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
-                                map.insert("symbols".to_string(), symbols.clone());
-                            }
+                        if let Value::Object(map) = b
+                            && matches!(map.get("type"), Some(Value::String(t)) if t == "enum")
+                        {
+                            map.insert("symbols".to_string(), symbols.clone());
                         }
                     }
                 }
@@ -8321,42 +8321,41 @@ mod test {
                 }
             }
             fn reverse_items_union(f: &mut Value) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
-                        items.reverse();
-                    }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut())
+                {
+                    items.reverse();
                 }
             }
             fn reverse_map_values_union(f: &mut Value) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(values) = obj.get_mut("values").and_then(|v| v.as_array_mut()) {
-                        values.reverse();
-                    }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(values) = obj.get_mut("values").and_then(|v| v.as_array_mut())
+                {
+                    values.reverse();
                 }
             }
             fn reverse_nested_union_in_record(f: &mut Value, field_name: &str) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                        for ff in fields.iter_mut() {
-                            if ff.get("name").and_then(|n| n.as_str()) == Some(field_name) {
-                                if let Some(ty) = ff.get_mut("type") {
-                                    if let Some(arr) = ty.as_array_mut() {
-                                        arr.reverse();
-                                    }
-                                }
-                            }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut())
+                {
+                    for ff in fields.iter_mut() {
+                        if ff.get("name").and_then(|n| n.as_str()) == Some(field_name)
+                            && let Some(ty) = ff.get_mut("type")
+                            && let Some(arr) = ty.as_array_mut()
+                        {
+                            arr.reverse();
                         }
                     }
                 }
             }
             fn rename_nested_field_with_alias(f: &mut Value, old: &str, new: &str) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                        for ff in fields.iter_mut() {
-                            if ff.get("name").and_then(|n| n.as_str()) == Some(old) {
-                                ff["name"] = Value::String(new.to_string());
-                                ff["aliases"] = Value::Array(vec![Value::String(old.to_string())]);
-                            }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut())
+                {
+                    for ff in fields.iter_mut() {
+                        if ff.get("name").and_then(|n| n.as_str()) == Some(old) {
+                            ff["name"] = Value::String(new.to_string());
+                            ff["aliases"] = Value::Array(vec![Value::String(old.to_string())]);
                         }
                     }
                 }

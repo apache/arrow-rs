@@ -835,10 +835,10 @@ impl ArrayData {
     pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
-            if let BufferSpec::FixedWidth { alignment, .. } = spec {
-                if buffer.as_ptr().align_offset(*alignment) != 0 {
-                    *buffer = Buffer::from_slice_ref(buffer.as_ref());
-                }
+            if let BufferSpec::FixedWidth { alignment, .. } = spec
+                && buffer.as_ptr().align_offset(*alignment) != 0
+            {
+                *buffer = Buffer::from_slice_ref(buffer.as_ref());
             }
         }
         // align children data recursively
