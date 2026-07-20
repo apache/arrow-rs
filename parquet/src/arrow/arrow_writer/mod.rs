@@ -21,7 +21,6 @@ use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::Write;
-use std::mem::MaybeUninit;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
@@ -1823,10 +1822,8 @@ fn get_interval_ym_array_slice(
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(12, indices, move |i, chunk| {
-        let mut out = [0; 12];
         let value = array.value(i);
-        out[0..4].copy_from_slice(&value.to_le_bytes());
-        chunk.write_copy_of_slice(&out)
+        chunk[0..4].copy_from_slice(&value.to_le_bytes());
     })
 }
 
@@ -1837,11 +1834,9 @@ fn get_interval_dt_array_slice(
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(12, indices, move |i, chunk| {
-        let mut out = [0; 12];
         let value = array.value(i);
-        out[4..8].copy_from_slice(&value.days.to_le_bytes());
-        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
-        chunk.write_copy_of_slice(&out)
+        chunk[4..8].copy_from_slice(&value.days.to_le_bytes());
+        chunk[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
     })
 }
 
@@ -1890,13 +1885,13 @@ fn get_decimal_array_slice<T: NativeDecimalType>(
         // Special-case that allows inlining memcpy.
         chunk_array_slice(chunk_size, indices, move |i, chunk| {
             let as_be_bytes = T::to_be_bytes(array.value(i));
-            chunk.write_copy_of_slice(as_be_bytes.as_ref())
+            chunk.copy_from_slice(as_be_bytes.as_ref());
         })
     } else {
         chunk_array_slice(chunk_size, indices, move |i, chunk| {
             let as_be_bytes = T::to_be_bytes(array.value(i));
             let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - chunk.len())..];
-            chunk.write_copy_of_slice(resized_value)
+            chunk.copy_from_slice(resized_value);
         })
     }
 }
@@ -1907,7 +1902,7 @@ fn get_float_16_array_slice(
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(2, indices, move |i, chunk| {
         let value = array.value(i).to_le_bytes();
-        chunk.write_copy_of_slice(&value)
+        chunk.copy_from_slice(&value);
     })
 }
 
@@ -1917,7 +1912,7 @@ fn get_fsb_array_slice(
 ) -> Vec<FixedLenByteArray> {
     chunk_array_slice(array.value_size(), indices, move |i, chunk| {
         let value = array.value(i);
-        chunk.write_copy_of_slice(value)
+        chunk.copy_from_slice(value);
     })
 }
 
@@ -1925,17 +1920,14 @@ fn get_fsb_array_slice(
 fn chunk_array_slice(
     chunk_size: usize,
     indices: impl ExactSizeIterator<Item = usize>,
-    writer: impl Fn(usize, &mut [MaybeUninit<u8>]) -> &mut [u8],
+    writer: impl Fn(usize, &mut [u8]),
 ) -> Vec<FixedLenByteArray> {
     let capacity = indices.len() * chunk_size;
-    let mut arena = Vec::with_capacity(capacity);
-    for (i, chunk) in indices.zip(arena.spare_capacity_mut().chunks_exact_mut(chunk_size)) {
-        let filled_chunk = writer(i, chunk);
-        assert_eq!(filled_chunk.len(), chunk_size);
-    }
-    // SAFETY: all chunks were initialized with writer closure
-    unsafe {
-        arena.set_len(capacity);
+    // TODO: This could be done with Vec::spare_capacity_mut,
+    //       but [MaybeUninit]::write_copy_of_slice is gated behind MSRV 1.93
+    let mut arena = vec![0; capacity];
+    for (i, chunk) in indices.zip(arena.chunks_exact_mut(chunk_size)) {
+        writer(i, chunk);
     }
     chunk_contiguous_vec(arena, chunk_size)
 }
