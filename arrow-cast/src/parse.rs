@@ -484,13 +484,11 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if string.is_empty() {
+                let string_bytes = trim_pre_and_post_whitespace(string).as_bytes();
+                if !string_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
-                let string = trim_pre_and_post_whitespace(string);
-                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
-                    string.as_bytes(),
-                ) {
+                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(string_bytes) {
                     (Some(n), x) if x == string.len() => Some(n),
                     _ => None,
                 }
