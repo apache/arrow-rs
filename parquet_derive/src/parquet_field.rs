@@ -17,6 +17,19 @@
 
 use syn::ext::IdentExt;
 
+/// Parquet physical types used while selecting the code emitted by the macro.
+/// Keeping this local avoids compiling `parquet` for the proc-macro host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhysicalType {
+    Boolean,
+    Int32,
+    Int64,
+    Float,
+    Double,
+    ByteArray,
+    FixedLenByteArray,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Field {
     ident: syn::Ident,
@@ -42,7 +55,7 @@ enum ThirdPartyType {
 impl Field {
     pub fn from(f: &syn::Field) -> Self {
         let ty = Type::from(f);
-        let is_a_byte_buf = ty.physical_type() == parquet::basic::Type::BYTE_ARRAY;
+        let is_a_byte_buf = ty.physical_type() == PhysicalType::ByteArray;
 
         let third_party_type = match &ty.last_part()[..] {
             "NaiveDateTime" => Some(ThirdPartyType::ChronoNaiveDateTime),
@@ -299,28 +312,25 @@ impl Field {
         // becomes a column named `type` in the parquet schema
         let field_name = self.ident.unraw().to_string();
         let physical_type = match self.ty.physical_type() {
-            parquet::basic::Type::BOOLEAN => quote! {
+            PhysicalType::Boolean => quote! {
                 ::parquet::basic::Type::BOOLEAN
             },
-            parquet::basic::Type::INT32 => quote! {
+            PhysicalType::Int32 => quote! {
                 ::parquet::basic::Type::INT32
             },
-            parquet::basic::Type::INT64 => quote! {
+            PhysicalType::Int64 => quote! {
                 ::parquet::basic::Type::INT64
             },
-            parquet::basic::Type::INT96 => quote! {
-                ::parquet::basic::Type::INT96
-            },
-            parquet::basic::Type::FLOAT => quote! {
+            PhysicalType::Float => quote! {
                 ::parquet::basic::Type::FLOAT
             },
-            parquet::basic::Type::DOUBLE => quote! {
+            PhysicalType::Double => quote! {
                 ::parquet::basic::Type::DOUBLE
             },
-            parquet::basic::Type::BYTE_ARRAY => quote! {
+            PhysicalType::ByteArray => quote! {
                 ::parquet::basic::Type::BYTE_ARRAY
             },
-            parquet::basic::Type::FIXED_LEN_BYTE_ARRAY => quote! {
+            PhysicalType::FixedLenByteArray => quote! {
                 ::parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
             },
         };
@@ -354,7 +364,7 @@ impl Field {
         let is_a_uuid = self.third_party_type == Some(ThirdPartyType::Uuid);
         let copy_to_vec = !matches!(
             self.ty.physical_type(),
-            parquet::basic::Type::BYTE_ARRAY | parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
+            PhysicalType::ByteArray | PhysicalType::FixedLenByteArray
         );
 
         let binding = if copy_to_vec {
@@ -374,8 +384,8 @@ impl Field {
         } else {
             // Type might need converting to a physical type
             match self.ty.physical_type() {
-                parquet::basic::Type::INT32 => quote! { Some(inner as i32) },
-                parquet::basic::Type::INT64 => quote! { Some(inner as i64) },
+                PhysicalType::Int32 => quote! { Some(inner as i32) },
+                PhysicalType::Int64 => quote! { Some(inner as i64) },
                 _ => quote! { Some(inner) },
             }
         };
@@ -411,8 +421,8 @@ impl Field {
                 } else {
                     // Type might need converting to a physical type
                     match self.ty.physical_type() {
-                        parquet::basic::Type::INT32 => quote! { rec.#field_name as i32 },
-                        parquet::basic::Type::INT64 => quote! { rec.#field_name as i64 },
+                        PhysicalType::Int32 => quote! { rec.#field_name as i32 },
+                        PhysicalType::Int64 => quote! { rec.#field_name as i64 },
                         _ => quote! { rec.#field_name },
                     }
                 }
@@ -490,21 +500,18 @@ impl Type {
     /// Takes a rust type and returns the appropriate
     /// parquet-rs column writer
     fn column_writer(&self) -> syn::TypePath {
-        use parquet::basic::Type as BasicType;
-
         match self.physical_type() {
-            BasicType::BOOLEAN => {
+            PhysicalType::Boolean => {
                 syn::parse_quote!(ColumnWriter::BoolColumnWriter)
             }
-            BasicType::INT32 => syn::parse_quote!(ColumnWriter::Int32ColumnWriter),
-            BasicType::INT64 => syn::parse_quote!(ColumnWriter::Int64ColumnWriter),
-            BasicType::INT96 => syn::parse_quote!(ColumnWriter::Int96ColumnWriter),
-            BasicType::FLOAT => syn::parse_quote!(ColumnWriter::FloatColumnWriter),
-            BasicType::DOUBLE => syn::parse_quote!(ColumnWriter::DoubleColumnWriter),
-            BasicType::BYTE_ARRAY => {
+            PhysicalType::Int32 => syn::parse_quote!(ColumnWriter::Int32ColumnWriter),
+            PhysicalType::Int64 => syn::parse_quote!(ColumnWriter::Int64ColumnWriter),
+            PhysicalType::Float => syn::parse_quote!(ColumnWriter::FloatColumnWriter),
+            PhysicalType::Double => syn::parse_quote!(ColumnWriter::DoubleColumnWriter),
+            PhysicalType::ByteArray => {
                 syn::parse_quote!(ColumnWriter::ByteArrayColumnWriter)
             }
-            BasicType::FIXED_LEN_BYTE_ARRAY => {
+            PhysicalType::FixedLenByteArray => {
                 syn::parse_quote!(ColumnWriter::FixedLenByteArrayColumnWriter)
             }
         }
@@ -513,21 +520,18 @@ impl Type {
     /// Takes a rust type and returns the appropriate
     /// parquet-rs column reader
     fn column_reader(&self) -> syn::TypePath {
-        use parquet::basic::Type as BasicType;
-
         match self.physical_type() {
-            BasicType::BOOLEAN => {
+            PhysicalType::Boolean => {
                 syn::parse_quote!(ColumnReader::BoolColumnReader)
             }
-            BasicType::INT32 => syn::parse_quote!(ColumnReader::Int32ColumnReader),
-            BasicType::INT64 => syn::parse_quote!(ColumnReader::Int64ColumnReader),
-            BasicType::INT96 => syn::parse_quote!(ColumnReader::Int96ColumnReader),
-            BasicType::FLOAT => syn::parse_quote!(ColumnReader::FloatColumnReader),
-            BasicType::DOUBLE => syn::parse_quote!(ColumnReader::DoubleColumnReader),
-            BasicType::BYTE_ARRAY => {
+            PhysicalType::Int32 => syn::parse_quote!(ColumnReader::Int32ColumnReader),
+            PhysicalType::Int64 => syn::parse_quote!(ColumnReader::Int64ColumnReader),
+            PhysicalType::Float => syn::parse_quote!(ColumnReader::FloatColumnReader),
+            PhysicalType::Double => syn::parse_quote!(ColumnReader::DoubleColumnReader),
+            PhysicalType::ByteArray => {
                 syn::parse_quote!(ColumnReader::ByteArrayColumnReader)
             }
-            BasicType::FIXED_LEN_BYTE_ARRAY => {
+            PhysicalType::FixedLenByteArray => {
                 syn::parse_quote!(ColumnReader::FixedLenByteArrayColumnReader)
             }
         }
@@ -609,9 +613,7 @@ impl Type {
     ///   `Vec<u8>`  => BYTE_ARRAY
     ///   String => BYTE_ARRAY
     ///   i32 => INT32
-    fn physical_type(&self) -> parquet::basic::Type {
-        use parquet::basic::Type as BasicType;
-
+    fn physical_type(&self) -> PhysicalType {
         let last_part = self.last_part();
         let leaf_type = self.leaf_type_recursive();
 
@@ -619,14 +621,14 @@ impl Type {
             Type::Array(first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
-                        return BasicType::FIXED_LEN_BYTE_ARRAY;
+                        return PhysicalType::FixedLenByteArray;
                     }
                 }
             }
             Type::Vec(first_type) | Type::Slice(first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
-                        return BasicType::BYTE_ARRAY;
+                        return PhysicalType::ByteArray;
                     }
                 }
             }
@@ -634,21 +636,21 @@ impl Type {
         }
 
         match last_part.trim() {
-            "bool" => BasicType::BOOLEAN,
-            "u8" | "u16" | "u32" => BasicType::INT32,
-            "i8" | "i16" | "i32" | "NaiveDate" => BasicType::INT32,
-            "u64" | "i64" | "NaiveDateTime" => BasicType::INT64,
+            "bool" => PhysicalType::Boolean,
+            "u8" | "u16" | "u32" => PhysicalType::Int32,
+            "i8" | "i16" | "i32" | "NaiveDate" => PhysicalType::Int32,
+            "u64" | "i64" | "NaiveDateTime" => PhysicalType::Int64,
             "usize" | "isize" => {
                 if usize::BITS == 64 {
-                    BasicType::INT64
+                    PhysicalType::Int64
                 } else {
-                    BasicType::INT32
+                    PhysicalType::Int32
                 }
             }
-            "f32" => BasicType::FLOAT,
-            "f64" => BasicType::DOUBLE,
-            "String" | "str" | "Arc < str >" => BasicType::BYTE_ARRAY,
-            "Uuid" => BasicType::FIXED_LEN_BYTE_ARRAY,
+            "f32" => PhysicalType::Float,
+            "f64" => PhysicalType::Double,
+            "String" | "str" | "Arc < str >" => PhysicalType::ByteArray,
+            "Uuid" => PhysicalType::FixedLenByteArray,
             f => unimplemented!("{} currently is not supported", f),
         }
     }
@@ -1112,7 +1114,6 @@ mod test {
 
     #[test]
     fn test_physical_type() {
-        use parquet::basic::Type as BasicType;
         let snippet: proc_macro2::TokenStream = quote! {
           struct LotsOfInnerTypes {
             a_buf: ::std::vec::Vec<u8>,
@@ -1136,14 +1137,14 @@ mod test {
         assert_eq!(
             physical_types,
             vec![
-                BasicType::BYTE_ARRAY,
-                BasicType::INT32,
-                BasicType::BOOLEAN,
-                BasicType::BYTE_ARRAY,
-                BasicType::FIXED_LEN_BYTE_ARRAY,
-                BasicType::BYTE_ARRAY,
-                BasicType::INT32,
-                BasicType::FIXED_LEN_BYTE_ARRAY,
+                PhysicalType::ByteArray,
+                PhysicalType::Int32,
+                PhysicalType::Boolean,
+                PhysicalType::ByteArray,
+                PhysicalType::FixedLenByteArray,
+                PhysicalType::ByteArray,
+                PhysicalType::Int32,
+                PhysicalType::FixedLenByteArray,
             ]
         )
     }
