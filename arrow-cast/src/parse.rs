@@ -445,7 +445,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
-        let string = truncate_white_space(string);
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes())
             .ok()
             .map(f16::from_f32)
@@ -454,44 +454,40 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
-        let string = truncate_white_space(string);
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
-        let string = truncate_white_space(string);
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
 }
+
+/// this is a no-op if the string starts and ends with a digit, otherwise it will trim whitespace from the start and end of the string.
 #[inline]
-fn truncate_white_space(string: &str) -> &str {
-    if string
-        .as_bytes()
-        .first()
-        .is_some_and(|first_byte| !first_byte.is_ascii_digit())
-    {
-        string.trim_ascii_start()
-    } else {
-        string
+fn trim_pre_and_post_whitespace(string: &str) -> &str {
+    let bytes = string.as_bytes();
+    let prefix = bytes.first().is_some_and(|b| !b.is_ascii_digit());
+    let suffix = bytes.last().is_some_and(|b| !b.is_ascii_digit());
+    match (prefix, suffix) {
+        (false, false) => string,
+        (true, false) => string.trim_ascii_start(),
+        (false, true) => string.trim_ascii_end(),
+        (true, true) => string.trim_ascii(),
     }
 }
 
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
-            fn parse(mut string: &str) -> Option<Self::Native> {
+            fn parse(string: &str) -> Option<Self::Native> {
+                let string = trim_pre_and_post_whitespace(string);
                 if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
-                if string
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|first| !first.is_ascii_digit())
-                {
-                    string = string.trim_ascii_start();
-                };
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
                     string.as_bytes(),
                 ) {
@@ -2913,5 +2909,29 @@ mod tests {
         assert_eq!(Int32Type::parse("\t\n\t\n\n\n\t1"), Some(1));
         assert_eq!(Int32Type::parse(" \n-25"), Some(-25));
         assert_eq!(Int32Type::parse("\t-800"), Some(-800));
+
+        // suffix whitespace
+        assert_eq!(Float64Type::parse("1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("40.5123\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("40.5123\n\t\n\t\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("-942.5423\t"), Some(-942.5423));
+        assert_eq!(Int32Type::parse("3 "), Some(3));
+        assert_eq!(Int32Type::parse("30          "), Some(30));
+        assert_eq!(Int32Type::parse("-25 \n"), Some(-25));
+        assert_eq!(Int32Type::parse("800\t"), Some(800));
+        // whitespace on both sides
+        assert_eq!(Float64Type::parse(" 1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54 \t"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n-942.5423\n"), Some(-942.5423));
+        assert_eq!(Int32Type::parse(" 3 "), Some(3));
+        assert_eq!(Int32Type::parse("\n \n 100 \n"), Some(100));
+        assert_eq!(Int32Type::parse("\t-800\t\n"), Some(-800));
+
+        // trailing non-whitespace chars should not parse
+        assert_eq!(Float64Type::parse("1.5abc"), None);
+        assert_eq!(Float64Type::parse("40.5123x"), None);
+        assert_eq!(Int32Type::parse("30x"), None);
+        assert_eq!(Int32Type::parse("100px"), None);
+        assert_eq!(Int32Type::parse("-25!"), None);
     }
 }
