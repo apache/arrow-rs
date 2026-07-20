@@ -537,7 +537,7 @@ mod zstd_codec {
         ) -> Result<usize> {
             let offset = output_buf.len();
             let len = uncompress_size.unwrap_or_else(|| {
-                // Get the decompressed size from the zstd frame header.
+                // Get the decompressed size of all zstd frames in the input.
                 // See doc of upper_bound about "experimental" feature.
                 zstd::bulk::Decompressor::upper_bound(input_buf)
                     .unwrap_or(input_buf.len().saturating_mul(4))
