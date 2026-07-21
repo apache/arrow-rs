@@ -1140,8 +1140,32 @@ impl From<Vec<&[u8]>> for BinaryViewArray {
     }
 }
 
+impl<const C: usize> From<Vec<[u8; C]>> for BinaryViewArray {
+    fn from(v: Vec<[u8; C]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl<const C: usize> From<Vec<&[u8; C]>> for BinaryViewArray {
+    fn from(v: Vec<&[u8; C]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
 impl From<Vec<Option<&[u8]>>> for BinaryViewArray {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<const C: usize> From<Vec<Option<[u8; C]>>> for BinaryViewArray {
+    fn from(v: Vec<Option<[u8; C]>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<const C: usize> From<Vec<Option<&[u8; C]>>> for BinaryViewArray {
+    fn from(v: Vec<Option<&[u8; C]>>) -> Self {
         v.into_iter().collect()
     }
 }

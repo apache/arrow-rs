@@ -96,12 +96,36 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 
 impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>> for GenericBinaryArray<OffsetSize> {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
-        Self::from_opt_vec(v)
+        v.into_iter().collect()
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<Option<[u8; C]>>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<Option<[u8; C]>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<Option<&[u8; C]>>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<Option<&[u8; C]>>) -> Self {
+        v.into_iter().collect()
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<Vec<&[u8]>> for GenericBinaryArray<OffsetSize> {
     fn from(v: Vec<&[u8]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<[u8; C]>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<[u8; C]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<&[u8; C]>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<&[u8; C]>) -> Self {
         Self::from_iter_values(v)
     }
 }
@@ -575,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_binary_array_all_null() {
-        let data = vec![None];
+        let data = vec![None::<&[u8]>];
         let array = BinaryArray::from(data);
         array
             .into_data()
@@ -585,7 +609,7 @@ mod tests {
 
     #[test]
     fn test_large_binary_array_all_null() {
-        let data = vec![None];
+        let data = vec![None::<&[u8]>];
         let array = LargeBinaryArray::from(data);
         array
             .into_data()
