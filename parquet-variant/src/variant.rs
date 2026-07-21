@@ -804,13 +804,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int8(), Some(123i8));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     /// // but not if it would overflow
-    /// let v3 = Variant::from(1234i64);
-    /// assert_eq!(v3.as_int8(), None);
+    /// let v4 = Variant::from(1234i64);
+    /// assert_eq!(v4.as_int8(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello");
-    /// assert_eq!(v4.as_int8(), None);
+    /// let v5 = Variant::from("hello");
+    /// assert_eq!(v5.as_int8(), None);
     /// ```
     pub fn as_int8(&self) -> Option<i8> {
         match *self {
@@ -818,9 +823,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
             _ => None,
         }
     }
@@ -844,13 +849,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int16(), Some(123i16));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     /// // but not if it would overflow
-    /// let v3 = Variant::from(123456i64);
-    /// assert_eq!(v3.as_int16(), None);
+    /// let v4 = Variant::from(123456i64);
+    /// assert_eq!(v4.as_int16(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello");
-    /// assert_eq!(v4.as_int16(), None);
+    /// let v5 = Variant::from("hello");
+    /// assert_eq!(v5.as_int16(), None);
     /// ```
     pub fn as_int16(&self) -> Option<i16> {
         match *self {
@@ -858,9 +868,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
             _ => None,
         }
     }
@@ -883,18 +893,23 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(1231i64);
     /// assert_eq!(v2.as_int32(), Some(1231i32));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     /// // or from decimal variant(scale=0)
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
-    /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int32(), Some(123i32));
+    /// let v4 = Variant::from(d);
+    /// assert_eq!(v4.as_int32(), Some(123i32));
     ///
     /// // but not if it would overflow
-    /// let v4 = Variant::from(1234567890123i64);
-    /// assert_eq!(v4.as_f32(), None);
+    /// let v5 = Variant::from(1234567890123i64);
+    /// assert_eq!(v5.as_f32(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v5 = Variant::from("hello");
-    /// assert_eq!(v5.as_f32(), None)
+    /// let v6 = Variant::from("hello");
+    /// assert_eq!(v6.as_f32(), None)
     /// ```
     pub fn as_int32(&self) -> Option<i32> {
         match *self {
@@ -902,9 +917,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i as i32),
             Variant::Int32(i) => Some(i),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer()),
-            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal4(d) => d.as_integer(),
+            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
             _ => None,
         }
     }
@@ -928,9 +943,14 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int64(), Some(123i64));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     /// // but not a variant that cannot be cast into an integer
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_int64(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_int64(), None);
     /// ```
     pub fn as_int64(&self) -> Option<i64> {
         match *self {
@@ -938,9 +958,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i as i64),
             Variant::Int32(i) => Some(i as i64),
             Variant::Int64(i) => Some(i),
-            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer() as i64),
-            Variant::Decimal8(d) if d.scale() == 0 => Some(d.integer()),
-            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal4(d) => d.as_integer().map(|i| i as i64),
+            Variant::Decimal8(d) => d.as_integer(),
+            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
             _ => None,
         }
     }
@@ -954,9 +974,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
-            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
             _ => None,
         }
     }
@@ -980,13 +1000,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_u8(), Some(123u8));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v3 = Variant::from(-1);
-    ///  assert_eq!(v3.as_u8(), None);
+    ///  let v4 = Variant::from(-1);
+    ///  assert_eq!(v4.as_u8(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v4 = Variant::from("hello");
-    ///  assert_eq!(v4.as_u8(), None);
+    ///  let v5 = Variant::from("hello");
+    ///  assert_eq!(v5.as_u8(), None);
     /// ```
     pub fn as_u8(&self) -> Option<u8> {
         Self::convert_to_unsigned_num(self)
@@ -1011,13 +1036,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_u16(), Some(123u16));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v3 = Variant::from(-1);
-    ///  assert_eq!(v3.as_u16(), None);
+    ///  let v4 = Variant::from(-1);
+    ///  assert_eq!(v4.as_u16(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v4 = Variant::from("hello");
-    ///  assert_eq!(v4.as_u16(), None);
+    ///  let v5 = Variant::from("hello");
+    ///  assert_eq!(v5.as_u16(), None);
     /// ```
     pub fn as_u16(&self) -> Option<u16> {
         Self::convert_to_unsigned_num(self)
@@ -1042,13 +1072,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u32(), Some(123u32));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v3 = Variant::from(-1);
-    ///  assert_eq!(v3.as_u32(), None);
+    ///  let v4 = Variant::from(-1);
+    ///  assert_eq!(v4.as_u32(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v4 = Variant::from("hello");
-    ///  assert_eq!(v4.as_u32(), None);
+    ///  let v5 = Variant::from("hello");
+    ///  assert_eq!(v5.as_u32(), None);
     /// ```
     pub fn as_u32(&self) -> Option<u32> {
         Self::convert_to_unsigned_num(self)
@@ -1073,9 +1108,14 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u64(), Some(1u64));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal16::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int8(), Some(1i8));
+    ///
     ///  // but not a variant that can't fit into the range
-    ///  let v3 = Variant::from(-1);
-    ///  assert_eq!(v3.as_u64(), None);
+    ///  let v4 = Variant::from(-1);
+    ///  assert_eq!(v4.as_u64(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
     ///  let v5 = Variant::from("hello!");

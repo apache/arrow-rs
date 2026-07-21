@@ -104,6 +104,10 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
 
     /// Returns the scale (number of digits after the decimal point)
     fn scale(&self) -> u8;
+
+    /// Returns the decimal as an integer, if scale is 0 or the unscaled value is divisible by 10^scale.
+    /// None for other values.
+    fn as_integer(&self) -> Option<Self::Native>;
 }
 
 /// Implements the complete variant decimal type: methods, Display, and VariantDecimalType trait
@@ -173,6 +177,14 @@ macro_rules! impl_variant_decimal {
 
             fn scale(&self) -> u8 {
                 self.scale()
+            }
+
+            fn as_integer(&self) -> Option<$native> {
+                if self.scale == 0 {
+                    return Some(self.integer);
+                }
+                let divisor = <$native>::pow(10, self.scale as u32);
+                (self.integer % divisor == 0).then(|| self.integer / divisor)
             }
         }
 
