@@ -2652,6 +2652,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "parquet-variant",
+ "ryu",
  "serde_json",
  "uuid",
 ]
