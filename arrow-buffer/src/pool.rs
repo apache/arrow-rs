@@ -150,7 +150,7 @@ impl MemoryReservation for Tracker {
 /// This is a wrapper for the reservation so we can standardize on changing
 /// and avoid race conditions in memory accounting
 #[derive(Debug, Default)]
-pub struct TrackedReservation {
+pub(crate) struct TrackedReservation {
     reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
 }
 
