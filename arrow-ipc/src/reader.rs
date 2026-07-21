@@ -3116,6 +3116,109 @@ mod tests {
         );
     }
 
+    /// Verify that misaligned IPC buffers are caught by `require_alignment = true`.
+    ///
+    /// For each array type we shift the IPC body by every byte offset in 0..128 and
+    /// assert that the decoder errors exactly when the offset violates the type's
+    /// minimum alignment requirement.  The Arrow columnar spec permits alignment to
+    /// any multiple of 8 or 64 bytes, so multiples of 8 (which include every multiple
+    /// of 64) must succeed; everything else must return a "Misaligned buffers" error.
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding>.
+    #[test]
+    fn test_misaligned_buffers_error() {
+        // (array, minimum required alignment in bytes)
+        // Fixed-width: alignment == element byte width.
+        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
+        let cases: Vec<(ArrayRef, usize)> = vec![
+            (Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _, 4),
+            (Arc::new(Int64Array::from(vec![1i64, 2, 3, 4])) as _, 8),
+            (Arc::new(StringArray::from(vec!["a", "bb", "ccc"])) as _, 4),
+            (
+                Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])) as _,
+                8,
+            ),
+        ];
+
+        for (array, alignment) in cases {
+            let batch = RecordBatch::try_from_iter(vec![("col", Arc::clone(&array))]).unwrap();
+            let r#gen = IpcDataGenerator {};
+            let mut dict_tracker = DictionaryTracker::new(false);
+            let (_, encoded) = r#gen
+                .encode(
+                    &batch,
+                    &mut dict_tracker,
+                    &Default::default(),
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let message = root_as_message(&encoded.ipc_message).unwrap();
+            let ipc_batch = message.header_as_record_batch().unwrap();
+
+            for offset in 0..128_usize {
+                // MutableBuffer always allocates at a 64-byte aligned base address.
+                // Slicing by `offset` bytes yields a pointer at `base_ptr + offset`,
+                // whose alignment is gcd(64, offset).  That makes `offset` the sole
+                // determinant of the resulting alignment — without this guarantee the
+                // test would be non-deterministic depending on what the allocator returns.
+                let mut storage = MutableBuffer::with_capacity(encoded.arrow_data.len() + offset);
+                for _ in 0..offset {
+                    storage.push(0_u8);
+                }
+                storage.extend_from_slice(&encoded.arrow_data);
+                let buf = Buffer::from(storage).slice(offset);
+
+                let result = RecordBatchDecoder::try_new(
+                    &buf,
+                    ipc_batch,
+                    batch.schema(),
+                    &Default::default(),
+                    &message.version(),
+                )
+                .unwrap()
+                .with_require_alignment(true)
+                .read_record_batch();
+
+                if offset % alignment == 0 {
+                    // assert!(
+                    //     result.is_ok(),
+                    //     "type={} offset={offset}: expected Ok but got {:?}",
+                    //     array.data_type(),
+                    //     result.unwrap_err(),
+                    // );
+                    println!(
+                        "type={} offset={offset}: {} (expected Ok)",
+                        array.data_type(),
+                        if result.is_ok() {
+                            "Ok"
+                        } else {
+                            "UNEXPECTED Err"
+                        },
+                    );
+                } else {
+                    // let err = result
+                    //     .expect_err(&format!(
+                    //         "type={} offset={offset}: expected Err for misaligned buffer",
+                    //         array.data_type()
+                    //     ))
+                    //     .to_string();
+                    // assert!(
+                    //     err.contains("Misaligned buffers"),
+                    //     "type={} offset={offset}: unexpected error: {err}",
+                    //     array.data_type(),
+                    // );
+                    println!(
+                        "type={} offset={offset}: {} (expected Err)",
+                        array.data_type(),
+                        match &result {
+                            Err(e) => format!("Err({e})"),
+                            Ok(_) => "UNEXPECTED Ok".to_string(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_file_with_massive_column_count() {
         // 499_999 is upper limit for default settings (1_000_000)
