@@ -56,21 +56,134 @@ use DataType::*;
 /// uncompressed length may be set to -1 to indicate that the data that
 /// follows is not compressed, which can be useful for cases where
 /// compression does not yield appreciable savings.
+/// Controls how the IPC reader allocates the [`Buffer`]s backing the arrays it
+/// decodes, trading read-time cost against the ability to free columns independently.
+///
+/// By default every buffer of a record batch is a zero-copy slice of a single
+/// allocation holding the whole batch body. That is the cheapest way to read,
+/// but because [`Buffer`]s are reference counted over their whole backing
+/// allocation, the entire batch stays resident in memory for as long as *any*
+/// one of its columns is alive. When only a subset of the columns is retained
+/// downstream (e.g. after a projection) this keeps far more memory alive than
+/// necessary.
+///
+/// See <https://github.com/apache/arrow-rs/issues/10392>.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BufferAllocationStrategy {
+    /// Back all buffers of a record batch with a single shared allocation using
+    /// zero-copy slices (the default, and the historic behavior). Lowest read
+    /// overhead; the whole batch stays resident while any column is alive.
+    #[default]
+    Shared,
+    /// Give each buffer its own allocation *when it costs no extra copy* — i.e.
+    /// when reading from a stream, where the bytes can be read straight into a
+    /// per-buffer allocation. For sources that are already a single in-memory
+    /// buffer (memory-mapped files, [`StreamDecoder`], or a [`Buffer`] handed to
+    /// [`FileDecoder`]), owning would require an added copy, so this falls back
+    /// to [`Shared`](Self::Shared) and never copies.
+    OwnedIfFree,
+    /// Always give each buffer its own allocation so columns can be freed
+    /// independently, copying out of a shared in-memory body when that is the
+    /// only way. For streaming readers this costs nothing over
+    /// [`OwnedIfFree`](Self::OwnedIfFree); for in-memory sources it adds one
+    /// copy per buffer.
+    Owned,
+}
+
+/// Reads a single (possibly compressed) buffer out of the shared batch body `a_data`.
+///
+/// If `copy_shared` is true, an uncompressed buffer is copied into its own
+/// freshly allocated [`Buffer`] instead of being returned as a zero-copy slice
+/// of `a_data`, so it can be freed independently. Compressed buffers are always
+/// decompressed into their own allocation, so `copy_shared` has no effect on them.
 fn read_buffer(
     buf: &crate::Buffer,
     a_data: &Buffer,
     compression_codec: Option<CompressionCodec>,
     decompression_context: &mut DecompressionContext,
+    copy_shared: bool,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
     let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
-        (true, _) | (_, None) => Ok(buf_data),
+        (true, _) => Ok(buf_data),
+        (false, None) if copy_shared => Ok(Buffer::from(buf_data.as_slice())),
+        (false, None) => Ok(buf_data),
         (false, Some(decompressor)) => {
             decompressor.decompress_to_buffer(&buf_data, decompression_context)
         }
     }
+}
+
+/// Finish a buffer that has already been read into its own allocation `raw`
+/// (the piecewise / owned path), applying decompression if needed.
+fn finish_owned_buffer(
+    raw: Buffer,
+    compression_codec: Option<CompressionCodec>,
+    decompression_context: &mut DecompressionContext,
+) -> Result<Buffer, ArrowError> {
+    match (raw.is_empty(), compression_codec) {
+        (true, _) | (_, None) => Ok(raw),
+        (false, Some(decompressor)) => {
+            decompressor.decompress_to_buffer(&raw, decompression_context)
+        }
+    }
+}
+
+/// Discard `n` bytes from `reader` (used to skip inter-buffer padding).
+fn skip_bytes<R: Read>(reader: &mut R, n: usize) -> Result<(), ArrowError> {
+    std::io::copy(&mut reader.by_ref().take(n as u64), &mut std::io::sink())?;
+    Ok(())
+}
+
+/// Read a record batch body from `reader` one buffer at a time, each into its
+/// own allocation, so the resulting arrays don't share a single backing buffer.
+///
+/// `reader` must be positioned at the start of the body. `buffers` is the
+/// `(offset, length)` of each buffer relative to the body start, in the order
+/// the decoder consumes them; offsets must be non-decreasing (they always are
+/// in a well-formed message). `body_len` is the total padded body length, so
+/// trailing padding is consumed and `reader` is left positioned at the next message.
+fn read_body_buffers<R: Read>(
+    reader: &mut R,
+    buffers: &[(usize, usize)],
+    body_len: usize,
+) -> Result<VecDeque<Buffer>, ArrowError> {
+    let mut out = VecDeque::with_capacity(buffers.len());
+    let mut pos: usize = 0;
+    for &(offset, len) in buffers {
+        if offset < pos {
+            return Err(ArrowError::IpcError(
+                "IPC buffer offsets are not monotonic; cannot read piecewise".to_string(),
+            ));
+        }
+        if offset > pos {
+            skip_bytes(reader, offset - pos)?;
+            pos = offset;
+        }
+        let mut buf = MutableBuffer::from_len_zeroed(len);
+        reader.read_exact(&mut buf)?;
+        out.push_back(buf.into());
+        pos += len;
+    }
+    if body_len > pos {
+        skip_bytes(reader, body_len - pos)?;
+    }
+    Ok(out)
+}
+
+/// Collect the `(offset, length)` of every buffer in a record batch flatbuffer.
+fn record_batch_buffer_layout(
+    batch: &crate::RecordBatch,
+) -> Result<Vec<(usize, usize)>, ArrowError> {
+    let buffers = batch.buffers().ok_or_else(|| {
+        ArrowError::IpcError("Unable to get buffers from IPC RecordBatch".to_string())
+    })?;
+    Ok(buffers
+        .iter()
+        .map(|b| (b.offset() as usize, b.length() as usize))
+        .collect())
 }
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
@@ -470,6 +583,14 @@ pub struct RecordBatchDecoder<'a> {
     ///
     /// See [`FileDecoder::with_skip_validation`] for details.
     skip_validation: UnsafeFlag,
+    /// When the buffers of this batch have been pre-read into their own
+    /// allocations (the piecewise / owned path), they are consumed from here in
+    /// order instead of being sliced out of `data`. See [`RecordBatchDecoder::with_owned_buffers`].
+    owned_buffers: Option<VecDeque<Buffer>>,
+    /// When slicing out of the shared `data`, copy each uncompressed buffer into
+    /// its own allocation. Only used when `owned_buffers` is `None`.
+    /// See [`RecordBatchDecoder::with_copy_shared`].
+    copy_shared: bool,
 }
 
 impl<'a> RecordBatchDecoder<'a> {
@@ -506,6 +627,8 @@ impl<'a> RecordBatchDecoder<'a> {
             projection: None,
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
+            owned_buffers: None,
+            copy_shared: false,
         })
     }
 
@@ -541,6 +664,27 @@ impl<'a> RecordBatchDecoder<'a> {
     /// may cause undefined behavior when the arrays are later accessed.
     pub fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
         self.skip_validation = skip_validation;
+        self
+    }
+
+    /// Supply buffers that have already been read into their own allocations, to
+    /// be consumed in order instead of being sliced out of the shared body.
+    ///
+    /// The buffers must be in the same order as the record batch's flatbuffer
+    /// buffer list (the order [`Self::next_buffer`] consumes them). Each may
+    /// still be compressed; decompression is applied on consumption.
+    pub fn with_owned_buffers(mut self, owned_buffers: VecDeque<Buffer>) -> Self {
+        self.owned_buffers = Some(owned_buffers);
+        self
+    }
+
+    /// When slicing buffers out of the shared body (i.e. no owned buffers were
+    /// supplied), copy each uncompressed buffer into its own allocation so that
+    /// columns can be freed independently. Used for in-memory sources under
+    /// [`BufferAllocationStrategy::Owned`], where reading straight into
+    /// per-buffer allocations is not possible.
+    pub fn with_copy_shared(mut self, copy_shared: bool) -> Self {
+        self.copy_shared = copy_shared;
         self
     }
 
@@ -624,16 +768,27 @@ impl<'a> RecordBatchDecoder<'a> {
         let buffer = self.buffers.next().ok_or_else(|| {
             ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
         })?;
+        if let Some(owned) = self.owned_buffers.as_mut() {
+            // Piecewise path: the buffer was already read into its own allocation.
+            let raw = owned.pop_front().ok_or_else(|| {
+                ArrowError::IpcError("Owned buffer count mismatched with metadata".to_string())
+            })?;
+            return finish_owned_buffer(raw, self.compression, &mut self.decompression_context);
+        }
         read_buffer(
             buffer,
             self.data,
             self.compression,
             &mut self.decompression_context,
+            self.copy_shared,
         )
     }
 
     fn skip_buffer(&mut self) {
         self.buffers.next().unwrap();
+        if let Some(owned) = self.owned_buffers.as_mut() {
+            owned.pop_front();
+        }
     }
 
     fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
@@ -795,10 +950,12 @@ pub fn read_dictionary(
         metadata,
         false,
         UnsafeFlag::new(),
+        false,
     )
 }
 
 /// Low-level version of [`read_dictionary`] with alignment and validation controls
+#[allow(clippy::too_many_arguments)]
 pub fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
@@ -807,6 +964,7 @@ pub fn read_dictionary_impl(
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
+    copy_shared: bool,
 ) -> Result<(), ArrowError> {
     let id = batch.id();
 
@@ -818,6 +976,7 @@ pub fn read_dictionary_impl(
         metadata,
         require_alignment,
         skip_validation,
+        copy_shared,
     )?;
 
     update_dictionaries(dictionaries_by_id, batch.isDelta(), id, dictionary_values)?;
@@ -865,6 +1024,7 @@ fn update_dictionaries(
 /// Given a dictionary batch IPC message/body along with the full state of a
 /// stream including schema, dictionary cache, metadata, and other flags, this
 /// function will parse the buffer into an array of dictionary values.
+#[allow(clippy::too_many_arguments)]
 fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
@@ -873,6 +1033,7 @@ fn get_dictionary_values(
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
+    copy_shared: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let id = batch.id();
     #[allow(deprecated)]
@@ -899,6 +1060,7 @@ fn get_dictionary_values(
             )?
             .with_require_alignment(require_alignment)
             .with_skip_validation(skip_validation)
+            .with_copy_shared(copy_shared)
             .read_record_batch()?;
 
             Some(record_batch.column(0).clone())
@@ -1025,6 +1187,7 @@ pub struct FileDecoder {
     projection: Option<Vec<usize>>,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
+    strategy: BufferAllocationStrategy,
 }
 
 impl FileDecoder {
@@ -1037,7 +1200,15 @@ impl FileDecoder {
             projection: None,
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
+            strategy: BufferAllocationStrategy::default(),
         }
+    }
+
+    /// Whether the in-memory (buffer-slicing) path should copy each buffer into
+    /// its own allocation. Only [`BufferAllocationStrategy::Owned`] does so here,
+    /// since [`FileDecoder`] is fed an already-materialized [`Buffer`].
+    fn copy_shared(&self) -> bool {
+        self.strategy == BufferAllocationStrategy::Owned
     }
 
     /// Specify a projection
@@ -1060,6 +1231,19 @@ impl FileDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Set how buffers backing the decoded arrays are allocated (defaults to
+    /// [`BufferAllocationStrategy::Shared`]).
+    ///
+    /// Note: [`FileDecoder`] is handed an already-materialized [`Buffer`], so it
+    /// can never read piecewise; [`BufferAllocationStrategy::OwnedIfFree`] is
+    /// therefore equivalent to [`Shared`](BufferAllocationStrategy::Shared) here,
+    /// and only [`Owned`](BufferAllocationStrategy::Owned) forces per-buffer
+    /// allocations (by copying). Piecewise reads happen in [`FileReader`].
+    pub fn with_buffer_allocation_strategy(mut self, strategy: BufferAllocationStrategy) -> Self {
+        self.strategy = strategy;
         self
     }
 
@@ -1092,6 +1276,7 @@ impl FileDecoder {
 
     /// Read the dictionary with the given block and data buffer
     pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
+        let copy_shared = self.copy_shared();
         let message = self.read_message(buf)?;
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
@@ -1104,6 +1289,7 @@ impl FileDecoder {
                     &message.version(),
                     self.require_alignment,
                     self.skip_validation.clone(),
+                    copy_shared,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -1138,6 +1324,59 @@ impl FileDecoder {
                 .with_projection(self.projection.as_deref())
                 .with_require_alignment(self.require_alignment)
                 .with_skip_validation(self.skip_validation.clone())
+                .with_copy_shared(self.copy_shared())
+                .read_record_batch()
+                .map(Some)
+            }
+            crate::MessageHeader::NONE => Ok(None),
+            t => Err(ArrowError::InvalidArgumentError(format!(
+                "Reading types other than record batches not yet supported, unable to read {t:?}"
+            ))),
+        }
+    }
+
+    /// Read the record batch at `block` by reading each buffer directly from
+    /// `reader` into its own allocation (the piecewise path used for
+    /// [`BufferAllocationStrategy::OwnedIfFree`] / [`Owned`](BufferAllocationStrategy::Owned)).
+    ///
+    /// Unlike [`Self::read_record_batch`], the batch body is never materialized
+    /// as a single shared buffer, so no extra copy is made.
+    fn read_record_batch_piecewise<R: Read + Seek>(
+        &self,
+        block: &Block,
+        reader: &mut R,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        let metadata_len = block.metaDataLength().to_usize().unwrap();
+        reader.seek(SeekFrom::Start(block.offset() as u64))?;
+        let mut meta = vec![0u8; metadata_len];
+        reader.read_exact(&mut meta)?;
+        let message = self.read_message(&meta)?;
+        match message.header_type() {
+            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
+                "Not expecting a schema when messages are read".to_string(),
+            )),
+            crate::MessageHeader::RecordBatch => {
+                let batch = message.header_as_record_batch().ok_or_else(|| {
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
+                })?;
+                let layout = record_batch_buffer_layout(&batch)?;
+                let body_start = block.offset() as u64 + metadata_len as u64;
+                reader.seek(SeekFrom::Start(body_start))?;
+                let owned =
+                    read_body_buffers(reader, &layout, block.bodyLength().to_usize().unwrap())?;
+                // `data` is unused on the owned path; pass an empty buffer.
+                let empty = Buffer::from(&[] as &[u8]);
+                RecordBatchDecoder::try_new(
+                    &empty,
+                    batch,
+                    self.schema.clone(),
+                    &self.dictionaries,
+                    &message.version(),
+                )?
+                .with_projection(self.projection.as_deref())
+                .with_require_alignment(self.require_alignment)
+                .with_skip_validation(self.skip_validation.clone())
+                .with_owned_buffers(owned)
                 .read_record_batch()
                 .map(Some)
             }
@@ -1158,6 +1397,8 @@ pub struct FileReaderBuilder {
     max_footer_fb_tables: usize,
     /// Passed through to construct [`VerifierOptions`]
     max_footer_fb_depth: usize,
+    /// How buffers backing the decoded arrays are allocated
+    strategy: BufferAllocationStrategy,
 }
 
 impl Default for FileReaderBuilder {
@@ -1167,6 +1408,7 @@ impl Default for FileReaderBuilder {
             max_footer_fb_tables: verifier_options.max_tables,
             max_footer_fb_depth: verifier_options.max_depth,
             projection: None,
+            strategy: BufferAllocationStrategy::default(),
         }
     }
 }
@@ -1219,6 +1461,18 @@ impl FileReaderBuilder {
         self
     }
 
+    /// Set how buffers backing the decoded arrays are allocated (defaults to
+    /// [`BufferAllocationStrategy::Shared`]).
+    ///
+    /// [`FileReader`] can read each buffer straight from the file into its own
+    /// allocation, so both [`OwnedIfFree`](BufferAllocationStrategy::OwnedIfFree)
+    /// and [`Owned`](BufferAllocationStrategy::Owned) give independent per-buffer
+    /// allocations here with no extra copy.
+    pub fn with_buffer_allocation_strategy(mut self, strategy: BufferAllocationStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
     /// Build [`FileReader`] with given reader.
     pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
         // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
@@ -1267,7 +1521,8 @@ impl FileReaderBuilder {
             }
         }
 
-        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version())
+            .with_buffer_allocation_strategy(self.strategy);
         if let Some(projection) = self.projection {
             decoder = decoder.with_projection(projection)
         }
@@ -1427,12 +1682,18 @@ impl<R: Read + Seek> FileReader<R> {
     }
 
     fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        let block = &self.blocks[self.current_block];
+        let block = self.blocks[self.current_block];
         self.current_block += 1;
 
-        // read length
-        let buffer = read_block(&mut self.reader, block)?;
-        self.decoder.read_record_batch(block, &buffer)
+        if self.decoder.strategy == BufferAllocationStrategy::Shared {
+            // Read the whole batch body into one allocation and slice it (zero-copy).
+            let buffer = read_block(&mut self.reader, &block)?;
+            self.decoder.read_record_batch(&block, &buffer)
+        } else {
+            // Read each buffer straight from the file into its own allocation.
+            self.decoder
+                .read_record_batch_piecewise(&block, &mut self.reader)
+        }
     }
 
     /// Gets a reference to the underlying reader.
@@ -1536,6 +1797,11 @@ pub struct StreamReader<R> {
     ///
     /// See [`FileDecoder::with_skip_validation`] for details.
     skip_validation: UnsafeFlag,
+
+    /// How buffers backing the decoded arrays are allocated.
+    ///
+    /// See [`BufferAllocationStrategy`] for details.
+    strategy: BufferAllocationStrategy,
 }
 
 impl<R> fmt::Debug for StreamReader<R> {
@@ -1576,7 +1842,7 @@ impl<R: Read> StreamReader<R> {
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
         let mut msg_reader = MessageReader::new(reader);
-        let message = msg_reader.maybe_next()?;
+        let message = msg_reader.maybe_next(false)?;
         let Some((message, _)) = message else {
             return Err(ArrowError::IpcError(
                 "Expected schema message, found empty stream.".to_string(),
@@ -1613,6 +1879,7 @@ impl<R: Read> StreamReader<R> {
             dictionaries_by_id,
             projection,
             skip_validation: UnsafeFlag::new(),
+            strategy: BufferAllocationStrategy::default(),
         })
     }
 
@@ -1673,7 +1940,10 @@ impl<R: Read> StreamReader<R> {
     /// This is useful primarily for testing reader/writer behaviors as it
     /// allows a full view into the messages that have been written to a stream.
     pub(crate) fn next_ipc_message(&mut self) -> Result<Option<IpcMessage>, ArrowError> {
-        let message = self.reader.maybe_next()?;
+        // Streaming readers can read each buffer straight into its own allocation
+        // with no extra copy, so both owning strategies use the piecewise path.
+        let owned_buffers = self.strategy != BufferAllocationStrategy::Shared;
+        let message = self.reader.maybe_next(owned_buffers)?;
         let Some((message, body)) = message else {
             // If the message is None, we have reached the end of the stream.
             return Ok(None);
@@ -1694,17 +1964,39 @@ impl<R: Read> StreamReader<R> {
 
                 let version = message.version();
                 let schema = self.schema.clone();
-                let record_batch = RecordBatchDecoder::try_new(
-                    &body.into(),
-                    batch,
-                    schema,
-                    &self.dictionaries_by_id,
-                    &version,
-                )?
-                .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
-                .with_require_alignment(false)
-                .with_skip_validation(self.skip_validation.clone())
-                .read_record_batch()?;
+                let projection = self.projection.as_ref().map(|x| x.0.as_ref());
+                let record_batch = match body {
+                    MessageBody::Whole(buf) => {
+                        let data: Buffer = buf.into();
+                        RecordBatchDecoder::try_new(
+                            &data,
+                            batch,
+                            schema,
+                            &self.dictionaries_by_id,
+                            &version,
+                        )?
+                        .with_projection(projection)
+                        .with_require_alignment(false)
+                        .with_skip_validation(self.skip_validation.clone())
+                        .read_record_batch()?
+                    }
+                    MessageBody::Owned(bufs) => {
+                        // `data` is unused on the owned path; pass an empty buffer.
+                        let empty = Buffer::from(&[] as &[u8]);
+                        RecordBatchDecoder::try_new(
+                            &empty,
+                            batch,
+                            schema,
+                            &self.dictionaries_by_id,
+                            &version,
+                        )?
+                        .with_projection(projection)
+                        .with_require_alignment(false)
+                        .with_skip_validation(self.skip_validation.clone())
+                        .with_owned_buffers(bufs)
+                        .read_record_batch()?
+                    }
+                };
                 IpcMessage::RecordBatch(record_batch)
             }
             Message::MessageHeader::DictionaryBatch => {
@@ -1715,6 +2007,14 @@ impl<R: Read> StreamReader<R> {
                 })?;
 
                 let version = message.version();
+                // Dictionaries are always read whole (in-memory); only `Owned`
+                // copies them out so their buffers are independent too.
+                let MessageBody::Whole(body) = body else {
+                    return Err(ArrowError::IpcError(
+                        "Dictionary batch body was read piecewise unexpectedly".to_string(),
+                    ));
+                };
+                let copy_shared = self.strategy == BufferAllocationStrategy::Owned;
                 let dict_values = get_dictionary_values(
                     &body.into(),
                     dict,
@@ -1723,6 +2023,7 @@ impl<R: Read> StreamReader<R> {
                     &version,
                     false,
                     self.skip_validation.clone(),
+                    copy_shared,
                 )?;
 
                 update_dictionaries(
@@ -1771,6 +2072,19 @@ impl<R: Read> StreamReader<R> {
         unsafe { self.skip_validation.set(skip_validation) };
         self
     }
+
+    /// Set how buffers backing the decoded arrays are allocated (defaults to
+    /// [`BufferAllocationStrategy::Shared`]).
+    ///
+    /// [`StreamReader`] reads from a stream, so it can read each buffer straight
+    /// into its own allocation; both
+    /// [`OwnedIfFree`](BufferAllocationStrategy::OwnedIfFree) and
+    /// [`Owned`](BufferAllocationStrategy::Owned) give independent per-buffer
+    /// allocations with no extra copy.
+    pub fn with_buffer_allocation_strategy(mut self, strategy: BufferAllocationStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1804,6 +2118,14 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// The body of an IPC message as read from a stream.
+enum MessageBody {
+    /// The whole body read into one allocation (buffers are sliced out of it).
+    Whole(MutableBuffer),
+    /// Each buffer read into its own allocation, in flatbuffer buffer order.
+    Owned(VecDeque<Buffer>),
+}
+
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
@@ -1827,9 +2149,16 @@ impl<R: Read> MessageReader<R> {
     ///   the first read
     /// - `Err(_)` if the reader returns an error other than on the first
     ///   read, or if the metadata length is invalid
-    /// - `Ok(Some(_))` with the Message and buffer containiner the
-    ///   body bytes otherwise.
-    fn maybe_next(&mut self) -> Result<Option<(Message::Message<'_>, MutableBuffer)>, ArrowError> {
+    /// - `Ok(Some(_))` with the Message and its body otherwise.
+    ///
+    /// If `owned_buffers` is true and the message is a record batch, the body is
+    /// read one buffer at a time into its own allocation ([`MessageBody::Owned`]),
+    /// so the resulting arrays don't share a single backing buffer. Otherwise the
+    /// whole body is read into one allocation ([`MessageBody::Whole`]).
+    fn maybe_next(
+        &mut self,
+        owned_buffers: bool,
+    ) -> Result<Option<(Message::Message<'_>, MessageBody)>, ArrowError> {
         let meta_len = self.read_meta_len()?;
         let Some(meta_len) = meta_len else {
             return Ok(None);
@@ -1842,10 +2171,22 @@ impl<R: Read> MessageReader<R> {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
+        let body_len = message.bodyLength() as usize;
+        let body = match (owned_buffers, message.header_as_record_batch()) {
+            (true, Some(batch)) => {
+                // Disjoint field borrows: `message` borrows `self.buf`, the read
+                // borrows `self.reader` — both accessed directly, so this is fine.
+                let layout = record_batch_buffer_layout(&batch)?;
+                MessageBody::Owned(read_body_buffers(&mut self.reader, &layout, body_len)?)
+            }
+            _ => {
+                let mut buf = MutableBuffer::from_len_zeroed(body_len);
+                self.reader.read_exact(&mut buf)?;
+                MessageBody::Whole(buf)
+            }
+        };
 
-        Ok(Some((message, buf)))
+        Ok(Some((message, body)))
     }
 
     /// Get a mutable reference to the underlying reader.
@@ -3769,6 +4110,368 @@ mod tests {
             // Verify that the returned column matches the original values column
             assert_eq!(read_batch.num_columns(), 1);
             assert_eq!(read_batch.column(0).as_ref(), &values);
+        }
+    }
+
+    #[test]
+    fn test_owned_buffers_with_projection() {
+        // Exercises the piecewise path's skip_buffer (projected-out columns still
+        // consume their pre-read owned buffers, keeping the queue in sync).
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("zzz")])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+                Arc::new(StringArray::from(vec![None, Some("qq"), Some("w")])),
+            ],
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Project columns 0 and 2 (skip the middle Int32), reading piecewise.
+        let read: Vec<_> = FileReaderBuilder::new()
+            .with_projection(vec![0, 2])
+            .with_buffer_allocation_strategy(BufferAllocationStrategy::OwnedIfFree)
+            .build(std::io::Cursor::new(buf))
+            .unwrap()
+            .map(|b| b.unwrap())
+            .collect();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].num_columns(), 2);
+        assert_eq!(read[0].column(0).as_ref(), batch.column(0).as_ref());
+        assert_eq!(read[0].column(1).as_ref(), batch.column(2).as_ref());
+        // The projected columns' buffers must each have their own allocation.
+        check_buffer_allocation(&read[0], BufferSharing::NoneShared, "projection");
+    }
+
+    #[test]
+    fn test_write_read_two_batches_all_nullable_types_shared() {
+        // Shared (default): buffers are zero-copy slices of one body allocation.
+        write_read_two_batches_all_nullable_types(
+            crate::writer::IpcWriteOptions::default(),
+            BufferAllocationStrategy::Shared,
+            BufferSharing::AllShared,
+        );
+    }
+
+    #[test]
+    fn test_write_read_two_batches_all_nullable_types_owned_if_free() {
+        // OwnedIfFree: FileReader/StreamReader read each buffer into its own
+        // allocation (no extra copy), so no two buffers share an allocation.
+        write_read_two_batches_all_nullable_types(
+            crate::writer::IpcWriteOptions::default(),
+            BufferAllocationStrategy::OwnedIfFree,
+            BufferSharing::NoneShared,
+        );
+    }
+
+    #[test]
+    fn test_write_read_two_batches_all_nullable_types_owned() {
+        // Owned: each buffer is its own allocation, so no two buffers share one.
+        write_read_two_batches_all_nullable_types(
+            crate::writer::IpcWriteOptions::default(),
+            BufferAllocationStrategy::Owned,
+            BufferSharing::NoneShared,
+        );
+    }
+
+    #[cfg(feature = "lz4")]
+    #[test]
+    fn test_write_read_two_batches_all_nullable_types_lz4() {
+        let options = crate::writer::IpcWriteOptions::default()
+            .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+            .unwrap();
+        write_read_two_batches_all_nullable_types(
+            options,
+            BufferAllocationStrategy::Shared,
+            BufferSharing::AllShared,
+        );
+    }
+
+    // Schema: 6 nullable columns — string, 2 primitive, boolean, list, struct(string, primitive).
+    fn all_nullable_types_schema() -> Arc<Schema> {
+        let struct_fields = Fields::from(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("n", DataType::Int32, true),
+        ]);
+        Arc::new(Schema::new(vec![
+            Field::new("string", DataType::Utf8, true),
+            Field::new("int32", DataType::Int32, true),
+            Field::new("float64", DataType::Float64, true),
+            Field::new("boolean", DataType::Boolean, true),
+            Field::new(
+                "list",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new("struct", DataType::Struct(struct_fields), true),
+        ]))
+    }
+
+    fn write_read_two_batches_all_nullable_types(
+        options: crate::writer::IpcWriteOptions,
+        strategy: BufferAllocationStrategy,
+        expected: BufferSharing,
+    ) {
+        use arrow_array::builder::{Int32Builder, ListBuilder};
+
+        // Build one batch: 6 nullable columns with nulls sprinkled in each.
+        fn make_batch(schema: &Arc<Schema>, base: i32) -> RecordBatch {
+            // string
+            let string = StringArray::from(vec![Some("a"), None, Some("c")]);
+            // 2 primitive
+            let int32 = Int32Array::from(vec![Some(base), None, Some(base + 2)]);
+            let float64 = Float64Array::from(vec![None, Some(base as f64 + 0.5), Some(1.0)]);
+            // boolean
+            let boolean = BooleanArray::from(vec![Some(true), Some(false), None]);
+            // list of int32
+            let list = {
+                let mut b = ListBuilder::new(Int32Builder::new());
+                b.values().append_value(1);
+                b.values().append_value(2);
+                b.append(true);
+                b.append(false); // null list
+                b.values().append_value(3);
+                b.append(true);
+                b.finish()
+            };
+            // struct of string + primitive
+            let struct_string = StringArray::from(vec![Some("x"), None, Some("z")]);
+            let struct_int = Int32Array::from(vec![None, Some(10), Some(20)]);
+            let struct_fields: Fields = match schema.field(5).data_type() {
+                DataType::Struct(f) => f.clone(),
+                _ => unreachable!(),
+            };
+            let struct_array = StructArray::new(
+                struct_fields,
+                vec![Arc::new(struct_string) as ArrayRef, Arc::new(struct_int)],
+                Some(NullBuffer::from(vec![true, true, false])), // null struct row
+            );
+
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(string),
+                    Arc::new(int32),
+                    Arc::new(float64),
+                    Arc::new(boolean),
+                    Arc::new(list),
+                    Arc::new(struct_array),
+                ],
+            )
+            .unwrap()
+        }
+
+        let schema = all_nullable_types_schema();
+        let batches = [make_batch(&schema, 0), make_batch(&schema, 100)];
+        // With Shared these small uncompressed buffers stay slices of one shared allocation;
+        // with OwnedIfFree / Owned each buffer is read into (or copied to) its own allocation.
+        write_read_and_check_allocation(&schema, &batches, options, strategy, expected);
+    }
+
+    // Same schema, but the string columns hold highly repetitive data (many identical long
+    // values) so LZ4 has plenty to compress — verifies compressed round-trip + buffer sharing.
+    #[cfg(feature = "lz4")]
+    #[test]
+    fn test_write_read_repetitive_strings_lz4() {
+        use arrow_array::builder::{Int32Builder, ListBuilder};
+
+        fn make_batch(schema: &Arc<Schema>, base: i32) -> RecordBatch {
+            let n = 1024;
+            // Highly repetitive: same long string on most rows, occasional null.
+            let repeated = "the-quick-brown-fox-jumps-over-the-lazy-dog";
+            let strings: Vec<Option<&str>> = (0..n)
+                .map(|i| if i % 8 == 0 { None } else { Some(repeated) })
+                .collect();
+            let string = StringArray::from(strings.clone());
+
+            let int32 = Int32Array::from((0..n).map(|_| Some(base)).collect::<Vec<_>>());
+            let float64 = Float64Array::from((0..n).map(|_| Some(1.5)).collect::<Vec<_>>());
+            let boolean = BooleanArray::from((0..n).map(|_| Some(true)).collect::<Vec<_>>());
+
+            let list = {
+                let mut b = ListBuilder::new(Int32Builder::new());
+                for _ in 0..n {
+                    b.values().append_value(7);
+                    b.values().append_value(7);
+                    b.append(true);
+                }
+                b.finish()
+            };
+
+            let struct_string = StringArray::from(strings);
+            let struct_int = Int32Array::from((0..n).map(|_| Some(base)).collect::<Vec<_>>());
+            let struct_fields: Fields = match schema.field(5).data_type() {
+                DataType::Struct(f) => f.clone(),
+                _ => unreachable!(),
+            };
+            let struct_array = StructArray::new(
+                struct_fields,
+                vec![Arc::new(struct_string) as ArrayRef, Arc::new(struct_int)],
+                None,
+            );
+
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(string),
+                    Arc::new(int32),
+                    Arc::new(float64),
+                    Arc::new(boolean),
+                    Arc::new(list),
+                    Arc::new(struct_array),
+                ],
+            )
+            .unwrap()
+        }
+
+        let schema = all_nullable_types_schema();
+        let batches = [make_batch(&schema, 0), make_batch(&schema, 100)];
+        let options = crate::writer::IpcWriteOptions::default()
+            .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+            .unwrap();
+        // These buffers are large and highly repetitive, so LZ4 actually compresses them.
+        // On read each compressed buffer is decompressed into its own fresh allocation, so the
+        // buffers do NOT share one body allocation — even under the Shared strategy.
+        write_read_and_check_allocation(
+            &schema,
+            &batches,
+            options,
+            BufferAllocationStrategy::Shared,
+            BufferSharing::NotAllShared,
+        );
+    }
+
+    fn write_read_and_check_allocation(
+        schema: &Arc<Schema>,
+        batches: &[RecordBatch],
+        options: crate::writer::IpcWriteOptions,
+        strategy: BufferAllocationStrategy,
+        expected: BufferSharing,
+    ) {
+        // Write once in the file format and once in the stream format, then read
+        // each back with the matching reader under `strategy`. Both readers own a
+        // stream, so both should honor the strategy identically.
+        let mut file_buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new_with_options(
+                &mut file_buf,
+                schema,
+                options.clone(),
+            )
+            .unwrap();
+            for b in batches {
+                writer.write(b).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let file_batches: Vec<_> = FileReaderBuilder::new()
+            .with_buffer_allocation_strategy(strategy)
+            .build(std::io::Cursor::new(file_buf))
+            .unwrap()
+            .map(|b| b.unwrap())
+            .collect();
+
+        let mut stream_buf = Vec::new();
+        {
+            let mut writer =
+                crate::writer::StreamWriter::try_new_with_options(&mut stream_buf, schema, options)
+                    .unwrap();
+            for b in batches {
+                writer.write(b).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let stream_batches: Vec<_> = StreamReader::try_new(std::io::Cursor::new(stream_buf), None)
+            .unwrap()
+            .with_buffer_allocation_strategy(strategy)
+            .map(|b| b.unwrap())
+            .collect();
+
+        assert_eq!(
+            file_batches.as_slice(),
+            batches,
+            "file reader data mismatch"
+        );
+        assert_eq!(
+            stream_batches.as_slice(),
+            batches,
+            "stream reader data mismatch"
+        );
+
+        check_buffer_allocation(&file_batches[0], expected, "file");
+        check_buffer_allocation(&stream_batches[0], expected, "stream");
+    }
+
+    /// The expected sharing of the backing allocations across a batch's buffers.
+    #[derive(Clone, Copy)]
+    enum BufferSharing {
+        /// Every buffer is a zero-copy slice of one shared allocation.
+        AllShared,
+        /// No two non-empty buffers share an allocation (each is independent).
+        NoneShared,
+        /// At least not fully shared (used when compression makes it data-dependent).
+        NotAllShared,
+    }
+
+    fn check_buffer_allocation(first: &RecordBatch, expected: BufferSharing, who: &str) {
+        // Collect (data_ptr, len) of every buffer, recursively. `data_ptr` is the
+        // allocation base (offset-independent); `len` lets us ignore empty buffers,
+        // which legitimately share a dangling pointer and hold no memory.
+        fn collect(data: &ArrayData, out: &mut Vec<(*const u8, usize)>) {
+            if let Some(nulls) = data.nulls() {
+                let b = nulls.buffer();
+                out.push((b.data_ptr().as_ptr(), b.len()));
+            }
+            for b in data.buffers() {
+                out.push((b.data_ptr().as_ptr(), b.len()));
+            }
+            for child in data.child_data() {
+                collect(child, out);
+            }
+        }
+
+        let mut infos = Vec::new();
+        for col in first.columns() {
+            collect(&col.to_data(), &mut infos);
+        }
+        let ptrs: Vec<_> = infos.iter().map(|(p, _)| *p).collect();
+        let all_shared = ptrs.windows(2).all(|w| w[0] == w[1]);
+
+        match expected {
+            BufferSharing::AllShared => assert!(
+                all_shared,
+                "[{who}] expected all buffers to share one allocation, got {ptrs:?}"
+            ),
+            BufferSharing::NotAllShared => assert!(
+                !all_shared,
+                "[{who}] expected buffers not all in one allocation, got {ptrs:?}"
+            ),
+            BufferSharing::NoneShared => {
+                // Every non-empty buffer must have its own allocation.
+                let mut seen = std::collections::HashSet::new();
+                for (ptr, len) in infos.iter().copied() {
+                    if len == 0 {
+                        continue;
+                    }
+                    assert!(
+                        seen.insert(ptr),
+                        "[{who}] two buffers share allocation {ptr:?}; ptrs = {ptrs:?}"
+                    );
+                }
+            }
         }
     }
 }
