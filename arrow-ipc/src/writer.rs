@@ -627,13 +627,14 @@ impl IpcDataGenerator {
                 ipc_write_context,
             )?);
         }
-        let mut arrow_data = Vec::new();
+        let mut arrow_data = ipc_write_context.scratch();
         self.record_batch_to_bytes(
             batch,
             write_options,
             ipc_write_context,
             &mut IpcBodySink::Write(&mut arrow_data),
         )?;
+        ipc_write_context.reserve_scratch_with_capacity(arrow_data.capacity());
         Ok((
             encoded_dictionaries,
             EncodedData {
