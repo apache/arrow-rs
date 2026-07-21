@@ -1339,6 +1339,29 @@ mod tests {
     use rand::{Rng, rng};
 
     #[test]
+    fn test_from_selectors_skips_empty_selectors() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(0),
+            RowSelector::skip(0),
+            RowSelector::select(2),
+            RowSelector::select(0),
+            RowSelector::skip(1),
+        ]);
+        assert_eq!(
+            selection.selectors(),
+            vec![RowSelector::select(2), RowSelector::skip(1)]
+        );
+    }
+
+    #[test]
+    fn test_offset_zero_and_zero_batch_expand_are_identity() {
+        let selection =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]));
+        assert_eq!(selection.clone().offset(0), selection);
+        assert_eq!(selection.expand_to_batch_boundaries(0, 3), selection);
+    }
+
+    #[test]
     fn test_from_filters() {
         let filters = vec![
             BooleanArray::from(vec![false, false, false, true, true, true, true]),

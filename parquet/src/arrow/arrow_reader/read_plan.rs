@@ -598,6 +598,25 @@ mod tests {
     }
 
     #[test]
+    fn selectors_policy_lowers_mask_backed_selection() {
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, false, true, true,
+        ]));
+        let mut plan = ReadPlanBuilder::new(4)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build();
+        let RowSelectionCursor::Selectors(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Selectors cursor");
+        };
+
+        assert_eq!(cursor.next_selector(), RowSelector::select(1));
+        assert_eq!(cursor.next_selector(), RowSelector::skip(2));
+        assert_eq!(cursor.next_selector(), RowSelector::select(2));
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
     fn mask_backed_plan_respects_loaded_row_ranges() {
         // Start from a non-byte-aligned BooleanBuffer::slice so the mask-backed
         // cursor path (new_mask_from_buffer) is exercised with a bit offset.

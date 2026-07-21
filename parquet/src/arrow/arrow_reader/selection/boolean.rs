@@ -983,6 +983,67 @@ mod tests {
         assert_eq!(r_mask.len(), 5);
         let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
         assert_eq!(bits, vec![true, false, true, true, true]);
+
+        // Swapped operands: the right side is longer and its tail passes through.
+        let a = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]));
+        let b = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, true, true, false, true,
+        ]));
+        let r = a.intersection(&b);
+        let r_mask = r.as_mask().unwrap();
+        assert_eq!(r_mask.len(), 5);
+        let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
+        assert_eq!(bits, vec![true, false, true, false, true]);
+    }
+
+    #[test]
+    fn test_mask_and_then_none_selected_returns_all_unset() {
+        let outer = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, true, true, false, true,
+        ]));
+        let inner =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![false, false, false]));
+
+        let result = outer.and_then(&inner);
+        let mask = result.as_mask().unwrap();
+        assert_eq!(mask.len(), 5);
+        assert_eq!(mask.count_set_bits(), 0);
+    }
+
+    #[test]
+    fn test_mixed_backing_equality_mismatches() {
+        let mask =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true, true]));
+
+        // Total row counts differ
+        let longer = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(2),
+            RowSelector::skip(1),
+        ]);
+        assert_ne!(mask, longer);
+        assert_ne!(longer, mask);
+
+        // A selected bit falls inside a skip run
+        let skip_overlap = RowSelection::from(vec![RowSelector::skip(2), RowSelector::select(2)]);
+        assert_ne!(mask, skip_overlap);
+
+        // Select run boundaries do not line up
+        let misaligned = RowSelection::from(vec![
+            RowSelector::select(2),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+        ]);
+        assert_ne!(mask, misaligned);
+
+        let equal = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(2),
+        ]);
+        assert_eq!(mask, equal);
+        assert_eq!(equal, mask);
     }
 
     #[test]
