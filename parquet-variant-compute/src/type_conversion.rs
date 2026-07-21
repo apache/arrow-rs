@@ -485,24 +485,26 @@ where
     I::Native: DecimalCast,
     O::Native: DecimalCast,
 {
-    if let Some(converted) = rescale_decimal::<I, O>(
+    let converted = rescale_decimal::<I, O>(
         input,
         input_precision,
         input_scale,
         target_precision,
         target_scale,
-    ) && let Some(convert_back) = rescale_decimal::<O, I>(
+    )?;
+
+    let converted_back = rescale_decimal::<O, I>(
         converted,
         target_precision,
         target_scale,
         input_precision,
         input_scale,
-    ) && convert_back == input
-    {
-        Some(converted)
-    } else {
-        None
+    )?;
+    if converted_back == input {
+        return Some(converted);
     }
+
+    None
 }
 
 impl ShredDecimalVariant for Decimal32Type {
