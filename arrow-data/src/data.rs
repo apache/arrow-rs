@@ -2651,7 +2651,7 @@ mod tests {
     fn test_slice_memory_size_binary_offset_buffer_len_plus_one() {
         // 2-element array: array len = 2, not 3
         // values: 5 bytes
-        let data_buffer = Buffer::from_slice_ref(&[0u8, 1, 2, 3, 4]);
+        let data_buffer = Buffer::from_slice_ref([0u8, 1, 2, 3, 4]);
         // offsets need array_len+1 entries to mark the end of every element:
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 5_i32]);
         let array = ArrayData::try_new(
