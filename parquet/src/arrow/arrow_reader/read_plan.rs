@@ -598,6 +598,50 @@ mod tests {
     }
 
     #[test]
+    fn mask_backed_plan_respects_loaded_row_ranges() {
+        // Start from a non-byte-aligned BooleanBuffer::slice so the mask-backed
+        // cursor path (new_mask_from_buffer) is exercised with a bit offset.
+        // Rows 0 and 11 of 12 are selected; pages for rows [4, 10) are unloaded.
+        let mut bits = vec![false; 5];
+        bits.push(true); // row 0
+        bits.extend(std::iter::repeat_n(false, 10)); // rows 1..=10
+        bits.push(true); // row 11
+        bits.extend([true, false, true]); // trailing padding outside the slice
+        let mask = BooleanBuffer::from(bits).slice(5, 12);
+        let selection = RowSelection::from_boolean_buffer(mask);
+        assert!(selection.as_mask().is_some());
+
+        let loaded = LoadedRowRanges::from_selection(RowSelection::from(vec![
+            RowSelector::select(4),
+            RowSelector::skip(6),
+            RowSelector::select(2),
+        ]));
+
+        let mut plan = ReadPlanBuilder::new(12)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .with_loaded_row_ranges(Some(loaded))
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        // The first chunk must end at the loaded range boundary (row 4), not
+        // continue into the unloaded gap.
+        let first = cursor.next_chunk(12).unwrap();
+        assert_eq!(first.initial_skip, 0);
+        assert_eq!(first.chunk_rows, 4);
+        assert_eq!(first.selected_rows, 1);
+
+        // The second chunk skips the gap and decodes only within [10, 12).
+        let second = cursor.next_chunk(12).unwrap();
+        assert_eq!(second.initial_skip, 7);
+        assert_eq!(second.chunk_rows, 1);
+        assert_eq!(second.selected_rows, 1);
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
     fn with_predicate_options_limit_pads_tail_when_no_prior_selection() {
         use crate::arrow::ProjectionMask;
         use crate::arrow::array_reader::StructArrayReader;
