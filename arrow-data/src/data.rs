@@ -530,7 +530,19 @@ impl ArrayData {
         for spec in layout.buffers.iter() {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
-                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
+                    // Offset buffers contain len+1 elements: one boundary per element
+                    // plus a final boundary marking the end of the last element.
+                    let len = match self.data_type {
+                        DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Map(_, _) => self.len + 1,
+                        _ => self.len,
+                    };
+                    let buffer_size = len.checked_mul(*byte_width).ok_or_else(|| {
                         ArrowError::ComputeError(
                             "Integer overflow computing buffer size".to_string(),
                         )
@@ -2614,6 +2626,44 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
         assert!(string_data_slice.ptr_eq(&string_data_slice));
         assert!(!string_data_slice.ptr_eq(&string_data))
+    }
+
+    #[test]
+    fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
+        // 2-element array ["hello", "world"]: array len = 2, 10 bytes
+        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        // offsets need array_len+1 entries to mark the end of every string:
+        //   [0, 5, 10] -> 3 i32s = 12 bytes
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
+        let array = ArrayData::try_new(
+            DataType::Utf8,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 22); // 12 + 10
+    }
+
+    #[test]
+    fn test_slice_memory_size_binary_offset_buffer_len_plus_one() {
+        // 2-element array: array len = 2, not 3
+        // values: 5 bytes
+        let data_buffer = Buffer::from_slice_ref(&[0u8, 1, 2, 3, 4]);
+        // offsets need array_len+1 entries to mark the end of every element:
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 5_i32]);
+        let array = ArrayData::try_new(
+            DataType::Binary,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 17); // 12 + 5
     }
 
     #[test]
