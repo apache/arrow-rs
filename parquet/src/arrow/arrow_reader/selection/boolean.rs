@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{RowSelection, RowSelectionInner, RowSelector};
+use super::{LoadedRowRanges, RowSelection, RowSelectionInner, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
 use arrow_buffer::bit_iterator::BitSliceIterator;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, Buffer};
 use std::cmp::Ordering;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Mask-backed [`RowSelection`] storage.
 ///
@@ -170,11 +170,32 @@ impl Iterator for MaskRunIter<'_> {
 ///
 /// This is best for dense selections where there are many small skips
 /// or selections. For example, selecting every other row.
+///
+/// When page pruning produces sparse column data, `loaded_row_ranges` limits
+/// each decoded chunk to rows whose pages are loaded for every projected leaf.
+/// For example, two projected columns can have different page boundaries:
+///
+/// ```text
+/// Row ranges:       [0, 4) [4, 6) [6, 8) [8, 10) [10, 12)
+/// Selection mask:   1000   00     00     00      01
+/// Column A pages:   loaded | missing [4, 8) | loaded [8, 12)
+/// Column B pages:   loaded [0, 6) | missing [6, 10) | loaded
+/// LoadedRowRanges:  [0, 4)                         [10, 12)
+/// ```
+///
+/// The first chunk decodes `[0, 4)` with mask `1000`. The next chunk skips to
+/// row 11 and decodes `[11, 12)` with mask `1`. The loaded ranges are decode
+/// boundaries, not output batch boundaries: [`ParquetRecordBatchReader`]
+/// accumulates both chunks and applies the combined mask `10001` once.
+///
+/// [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 #[derive(Debug)]
 pub struct MaskCursor {
     pub(super) mask: BooleanBuffer,
     /// Current absolute offset into the selection
     pub(super) position: usize,
+    /// Row ranges whose backing pages are loaded for every projected column.
+    pub(super) loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
 }
 
 impl MaskCursor {
@@ -185,13 +206,19 @@ impl MaskCursor {
 
     /// Advance through the mask representation, producing the next chunk summary
     pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+        if self.is_empty() {
+            return None;
+        }
+
+        Some(self.next_mask_chunk_non_empty(batch_size))
+    }
+
+    /// Produces the next chunk for a non-empty, trailing-skip-free mask.
+    fn next_mask_chunk_non_empty(&mut self, batch_size: usize) -> MaskChunk {
+        debug_assert!(!self.is_empty());
+
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
-
-            if self.position >= mask.len() {
-                return None;
-            }
-
             let start_position = self.position;
             let mut cursor = start_position;
             let mut initial_skip = 0;
@@ -200,6 +227,10 @@ impl MaskCursor {
                 initial_skip += 1;
                 cursor += 1;
             }
+            debug_assert!(
+                cursor < mask.len(),
+                "ReadPlan must remove trailing skips from Mask selections"
+            );
 
             let mask_start = cursor;
             let mut chunk_rows = 0;
@@ -221,9 +252,61 @@ impl MaskCursor {
 
         self.position = end_position;
 
-        Some(MaskChunk {
+        MaskChunk {
             initial_skip,
             chunk_rows,
+            selected_rows,
+            mask_start,
+        }
+    }
+
+    /// Returns the next non-empty mask chunk without crossing an unloaded row range.
+    ///
+    /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
+    /// skips before constructing this cursor. Callers therefore only invoke
+    /// this method for a non-empty mask that has another selected row.
+    pub(crate) fn next_chunk(&mut self, batch_size: usize) -> Result<MaskChunk, ParquetError> {
+        debug_assert!(batch_size > 0);
+        debug_assert!(!self.is_empty());
+
+        if self.loaded_row_ranges.is_none() {
+            return Ok(self.next_mask_chunk_non_empty(batch_size));
+        }
+
+        let start_position = self.position;
+        let mut cursor = start_position;
+        while cursor < self.mask.len() && !self.mask.value(cursor) {
+            cursor += 1;
+        }
+
+        debug_assert!(
+            cursor < self.mask.len(),
+            "ReadPlan must remove trailing skips from Mask selections"
+        );
+
+        let loaded_range_end = self
+            .loaded_row_ranges
+            .as_ref()
+            .and_then(|ranges| ranges.end_containing(cursor))
+            .ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Internal Error: selected row {cursor} has no loaded page range"
+                ))
+            })?;
+
+        let mask_start = cursor;
+        let mut selected_rows = 0;
+        while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
+            if self.mask.value(cursor) {
+                selected_rows += 1;
+            }
+            cursor += 1;
+        }
+
+        self.position = cursor;
+        Ok(MaskChunk {
+            initial_skip: mask_start - start_position,
+            chunk_rows: cursor - mask_start,
             selected_rows,
             mask_start,
         })
