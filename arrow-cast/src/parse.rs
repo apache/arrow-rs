@@ -445,6 +445,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
+        let string = truncate_white_space(string);
         lexical_core::parse(string.as_bytes())
             .ok()
             .map(f16::from_f32)
@@ -453,23 +454,44 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
+        let string = truncate_white_space(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
+        let string = truncate_white_space(string);
         lexical_core::parse(string.as_bytes()).ok()
+    }
+}
+#[inline]
+fn truncate_white_space(string: &str) -> &str {
+    if string
+        .as_bytes()
+        .first()
+        .is_some_and(|first_byte| !first_byte.is_ascii_digit())
+    {
+        string.trim_ascii_start()
+    } else {
+        string
     }
 }
 
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
-            fn parse(string: &str) -> Option<Self::Native> {
+            fn parse(mut string: &str) -> Option<Self::Native> {
                 if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
+                if string
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|first| !first.is_ascii_digit())
+                {
+                    string = string.trim_ascii_start();
+                };
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
                     string.as_bytes(),
                 ) {
@@ -2871,5 +2893,25 @@ mod tests {
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
+    }
+    #[test]
+    fn test_parse_prefix_white_space() {
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n2.5"), Some(2.5));
+        assert_eq!(Float64Type::parse("\n-942.5423"), Some(-942.5423));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n40.5123"), Some(40.5123));
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n-40.5123"), Some(-40.5123));
+        assert_eq!(Float64Type::parse(" -1.5"), Some(-1.5));
+        assert_eq!(Int32Type::parse(" 3"), Some(3));
+        assert_eq!(Int32Type::parse("          30"), Some(30));
+        assert_eq!(Int32Type::parse("\n \n 100"), Some(100));
+        assert_eq!(Int32Type::parse(" \n25"), Some(25));
+        assert_eq!(Int32Type::parse("\t800"), Some(800));
+        assert_eq!(Int32Type::parse("\t  \n \t 851"), Some(851));
+        assert_eq!(Int32Type::parse("\t\n\t\n\n\n\t1"), Some(1));
+        assert_eq!(Int32Type::parse(" \n-25"), Some(-25));
+        assert_eq!(Int32Type::parse("\t-800"), Some(-800));
     }
 }
