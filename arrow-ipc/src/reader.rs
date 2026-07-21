@@ -3118,7 +3118,7 @@ mod tests {
 
     /// Verify that misaligned IPC buffers are caught by `require_alignment = true`.
     ///
-    /// For each array type we shift the IPC body by every byte offset in 0..128 and
+    /// For each array type we shift the IPC body by every byte offset in 0..OFFSET_RANGE and
     /// assert that the decoder errors exactly when the offset violates the type's
     /// minimum alignment requirement.  The Arrow columnar spec permits alignment to
     /// any multiple of 8 or 64 bytes, so multiples of 8 (which include every multiple
@@ -3126,24 +3126,33 @@ mod tests {
     /// See <https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding>.
     #[test]
     fn test_misaligned_buffers_error() {
+        const OFFSET_RANGE: usize = 128;
+
         // (array, minimum required alignment in bytes)
         // Fixed-width: alignment == element byte width.
         // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
         let cases: Vec<(ArrayRef, usize)> = vec![
-            (Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _, 4),
-            (Arc::new(Int64Array::from(vec![1i64, 2, 3, 4])) as _, 8),
-            (Arc::new(StringArray::from(vec!["a", "bb", "ccc"])) as _, 4),
+            (Arc::new(Int32Array::from_iter(0i32..20_000)) as _, 4),
+            (Arc::new(Int64Array::from_iter(0i64..20_000)) as _, 8),
             (
-                Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])) as _,
+                Arc::new(StringArray::from_iter_values(
+                    (0..20_000).map(|i| i.to_string()),
+                )) as _,
+                4,
+            ),
+            (
+                Arc::new(LargeStringArray::from_iter_values(
+                    (0..20_000).map(|i| i.to_string()),
+                )) as _,
                 8,
             ),
         ];
 
         for (array, alignment) in cases {
             let batch = RecordBatch::try_from_iter(vec![("col", Arc::clone(&array))]).unwrap();
-            let r#gen = IpcDataGenerator {};
+            let encoder = IpcDataGenerator {};
             let mut dict_tracker = DictionaryTracker::new(false);
-            let (_, encoded) = r#gen
+            let (_, encoded) = encoder
                 .encode(
                     &batch,
                     &mut dict_tracker,
@@ -3154,7 +3163,7 @@ mod tests {
             let message = root_as_message(&encoded.ipc_message).unwrap();
             let ipc_batch = message.header_as_record_batch().unwrap();
 
-            for offset in 0..128_usize {
+            for offset in 0..OFFSET_RANGE {
                 // MutableBuffer always allocates at a 64-byte aligned base address.
                 // Slicing by `offset` bytes yields a pointer at `base_ptr + offset`,
                 // whose alignment is gcd(64, offset).  That makes `offset` the sole
@@ -3179,40 +3188,23 @@ mod tests {
                 .read_record_batch();
 
                 if offset % alignment == 0 {
-                    // assert!(
-                    //     result.is_ok(),
-                    //     "type={} offset={offset}: expected Ok but got {:?}",
-                    //     array.data_type(),
-                    //     result.unwrap_err(),
-                    // );
-                    println!(
-                        "type={} offset={offset}: {} (expected Ok)",
+                    assert!(
+                        result.is_ok(),
+                        "type={} offset={offset}: expected Ok but got {:?}",
                         array.data_type(),
-                        if result.is_ok() {
-                            "Ok"
-                        } else {
-                            "UNEXPECTED Err"
-                        },
+                        result.unwrap_err(),
                     );
                 } else {
-                    // let err = result
-                    //     .expect_err(&format!(
-                    //         "type={} offset={offset}: expected Err for misaligned buffer",
-                    //         array.data_type()
-                    //     ))
-                    //     .to_string();
-                    // assert!(
-                    //     err.contains("Misaligned buffers"),
-                    //     "type={} offset={offset}: unexpected error: {err}",
-                    //     array.data_type(),
-                    // );
-                    println!(
-                        "type={} offset={offset}: {} (expected Err)",
+                    let err = result
+                        .expect_err(&format!(
+                            "type={} offset={offset}: expected Err for misaligned buffer",
+                            array.data_type()
+                        ))
+                        .to_string();
+                    assert!(
+                        err.contains("Misaligned buffers"),
+                        "type={} offset={offset}: unexpected error: {err}",
                         array.data_type(),
-                        match &result {
-                            Err(e) => format!("Err({e})"),
-                            Ok(_) => "UNEXPECTED Ok".to_string(),
-                        },
                     );
                 }
             }
