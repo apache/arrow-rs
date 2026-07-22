@@ -594,7 +594,7 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
 impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         ensure_phys_ty!(
-            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY,
+            Type::BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
@@ -628,7 +628,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         ensure_phys_ty!(
-            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY,
+            Type::BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
