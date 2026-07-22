@@ -689,7 +689,7 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
             suffix_writer: DeltaLengthByteArrayEncoder::new(),
             prefix_lengths: Vec::new(),
             suffixes: Vec::new(),
-            previous: ByteArray::new(),
+            previous: Bytes::new().into(),
             _phantom: PhantomData,
         }
     }
@@ -748,7 +748,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
                 // ... followed by suffixes
                 self.suffix_writer.flush_to(out)?;
 
-                self.previous = ByteArray::new();
+                self.previous = Bytes::new().into();
                 Ok(())
             }
             _ => panic!(
