@@ -887,7 +887,7 @@ impl RowGroupReaderBuilder {
                 // window-boundary pages) stay buffered until their last use
                 let retained = windowed.finish_front_window(&ranges);
 
-                let row_group = data_request.try_into_in_memory_row_group_retaining(
+                let mut row_group = data_request.try_into_in_memory_row_group_retaining(
                     windowed.row_group_idx,
                     windowed.row_count,
                     &self.metadata,
@@ -895,6 +895,9 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                     &|range| retained.contains_key(&(range.start, range.end)),
                 )?;
+                // dictionary pages are decompressed once and shared across
+                // this row group's windows
+                row_group.dictionary_page_cache = Some(Arc::clone(&windowed.dictionary_page_cache));
 
                 plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,

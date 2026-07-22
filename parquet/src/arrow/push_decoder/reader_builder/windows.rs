@@ -26,11 +26,13 @@
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::{ReadPlanBuilder, RowSelection, RowSelectionPolicy, RowSelector};
+use crate::arrow::in_memory_row_group::DictionaryPageCache;
 use crate::arrow::push_decoder::reader_builder::data::{DataRequest, DataRequestBuilder};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
+use std::sync::Arc;
 
 /// One decode window: the data it needs and the plan to decode it.
 #[derive(Debug)]
@@ -55,6 +57,9 @@ pub(super) struct WindowedRead {
     /// `ParquetPushDecoder::upcoming_fetch_plan` so it can decide which
     /// coalesced requests to consume incrementally.
     pub streamable: Vec<Range<u64>>,
+    /// Decompressed dictionary pages shared across this row group's windows,
+    /// so each is decompressed once rather than once per window
+    pub dictionary_page_cache: Arc<DictionaryPageCache>,
 }
 
 impl WindowedRead {
@@ -269,6 +274,7 @@ pub(super) fn plan_windows(
         windows,
         range_uses,
         streamable,
+        dictionary_page_cache: Arc::new(DictionaryPageCache::default()),
     })
 }
 

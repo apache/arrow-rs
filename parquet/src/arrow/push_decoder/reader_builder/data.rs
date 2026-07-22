@@ -129,6 +129,7 @@ impl DataRequest {
             offset_index: get_offset_index(parquet_metadata, row_group_idx),
             row_group_idx,
             metadata: parquet_metadata,
+            dictionary_page_cache: None,
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
@@ -234,6 +235,7 @@ impl<'a> DataRequestBuilder<'a> {
             offset_index: get_offset_index(parquet_metadata, row_group_idx),
             row_group_idx,
             metadata: parquet_metadata,
+            dictionary_page_cache: None,
         };
 
         let FetchRanges {

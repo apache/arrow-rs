@@ -18,14 +18,102 @@
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::RowGroups;
 use crate::arrow::arrow_reader::RowSelection;
-use crate::column::page::{PageIterator, PageReader};
+use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
 use crate::errors::ParquetError;
+use crate::errors::Result;
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use bytes::{Buf, Bytes};
+use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Decompressed dictionary pages shared between the decode windows of one row
+/// group (see `BoundedStreamingOptions`), keyed by column index.
+///
+/// Each window builds fresh column readers, whose page readers would otherwise
+/// re-read and re-decompress the chunk's dictionary page for every window.
+/// The first window to read a column's dictionary page stores the decompressed
+/// [`Page`] here; later windows skip the page in the underlying reader (free
+/// when page locations are available) and reuse the cached one. Dropped with
+/// the row group's windowed-read state, so at most one decompressed dictionary
+/// page per projected column is retained at a time.
+#[derive(Debug, Default)]
+pub(crate) struct DictionaryPageCache {
+    pages: Mutex<HashMap<usize, Page>>,
+}
+
+impl DictionaryPageCache {
+    fn get(&self, column: usize) -> Option<Page> {
+        self.pages.lock().unwrap().get(&column).cloned()
+    }
+
+    fn put(&self, column: usize, page: Page) {
+        self.pages.lock().unwrap().insert(column, page);
+    }
+}
+
+/// A [`PageReader`] adapter that reuses a cached decompressed dictionary page
+/// (see [`DictionaryPageCache`]) instead of re-reading it from the chunk data.
+struct CachedDictionaryPageReader<R: PageReader> {
+    inner: R,
+    cache: Arc<DictionaryPageCache>,
+    column: usize,
+    /// Whether the (potential) dictionary page at the start of the chunk has
+    /// been handled
+    dictionary_handled: bool,
+}
+
+impl<R: PageReader> Iterator for CachedDictionaryPageReader<R> {
+    type Item = Result<Page>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
+    }
+}
+
+impl<R: PageReader> PageReader for CachedDictionaryPageReader<R> {
+    fn get_next_page(&mut self) -> Result<Option<Page>> {
+        if !self.dictionary_handled {
+            self.dictionary_handled = true;
+            let next_is_dictionary = matches!(
+                self.inner.peek_next_page()?,
+                Some(PageMetadata { is_dict: true, .. })
+            );
+            if next_is_dictionary {
+                if let Some(page) = self.cache.get(self.column) {
+                    // skip the underlying dictionary page without reading it
+                    // (with page locations this only drops its metadata)
+                    self.inner.skip_next_page()?;
+                    return Ok(Some(page));
+                }
+                let page = self.inner.get_next_page()?;
+                if let Some(page) = &page {
+                    self.cache.put(self.column, page.clone());
+                }
+                return Ok(page);
+            }
+        }
+        self.inner.get_next_page()
+    }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+        self.inner.peek_next_page()
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        if !self.dictionary_handled {
+            // a skipped dictionary page needs no caching
+            self.dictionary_handled = true;
+        }
+        self.inner.skip_next_page()
+    }
+
+    fn at_record_boundary(&mut self) -> Result<bool> {
+        self.inner.at_record_boundary()
+    }
+}
 
 /// An in-memory collection of column chunks
 #[derive(Debug)]
@@ -36,6 +124,9 @@ pub(crate) struct InMemoryRowGroup<'a> {
     pub(crate) row_count: usize,
     pub(crate) row_group_idx: usize,
     pub(crate) metadata: &'a ParquetMetaData,
+    /// If set, dictionary pages are cached and shared across the decode
+    /// windows of this row group
+    pub(crate) dictionary_page_cache: Option<Arc<DictionaryPageCache>>,
 }
 
 /// What ranges to fetch for the columns in this row group
@@ -218,7 +309,15 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     column_chunk_metadata,
                 )?;
 
-                let page_reader: Box<dyn PageReader> = Box::new(page_reader);
+                let page_reader: Box<dyn PageReader> = match &self.dictionary_page_cache {
+                    Some(cache) => Box::new(CachedDictionaryPageReader {
+                        inner: page_reader,
+                        cache: Arc::clone(cache),
+                        column: i,
+                        dictionary_handled: false,
+                    }),
+                    None => Box::new(page_reader),
+                };
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),
