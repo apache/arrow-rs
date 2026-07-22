@@ -668,7 +668,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 pub struct DeltaByteArrayEncoder<T: DataType> {
     prefix_len_encoder: DeltaBitPackEncoder<Int32Type>,
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,
-    previous: Vec<u8>,
+    previous: ByteArray,
     _phantom: PhantomData<T>,
 }
 
@@ -684,7 +684,7 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
         Self {
             prefix_len_encoder: DeltaBitPackEncoder::new(),
             suffix_writer: DeltaLengthByteArrayEncoder::new(),
-            previous: vec![],
+            previous: ByteArray::new(),
             _phantom: PhantomData,
         }
     }
@@ -703,21 +703,23 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             ),
         });
 
-        for byte_array in values {
-            let current = byte_array.data();
-            // Maximum prefix length that is shared between previous value and current
-            // value
-            let prefix_len = cmp::min(self.previous.len(), current.len());
+        let mut previous_array = &self.previous;
+        for current_array in values {
+            let current = current_array.data();
+            let previous = previous_array.data();
+            // Maximum prefix length that is shared between previous value and current value
+            let prefix_len = cmp::min(previous.len(), current.len());
             let mut match_len = 0;
-            while match_len < prefix_len && self.previous[match_len] == current[match_len] {
+            while match_len < prefix_len && previous[match_len] == current[match_len] {
                 match_len += 1;
             }
             prefix_lengths.push(match_len as i32);
-            suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
+            suffixes.push(current_array.slice(match_len, current_array.len() - match_len));
             // Update previous for the next prefix
-            self.previous.clear();
-            self.previous.extend_from_slice(current);
+            previous_array = current_array;
         }
+        self.previous = previous_array.clone();
+        
         self.prefix_len_encoder.put(&prefix_lengths)?;
         self.suffix_writer.put(&suffixes)?;
 
@@ -741,7 +743,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
                 // ... followed by suffixes
                 self.suffix_writer.flush_to(out)?;
 
-                self.previous.clear();
+                self.previous = ByteArray::new();
                 Ok(())
             }
             _ => panic!(
@@ -754,7 +756,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.prefix_len_encoder.estimated_memory_size()
             + self.suffix_writer.estimated_memory_size()
-            + (self.previous.capacity() * std::mem::size_of::<u8>())
+            + (self.previous.len() * std::mem::size_of::<u8>())
     }
 }
 
