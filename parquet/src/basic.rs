@@ -449,6 +449,12 @@ enum Encoding {
   /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
   /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
+  /// Compressed string encoding using a Fast Static Symbol Table (FSST).
+  ///
+  /// Frequently occurring substrings (up to 8 bytes) are replaced with
+  /// single-byte codes drawn from a per-page symbol table, enabling random
+  /// access to individual compressed values. Applies to BYTE_ARRAY data.
+  FSST = 10;
 }
 );
 
@@ -469,6 +475,7 @@ impl FromStr for Encoding {
             "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            "FSST" | "fsst" => Ok(Encoding::FSST),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -608,6 +615,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         7 => Encoding::DELTA_BYTE_ARRAY,
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
+        10 => Encoding::FSST,
         _ => panic!("Impossible encoding {val}"),
     }
 }
