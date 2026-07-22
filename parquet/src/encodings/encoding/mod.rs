@@ -154,10 +154,6 @@ impl<T: DataType> PlainEncoder<T> {
 }
 
 impl<T: DataType> Encoder<T> for PlainEncoder<T> {
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::PLAIN
     }
@@ -244,10 +240,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::RLE
     }
@@ -493,10 +485,6 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BINARY_PACKED
     }
@@ -638,10 +626,6 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_LENGTH_BYTE_ARRAY
     }
@@ -733,10 +717,6 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BYTE_ARRAY
     }
