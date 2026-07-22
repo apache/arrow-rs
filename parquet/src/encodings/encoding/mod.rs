@@ -598,18 +598,18 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let val_it = || {
-            values
-                .iter()
-                .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap())
-        };
+        let values = values
+            .iter()
+            .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap());
 
-        let lengths: Vec<i32> = val_it().map(|byte_array| byte_array.len() as i32).collect();
-        self.len_encoder.put(&lengths)?;
-        for byte_array in val_it() {
-            self.encoded_size += byte_array.len();
+        let mut lengths: Vec<i32> = Vec::with_capacity(values.len());
+        for byte_array in values {
+            let len = byte_array.len();
+            lengths.push(len as i32);
+            self.encoded_size += len;
             self.data.push(byte_array.clone());
         }
+        self.len_encoder.put(&lengths)?;
 
         Ok(())
     }
@@ -682,19 +682,16 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        let mut prefix_lengths: Vec<i32> = vec![];
-        let mut suffixes: Vec<ByteArray> = vec![];
+        let mut prefix_lengths: Vec<i32> = Vec::with_capacity(values.len());
+        let mut suffixes: Vec<ByteArray> = Vec::with_capacity(values.len());
 
-        let values = values
-            .iter()
-            .map(|x| x.as_any())
-            .map(|x| match T::get_physical_type() {
-                Type::BYTE_ARRAY => x.downcast_ref::<ByteArray>().unwrap(),
-                Type::FIXED_LEN_BYTE_ARRAY => x.downcast_ref::<FixedLenByteArray>().unwrap(),
-                _ => panic!(
-                    "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
-                ),
-            });
+        let values = values.iter().map(|x| match T::get_physical_type() {
+            Type::BYTE_ARRAY => x.as_any().downcast_ref::<ByteArray>().unwrap(),
+            Type::FIXED_LEN_BYTE_ARRAY => x.as_any().downcast_ref::<FixedLenByteArray>().unwrap(),
+            _ => panic!(
+                "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
+            ),
+        });
 
         for byte_array in values {
             let current = byte_array.data();
