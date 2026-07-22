@@ -132,6 +132,8 @@ impl<T: DataType> DictEncoder<T> {
     /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
     /// the result.
     pub fn write_indices(&mut self) -> Result<Bytes> {
+        // TODO: Move this into flush_buffer/flush_to?
+        //       That could allow reusing buffer with flush_to.
         let buffer_len = self.estimated_data_encoded_size();
         let mut buffer = Vec::with_capacity(buffer_len);
         buffer.push(self.bit_width());

@@ -81,7 +81,7 @@ pub trait Encoder<T: DataType>: Send {
         Ok(buffer.into())
     }
 
-    /// Flushes the underlying byte buffer that's being processed by this encoder. 
+    /// Flushes the underlying byte buffer that's being processed by this encoder.
     /// This will also reset the internal state.
     fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()>;
 }
@@ -668,6 +668,8 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 pub struct DeltaByteArrayEncoder<T: DataType> {
     prefix_len_encoder: DeltaBitPackEncoder<Int32Type>,
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,
+    prefix_lengths: Vec<i32>,
+    suffixes: Vec<ByteArray>,
     previous: ByteArray,
     _phantom: PhantomData<T>,
 }
@@ -684,6 +686,8 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
         Self {
             prefix_len_encoder: DeltaBitPackEncoder::new(),
             suffix_writer: DeltaLengthByteArrayEncoder::new(),
+            prefix_lengths: Vec::new(),
+            suffixes: Vec::new(),
             previous: ByteArray::new(),
             _phantom: PhantomData,
         }
@@ -692,8 +696,8 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        let mut prefix_lengths: Vec<i32> = Vec::with_capacity(values.len());
-        let mut suffixes: Vec<ByteArray> = Vec::with_capacity(values.len());
+        self.prefix_lengths.reserve(values.len());
+        self.suffixes.reserve(values.len());
 
         let values = values.iter().map(|x| match T::get_physical_type() {
             Type::BYTE_ARRAY => x.as_any().downcast_ref::<ByteArray>().unwrap(),
@@ -713,15 +717,19 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             while match_len < prefix_len && previous[match_len] == current[match_len] {
                 match_len += 1;
             }
-            prefix_lengths.push(match_len as i32);
-            suffixes.push(current_array.slice(match_len, current_array.len() - match_len));
+            self.prefix_lengths.push(match_len as i32);
+            self.suffixes
+                .push(current_array.slice(match_len, current.len() - match_len));
             // Update previous for the next prefix
             previous_array = current_array;
         }
         self.previous = previous_array.clone();
-        
-        self.prefix_len_encoder.put(&prefix_lengths)?;
-        self.suffix_writer.put(&suffixes)?;
+
+        self.prefix_len_encoder.put(&self.prefix_lengths)?;
+        self.suffix_writer.put(&self.suffixes)?;
+
+        self.prefix_lengths.clear();
+        self.suffixes.clear();
 
         Ok(())
     }
