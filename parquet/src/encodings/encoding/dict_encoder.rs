@@ -164,9 +164,6 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
     fn encoding(&self) -> Encoding {
         Encoding::PLAIN_DICTIONARY
     }
