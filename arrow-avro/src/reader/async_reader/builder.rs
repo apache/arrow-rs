@@ -17,7 +17,6 @@
 
 use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
-use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder, HeaderInfo};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
@@ -183,7 +182,7 @@ where
         .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".into()))
 }
 
-impl<R: AsyncFileReader> ReaderBuilder<R> {
+impl<R: AsyncFileReader + Unpin + Send + 'static> ReaderBuilder<R> {
     /// Build the asynchronous Avro reader with the provided parameters.
     /// This reads the header first to initialize the reader state.
     pub async fn try_build(mut self) -> Result<AsyncAvroFileReader<R>, AvroError> {
@@ -273,24 +272,18 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
 
         // Determine if there is actually data to fetch, note that we subtract the header len from range.start,
         // so we need to check if range.end == header_len to see if there's no data after the header
-        let reader_state = if range.start == range.end || header_len == range.end {
-            ReaderState::Finished
-        } else {
-            ReaderState::Idle {
-                reader: self.reader,
-            }
-        };
-
+        let finished = range.start == range.end || header_len == range.end;
         let codec = header_info.compression()?;
         let sync_marker = header_info.sync();
 
         Ok(AsyncAvroFileReader::new(
+            self.reader,
             range,
             self.file_size,
             decoder,
             codec,
             sync_marker,
-            reader_state,
+            finished,
         ))
     }
 }
