@@ -184,6 +184,12 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         self.write_indices()
     }
 
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        // TODO: RleEncoder could be reused instead of consumed
+        out.extend_from_slice(&self.flush_buffer()?);
+        Ok(())
+    }
+
     /// Returns the estimated total memory usage
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
