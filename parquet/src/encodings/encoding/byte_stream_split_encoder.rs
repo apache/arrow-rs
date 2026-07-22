@@ -22,7 +22,7 @@ use crate::errors::{ParquetError, Result};
 
 use super::Encoder;
 
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 use std::cmp;
 use std::marker::PhantomData;
 
@@ -88,12 +88,15 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         self.buffer.len()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
-        let mut encoded = vec![0; self.buffer.len()];
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let start = out.len();
+        out.resize(start + self.buffer.len(), 0);
+        let encoded = &mut out[start..];
+
         let type_size = T::get_type_size();
         match type_size {
-            4 => split_streams_const::<4>(&self.buffer, &mut encoded),
-            8 => split_streams_const::<8>(&self.buffer, &mut encoded),
+            4 => split_streams_const::<4>(&self.buffer, encoded),
+            8 => split_streams_const::<8>(&self.buffer, encoded),
             _ => {
                 return Err(general_err!(
                     "byte stream split unsupported for data types of size {} bytes",
@@ -103,7 +106,7 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         }
 
         self.buffer.clear();
-        Ok(encoded.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -202,26 +205,29 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         self.buffer.len()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
-        let mut encoded = vec![0; self.buffer.len()];
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let start = out.len();
+        out.resize(start + self.buffer.len(), 0);
+        let encoded = &mut out[start..];
+
         let type_size = match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => self.type_width,
             _ => T::get_type_size(),
         };
         // split_streams_const() is faster up to type_width == 8
         match type_size {
-            2 => split_streams_const::<2>(&self.buffer, &mut encoded),
-            3 => split_streams_const::<3>(&self.buffer, &mut encoded),
-            4 => split_streams_const::<4>(&self.buffer, &mut encoded),
-            5 => split_streams_const::<5>(&self.buffer, &mut encoded),
-            6 => split_streams_const::<6>(&self.buffer, &mut encoded),
-            7 => split_streams_const::<7>(&self.buffer, &mut encoded),
-            8 => split_streams_const::<8>(&self.buffer, &mut encoded),
-            _ => split_streams_variable(&self.buffer, &mut encoded, type_size),
+            2 => split_streams_const::<2>(&self.buffer, encoded),
+            3 => split_streams_const::<3>(&self.buffer, encoded),
+            4 => split_streams_const::<4>(&self.buffer, encoded),
+            5 => split_streams_const::<5>(&self.buffer, encoded),
+            6 => split_streams_const::<6>(&self.buffer, encoded),
+            7 => split_streams_const::<7>(&self.buffer, encoded),
+            8 => split_streams_const::<8>(&self.buffer, encoded),
+            _ => split_streams_variable(&self.buffer, out, type_size),
         }
 
         self.buffer.clear();
-        Ok(encoded.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.

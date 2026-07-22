@@ -75,7 +75,15 @@ pub trait Encoder<T: DataType>: Send {
 
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
-    fn flush_buffer(&mut self) -> Result<Bytes>;
+    fn flush_buffer(&mut self) -> Result<Bytes> {
+        let mut buffer = Vec::new();
+        self.flush_to(&mut buffer)?;
+        Ok(buffer.into())
+    }
+
+    /// Flushes the underlying byte buffer that's being processed by this encoder. 
+    /// This will also reset the internal state.
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()>;
 }
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
@@ -162,6 +170,15 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
             .extend_from_slice(self.bit_writer.flush_buffer());
         self.bit_writer.clear();
         Ok(std::mem::take(&mut self.buffer).into())
+    }
+
+    #[inline]
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        out.extend_from_slice(&self.buffer);
+        out.extend_from_slice(self.bit_writer.flush_buffer());
+        self.buffer.clear();
+        self.bit_writer.clear();
+        Ok(())
     }
 
     #[inline]
@@ -258,6 +275,12 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         buf[..4].copy_from_slice(&len.to_le_bytes());
 
         Ok(buf.into())
+    }
+
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        // TODO: RleEncoder could be reused instead of consumed
+        out.extend_from_slice(&self.flush_buffer()?);
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -477,18 +500,17 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
     }
 
     fn estimated_data_encoded_size(&self) -> usize {
-        self.bit_writer.bytes_written()
+        self.page_header_writer.bytes_written() + self.bit_writer.bytes_written()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         // Write remaining values
         self.flush_block_values()?;
         // Write page header with total values
         self.write_page_header();
 
-        let mut buffer = Vec::new();
-        buffer.extend_from_slice(self.page_header_writer.flush_buffer());
-        buffer.extend_from_slice(self.bit_writer.flush_buffer());
+        out.extend_from_slice(self.page_header_writer.flush_buffer());
+        out.extend_from_slice(self.bit_writer.flush_buffer());
 
         // Reset state
         self.page_header_writer.clear();
@@ -498,7 +520,7 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         self.current_value = 0;
         self.values_in_block = 0;
 
-        Ok(buffer.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -626,22 +648,22 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
         self.len_encoder.estimated_data_encoded_size() + self.encoded_size
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         ensure_phys_ty!(
             Type::BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let mut total_bytes = vec![];
-        let lengths = self.len_encoder.flush_buffer()?;
-        total_bytes.extend_from_slice(&lengths);
+        out.reserve(self.estimated_data_encoded_size());
+        self.len_encoder.flush_to(out)?;
+
         self.data.iter().for_each(|byte_array| {
-            total_bytes.extend_from_slice(byte_array.data());
+            out.extend_from_slice(byte_array.data());
         });
         self.data.clear();
         self.encoded_size = 0;
 
-        Ok(total_bytes.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -727,21 +749,16 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             + self.suffix_writer.estimated_data_encoded_size()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         match T::get_physical_type() {
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                // TODO: investigate if we can merge lengths and suffixes
-                // without copying data into new vector.
-                let mut total_bytes = vec![];
                 // Insert lengths ...
-                let lengths = self.prefix_len_encoder.flush_buffer()?;
-                total_bytes.extend_from_slice(&lengths);
+                self.prefix_len_encoder.flush_to(out)?;
                 // ... followed by suffixes
-                let suffixes = self.suffix_writer.flush_buffer()?;
-                total_bytes.extend_from_slice(&suffixes);
+                self.suffix_writer.flush_to(out)?;
 
                 self.previous.clear();
-                Ok(total_bytes.into())
+                Ok(())
             }
             _ => panic!(
                 "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
