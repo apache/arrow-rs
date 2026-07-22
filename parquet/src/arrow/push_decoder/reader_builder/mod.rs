@@ -746,8 +746,7 @@ impl RowGroupReaderBuilder {
                             &self.projection,
                             plan_builder.selection(),
                             self.row_selection_policy,
-                            streaming.stream_threshold,
-                            streaming.window_bytes,
+                            streaming,
                         ) {
                             return Ok(NextState::again(RowGroupDecoderState::DecodingWindows {
                                 windowed: Box::new(windowed),

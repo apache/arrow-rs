@@ -52,7 +52,7 @@ mod metadata;
 pub use adaptive::AdaptiveFetcher;
 pub use metadata::*;
 
-use futures::stream::{BoxStream, StreamExt as _};
+use futures::stream::BoxStream;
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -95,33 +95,28 @@ pub trait AsyncFileReader: Send {
     }
 
     /// Retrieve the bytes in `range` as a stream of chunks that can be
-    /// consumed incrementally, without buffering the whole range in memory.
+    /// consumed incrementally, without buffering the whole range in memory,
+    /// or `None` if this reader does not support streamed requests.
     ///
     /// Used by the bounded streaming mode (see
     /// [`BoundedStreamingOptions`](crate::arrow::arrow_reader::BoundedStreamingOptions))
     /// to consume large column chunks incrementally: the returned future
     /// issues the request, and the resulting stream yields the body as it
-    /// arrives. The stream is `'static` so the request can remain in flight
-    /// while the reader issues other requests.
+    /// arrives. Both the future and the stream are `'static` (owning their
+    /// connection) so several streamed requests can be opened concurrently
+    /// and remain in flight while the reader issues other requests.
     ///
-    /// The default implementation materializes the entire range via
-    /// [`Self::get_bytes`] and yields it as a single chunk, so implementations
-    /// that do not override this method behave exactly as before (correct, but
+    /// The default implementation returns `None`, which makes callers fall
+    /// back to [`Self::get_byte_ranges`] (existing implementors keep working,
     /// without the memory benefit). Implementations backed by a network store
     /// should return the response body stream directly; see the
     /// `ParquetObjectReader` implementation.
     fn get_bytes_stream(
         &mut self,
         range: Range<u64>,
-    ) -> BoxFuture<'_, Result<BoxStream<'static, Result<Bytes>>>> {
-        let fut = self.get_bytes(range);
-        async move {
-            let bytes = fut.await?;
-            let stream: BoxStream<'static, Result<Bytes>> =
-                futures::stream::once(async move { Ok(bytes) }).boxed();
-            Ok(stream)
-        }
-        .boxed()
+    ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
+        let _ = range;
+        None
     }
 
     /// Return a future which results in the [`ParquetMetaData`] for this Parquet file.
@@ -159,7 +154,7 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     fn get_bytes_stream(
         &mut self,
         range: Range<u64>,
-    ) -> BoxFuture<'_, Result<BoxStream<'static, Result<Bytes>>>> {
+    ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
         self.as_mut().get_bytes_stream(range)
     }
 
@@ -2193,7 +2188,7 @@ mod tests {
         fn get_bytes_stream(
             &mut self,
             range: Range<u64>,
-        ) -> BoxFuture<'_, Result<BoxStream<'static, Result<Bytes>>>> {
+        ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
             self.stream_requests.lock().unwrap().push(range.clone());
             let data = self.data.slice(range.start as usize..range.end as usize);
             let chunk_size = self.chunk_size;
@@ -2201,7 +2196,7 @@ mod tests {
                 .step_by(chunk_size)
                 .map(|offset| Ok(data.slice(offset..(offset + chunk_size).min(data.len()))))
                 .collect();
-            futures::future::ready(Ok(futures::stream::iter(chunks).boxed())).boxed()
+            Some(futures::future::ready(Ok(futures::stream::iter(chunks).boxed())).boxed())
         }
 
         fn get_metadata<'a>(
@@ -2289,6 +2284,7 @@ mod tests {
             stream_threshold: 256 * 1024,
             window_bytes: 128 * 1024,
             coalesce_gap: 1024 * 1024,
+            min_window_bytes_per_column: 16 * 1024,
         }
     }
 
@@ -2403,6 +2399,7 @@ mod tests {
                 stream_threshold: 64 * 1024,
                 window_bytes: 32 * 1024,
                 coalesce_gap: 4 * 1024,
+                min_window_bytes_per_column: 8 * 1024,
             };
 
             let (baseline, _) = read_all_with_options(
@@ -2460,6 +2457,7 @@ mod tests {
                 stream_threshold: 64 * 1024,
                 window_bytes: 32 * 1024,
                 coalesce_gap: 1024 * 1024,
+                min_window_bytes_per_column: 8 * 1024,
             })
             .build()
             .unwrap();

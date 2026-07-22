@@ -133,9 +133,9 @@ pub(super) fn plan_windows(
     projection: &ProjectionMask,
     selection: Option<&RowSelection>,
     row_selection_policy: RowSelectionPolicy,
-    stream_threshold: u64,
-    window_bytes: u64,
+    options: &crate::arrow::arrow_reader::BoundedStreamingOptions,
 ) -> Option<WindowedRead> {
+    let stream_threshold = options.stream_threshold;
     if batch_size == 0 || row_count == 0 {
         return None;
     }
@@ -172,6 +172,14 @@ pub(super) fn plan_windows(
             streamable.push(start..start + len);
         }
     }
+    // See BoundedStreamingOptions::min_window_bytes_per_column: windows must
+    // amortize per-window, per-column fixed costs
+    let projected_columns = (0..num_columns)
+        .filter(|idx| projection.leaf_included(*idx))
+        .count() as u64;
+    let window_bytes = options
+        .window_bytes
+        .max(projected_columns * options.min_window_bytes_per_column);
     if streamable.is_empty() || total_requested <= window_bytes {
         return None;
     }

@@ -315,7 +315,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if called outside a tokio runtime context.
+    /// Returns an error if called outside a tokio runtime context. To supply
+    /// an explicit runtime, use [`Self::new`].
     pub fn try_new(options: BoundedStreamingOptions, input: T) -> Result<Self> {
         let runtime = Handle::try_current().map_err(|e| {
             ParquetError::General(format!(
@@ -363,8 +364,9 @@ where
         .await
     }
 
-    /// `runtime` is used to spawn body-draining tasks
-    pub(crate) fn new(options: BoundedStreamingOptions, runtime: Handle, input: T) -> Self {
+    /// Create a new fetcher over `input`. `runtime` is used to spawn
+    /// body-draining tasks.
+    pub fn new(options: BoundedStreamingOptions, runtime: Handle, input: T) -> Self {
         Self {
             options,
             runtime,
@@ -435,9 +437,11 @@ where
             return Ok(());
         }
 
-        // Can only issue requests while the input is idle. If a request is
-        // already in flight, plan again once it resolves (`poll_sources`
-        // returns progress when it does).
+        // Streamed requests can be opened at any time (they own their own
+        // connections), but the materialize batch borrows the input, so it
+        // can only be issued while the input is idle. If a materialize
+        // request is already in flight, plan again once it resolves
+        // (`poll_sources` returns progress when it does).
         if matches!(self.input, InputState::Busy(_)) {
             return Ok(());
         }
@@ -519,6 +523,38 @@ where
             unreachable!("checked idle above");
         };
 
+        // Open all streamed requests concurrently: each open future is
+        // 'static (owns its connection), so it is spawned immediately and
+        // runs in parallel with the other opens and with the materialize
+        // batch below. Readers that do not support streamed requests
+        // (`get_bytes_stream` returns None) fall back to materialization.
+        for spec in specs {
+            let StreamSpec { span, tx } = spec;
+            match input.get_bytes_stream(span.clone()) {
+                Some(open) => {
+                    self.runtime.spawn(async move {
+                        match open.await {
+                            Ok(body) => pump_body(body, tx).await,
+                            Err(e) => {
+                                let _ = tx.send(Err(e)).await;
+                            }
+                        }
+                    });
+                }
+                None => {
+                    // Unsupported: drop the just-registered stream and
+                    // materialize its members instead
+                    let idx = self
+                        .streams
+                        .iter()
+                        .position(|s| s.members.front().map(|m| m.start) == Some(span.start))
+                        .expect("stream registered above");
+                    let stream = self.streams.swap_remove(idx);
+                    materialize.extend(stream.members);
+                }
+            }
+        }
+
         for range in &materialize {
             self.planned.insert(key(range));
         }
@@ -528,26 +564,14 @@ where
             }
         }
 
-        let runtime = self.runtime.clone();
+        if materialize.is_empty() {
+            // nothing to materialize: the input stays available
+            self.input = InputState::Idle(input);
+            return Ok(());
+        }
+
         let future = async move {
-            // Open the streamed requests first so their bodies start flowing
-            // while the materialized ranges download
-            for spec in specs {
-                let StreamSpec { span, tx } = spec;
-                match input.get_bytes_stream(span).await {
-                    Ok(body) => {
-                        runtime.spawn(pump_body(body, tx));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                    }
-                }
-            }
-            let data = if materialize.is_empty() {
-                vec![]
-            } else {
-                input.get_byte_ranges(materialize.clone()).await?
-            };
+            let data = input.get_byte_ranges(materialize.clone()).await?;
             Ok((input, materialize, data))
         }
         .boxed();

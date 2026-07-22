@@ -185,6 +185,13 @@ pub struct BoundedStreamingOptions {
     ///
     /// [`AsyncFileReader::get_byte_ranges`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/trait.AsyncFileReader.html
     pub coalesce_gap: u64,
+    /// A decode window must hold at least this many bytes per projected
+    /// column, so that per-window fixed costs (rebuilding one array reader
+    /// per column, re-decompressing one boundary page per column) stay
+    /// amortized. Wide projections therefore get proportionally larger
+    /// windows; projections so wide that one window would cover the whole
+    /// row group fall back to the non-windowed path. Default: 2 MiB.
+    pub min_window_bytes_per_column: u64,
 }
 
 impl Default for BoundedStreamingOptions {
@@ -193,6 +200,7 @@ impl Default for BoundedStreamingOptions {
             stream_threshold: 16 * 1024 * 1024,
             window_bytes: 8 * 1024 * 1024,
             coalesce_gap: 1024 * 1024,
+            min_window_bytes_per_column: 2 * 1024 * 1024,
         }
     }
 }
