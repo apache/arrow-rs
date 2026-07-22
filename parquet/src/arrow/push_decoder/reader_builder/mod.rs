@@ -17,18 +17,21 @@
 
 mod data;
 mod filter;
+mod windows;
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    BoundedStreamingOptions, ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder,
+    RowFilter, RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
+use crate::arrow::push_decoder::UpcomingFetchPlan;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
+use crate::arrow::push_decoder::reader_builder::windows::{WindowPlan, WindowedRead};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
@@ -38,6 +41,7 @@ use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -83,6 +87,15 @@ enum RowGroupDecoderState {
         data_request: DataRequest,
         /// Any cached filter results
         cache_info: Option<CacheInfo>,
+    },
+    /// Decoding the row group in bounded windows (see
+    /// [`BoundedStreamingOptions`]): one reader is produced per window, and
+    /// only the front window's data needs to be resident to make progress.
+    DecodingWindows {
+        windowed: Box<WindowedRead>,
+        /// Budget remaining after this row group (already applied to the
+        /// windows' selections)
+        remaining_budget: RowBudget,
     },
     /// Finished (or not yet started) reading this group
     Finished,
@@ -263,6 +276,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// If set, decode row groups with large column chunks in bounded windows
+    bounded_streaming: Option<BoundedStreamingOptions>,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -287,6 +303,7 @@ pub(crate) struct RowGroupReaderBuilderParts {
     pub max_predicate_cache_size: usize,
     pub metrics: ArrowReaderMetrics,
     pub row_selection_policy: RowSelectionPolicy,
+    pub bounded_streaming: Option<BoundedStreamingOptions>,
     /// Bytes already pushed into the decoder, carried across a rebuild so they
     /// are not re-requested.
     pub buffers: PushBuffers,
@@ -305,6 +322,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        bounded_streaming: Option<BoundedStreamingOptions>,
     ) -> Self {
         Self {
             batch_size,
@@ -315,6 +333,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            bounded_streaming,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -335,6 +354,7 @@ impl RowGroupReaderBuilder {
             max_predicate_cache_size,
             metrics,
             row_selection_policy,
+            bounded_streaming,
             state: _,
             buffers,
         } = self;
@@ -346,6 +366,7 @@ impl RowGroupReaderBuilder {
             max_predicate_cache_size,
             metrics,
             row_selection_policy,
+            bounded_streaming,
             buffers,
         }
     }
@@ -710,6 +731,32 @@ impl RowGroupReaderBuilder {
                     ));
                 }
 
+                // If bounded streaming is enabled and this row group's
+                // projection requests any chunk large enough to stream, decode
+                // it in bounded windows. Not applied when filters ran for this
+                // row group (`cache_info` / previously read `column_chunks`):
+                // the predicate cache assumes whole-row-group decode.
+                if let Some(streaming) = self.bounded_streaming.as_ref() {
+                    if cache_info.is_none() && column_chunks.is_none() {
+                        if let Some(windowed) = windows::plan_windows(
+                            row_group_idx,
+                            row_count,
+                            self.batch_size,
+                            &self.metadata,
+                            &self.projection,
+                            plan_builder.selection(),
+                            self.row_selection_policy,
+                            streaming.stream_threshold,
+                            streaming.window_bytes,
+                        ) {
+                            return Ok(NextState::again(RowGroupDecoderState::DecodingWindows {
+                                windowed: Box::new(windowed),
+                                remaining_budget,
+                            }));
+                        }
+                    }
+                }
+
                 let data_request = DataRequestBuilder::new(
                     row_group_idx,
                     row_count,
@@ -805,6 +852,76 @@ impl RowGroupReaderBuilder {
                     },
                 )
             }
+            RowGroupDecoderState::DecodingWindows {
+                mut windowed,
+                remaining_budget,
+            } => {
+                let Some(front) = windowed.windows.front() else {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::Finished,
+                        RowGroupBuildResult::Finished { remaining_budget },
+                    ));
+                };
+
+                // Only the *front* window's data must be resident to make
+                // progress; this is the decoder's backpressure signal. The
+                // full remaining need is available via
+                // [`RowGroupReaderBuilder::upcoming_fetch_plan`].
+                let missing = front.data_request.needed_ranges(&self.buffers);
+                if !missing.is_empty() {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::DecodingWindows {
+                            windowed,
+                            remaining_budget,
+                        },
+                        RowGroupBuildResult::NeedsData(missing),
+                    ));
+                }
+
+                let WindowPlan {
+                    data_request,
+                    mut plan_builder,
+                } = windowed.windows.pop_front().expect("checked above");
+
+                let ranges: Vec<Range<u64>> = data_request.ranges().to_vec();
+                // Ranges shared with later windows (dictionary pages and
+                // window-boundary pages) stay buffered until their last use
+                let retained = windowed.finish_front_window(&ranges);
+
+                let row_group = data_request.try_into_in_memory_row_group_retaining(
+                    windowed.row_group_idx,
+                    windowed.row_count,
+                    &self.metadata,
+                    &self.projection,
+                    &mut self.buffers,
+                    &|range| retained.contains_key(&(range.start, range.end)),
+                )?;
+
+                plan_builder = prepare_selection_for_page_skipping(
+                    plan_builder,
+                    &self.projection,
+                    self.row_group_offset_index(windowed.row_group_idx),
+                    windowed.row_count,
+                );
+                let plan = plan_builder.build();
+
+                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
+                    .with_parquet_metadata(&self.metadata)
+                    .build_array_reader(self.fields.as_deref(), &self.projection)?;
+
+                let batch_reader = ParquetRecordBatchReader::new(array_reader, plan);
+                NextState::result(
+                    RowGroupDecoderState::DecodingWindows {
+                        windowed,
+                        remaining_budget,
+                    },
+                    RowGroupBuildResult::Data {
+                        batch_reader,
+                        remaining_budget,
+                    },
+                )
+            }
             RowGroupDecoderState::Finished => {
                 return Err(ParquetError::General(String::from(
                     "Internal Error: try_build called without an active row group",
@@ -812,6 +929,40 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    /// Returns everything the active row group will still need, plus which
+    /// byte spans are suitable for incremental (streamed) consumption.
+    ///
+    /// Unlike the `NeedsData` result, which only reports what is needed to
+    /// make progress *now*, this reports the full remaining need so callers
+    /// can plan coalesced fetches up front.
+    pub(crate) fn upcoming_fetch_plan(&self) -> UpcomingFetchPlan {
+        match self.state.as_ref() {
+            Some(RowGroupDecoderState::DecodingWindows { windowed, .. }) => {
+                let mut seen = HashSet::new();
+                let mut ranges = Vec::new();
+                for window in &windowed.windows {
+                    for range in window.data_request.needed_ranges(&self.buffers) {
+                        if seen.insert((range.start, range.end)) {
+                            ranges.push(range);
+                        }
+                    }
+                }
+                UpcomingFetchPlan {
+                    ranges,
+                    streamable: windowed.streamable.clone(),
+                }
+            }
+            Some(RowGroupDecoderState::WaitingOnData { data_request, .. })
+            | Some(RowGroupDecoderState::WaitingOnFilterData { data_request, .. }) => {
+                UpcomingFetchPlan {
+                    ranges: data_request.needed_ranges(&self.buffers),
+                    streamable: Vec::new(),
+                }
+            }
+            _ => UpcomingFetchPlan::default(),
+        }
     }
 
     /// Which columns should be cached?

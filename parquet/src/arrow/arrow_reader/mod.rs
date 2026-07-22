@@ -145,6 +145,56 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    pub(crate) bounded_streaming: Option<BoundedStreamingOptions>,
+}
+
+/// Options controlling adaptive bounded streaming of large column chunks.
+///
+/// When enabled (see [`ArrowReaderBuilder::with_bounded_streaming`]), the
+/// async reader decodes row groups whose projected column chunks exceed
+/// [`Self::stream_threshold`] in bounded *windows* instead of materializing
+/// every projected byte before decoding:
+///
+/// * Column chunks whose requested bytes are below `stream_threshold` keep the
+///   existing behavior: their ranges are coalesced and fully materialized with
+///   the minimum number of requests.
+/// * Larger chunks are fetched with a single ranged request each whose body is
+///   consumed incrementally ([`AsyncFileReader::get_bytes_stream`]), feeding
+///   the decoder through a buffer bounded by roughly `window_bytes` (plus one
+///   decode window). Decode of earlier windows overlaps transfer of later
+///   ones.
+///
+/// Requires the Parquet offset index (page locations); row groups without one,
+/// or with active row filters, fall back to the materialized path.
+///
+/// [`AsyncFileReader::get_bytes_stream`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/trait.AsyncFileReader.html
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedStreamingOptions {
+    /// Minimum number of requested bytes in a single column chunk for it to be
+    /// streamed rather than materialized. Default: 16 MiB.
+    pub stream_threshold: u64,
+    /// Target compressed bytes per decode window, and the approximate
+    /// per-stream fetch-ahead bound. Default: 8 MiB.
+    pub window_bytes: u64,
+    /// Ranges closer together than this are assumed to be coalesced into a
+    /// single request by the underlying reader. Must match the coalescing of
+    /// the [`AsyncFileReader::get_byte_ranges`] implementation for the
+    /// request-count guarantees to be exact. Default: 1 MiB (the
+    /// `object_store` default).
+    ///
+    /// [`AsyncFileReader::get_byte_ranges`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/trait.AsyncFileReader.html
+    pub coalesce_gap: u64,
+}
+
+impl Default for BoundedStreamingOptions {
+    fn default() -> Self {
+        Self {
+            stream_threshold: 16 * 1024 * 1024,
+            window_bytes: 8 * 1024 * 1024,
+            coalesce_gap: 1024 * 1024,
+        }
+    }
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -184,6 +234,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            bounded_streaming: None,
         }
     }
 
@@ -437,6 +488,20 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_max_predicate_cache_size(self, max_predicate_cache_size: usize) -> Self {
         Self {
             max_predicate_cache_size,
+            ..self
+        }
+    }
+
+    /// Enable adaptive bounded streaming of large column chunks for the async
+    /// decoder. See [`BoundedStreamingOptions`] for details.
+    ///
+    /// Defaults to disabled. Only used by [`ParquetRecordBatchStream`] and the
+    /// push decoder; the sync reader ignores this option.
+    ///
+    /// [`ParquetRecordBatchStream`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/struct.ParquetRecordBatchStream.html
+    pub fn with_bounded_streaming(self, options: BoundedStreamingOptions) -> Self {
+        Self {
+            bounded_streaming: Some(options),
             ..self
         }
     }
@@ -1198,6 +1263,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            // Only used by the async / push decoders
+            bounded_streaming: _,
         } = self;
 
         // Try to avoid allocate large buffer
