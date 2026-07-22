@@ -18,13 +18,13 @@
 mod data;
 mod filter;
 
-use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
+    RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -41,12 +41,13 @@ use filter::FilterInfo;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
-/// The current row group being read and the read plan
+/// The current row group being read, its read plan, and its offset/limit budget.
 #[derive(Debug)]
 struct RowGroupInfo {
     row_group_idx: usize,
     row_count: usize,
     plan_builder: ReadPlanBuilder,
+    budget: RowBudget,
 }
 
 /// This is the inner state machine for reading a single row group.
@@ -87,6 +88,117 @@ enum RowGroupDecoderState {
     Finished,
 }
 
+/// Running offset/limit budget shared across row groups.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct RowBudget {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+impl RowBudget {
+    pub(crate) fn new(offset: Option<usize>, limit: Option<usize>) -> Self {
+        Self { offset, limit }
+    }
+
+    pub(crate) fn is_exhausted(self) -> bool {
+        matches!(self.limit, Some(0))
+    }
+
+    /// The offset still to be skipped before the next readable row group.
+    pub(crate) fn offset(self) -> Option<usize> {
+        self.offset
+    }
+
+    /// The number of output rows still permitted across the remaining row groups.
+    pub(crate) fn limit(self) -> Option<usize> {
+        self.limit
+    }
+
+    /// Returns how many selected rows remain after applying this budget.
+    pub(crate) fn rows_after(self, rows_before_budget: usize) -> usize {
+        let rows_after_offset = rows_before_budget.saturating_sub(self.offset.unwrap_or(0));
+        match self.limit {
+            Some(limit) => rows_after_offset.min(limit),
+            None => rows_after_offset,
+        }
+    }
+
+    /// Returns the number of selected rows needed before applying the offset.
+    fn selected_row_limit(self) -> Option<usize> {
+        self.limit
+            .map(|limit| limit.saturating_add(self.offset.unwrap_or(0)))
+    }
+
+    fn apply_to_plan(self, plan_builder: ReadPlanBuilder, row_count: usize) -> BudgetedReadPlan {
+        let rows_before_budget = plan_builder.num_rows_selected().unwrap_or(row_count);
+        let plan_builder = plan_builder
+            .limited(row_count)
+            .with_offset(self.offset)
+            .with_limit(self.limit)
+            .build_limited();
+        let rows_after_budget = self.rows_after(rows_before_budget);
+
+        BudgetedReadPlan {
+            plan_builder,
+            rows_before_budget,
+            rows_after_budget,
+            remaining_budget: self.advance(rows_before_budget, rows_after_budget),
+        }
+    }
+
+    /// Advance the budget past one row group.
+    ///
+    /// `rows_before_budget` is the number of rows selected before applying the
+    /// budget, and `rows_after_budget` is the number retained for output from
+    /// this row group.
+    pub(crate) fn advance(mut self, rows_before_budget: usize, rows_after_budget: usize) -> Self {
+        if let Some(offset) = &mut self.offset {
+            // Reduction is either because of offset or limit, as limit is applied
+            // after offset has been "exhausted" can just use saturating sub here.
+            *offset = offset.saturating_sub(rows_before_budget - rows_after_budget);
+        }
+
+        if rows_after_budget != 0 {
+            if let Some(limit) = &mut self.limit {
+                *limit -= rows_after_budget;
+            }
+        }
+
+        self
+    }
+}
+
+#[derive(Debug)]
+struct BudgetedReadPlan {
+    /// Read plan after applying this row group's share of the offset/limit budget.
+    plan_builder: ReadPlanBuilder,
+    /// Number of rows selected by row selection and predicates before applying
+    /// this row group's offset/limit budget.
+    rows_before_budget: usize,
+    /// Number of selected rows that remain to be read after applying this row
+    /// group's offset/limit budget.
+    rows_after_budget: usize,
+    /// Budget remaining for later row groups.
+    remaining_budget: RowBudget,
+}
+
+#[derive(Debug)]
+pub(crate) enum RowGroupBuildResult {
+    /// The active row group is complete without producing a reader.
+    Finished {
+        /// Budget remaining after applying this row group's selection.
+        remaining_budget: RowBudget,
+    },
+    /// More bytes are needed before the active row group can make progress.
+    NeedsData(Vec<Range<u64>>),
+    /// The active row group produced a reader.
+    Data {
+        batch_reader: ParquetRecordBatchReader,
+        /// Budget remaining after applying this row group's selection.
+        remaining_budget: RowBudget,
+    },
+}
+
 /// Result of a state transition
 #[derive(Debug)]
 struct NextState {
@@ -95,7 +207,7 @@ struct NextState {
     ///
     /// * `Some`: the processing should stop and return the result
     /// * `None`: processing should continue
-    result: Option<DecodeResult<ParquetRecordBatchReader>>,
+    result: Option<RowGroupBuildResult>,
 }
 
 impl NextState {
@@ -110,10 +222,7 @@ impl NextState {
     }
 
     /// Create a NextState with a result that should be returned
-    fn result(
-        next_state: RowGroupDecoderState,
-        result: DecodeResult<ParquetRecordBatchReader>,
-    ) -> Self {
+    fn result(next_state: RowGroupDecoderState, result: RowGroupBuildResult) -> Self {
         Self {
             next_state,
             result: Some(result),
@@ -143,12 +252,6 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Limit to apply to remaining row groups (decremented as rows are read)
-    limit: Option<usize>,
-
-    /// Offset to apply to remaining row groups (decremented as rows are read)
-    offset: Option<usize>,
-
     /// The size in bytes of the predicate cache to use
     ///
     /// See [`RowGroupCache`] for details.
@@ -170,6 +273,25 @@ pub(crate) struct RowGroupReaderBuilder {
     buffers: PushBuffers,
 }
 
+/// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
+/// [`RowGroupReaderBuilder::into_parts`].
+///
+/// `metadata` is not included: it is a whole-file property carried alongside
+/// `schema` in `RemainingRowGroupsParts`.
+#[derive(Debug)]
+pub(crate) struct RowGroupReaderBuilderParts {
+    pub batch_size: usize,
+    pub projection: ProjectionMask,
+    pub fields: Option<Arc<ParquetField>>,
+    pub filter: Option<RowFilter>,
+    pub max_predicate_cache_size: usize,
+    pub metrics: ArrowReaderMetrics,
+    pub row_selection_policy: RowSelectionPolicy,
+    /// Bytes already pushed into the decoder, carried across a rebuild so they
+    /// are not re-requested.
+    pub buffers: PushBuffers,
+}
+
 impl RowGroupReaderBuilder {
     /// Create a new RowGroupReaderBuilder
     #[expect(clippy::too_many_arguments)]
@@ -179,8 +301,6 @@ impl RowGroupReaderBuilder {
         metadata: Arc<ParquetMetaData>,
         fields: Option<Arc<ParquetField>>,
         filter: Option<RowFilter>,
-        limit: Option<usize>,
-        offset: Option<usize>,
         metrics: ArrowReaderMetrics,
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
@@ -192,12 +312,40 @@ impl RowGroupReaderBuilder {
             metadata,
             fields,
             filter,
-            limit,
-            offset,
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
+            buffers,
+        }
+    }
+
+    /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
+    /// reconstructed. The runtime decode `state` is discarded; `metadata` is
+    /// recovered from the frontier instead (see `RemainingRowGroups::into_parts`).
+    pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
+        // If a new field is added to `RowGroupReaderBuilder`, it must be added here and in `RowGroupReaderBuilderParts`,
+        // or at least evaluate how it should be handled in the decomposition and reconstruction of the builder.
+        let Self {
+            batch_size,
+            projection,
+            metadata: _,
+            fields,
+            filter,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
+            state: _,
+            buffers,
+        } = self;
+        RowGroupReaderBuilderParts {
+            batch_size,
+            projection,
+            fields,
+            filter,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
             buffers,
         }
     }
@@ -207,9 +355,22 @@ impl RowGroupReaderBuilder {
         self.buffers.push_ranges(ranges, buffers);
     }
 
+    /// True iff the inner state is `Finished`. This is the only state in
+    /// which it is safe to decompose the builder via [`Self::into_parts`],
+    /// because no `RowGroupInfo`, `FilterInfo`, or in-flight `DataRequest`
+    /// is referencing the row-group-scoped decode state.
+    pub(crate) fn is_finished(&self) -> bool {
+        matches!(self.state, Some(RowGroupDecoderState::Finished))
+    }
+
     /// Returns the total number of buffered bytes available
     pub fn buffered_bytes(&self) -> u64 {
         self.buffers.buffered_bytes()
+    }
+
+    /// Clear any staged ranges currently buffered for future decode work.
+    pub fn clear_all_ranges(&mut self) {
+        self.buffers.clear_all_ranges();
     }
 
     /// take the current state, leaving None in its place.
@@ -227,12 +388,18 @@ impl RowGroupReaderBuilder {
         })
     }
 
+    /// Returns true if this builder is currently decoding a row group.
+    pub(crate) fn has_active_row_group(&self) -> bool {
+        !matches!(self.state, Some(RowGroupDecoderState::Finished))
+    }
+
     /// Setup this reader to read the next row group
     pub(crate) fn next_row_group(
         &mut self,
         row_group_idx: usize,
         row_count: usize,
         selection: Option<RowSelection>,
+        budget: RowBudget,
     ) -> Result<(), ParquetError> {
         let state = self.take_state()?;
         if !matches!(state, RowGroupDecoderState::Finished) {
@@ -248,22 +415,20 @@ impl RowGroupReaderBuilder {
             row_group_idx,
             row_count,
             plan_builder,
+            budget,
         };
 
         self.state = Some(RowGroupDecoderState::Start { row_group_info });
         Ok(())
     }
 
-    /// Try to build the next `ParquetRecordBatchReader` from this RowGroupReader.
+    /// Try to build the next `ParquetRecordBatchReader` for the active row group.
     ///
-    /// If more data is needed, returns [`DecodeResult::NeedsData`] with the
-    /// ranges of data that are needed to proceed.
-    ///
-    /// If a [`ParquetRecordBatchReader`] is ready, it is returned in
-    /// `DecodeResult::Data`.
-    pub(crate) fn try_build(
-        &mut self,
-    ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
+    /// Returns [`RowGroupBuildResult::NeedsData`] if more data is needed,
+    /// [`RowGroupBuildResult::Data`] if a reader is ready, or
+    /// [`RowGroupBuildResult::Finished`] if the row group completed without
+    /// producing a reader.
+    pub(crate) fn try_build(&mut self) -> Result<RowGroupBuildResult, ParquetError> {
         loop {
             let current_state = self.take_state()?;
             // Try to transition the decoder.
@@ -304,6 +469,11 @@ impl RowGroupReaderBuilder {
     ) -> Result<NextState, ParquetError> {
         let result = match current_state {
             RowGroupDecoderState::Start { row_group_info } => {
+                debug_assert!(
+                    !row_group_info.budget.is_exhausted(),
+                    "RowGroupFrontier should not hand off row groups after the output limit is exhausted"
+                );
+
                 let column_chunks = None; // no prior column chunks
 
                 let Some(filter) = self.filter.take() else {
@@ -352,6 +522,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget,
                 } = row_group_info;
 
                 // If nothing is selected, we are done with this row group
@@ -360,7 +531,9 @@ impl RowGroupReaderBuilder {
                     self.filter = Some(filter_info.into_filter());
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
-                        DecodeResult::Finished,
+                        RowGroupBuildResult::Finished {
+                            remaining_budget: budget,
+                        },
                     ));
                 }
 
@@ -386,6 +559,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget,
                 };
 
                 NextState::again(RowGroupDecoderState::WaitingOnFilterData {
@@ -409,7 +583,7 @@ impl RowGroupReaderBuilder {
                             filter_info,
                             data_request,
                         },
-                        DecodeResult::NeedsData(needed_ranges),
+                        RowGroupBuildResult::NeedsData(needed_ranges),
                     ));
                 }
 
@@ -418,6 +592,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     mut plan_builder,
+                    budget,
                 } = row_group_info;
 
                 let predicate = filter_info.current();
@@ -433,34 +608,46 @@ impl RowGroupReaderBuilder {
                 let cache_options = filter_info.cache_builder().producer();
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                // Reset to original policy before each predicate so the override
-                // can detect page skipping for THIS predicate's columns.
-                // Without this reset, a prior predicate's override (e.g. Mask)
-                // carries forward and the check returns early, missing unfetched
-                // pages for subsequent predicates.
+                // Auto resolution and loaded ranges are projection-specific, so restore the
+                // configured policy before preparing each predicate.
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                // Prepare to evaluate the filter.
-                // Note: first update the selection strategy to properly handle any pages
-                // pruned during fetch
-                plan_builder = override_selector_strategy_if_needed(
+                // Prepare selection execution for pages pruned during fetch.
+                plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
+                    row_count,
                 );
-                // `with_predicate` actually evaluates the filter
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                // When this is the final predicate in the chain and an output
+                // limit is set, tell the filter evaluation to stop once enough
+                // matching rows have been accumulated.
+                let predicate_limit = filter_info
+                    .is_last()
+                    .then(|| budget.selected_row_limit())
+                    .flatten();
+
+                // Evaluate the filter via `with_predicate_options`, opting into
+                // early termination when this is the final predicate and an
+                // output limit was set.
+                let mut predicate_options =
+                    PredicateOptions::new(array_reader, filter_info.current_mut());
+                if let Some(limit) = predicate_limit {
+                    predicate_options = predicate_options.with_limit(limit, row_count);
+                }
+                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget,
                 };
 
                 // Take back the column chunks that were read
@@ -497,45 +684,30 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget,
                 } = row_group_info;
 
-                // Compute the number of rows in the selection before applying limit and offset
-                let rows_before = plan_builder.num_rows_selected().unwrap_or(row_count);
+                let BudgetedReadPlan {
+                    mut plan_builder,
+                    rows_before_budget,
+                    rows_after_budget,
+                    remaining_budget,
+                } = budget.apply_to_plan(plan_builder, row_count);
 
-                if rows_before == 0 {
+                if rows_before_budget == 0 {
                     // ruled out entire row group
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
-                        DecodeResult::Finished,
+                        RowGroupBuildResult::Finished { remaining_budget },
                     ));
                 }
 
-                // Apply any limit and offset
-                let mut plan_builder = plan_builder
-                    .limited(row_count)
-                    .with_offset(self.offset)
-                    .with_limit(self.limit)
-                    .build_limited();
-
-                let rows_after = plan_builder.num_rows_selected().unwrap_or(row_count);
-
-                // Update running offset and limit for after the current row group is read
-                if let Some(offset) = &mut self.offset {
-                    // Reduction is either because of offset or limit, as limit is applied
-                    // after offset has been "exhausted" can just use saturating sub here
-                    *offset = offset.saturating_sub(rows_before - rows_after)
-                }
-
-                if rows_after == 0 {
+                if rows_after_budget == 0 {
                     // no rows left after applying limit/offset
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
-                        DecodeResult::Finished,
+                        RowGroupBuildResult::Finished { remaining_budget },
                     ));
-                }
-
-                if let Some(limit) = &mut self.limit {
-                    *limit -= rows_after;
                 }
 
                 let data_request = DataRequestBuilder::new(
@@ -553,16 +725,18 @@ impl RowGroupReaderBuilder {
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                plan_builder = override_selector_strategy_if_needed(
+                plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
+                    row_count,
                 );
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget: remaining_budget,
                 };
 
                 NextState::again(RowGroupDecoderState::WaitingOnData {
@@ -586,7 +760,7 @@ impl RowGroupReaderBuilder {
                             data_request,
                             cache_info,
                         },
-                        DecodeResult::NeedsData(needed_ranges),
+                        RowGroupBuildResult::NeedsData(needed_ranges),
                     ));
                 }
 
@@ -595,6 +769,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    budget,
                 } = row_group_info;
 
                 let row_group = data_request.try_into_in_memory_row_group(
@@ -609,6 +784,7 @@ impl RowGroupReaderBuilder {
 
                 // if we have any cached results, connect them up
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
                     .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
                     let cache_options: CacheOptions = cache_info.builder().consumer();
@@ -621,11 +797,18 @@ impl RowGroupReaderBuilder {
                 }?;
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
-                NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
+                NextState::result(
+                    RowGroupDecoderState::Finished,
+                    RowGroupBuildResult::Data {
+                        batch_reader: reader,
+                        remaining_budget: budget,
+                    },
+                )
             }
             RowGroupDecoderState::Finished => {
-                // nothing left to read
-                NextState::result(RowGroupDecoderState::Finished, DecodeResult::Finished)
+                return Err(ParquetError::General(String::from(
+                    "Internal Error: try_build called without an active row group",
+                )));
             }
         };
         Ok(result)
@@ -671,7 +854,7 @@ impl RowGroupReaderBuilder {
     }
 }
 
-/// Override the selection strategy if needed.
+/// Prepare row selection execution when page pruning produced sparse column data.
 ///
 /// Some pages can be skipped during row-group construction if they are not read
 /// by the selections. This means that the data pages for those rows are never
@@ -679,56 +862,190 @@ impl RowGroupReaderBuilder {
 /// `RowSelections` selection works because `skip_records()` handles this
 /// case and skips the page accordingly.
 ///
-/// However, with the current mask design, all values must be read and decoded
-/// and then a mask filter is applied. Thus if any pages are skipped during
-/// row-group construction, the data pages are missing and cannot be decoded.
+/// However, with the current mask design, all values covered by a mask chunk
+/// are decoded before the mask filter is applied. Thus a chunk cannot cross a
+/// page that was skipped during row-group construction.
 ///
 /// A simple example:
 /// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
 /// * the `ColumnChunkData` would be page1(10), page2(skipped), page3(01)
 ///
-/// Using the row selection to skip(4), page2 won't be read at all, so in this
-/// case we can't decode all the rows and apply a mask. To correctly apply the
-/// bit mask, we need all 6 values be read, but page2 is not in memory.
-fn override_selector_strategy_if_needed(
+/// Mask execution records the row ranges loaded for every projected column, so
+/// each mask chunk stays within loaded data and `skip_records()` crosses the
+/// gaps. This applies both to an explicit mask policy and to Auto when it
+/// resolves to mask execution.
+fn prepare_selection_for_page_skipping(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
     offset_index: Option<&[OffsetIndexMetaData]>,
+    total_rows: usize,
 ) -> ReadPlanBuilder {
-    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
-    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
-        return plan_builder;
-    };
+    match plan_builder.resolve_selection_strategy() {
+        RowSelectionStrategy::Mask => {
+            let loaded = loaded_row_ranges_for_projection(
+                plan_builder.selection(),
+                projection_mask,
+                offset_index,
+                total_rows,
+            );
+            plan_builder
+                .with_row_selection_policy(RowSelectionPolicy::Mask)
+                .with_loaded_row_ranges(loaded)
+        }
+        RowSelectionStrategy::Selectors => {
+            plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+        }
+    }
+}
 
-    let preferred_strategy = plan_builder.resolve_selection_strategy();
+/// Computes row ranges for which every projected column has page data loaded.
+fn loaded_row_ranges_for_projection(
+    selection: Option<&RowSelection>,
+    projection_mask: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+    total_rows: usize,
+) -> Option<LoadedRowRanges> {
+    let selection = selection?;
+    let columns = offset_index?;
 
-    let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
-        && plan_builder.selection().is_some_and(|selection| {
-            selection.should_force_selectors(projection_mask, offset_index)
-        });
-
-    let resolved_strategy = if force_selectors {
-        RowSelectionStrategy::Selectors
-    } else {
-        preferred_strategy
-    };
-
-    // override the plan builder strategy with the resolved one
-    let new_policy = match resolved_strategy {
-        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
-        RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
-    };
-
-    plan_builder.with_row_selection_policy(new_policy)
+    columns
+        .iter()
+        .enumerate()
+        .filter_map(|(leaf_idx, column)| {
+            let pages = column.page_locations();
+            (projection_mask.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
+                RowSelection::from_consecutive_ranges(
+                    selection
+                        .row_ranges_for_selected_pages(pages, total_rows)
+                        .into_iter(),
+                    total_rows,
+                )
+            })
+        })
+        .reduce(|loaded, column| loaded.intersection(&column))
+        .filter(|loaded| loaded.skipped_row_count() != 0)
+        .map(LoadedRowRanges::from_selection)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::{RowSelection, RowSelector};
+    use crate::file::page_index::offset_index::PageLocation;
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
+    }
+
+    #[test]
+    fn test_loaded_row_ranges_intersect_column_page_boundaries() {
+        let column = |first_rows: &[i64]| OffsetIndexMetaData {
+            page_locations: first_rows
+                .iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index: *first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
+        };
+        let columns = vec![column(&[0, 4, 8]), column(&[0, 6, 10])];
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(9),
+            RowSelector::select(1),
+        ]);
+
+        let loaded = loaded_row_ranges_for_projection(
+            Some(&selection),
+            &ProjectionMask::all(),
+            Some(&columns),
+            12,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.ranges(), &[0..4, 10..12]);
+    }
+
+    #[test]
+    fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
+        let columns = vec![OffsetIndexMetaData {
+            page_locations: [0, 2, 4, 6, 8, 10]
+                .into_iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
+        }];
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(10),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(12)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 });
+
+        let prepared = prepare_selection_for_page_skipping(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&columns),
+            12,
+        );
+
+        assert_eq!(prepared.row_selection_policy(), &RowSelectionPolicy::Mask);
+    }
+
+    #[test]
+    fn test_row_budget_offset_limit_across_row_groups() {
+        let first =
+            RowBudget::new(Some(225), Some(20)).apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(first.rows_before_budget, 200);
+        assert_eq!(first.rows_after_budget, 0);
+        assert_eq!(first.remaining_budget, RowBudget::new(Some(25), Some(20)));
+        assert_eq!(first.plan_builder.num_rows_selected(), Some(0));
+
+        let second = first
+            .remaining_budget
+            .apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(second.rows_before_budget, 200);
+        assert_eq!(second.rows_after_budget, 20);
+        assert_eq!(second.remaining_budget, RowBudget::new(Some(0), Some(0)));
+        assert_eq!(second.plan_builder.num_rows_selected(), Some(20));
+    }
+
+    #[test]
+    fn test_row_budget_limit_only() {
+        let budgeted =
+            RowBudget::new(None, Some(20)).apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(budgeted.rows_before_budget, 200);
+        assert_eq!(budgeted.rows_after_budget, 20);
+        assert_eq!(budgeted.remaining_budget, RowBudget::new(None, Some(0)));
+        assert_eq!(budgeted.plan_builder.num_rows_selected(), Some(20));
+    }
+
+    #[test]
+    fn test_row_budget_empty_selection() {
+        let empty_selection = RowSelection::from(vec![RowSelector::skip(200)]);
+        let budgeted = RowBudget::new(Some(10), Some(20)).apply_to_plan(
+            ReadPlanBuilder::new(1024).with_selection(Some(empty_selection)),
+            200,
+        );
+        assert_eq!(budgeted.rows_before_budget, 0);
+        assert_eq!(budgeted.rows_after_budget, 0);
+        assert_eq!(
+            budgeted.remaining_budget,
+            RowBudget::new(Some(10), Some(20))
+        );
+        assert_eq!(budgeted.plan_builder.num_rows_selected(), Some(0));
     }
 }

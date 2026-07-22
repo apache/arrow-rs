@@ -273,7 +273,11 @@ pub enum DataType {
     /// of binary data in total.
     Binary,
     /// Opaque binary data of fixed size.
-    /// Enum parameter specifies the number of bytes per value.
+    ///
+    /// Enum parameter specifies the number of bytes per value, defined by the
+    /// [`byteWidth` field] in the Arrow Spec
+    ///
+    /// [`byteWidth` field]: https://github.com/apache/arrow/blob/2a89d03bbefd620b42126b8e00f8ae57e99cd638/format/Schema.fbs#L211
     FixedSizeBinary(i32),
     /// Opaque binary data of variable length and 64-bit offsets.
     ///
@@ -312,7 +316,6 @@ pub enum DataType {
     ///
     /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
-
     /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
@@ -326,7 +329,6 @@ pub enum DataType {
     ///
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
-
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
@@ -354,59 +356,51 @@ pub enum DataType {
     Dictionary(Box<DataType>, Box<DataType>),
     /// Exact 32-bit width decimal value with precision and scale
     ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
+    /// * precision is the maximum number of digits in the unscaled value
+    /// * scale controls the position of the decimal point
     ///
-    /// For example the number 123.45 has precision 5 and scale 2.
+    /// The represented value is the unscaled integer multiplied by 10^{-scale}.
+    /// For example, the unscaled value 12345 with precision 5 and scale 2
+    /// represents 123.45.
     ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
+    /// Scale can also be negative. For example, the unscaled value 12 with
+    /// precision 2 and scale -3 represents 12000.
     Decimal32(u8, i8),
     /// Exact 64-bit width decimal value with precision and scale
     ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
+    /// * precision is the maximum number of digits in the unscaled value
+    /// * scale controls the position of the decimal point
     ///
-    /// For example the number 123.45 has precision 5 and scale 2.
+    /// The represented value is the unscaled integer multiplied by 10^{-scale}.
+    /// For example, the unscaled value 12345 with precision 5 and scale 2
+    /// represents 123.45.
     ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
+    /// Scale can also be negative. For example, the unscaled value 12 with
+    /// precision 2 and scale -3 represents 12000.
     Decimal64(u8, i8),
     /// Exact 128-bit width decimal value with precision and scale
     ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
+    /// * precision is the maximum number of digits in the unscaled value
+    /// * scale controls the position of the decimal point
     ///
-    /// For example the number 123.45 has precision 5 and scale 2.
+    /// The represented value is the unscaled integer multiplied by 10^{-scale}.
+    /// For example, the unscaled value 12345 with precision 5 and scale 2
+    /// represents 123.45.
     ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
+    /// Scale can also be negative. For example, the unscaled value 12 with
+    /// precision 2 and scale -3 represents 12000.
     Decimal128(u8, i8),
     /// Exact 256-bit width decimal value with precision and scale
     ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
+    /// * precision is the maximum number of digits in the unscaled value
+    /// * scale controls the position of the decimal point
     ///
-    /// For example the number 123.45 has precision 5 and scale 2.
+    /// The represented value is the unscaled integer multiplied by 10^{-scale}.
+    /// For example, the unscaled value 12345 with precision 5 and scale 2
+    /// represents 123.45.
     ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
+    /// Scale can also be negative. For example, the unscaled value 12 with
+    /// precision 2 and scale -3 represents 12000.
     Decimal256(u8, i8),
     /// A Map is a logical nested type that is represented as
     ///

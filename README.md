@@ -42,7 +42,7 @@ This is a great place to meet other contributors and get guidance on where to co
 However, all technical designs should also be recorded and formalized in GitHub issues, so that they are accessible to everyone.
 In Slack, find us in the `#arrow-rust` channel and feel free to ask for an invite via Discord, GitHub issues, or other means.
 
-There is more information in the [contributing] guide.
+There is more information in the [contributing] guide and the [security] policy.
 
 ## Repository Structure
 
@@ -91,13 +91,13 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| March 2026       | [`58.1.0`] | Minor, NO breaking API changes          |
-| April 2026       | [`58.2.0`] | Minor, NO breaking API changes          |
-| May 2026         | [`59.0.0`] | Major, potentially breaking API changes |
+| June 2026        | [`59.1.0`] | Minor, NO breaking API changes          |
+| July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
+| August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
 
-[`58.1.0`]: https://github.com/apache/arrow-rs/issues/9108
-[`58.2.0`]: https://github.com/apache/arrow-rs/issues/9109
-[`59.0.0`]: https://github.com/apache/arrow-rs/issues/9110
+[`59.1.0`]: https://github.com/apache/arrow-rs/issues/9878
+[`59.2.0`]: https://github.com/apache/arrow-rs/issues/9879
+[`60.0.0`]: https://github.com/apache/arrow-rs/issues/9880
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
@@ -186,3 +186,4 @@ You can find more details about each crate in their respective READMEs.
 [issues]: https://github.com/apache/arrow-rs/issues
 [pull requests]: https://github.com/apache/arrow-rs/pulls
 [discussions]: https://github.com/apache/arrow-rs/discussions
+[security]: SECURITY.md

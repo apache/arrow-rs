@@ -212,9 +212,11 @@ async fn main() -> anyhow::Result<()> {
 * **Confluent Schema Registry wire format**: 1‑byte magic `0x00` + 4‑byte BE schema ID + Avro body; supports decode + encode helpers.
 * **Avro Single‑Object Encoding (SOE)**: 2‑byte magic `0xC3 0x01` + 8‑byte LE CRC‑64‑AVRO fingerprint + Avro body; supports decode + encode helpers.
 
----
+## Security
 
-## Examples
+See the [Security Policy] for information on the security model and how to report vulnerabilities.
+
+[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 
 * Read/write OCF in memory and from files (see crate docs “OCF round‑trip”).
 * Confluent wire‑format and SOE quickstarts are provided as runnable snippets in docs.

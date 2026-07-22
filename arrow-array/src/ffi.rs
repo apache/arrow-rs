@@ -162,7 +162,13 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
-        (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
+        (DataType::FixedSizeBinary(num_bytes), 1) => {
+            TryInto::<usize>::try_into(*num_bytes).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "cannot determine bit_width for FixedSizeBinary({num_bytes})"
+                ))
+            })? * u8::BITS as usize
+        }
         (DataType::FixedSizeList(f, num_elems), 1) => {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
@@ -281,7 +287,14 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    tmp.consume()
+    let mut data = tmp.consume()?;
+    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
+    // See https://github.com/apache/arrow/issues/43552 and
+    // https://github.com/apache/arrow-rs/issues/10028 for context.
+    data.align_buffers();
+    Ok(data)
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -299,7 +312,14 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    tmp.consume()
+    let mut data = tmp.consume()?;
+    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
+    // See https://github.com/apache/arrow/issues/43552 and
+    // https://github.com/apache/arrow-rs/issues/10028 for context.
+    data.align_buffers();
+    Ok(data)
 }
 
 #[derive(Debug)]
@@ -666,6 +686,40 @@ mod tests_to_then_from_ffi {
         Ok(())
     }
     // case with nulls is tested in the docs, through the example on this module.
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_decimal128_under_aligned_round_trip() -> Result<()> {
+        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
+        // an FFI producer that only guarantees the C Data Interface's
+        // recommended 8-byte alignment (e.g. arrow-java).
+        let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
+        let under_aligned = aligned.slice(8);
+        assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
+        assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
+
+        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
+        // input is the condition under test.
+        let data = unsafe {
+            ArrayData::builder(DataType::Decimal128(10, 2))
+                .len(2)
+                .add_buffer(under_aligned)
+                .build_unchecked()
+        };
+
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+        let array = FFI_ArrowArray::new(&data);
+
+        let imported = unsafe { from_ffi(array, &schema) }?;
+        let array = Decimal128Array::from(imported);
+
+        // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
+        // yields elements `1 << 64` and `2 << 64`.
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), 1_i128 << 64);
+        assert_eq!(array.value(1), 2_i128 << 64);
+        Ok(())
+    }
 
     #[test]
     fn test_null_count_handling() {
@@ -1729,7 +1783,7 @@ mod tests_from_ffi {
         let data = array.to_data();
 
         let mut mutable = MutableArrayData::new(vec![&data], false, len);
-        mutable.extend(0, 0, len);
+        mutable.try_extend(0, 0, len).unwrap();
         make_array(mutable.freeze())
     }
 

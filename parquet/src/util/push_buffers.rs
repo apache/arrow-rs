@@ -21,9 +21,12 @@ use bytes::Bytes;
 use std::fmt::Display;
 use std::ops::Range;
 
-/// Holds multiple buffers of data
+/// Holds multiple non-contiguous, caller-provided buffers of file data.
 ///
-/// This is the in-memory buffer for the ParquetDecoder and ParquetMetadataDecoders
+/// This is the in-memory buffer used by the push-based Parquet decoders
+/// (`ParquetPushDecoder` and `ParquetMetaDataPushDecoder`). It can be
+/// constructed up front and handed to a builder so the decoder reuses bytes
+/// that have already been fetched.
 ///
 /// Features:
 /// 1. Zero copy
@@ -38,8 +41,8 @@ use std::ops::Range;
 ///
 /// Thus, the implementation defers to the caller to coalesce subsequent requests
 /// if desired.
-#[derive(Debug, Clone)]
-pub(crate) struct PushBuffers {
+#[derive(Debug, Clone, Default)]
+pub struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
     offset: u64,
     /// The total length of the file being decoded
@@ -75,7 +78,11 @@ impl Display for PushBuffers {
 }
 
 impl PushBuffers {
-    /// Create a new Buffers instance with the given file length
+    /// Create a new, empty `PushBuffers` for a file of the given length.
+    ///
+    /// Use [`PushBuffers::default`] when the file length is unknown or
+    /// irrelevant (e.g. the push decoder, which tracks ranges by absolute
+    /// offset and never consults `file_len`).
     pub fn new(file_len: u64) -> Self {
         Self {
             offset: 0,
@@ -92,7 +99,7 @@ impl PushBuffers {
             buffers.len(),
             "Number of ranges must match number of buffers"
         );
-        for (range, buffer) in ranges.into_iter().zip(buffers.into_iter()) {
+        for (range, buffer) in ranges.into_iter().zip(buffers) {
             self.push_range(range, buffer);
         }
     }
@@ -109,7 +116,7 @@ impl PushBuffers {
     }
 
     /// Returns true if the Buffers contains data for the given range
-    pub fn has_range(&self, range: &Range<u64>) -> bool {
+    pub(crate) fn has_range(&self, range: &Range<u64>) -> bool {
         self.ranges
             .iter()
             .any(|r| r.start <= range.start && r.end >= range.end)
@@ -120,25 +127,25 @@ impl PushBuffers {
     }
 
     /// return the file length of the Parquet file being read
-    pub fn file_len(&self) -> u64 {
+    pub(crate) fn file_len(&self) -> u64 {
         self.file_len
     }
 
     /// Specify a new offset
-    pub fn with_offset(mut self, offset: u64) -> Self {
+    fn with_offset(mut self, offset: u64) -> Self {
         self.offset = offset;
         self
     }
 
     /// Return the total of all buffered ranges
     #[cfg(feature = "arrow")]
-    pub fn buffered_bytes(&self) -> u64 {
+    pub(crate) fn buffered_bytes(&self) -> u64 {
         self.ranges.iter().map(|r| r.end - r.start).sum()
     }
 
     /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
     #[cfg(feature = "arrow")]
-    pub fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
+    pub(crate) fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
         let mut new_ranges = Vec::new();
         let mut new_buffers = Vec::new();
 
@@ -153,6 +160,12 @@ impl PushBuffers {
         }
         self.ranges = new_ranges;
         self.buffers = new_buffers;
+    }
+
+    /// Clear all buffered ranges and their corresponding data
+    pub(crate) fn clear_all_ranges(&mut self) {
+        self.ranges.clear();
+        self.buffers.clear();
     }
 }
 

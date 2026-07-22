@@ -68,23 +68,30 @@ use std::sync::Arc;
 /// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
 /// value passed to this function.
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
-    if array.typed_value_field().is_some() {
+    shred_variant_with_options(array, as_type, &CastOptions::default())
+}
+
+pub(crate) fn shred_variant_with_options(
+    array: &VariantArray,
+    as_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<VariantArray> {
+    if array.typed_value_column().is_some() {
         return Err(ArrowError::InvalidArgumentError(
             "Input is already shredded".to_string(),
         ));
     }
 
-    if array.value_field().is_none() {
+    if array.value_column().is_none() {
         // all-null case -- nothing to do.
         return Ok(array.clone());
     };
 
-    let cast_options = CastOptions::default();
     let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
         as_type,
-        &cast_options,
+        cast_options,
         array.len(),
-        true,
+        NullValue::TopLevelVariant,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -95,18 +102,49 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     }
     let (value, typed_value, nulls) = builder.finish()?;
     Ok(VariantArray::from_parts(
-        array.metadata_field().clone(),
-        Some(value),
+        array.metadata_column().clone(),
+        Some(Arc::new(value)),
         Some(typed_value),
         nulls,
     ))
+}
+
+/// Controls how `append_null` is encoded for a shredded `(value, typed_value)` pair.
+///
+/// | Mode | Struct validity bit | `value` | `typed_value` | Meaning |
+/// | --- | --- | --- | --- | --- |
+/// | `TopLevelVariant` | null | NULL | NULL | SQL NULL at the top-level variant row |
+/// | `ObjectField` | non-null | NULL | NULL | Missing object field |
+/// | `ArrayElement` | non-null | `Variant::Null` | NULL | Explicit null array element |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NullValue {
+    TopLevelVariant,
+    ObjectField,
+    ArrayElement,
+}
+
+impl NullValue {
+    fn append_to(
+        self,
+        nulls: &mut NullBufferBuilder,
+        value_builder: &mut VariantValueArrayBuilder,
+    ) {
+        match self {
+            Self::TopLevelVariant => nulls.append_null(),
+            Self::ObjectField | Self::ArrayElement => nulls.append_non_null(),
+        }
+        match self {
+            Self::TopLevelVariant | Self::ObjectField => value_builder.append_null(),
+            Self::ArrayElement => value_builder.append_value(Variant::Null),
+        }
+    }
 }
 
 pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
-    top_level: bool,
+    null_value: NullValue,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -114,7 +152,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 fields,
                 cast_options,
                 capacity,
-                top_level,
+                null_value,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -127,6 +165,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 data_type,
                 cast_options,
                 capacity,
+                null_value,
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
         }
@@ -156,7 +195,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
         DataType::FixedSizeBinary(_) => {
@@ -204,33 +243,31 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     }
 }
 
-/// A top-level variant shredder -- appending NULL produces typed_value=NULL and value=Variant::Null
+/// A shredded primitive field builder.
 pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
-    top_level: bool,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
         capacity: usize,
-        top_level: bool,
+        null_value: NullValue,
     ) -> Self {
         Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
+            null_value,
         }
     }
 
     fn append_null(&mut self) -> Result<()> {
-        // Only the top-level struct that represents the variant can be nullable; object fields and
-        // array elements are non-nullable.
-        self.nulls.append(!self.top_level);
-        self.value_builder.append_null();
+        self.null_value
+            .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()
     }
 
@@ -256,6 +293,8 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
 pub(crate) struct VariantToShreddedArrayVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: ArrayVariantToArrowRowBuilder<'a>,
+    nulls: NullBufferBuilder,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
@@ -263,6 +302,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         data_type: &'a DataType,
         cast_options: &'a CastOptions,
         capacity: usize,
+        null_value: NullValue,
     ) -> Result<Self> {
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
@@ -270,12 +310,16 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 data_type,
                 cast_options,
                 capacity,
+                true,
             )?,
+            nulls: NullBufferBuilder::new(capacity),
+            null_value,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.value_builder.append_value(Variant::Null);
+        self.null_value
+            .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()?;
         Ok(())
     }
@@ -285,12 +329,16 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         // If the variant is an array, value must be null.
         match variant {
             Variant::List(list) => {
+                self.nulls.append_non_null();
                 self.value_builder.append_null();
+
+                // NOTE: A `FixedSizeList` with incorrect size will hard fail during shredding.
                 self.typed_value_builder
                     .append_value(&Variant::List(list))?;
                 Ok(true)
             }
             other => {
+                self.nulls.append_non_null();
                 self.value_builder.append_value(other);
                 self.typed_value_builder.append_null()?;
                 Ok(false)
@@ -298,13 +346,11 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         }
     }
 
-    fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         Ok((
             self.value_builder.build()?,
             self.typed_value_builder.finish()?,
-            // All elements of an array must be present (not missing) because
-            // the array Variant encoding does not allow missing elements
-            None,
+            self.nulls.finish(),
         ))
     }
 }
@@ -314,7 +360,7 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
-    top_level: bool,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
@@ -322,14 +368,14 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         fields: &'a Fields,
         cast_options: &'a CastOptions,
         capacity: usize,
-        top_level: bool,
+        null_value: NullValue,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
                 cast_options,
                 capacity,
-                false,
+                NullValue::ObjectField,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -338,15 +384,13 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
+            null_value,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        // Only the top-level struct that represents the variant can be nullable; object fields and
-        // array elements are non-nullable.
-        self.nulls.append(!self.top_level);
-        self.value_builder.append_null();
+        self.null_value
+            .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
             typed_value_builder.append_null()?;
@@ -408,8 +452,11 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         let mut builder = StructArrayBuilder::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
-            let array =
-                ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+            let array = ShreddedVariantFieldArray::from_parts(
+                Some(Arc::new(value)),
+                Some(typed_value),
+                nulls,
+            );
             builder = builder.with_field(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
@@ -654,10 +701,11 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
+    use crate::variant_array::{binary_array_value, variant_from_arrays_at};
     use arrow::array::{
-        Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
-        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        Array, BinaryViewArray, FixedSizeBinaryArray, FixedSizeListArray, Float64Array,
+        GenericListArray, GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray,
+        ListArray, ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -668,6 +716,12 @@ mod tests {
     };
     use std::sync::Arc;
     use uuid::Uuid;
+
+    const NULL_VALUES: [NullValue; 3] = [
+        NullValue::TopLevelVariant,
+        NullValue::ObjectField,
+        NullValue::ArrayElement,
+    ];
 
     #[derive(Clone)]
     enum VariantValue<'a> {
@@ -801,7 +855,7 @@ mod tests {
     fn downcast_list_like_array<O: OffsetSizeTrait>(
         array: &VariantArray,
     ) -> &dyn TestListLikeArray<OffsetSize = O> {
-        let typed_value = array.typed_value_field().unwrap();
+        let typed_value = array.typed_value_column().unwrap();
         if let Some(list) = typed_value.as_any().downcast_ref::<GenericListArray<O>>() {
             list
         } else if let Some(list_view) = typed_value
@@ -826,7 +880,8 @@ mod tests {
     ) {
         assert_eq!(array.len(), expected_len);
 
-        let fallbacks = (array.value_field().unwrap(), Some(array.metadata_field()));
+        let fallback_value = array.value_column().unwrap();
+        let fallback_metadata = array.metadata_column();
         let array = downcast_list_like_array::<O>(array);
 
         assert_eq!(
@@ -846,7 +901,7 @@ mod tests {
         );
         assert_eq!(
             array.len(),
-            fallbacks.0.len(),
+            fallback_value.len(),
             "fallbacks value field should match array length"
         );
 
@@ -861,7 +916,7 @@ mod tests {
                     // Successfully shredded: typed list value present, no fallback value
                     assert!(array.is_valid(idx));
                     assert_eq!(array.value_size(idx), *len);
-                    assert!(fallbacks.0.is_null(idx));
+                    assert!(fallback_value.is_null(idx));
                 }
                 None => {
                     // Unable to shred: typed list value absent, fallback should carry the variant
@@ -869,19 +924,26 @@ mod tests {
                     assert_eq!(array.value_size(idx), O::zero());
                     match expected_fallback {
                         Some(expected_variant) => {
-                            assert!(fallbacks.0.is_valid(idx));
-                            let metadata_bytes = fallbacks
-                                .1
-                                .filter(|m| m.is_valid(idx))
-                                .map(|m| m.value(idx))
-                                .filter(|bytes| !bytes.is_empty())
-                                .unwrap_or(EMPTY_VARIANT_METADATA_BYTES);
+                            assert!(fallback_value.is_valid(idx));
+                            let metadata_bytes =
+                                binary_array_value(fallback_metadata.as_ref(), idx).unwrap();
+                            let metadata_bytes =
+                                if fallback_metadata.is_valid(idx) && !metadata_bytes.is_empty() {
+                                    metadata_bytes
+                                } else {
+                                    EMPTY_VARIANT_METADATA_BYTES
+                                };
                             assert_eq!(
-                                Variant::new(metadata_bytes, fallbacks.0.value(idx)),
+                                Variant::new(
+                                    metadata_bytes,
+                                    binary_array_value(fallback_value.as_ref(), idx).unwrap()
+                                ),
                                 expected_variant.clone()
                             );
                         }
-                        None => unreachable!(),
+                        None => {
+                            assert!(fallback_value.is_null(idx));
+                        }
                     }
                 }
             }
@@ -916,7 +978,7 @@ mod tests {
         // Validate the shredded primitive values for list elements
         let element_array = ShreddedVariantFieldArray::try_new(array.values().as_ref()).unwrap();
         let element_values = element_array
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
@@ -933,18 +995,136 @@ mod tests {
         }
 
         // Validate fallback variants for list elements that could not be shredded
-        let element_fallbacks = element_array.value_field().unwrap();
+        let element_fallbacks = element_array.value_column().unwrap();
         assert_eq!(element_fallbacks.len(), expected_fallbacks.len());
         for (idx, expected_fallback) in expected_fallbacks.iter().enumerate() {
             match expected_fallback {
                 Some(expected_variant) => {
                     assert!(element_fallbacks.is_valid(idx));
                     assert_eq!(
-                        Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(idx)),
+                        Variant::new(
+                            EMPTY_VARIANT_METADATA_BYTES,
+                            binary_array_value(element_fallbacks.as_ref(), idx).unwrap()
+                        ),
                         expected_variant.clone()
                     );
                 }
                 None => assert!(element_fallbacks.is_null(idx)),
+            }
+        }
+    }
+
+    fn assert_append_null_mode_value_and_struct_nulls(
+        mode: NullValue,
+        value: &BinaryViewArray,
+        nulls: Option<&arrow::buffer::NullBuffer>,
+    ) {
+        if mode == NullValue::TopLevelVariant {
+            assert!(nulls.is_some_and(|n| n.is_null(0)));
+        } else {
+            assert!(nulls.is_none());
+        }
+
+        if mode == NullValue::ArrayElement {
+            assert!(value.is_valid(0));
+            assert_eq!(
+                Variant::new(EMPTY_VARIANT_METADATA_BYTES, value.value(0)),
+                Variant::Null
+            );
+        } else {
+            assert!(value.is_null(0));
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics_primitive_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+
+        for mode in NULL_VALUES {
+            let mut primitive_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &DataType::Int64,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            primitive_builder.append_null().unwrap();
+            let (primitive_value, primitive_typed_value, primitive_nulls) =
+                primitive_builder.finish().unwrap();
+            let primitive_typed_value = primitive_typed_value
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+
+            assert!(primitive_typed_value.is_null(0));
+            assert_append_null_mode_value_and_struct_nulls(
+                mode,
+                &primitive_value,
+                primitive_nulls.as_ref(),
+            );
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics_array_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+        let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+
+        for mode in NULL_VALUES {
+            let mut array_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &list_type,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            array_builder.append_null().unwrap();
+            let (value, typed_value, nulls) = array_builder.finish().unwrap();
+
+            assert_append_null_mode_value_and_struct_nulls(mode, &value, nulls.as_ref());
+
+            let typed_value = typed_value.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(typed_value.len(), 1);
+            assert!(typed_value.is_null(0));
+            assert_eq!(typed_value.values().len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics_object_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+        let object_type = DataType::Struct(Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        for mode in NULL_VALUES {
+            let mut object_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &object_type,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            object_builder.append_null().unwrap();
+            let (value, typed_value, nulls) = object_builder.finish().unwrap();
+
+            assert_append_null_mode_value_and_struct_nulls(mode, &value, nulls.as_ref());
+
+            let typed_struct = typed_value
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
+            assert_eq!(typed_struct.len(), 1);
+            assert!(typed_struct.is_null(0));
+
+            for field_name in ["id", "name"] {
+                let field = ShreddedVariantFieldArray::try_new(
+                    typed_struct.column_by_name(field_name).unwrap(),
+                )
+                .unwrap();
+                assert!(field.value_column().unwrap().is_null(0));
+                assert!(field.typed_value_column().unwrap().is_null(0));
             }
         }
     }
@@ -954,8 +1134,8 @@ mod tests {
         // Create a VariantArray that already has typed_value_field
         // First create a valid VariantArray, then extract its parts to construct a shredded one
         let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
-        let metadata = temp_array.metadata_field().clone();
-        let value = temp_array.value_field().unwrap().clone();
+        let metadata = temp_array.metadata_column().clone();
+        let value = temp_array.value_column().unwrap().clone();
         let typed_value = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
 
         let shredded_array =
@@ -971,13 +1151,13 @@ mod tests {
     #[test]
     fn test_all_null_input() {
         // Create VariantArray with no value field (all null case)
-        let metadata = BinaryViewArray::from_iter_values([&[1u8, 0u8]]); // minimal valid metadata
+        let metadata = Arc::new(BinaryViewArray::from_iter_values([&[1u8, 0u8]])); // minimal valid metadata
         let all_null_array = VariantArray::from_parts(metadata, None, None, None);
         let result = shred_variant(&all_null_array, &DataType::Int64).unwrap();
 
         // Should return array with no value/typed_value fields
-        assert!(result.value_field().is_none());
-        assert!(result.typed_value_field().is_none());
+        assert!(result.value_column().is_none());
+        assert!(result.typed_value_column().is_none());
     }
 
     #[test]
@@ -1009,23 +1189,13 @@ mod tests {
 
         let variant_array = shred_variant(&input, &DataType::FixedSizeBinary(16)).unwrap();
 
-        // // inspect the typed_value Field and make sure it contains the canonical Uuid extension type
-        // let typed_value_field = variant_array
-        //     .inner()
-        //     .fields()
-        //     .into_iter()
-        //     .find(|f| f.name() == "typed_value")
-        //     .unwrap();
+        let typed_value_field = variant_array.inner().field_by_name("typed_value").unwrap();
 
-        // assert!(
-        //     typed_value_field
-        //         .try_extension_type::<extension::Uuid>()
-        //         .is_ok()
-        // );
+        assert!(typed_value_field.has_valid_extension_type::<arrow_schema::extension::Uuid>());
 
         // probe the downcasted typed_value array to make sure uuids are shredded correctly
         let uuids = variant_array
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
@@ -1048,6 +1218,32 @@ mod tests {
     }
 
     #[test]
+    fn test_uuid_nested_shredding() {
+        let mock_uuid = Uuid::new_v4();
+        let input = build_variant_array(vec![VariantRow::Object(vec![(
+            "id",
+            VariantValue::from(mock_uuid),
+        )])]);
+        let target = ShreddedSchemaBuilder::default()
+            .with_path("id", DataType::FixedSizeBinary(16))
+            .unwrap()
+            .build();
+
+        let result = shred_variant(&input, &target).unwrap();
+
+        let typed_value = result.typed_value_column().unwrap();
+        let typed_struct = typed_value.as_any().downcast_ref::<StructArray>().unwrap();
+        let id =
+            ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("id").unwrap()).unwrap();
+
+        // The extension type lives on the field, not the array, so assert it on the inner struct.
+        let leaf = id.inner().field_by_name("typed_value").unwrap();
+
+        assert_eq!(leaf.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(leaf.has_valid_extension_type::<arrow_schema::extension::Uuid>());
+    }
+
+    #[test]
     fn test_primitive_shredding_comprehensive() {
         // Test mixed scenarios in a single array
         let input = VariantArray::from_iter(vec![
@@ -1062,10 +1258,10 @@ mod tests {
         let result = shred_variant(&input, &DataType::Int64).unwrap();
 
         // Verify structure
-        let metadata_field = result.metadata_field();
-        let value_field = result.value_field().unwrap();
+        let metadata_field = result.metadata_column();
+        let value_field = result.value_column().unwrap();
         let typed_value_field = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -1085,7 +1281,7 @@ mod tests {
         assert!(!value_field.is_null(1)); // value should contain original
         assert!(typed_value_field.is_null(1)); // typed_value should be null
         assert_eq!(
-            Variant::new(metadata_field.value(1), value_field.value(1)),
+            variant_from_arrays_at(metadata_field, value_field, 1).unwrap(),
             Variant::from("hello")
         );
 
@@ -1101,7 +1297,7 @@ mod tests {
         assert!(!result.is_null(4));
         assert!(!value_field.is_null(4)); // should contain Variant::Null
         assert_eq!(
-            Variant::new(metadata_field.value(4), value_field.value(4)),
+            variant_from_arrays_at(metadata_field, value_field, 4).unwrap(),
             Variant::Null
         );
         assert!(typed_value_field.is_null(4));
@@ -1124,19 +1320,19 @@ mod tests {
         // Test Int32 target
         let result_int32 = shred_variant(&input, &DataType::Int32).unwrap();
         let typed_value_int32 = result_int32
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         assert_eq!(typed_value_int32.value(0), 42);
-        assert!(typed_value_int32.is_null(1)); // float doesn't convert to int32
+        assert_eq!(typed_value_int32.value(1), 3);
         assert!(typed_value_int32.is_null(2)); // string doesn't convert to int32
 
         // Test Float64 target
         let result_float64 = shred_variant(&input, &DataType::Float64).unwrap();
         let typed_value_float64 = result_float64
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Float64Array>()
@@ -1157,10 +1353,10 @@ mod tests {
         ]);
 
         let result = shred_variant(&input, &DataType::LargeUtf8).unwrap();
-        let metadata = result.metadata_field();
-        let value = result.value_field().unwrap();
+        let metadata = result.metadata_column();
+        let value = result.value_column().unwrap();
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<LargeStringArray>()
@@ -1178,7 +1374,7 @@ mod tests {
         assert!(value.is_valid(1));
         assert!(typed_value.is_null(1));
         assert_eq!(
-            Variant::new(metadata.value(1), value.value(1)),
+            variant_from_arrays_at(metadata, value, 1).unwrap(),
             Variant::from(42i64)
         );
 
@@ -1192,7 +1388,7 @@ mod tests {
         assert!(value.is_valid(3));
         assert!(typed_value.is_null(3));
         assert_eq!(
-            Variant::new(metadata.value(3), value.value(3)),
+            variant_from_arrays_at(metadata, value, 3).unwrap(),
             Variant::Null
         );
 
@@ -1213,10 +1409,10 @@ mod tests {
         ]);
 
         let result = shred_variant(&input, &DataType::LargeBinary).unwrap();
-        let metadata = result.metadata_field();
-        let value = result.value_field().unwrap();
+        let metadata = result.metadata_column();
+        let value = result.value_column().unwrap();
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<LargeBinaryArray>()
@@ -1234,7 +1430,7 @@ mod tests {
         assert!(value.is_valid(1));
         assert!(typed_value.is_null(1));
         assert_eq!(
-            Variant::new(metadata.value(1), value.value(1)),
+            variant_from_arrays_at(metadata, value, 1).unwrap(),
             Variant::from("not_binary")
         );
 
@@ -1248,7 +1444,7 @@ mod tests {
         assert!(value.is_valid(3));
         assert!(typed_value.is_null(3));
         assert_eq!(
-            Variant::new(metadata.value(3), value.value(3)),
+            variant_from_arrays_at(metadata, value, 3).unwrap(),
             Variant::Null
         );
 
@@ -1280,10 +1476,10 @@ mod tests {
             ),
             DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Int32, true),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                     ])),
                     false,
                 )),
@@ -1338,13 +1534,7 @@ mod tests {
             5,
             &[0, 3, 6, 6, 6, 6],
             &[Some(3), Some(3), None, None, Some(0)],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-                None,
-            ],
+            &[None, None, Some(Variant::from("not a list")), None, None],
             (
                 &[Some(1), Some(2), Some(3), Some(1), None, None],
                 &[
@@ -1414,13 +1604,7 @@ mod tests {
             5,
             &[0, 3, 6, 6, 6],
             &[Some(3), Some(3), None, None, Some(0)],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-                None,
-            ],
+            &[None, None, Some(Variant::from("not a list")), None, None],
             (
                 &[Some(1), Some(2), Some(3), Some(1), None, None],
                 &[
@@ -1462,6 +1646,67 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_fixed_size_list() {
+        let input = build_variant_array(vec![
+            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
+            VariantRow::Value(VariantValue::from("This should not be shredded")),
+            VariantRow::List(vec![VariantValue::from(3i64), VariantValue::from(4i64)]),
+        ]);
+
+        let list_schema =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 3);
+
+        // The first row should be shredded, so the `value` field should be null and the
+        // `typed_value` field should contain the list
+        assert!(result.is_valid(0));
+        assert!(result.value_column().unwrap().is_null(0));
+        assert!(result.typed_value_column().unwrap().is_valid(0));
+
+        // The second row should not be shredded because the provided schema for shredding did not
+        // match. Hence, the `value` field should contain the raw value and the `typed_value` field
+        // should be null.
+        assert!(result.is_valid(1));
+        assert!(result.value_column().unwrap().is_valid(1));
+        assert!(result.typed_value_column().unwrap().is_null(1));
+
+        // The third row should be shredded, so the `value` field should be null and the
+        // `typed_value` field should contain the list
+        assert!(result.is_valid(2));
+        assert!(result.value_column().unwrap().is_null(2));
+        assert!(result.typed_value_column().unwrap().is_valid(2));
+
+        let typed_value = result.typed_value_column().unwrap();
+        let fixed_size_list = typed_value
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+
+        // Verify that typed value is `FixedSizeList`.
+        assert_eq!(fixed_size_list.len(), 3);
+        assert_eq!(fixed_size_list.value_length(), 2);
+
+        // Verify that the first entry in the `FixedSizeList` contains the expected value.
+        let val0 = fixed_size_list.value(0);
+        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
+        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
+        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
+
+        // Verify that second entry in the `FixedSizeList` cannot be shredded hence the value is
+        // invalid.
+        assert!(fixed_size_list.is_null(1));
+
+        // Verify that the third entry in the `FixedSizeList` contains the expected value.
+        let val2 = fixed_size_list.value(2);
+        let val2_struct = val2.as_any().downcast_ref::<StructArray>().unwrap();
+        let val2_typed = val2_struct.column_by_name("typed_value").unwrap();
+        let val2_ints = val2_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val2_ints.values(), &[3i64, 4i64]);
+    }
+
+    #[test]
+    fn test_array_shredding_as_fixed_size_list_wrong_size() {
         let input = build_variant_array(vec![VariantRow::List(vec![
             VariantValue::from(1i64),
             VariantValue::from(2i64),
@@ -1469,10 +1714,12 @@ mod tests {
         ])]);
         let list_schema =
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+
         let err = shred_variant(&input, &list_schema).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Not yet implemented: Converting unshredded variant arrays to arrow fixed-size lists"
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
         );
     }
 
@@ -1511,7 +1758,7 @@ mod tests {
         assert_eq!(result.len(), 4);
 
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<ListArray>()
@@ -1522,29 +1769,24 @@ mod tests {
             4,
             &[0, 3, 6, 6, 6],
             &[Some(3), Some(3), None, None],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-            ],
+            &[None, None, Some(Variant::from("not a list")), None],
         );
 
         let outer_elements =
             ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
         assert_eq!(outer_elements.len(), 6);
         let outer_values = outer_elements
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let outer_fallbacks = outer_elements.value_field().unwrap();
+        let outer_fallbacks = outer_elements.value_column().unwrap();
 
-        let outer_metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+        let outer_metadata = Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
             EMPTY_VARIANT_METADATA_BYTES,
             outer_elements.len(),
-        ));
+        )));
         let outer_variant = VariantArray::from_parts(
             outer_metadata,
             Some(outer_fallbacks.clone()),
@@ -1615,12 +1857,12 @@ mod tests {
             3,
             &[0, 2, 2, 2],
             &[Some(2), None, None],
-            &[None, Some(Variant::from("not a list")), Some(Variant::Null)],
+            &[None, Some(Variant::from("not a list")), None],
         );
 
         // Validate nested struct fields for each element
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<ListArray>()
@@ -1629,7 +1871,7 @@ mod tests {
             ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
         assert_eq!(element_array.len(), 2);
         let element_objects = element_array
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
@@ -1639,9 +1881,9 @@ mod tests {
         let id_field =
             ShreddedVariantFieldArray::try_new(element_objects.column_by_name("id").unwrap())
                 .unwrap();
-        let id_values = id_field.value_field().unwrap();
+        let id_values = id_field.value_column().unwrap();
         let id_typed_values = id_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -1651,7 +1893,10 @@ mod tests {
         // null is stored as Variant::Null in values
         assert!(id_values.is_valid(1));
         assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, id_values.value(1)),
+            Variant::new(
+                EMPTY_VARIANT_METADATA_BYTES,
+                binary_array_value(id_values.as_ref(), 1).unwrap()
+            ),
             Variant::Null
         );
         assert!(id_typed_values.is_null(1));
@@ -1660,9 +1905,9 @@ mod tests {
         let name_field =
             ShreddedVariantFieldArray::try_new(element_objects.column_by_name("name").unwrap())
                 .unwrap();
-        let name_values = name_field.value_field().unwrap();
+        let name_values = name_field.value_column().unwrap();
         let name_typed_values = name_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1720,15 +1965,14 @@ mod tests {
         let result = shred_variant(&input, &target_schema).unwrap();
 
         // Verify structure
-        assert!(result.value_field().is_some());
-        assert!(result.typed_value_field().is_some());
+        assert!(result.value_column().is_some());
+        assert!(result.typed_value_column().is_some());
         assert_eq!(result.len(), 9);
 
-        let metadata = result.metadata_field();
-
-        let value = result.value_field().unwrap();
+        let metadata = result.metadata_column();
+        let value = result.value_column().unwrap();
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
@@ -1741,26 +1985,16 @@ mod tests {
         let age_field =
             ShreddedVariantFieldArray::try_new(typed_value.column_by_name("age").unwrap()).unwrap();
 
-        let score_value = score_field
-            .value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
+        let score_value = score_field.value_column().unwrap();
         let score_typed_value = score_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        let age_value = age_field
-            .value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
+        let age_value = age_field.value_column().unwrap();
         let age_typed_value = age_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -1777,10 +2011,10 @@ mod tests {
         }
         fn get_value<'m, 'v>(
             i: usize,
-            metadata: &'m BinaryViewArray,
-            value: &'v BinaryViewArray,
+            metadata: &'m dyn Array,
+            value: &'v dyn Array,
         ) -> Variant<'m, 'v> {
-            Variant::new(metadata.value(i), value.value(i))
+            variant_from_arrays_at(metadata, value, i).unwrap()
         }
         let expect = |i, expected_result: Option<ShreddedValue<ShreddedStruct>>| {
             match expected_result {
@@ -1792,7 +2026,10 @@ mod tests {
                     match expected_value {
                         Some(expected_value) => {
                             assert!(value.is_valid(i));
-                            assert_eq!(expected_value, get_value(i, metadata, value));
+                            assert_eq!(
+                                expected_value,
+                                get_value(i, metadata.as_ref(), value.as_ref())
+                            );
                         }
                         None => {
                             assert!(value.is_null(i));
@@ -1811,7 +2048,7 @@ mod tests {
                                     assert!(score_value.is_valid(i));
                                     assert_eq!(
                                         expected_score_value,
-                                        get_value(i, metadata, score_value)
+                                        get_value(i, metadata.as_ref(), score_value.as_ref())
                                     );
                                 }
                                 None => {
@@ -1832,7 +2069,7 @@ mod tests {
                                     assert!(age_value.is_valid(i));
                                     assert_eq!(
                                         expected_age_value,
-                                        get_value(i, metadata, age_value)
+                                        get_value(i, metadata.as_ref(), age_value.as_ref())
                                     );
                                 }
                                 None => {
@@ -1973,7 +2210,7 @@ mod tests {
         // Helper to correctly create a variant object using a row's existing metadata
         let object_with_foo_field = |i| {
             use parquet_variant::{ParentState, ValueBuilder, VariantMetadata};
-            let metadata = VariantMetadata::new(metadata.value(i));
+            let metadata = VariantMetadata::new(binary_array_value(metadata.as_ref(), i).unwrap());
             let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
             let mut value_builder = ValueBuilder::new();
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
@@ -2058,9 +2295,9 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         // Access base value/typed_value columns
-        let value_field = result.value_field().unwrap();
+        let value_field = result.value_column().unwrap();
         let typed_struct = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
@@ -2072,7 +2309,7 @@ mod tests {
         assert!(value_field.is_null(2));
         assert!(value_field.is_valid(3));
         assert_eq!(
-            Variant::new(result.metadata_field().value(3), value_field.value(3)),
+            variant_from_arrays_at(result.metadata_column(), value_field, 3).unwrap(),
             Variant::from("not an object")
         );
         assert!(value_field.is_null(4));
@@ -2090,24 +2327,18 @@ mod tests {
                 .unwrap();
         assert_list_structure_and_elements::<Int64Type, i32>(
             &VariantArray::from_parts(
-                BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
                     EMPTY_VARIANT_METADATA_BYTES,
                     scores_field.len(),
-                )),
-                Some(scores_field.value_field().unwrap().clone()),
-                Some(scores_field.typed_value_field().unwrap().clone()),
+                ))),
+                Some(scores_field.value_column().unwrap().clone()),
+                Some(scores_field.typed_value_column().unwrap().clone()),
                 None,
             ),
             scores_field.len(),
             &[0i32, 2, 4, 4, 4, 4],
             &[Some(2), Some(2), None, None, None],
-            &[
-                None,
-                None,
-                Some(Variant::Null),
-                Some(Variant::Null),
-                Some(Variant::Null),
-            ],
+            &[None, None, None, None, None],
             (
                 &[Some(10), Some(20), None, None],
                 &[None, None, Some(Variant::from("oops")), Some(Variant::Null)],
@@ -2129,7 +2360,7 @@ mod tests {
             .with_path("id", &DataType::Int32)?
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
-        let value_field1 = result1.value_field().unwrap();
+        let value_field1 = result1.value_column().unwrap();
         assert!(!value_field1.is_null(0)); // should contain {"age": 25, "score": 95.5}
 
         // Test with schema containing id and age fields
@@ -2138,7 +2369,7 @@ mod tests {
             .with_path("age", &DataType::Int64)?
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
-        let value_field2 = result2.value_field().unwrap();
+        let value_field2 = result2.value_column().unwrap();
         assert!(!value_field2.is_null(0)); // should contain {"score": 95.5}
 
         // Test with schema containing all fields
@@ -2148,7 +2379,7 @@ mod tests {
             .with_path("score", &DataType::Float64)?
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
-        let value_field3 = result3.value_field().unwrap();
+        let value_field3 = result3.value_column().unwrap();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
 
         Ok(())
@@ -2195,14 +2426,14 @@ mod tests {
 
         let result = shred_variant(&input, &target_schema).unwrap();
 
-        assert!(result.value_field().is_some());
-        assert!(result.typed_value_field().is_some());
+        assert!(result.value_column().is_some());
+        assert!(result.typed_value_column().is_some());
         assert_eq!(result.len(), 6);
 
-        let metadata = result.metadata_field();
-        let value = result.value_field().unwrap();
+        let metadata = result.metadata_column();
+        let value = result.value_column().unwrap();
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
@@ -2215,26 +2446,16 @@ mod tests {
             ShreddedVariantFieldArray::try_new(typed_value.column_by_name("session_id").unwrap())
                 .unwrap();
 
-        let id_value = id_field
-            .value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
+        let id_value = id_field.value_column().unwrap();
         let id_typed_value = id_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
-        let session_id_value = session_id_field
-            .value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
+        let session_id_value = session_id_field.value_column().unwrap();
         let session_id_typed_value = session_id_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
@@ -2269,7 +2490,7 @@ mod tests {
         assert_eq!(session_id_typed_value.value(1), mock_uuid_3.as_bytes());
 
         // Verify the value field contains the name field
-        let row_1_variant = Variant::new(metadata.value(1), value.value(1));
+        let row_1_variant = variant_from_arrays_at(metadata, value, 1).unwrap();
         let Variant::Object(obj) = row_1_variant else {
             panic!("Expected object");
         };
@@ -2301,7 +2522,7 @@ mod tests {
 
         assert!(session_id_value.is_valid(3)); // type mismatch, stored in value
         assert!(session_id_typed_value.is_null(3));
-        let session_id_variant = Variant::new(metadata.value(3), session_id_value.value(3));
+        let session_id_variant = variant_from_arrays_at(metadata, session_id_value, 3).unwrap();
         assert_eq!(session_id_variant, Variant::from("not-a-uuid"));
 
         // Row 4: Type mismatch - id is int64, not UUID
@@ -2312,7 +2533,7 @@ mod tests {
 
         assert!(id_value.is_valid(4)); // type mismatch, stored in value
         assert!(id_typed_value.is_null(4));
-        let id_variant = Variant::new(metadata.value(4), id_value.value(4));
+        let id_variant = variant_from_arrays_at(metadata, id_value, 4).unwrap();
         assert_eq!(id_variant, Variant::from(12345i64));
 
         assert!(session_id_value.is_null(4));
@@ -2338,21 +2559,27 @@ mod tests {
         assert!(inner_struct.column_by_name("typed_value").is_some());
 
         // Test metadata preservation
-        assert_eq!(result.metadata_field().len(), input.metadata_field().len());
+        assert_eq!(
+            result.metadata_column().len(),
+            input.metadata_column().len()
+        );
         // The metadata should be the same reference (cheap clone)
         // Note: BinaryViewArray doesn't have a .values() method, so we compare the arrays directly
-        assert_eq!(result.metadata_field().len(), input.metadata_field().len());
+        assert_eq!(
+            result.metadata_column().len(),
+            input.metadata_column().len()
+        );
 
         // Test output structure correctness
         assert_eq!(result.len(), input.len());
-        assert!(result.value_field().is_some());
-        assert!(result.typed_value_field().is_some());
+        assert!(result.value_column().is_some());
+        assert!(result.typed_value_column().is_some());
 
         // For primitive shredding, verify that value and typed_value are never both non-null
         // (This rule applies to primitives; for objects, both can be non-null for partial shredding)
-        let value_field = result.value_field().unwrap();
+        let value_field = result.value_column().unwrap();
         let typed_value_field = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -2513,10 +2740,10 @@ mod tests {
         );
 
         assert_eq!(result.len(), 3);
-        assert!(result.typed_value_field().is_some());
+        assert!(result.typed_value_column().is_some());
 
         let typed_value = result
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
@@ -2530,13 +2757,13 @@ mod tests {
                 .unwrap();
 
         let time_typed = time_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let hostname_typed = hostname_field
-            .typed_value_field()
+            .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StringArray>()

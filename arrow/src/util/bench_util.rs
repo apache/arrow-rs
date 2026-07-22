@@ -20,17 +20,19 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
-use arrow_buffer::{Buffer, IntervalMonthDayNano};
+use arrow_buffer::{Buffer, IntervalMonthDayNano, NullBuffer};
+use arrow_schema::Field;
 use half::f16;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::distr::uniform::SampleUniform;
 use rand::rng;
 use rand::{
-    distr::{Alphanumeric, Distribution, StandardUniform},
+    distr::{Alphanumeric, Distribution, SampleString, StandardUniform},
     prelude::StdRng,
 };
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
@@ -46,6 +48,31 @@ where
                 None
             } else {
                 Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Creates an random (but fixed-seeded) array of a given size and null density,
+/// all the values located in the given range
+pub fn create_primitive_array_range<T>(
+    size: usize,
+    null_density: f32,
+    value_range: Range<T::Native>,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+    T::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(value_range.clone()))
             }
         })
         .collect()
@@ -491,6 +518,80 @@ where
     GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
 }
 
+/// Create a List/LargeList Array of primitive values using a fixed seed
+///
+/// See [`create_primitive_list_array_with_seed`] for details on arguments.
+pub fn create_primitive_list_array<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+) -> GenericListArray<O>
+where
+    O: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
+/// Create a ListViewArray of primitive values using a fixed seed
+///
+/// See [`create_primitive_list_array_with_seed`] for details on arguments.
+pub fn create_primitive_list_view_array<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+) -> GenericListViewArray<O>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+    O: OffsetSizeTrait,
+{
+    let mut rng = seedable_rng();
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListViewArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
 /// Create primitive run array for given logical and physical array lengths
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
@@ -698,7 +799,7 @@ where
 
     let nulls: Option<Buffer> = (null_density != 0.).then(|| {
         (0..size)
-            .map(|_| rng.random_bool(null_density as _))
+            .map(|_| rng.random_bool((1.0 - null_density) as _))
             .collect()
     });
 
@@ -771,4 +872,78 @@ pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> F
             }
         })
         .collect()
+}
+
+/// Create a FixedSizeList array of primitive values
+///
+/// Arguments:
+/// - `size`: number of fixed-size lists in the array
+/// - `null_density`: density of nulls in the fixed-size list array (row-level nulls)
+/// - `value_null_density`: density of nulls in the primitive values inside each list
+/// - `list_size`: fixed size of each list element
+pub fn create_primitive_fixed_size_list_array<T>(
+    size: usize,
+    null_density: f32,
+    value_null_density: f32,
+    list_size: i32,
+) -> FixedSizeListArray
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+    let list_size_usize = usize::try_from(list_size).expect("list_size must be non-negative");
+    let values: PrimitiveArray<T> = (0..size * list_size_usize)
+        .map(|_| {
+            if rng.random::<f32>() < value_null_density {
+                None
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect();
+    let field = Arc::new(Field::new("item", T::DATA_TYPE, value_null_density > 0.0));
+    let nulls = (null_density > 0.0).then(|| {
+        NullBuffer::new(arrow_buffer::BooleanBuffer::collect_bool(size, |_| {
+            rng.random::<f32>() >= null_density
+        }))
+    });
+    FixedSizeListArray::new(field, list_size, Arc::new(values), nulls)
+}
+
+/// Create a Map array with string keys and primitive values
+///
+/// Arguments:
+/// - `size`: number of map entries in the array
+/// - `null_density`: density of nulls in the map array (row-level nulls)
+/// - `max_map_size`: maximum number of key-value pairs per map entry
+///   (actual size is random between 0 and max_map_size)
+/// - `key_len`: length of each random string key
+pub fn create_string_map_array<T>(
+    size: usize,
+    null_density: f32,
+    max_map_size: usize,
+    key_len: usize,
+) -> MapArray
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+    let mut builder = MapBuilder::new(None, StringBuilder::new(), PrimitiveBuilder::<T>::new());
+    for _ in 0..size {
+        if rng.random::<f32>() < null_density {
+            builder.append(false).unwrap();
+        } else {
+            let n = rng.random_range(0..=max_map_size);
+            for _ in 0..n {
+                builder
+                    .keys()
+                    .append_value(Alphanumeric.sample_string(&mut rng, key_len));
+                builder.values().append_value(rng.random());
+            }
+            builder.append(true).unwrap();
+        }
+    }
+    builder.finish()
 }

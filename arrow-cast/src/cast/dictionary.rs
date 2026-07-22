@@ -59,6 +59,24 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
 
+    // Fast path for a nested dictionary source (`Dictionary<K, Dictionary<K2, V>>`).
+    // Both layers index into the same inner values, so the two index layers can
+    // be composed into one rather than materializing the values: `take` gathers
+    // the inner keys through the outer keys and reuses the inner values buffer
+    // untouched, so no value data is rewritten. The flattened single-level
+    // dictionary is then cast to the requested index/value types.
+    if matches!(array.values().data_type(), Dictionary(_, _)) {
+        let flattened = take(array.values().as_ref(), array.keys(), None)?;
+        return cast_with_options(
+            &flattened,
+            &Dictionary(
+                Box::new(to_index_type.clone()),
+                Box::new(to_value_type.clone()),
+            ),
+            cast_options,
+        );
+    }
+
     let keys_array: ArrayRef = Arc::new(PrimitiveArray::<K>::from(array.keys().to_data()));
     let values_array = array.values();
     let cast_keys = cast_with_options(&keys_array, to_index_type, cast_options)?;
@@ -315,10 +333,49 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         FixedSizeBinary(byte_size) => {
             pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
         }
+        Struct(_) => pack_struct_to_dictionary::<K>(array, dict_value_type, cast_options),
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type}"
         ))),
     }
+}
+
+/// Wrap a struct-valued array as a `DictionaryArray<K, Struct>` with identity
+/// keys `[0, 1, ..., len-1]`. Unlike the primitive / byte packers above, no
+/// deduplication is performed, since struct values have no general hash/equality
+/// builder in arrow-rs.
+///
+/// Each child field of the source is recursively cast to the matching field of
+/// `dict_value_type` via `cast_with_options` before keys are emitted. If any
+/// child cast fails, the whole pack fails, the same contract as the primitive
+/// packers above.
+fn pack_struct_to_dictionary<K: ArrowDictionaryKeyType>(
+    array: &dyn Array,
+    dict_value_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let cast_values = cast_with_options(array, dict_value_type, cast_options)?;
+    let len = cast_values.len();
+
+    // Identity keys `[0, 1, ..., len-1]`, with null entries wherever the
+    // source row is null so the dictionary's logical null mask matches.
+    let mut builder = PrimitiveBuilder::<K>::with_capacity(len);
+    for i in 0..len {
+        if cast_values.is_null(i) {
+            builder.append_null();
+        } else {
+            let key = K::Native::from_usize(i).ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Cannot fit {len} dictionary keys in {:?}",
+                    K::DATA_TYPE,
+                ))
+            })?;
+            builder.append_value(key);
+        }
+    }
+    let keys = builder.finish();
+
+    Ok(Arc::new(DictionaryArray::<K>::try_new(keys, cast_values)?))
 }
 
 // Packs the data from the primitive array of type <V> to a
@@ -361,22 +418,18 @@ where
     D: DecimalType + ArrowPrimitiveType,
 {
     let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
-    let dict = dict
-        .as_dictionary::<K>()
-        .downcast_dict::<PrimitiveArray<D>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Internal Error: Cannot cast dict to {}Array",
-                D::PREFIX
-            ))
-        })?;
-    let value = dict.values().clone();
-    // Set correct precision/scale
-    let value = value.with_precision_and_scale(precision, scale)?;
-    Ok(Arc::new(DictionaryArray::<K>::try_new(
-        dict.keys().clone(),
-        Arc::new(value),
-    )?))
+    let dict = dict.as_dictionary::<K>();
+    let typed = dict.downcast_dict::<PrimitiveArray<D>>().ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Internal Error: Cannot cast dict to {}Array",
+            D::PREFIX
+        ))
+    })?;
+    let value = typed
+        .values()
+        .clone()
+        .with_precision_and_scale(precision, scale)?;
+    Ok(Arc::new(dict.with_values(Arc::new(value))))
 }
 
 pub(crate) fn string_view_to_dictionary<K, O: OffsetSizeTrait>(

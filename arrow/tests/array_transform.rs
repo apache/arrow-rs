@@ -21,7 +21,7 @@ use arrow::array::{
     MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
     UInt8Array, UInt16Array, UInt16Builder, UnionArray,
 };
-use arrow::datatypes::Int16Type;
+use arrow::datatypes::{Int16Type, IntervalMonthDayNanoType};
 use arrow_array::StringViewArray;
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
@@ -45,8 +45,8 @@ fn test_decimal() {
         create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3).into_data();
     let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 3);
-    a.extend(0, 0, 3);
-    a.extend(0, 2, 3);
+    a.try_extend(0, 0, 3).unwrap();
+    a.try_extend(0, 2, 3).unwrap();
     let result = a.freeze();
     let array = Decimal128Array::from(result);
     let expected = create_decimal_array(vec![Some(1), Some(2), None, None], 10, 3);
@@ -59,7 +59,7 @@ fn test_decimal_offset() {
     let decimal_array = decimal_array.slice(1, 3).into_data(); // 2, null, 3
     let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 2);
-    a.extend(0, 0, 2); // 2, null
+    a.try_extend(0, 0, 2).unwrap(); // 2, null
     let result = a.freeze();
     let array = Decimal128Array::from(result);
     let expected = create_decimal_array(vec![Some(2), None], 10, 3);
@@ -73,9 +73,9 @@ fn test_decimal_null_offset_nulls() {
     let decimal_array = decimal_array.slice(1, 3).into_data(); // 2, null, 3
     let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 2);
-    a.extend(0, 0, 2); // 2, null
-    a.extend_nulls(3); // 2, null, null, null, null
-    a.extend(0, 1, 3); //2, null, null, null, null, null, 3
+    a.try_extend(0, 0, 2).unwrap(); // 2, null
+    a.try_extend_nulls(3).unwrap(); // 2, null, null, null, null
+    a.try_extend(0, 1, 3).unwrap(); //2, null, null, null, null, null, 3
     let result = a.freeze();
     let array = Decimal128Array::from(result);
     let expected =
@@ -89,7 +89,7 @@ fn test_primitive() {
     let b = UInt8Array::from(vec![Some(1), Some(2), Some(3)]).into_data();
     let arrays = vec![&b];
     let mut a = MutableArrayData::new(arrays, false, 3);
-    a.extend(0, 0, 2);
+    a.try_extend(0, 0, 2).unwrap();
     let result = a.freeze();
     let array = UInt8Array::from(result);
     let expected = UInt8Array::from(vec![Some(1), Some(2)]);
@@ -103,7 +103,7 @@ fn test_primitive_offset() {
     let b = b.slice(1, 2);
     let arrays = vec![&b];
     let mut a = MutableArrayData::new(arrays, false, 2);
-    a.extend(0, 0, 2);
+    a.try_extend(0, 0, 2).unwrap();
     let result = a.freeze();
     let array = UInt8Array::from(result);
     let expected = UInt8Array::from(vec![Some(2), Some(3)]);
@@ -117,7 +117,7 @@ fn test_primitive_null_offset() {
     let b = b.slice(1, 2).into_data();
     let arrays = vec![&b];
     let mut a = MutableArrayData::new(arrays, false, 2);
-    a.extend(0, 0, 2);
+    a.try_extend(0, 0, 2).unwrap();
     let result = a.freeze();
     let array = UInt8Array::from(result);
     let expected = UInt8Array::from(vec![None, Some(3)]);
@@ -130,9 +130,9 @@ fn test_primitive_null_offset_nulls() {
     let b = b.slice(1, 2);
     let arrays = vec![&b];
     let mut a = MutableArrayData::new(arrays, true, 2);
-    a.extend(0, 0, 2);
-    a.extend_nulls(3);
-    a.extend(0, 1, 2);
+    a.try_extend(0, 0, 2).unwrap();
+    a.try_extend_nulls(3).unwrap();
+    a.try_extend(0, 1, 2).unwrap();
     let result = a.freeze();
     let array = UInt8Array::from(result);
     let expected = UInt8Array::from(vec![Some(2), Some(3), None, None, None, Some(3)]);
@@ -153,7 +153,7 @@ fn test_list_null_offset() {
     let arrays = vec![&array];
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
-    mutable.extend(0, 0, 1);
+    mutable.try_extend(0, 0, 1).unwrap();
 
     let result = mutable.freeze();
     let array = ListArray::from(result);
@@ -175,7 +175,7 @@ fn test_variable_sized_nulls() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
 
     let result = mutable.freeze();
     let result = StringArray::from(result);
@@ -195,7 +195,7 @@ fn test_variable_sized_offsets() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 0, 3);
+    mutable.try_extend(0, 0, 3).unwrap();
 
     let result = mutable.freeze();
     let result = StringArray::from(result);
@@ -213,7 +213,7 @@ fn test_string_offsets() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 0, 3);
+    mutable.try_extend(0, 0, 3).unwrap();
 
     let result = mutable.freeze();
     let result = StringArray::from(result);
@@ -231,8 +231,8 @@ fn test_multiple_with_nulls() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 5);
 
-    mutable.extend(0, 0, 2);
-    mutable.extend(1, 0, 2);
+    mutable.try_extend(0, 0, 2).unwrap();
+    mutable.try_extend(1, 0, 2).unwrap();
 
     let result = mutable.freeze();
     let result = StringArray::from(result);
@@ -250,8 +250,8 @@ fn test_string_null_offset_nulls() {
 
     let mut mutable = MutableArrayData::new(arrays, true, 0);
 
-    mutable.extend(0, 1, 3);
-    mutable.extend_nulls(1);
+    mutable.try_extend(0, 1, 3).unwrap();
+    mutable.try_extend_nulls(1).unwrap();
 
     let result = mutable.freeze();
     let result = StringArray::from(result);
@@ -267,7 +267,7 @@ fn test_bool() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
 
     let result = mutable.freeze();
     let result = BooleanArray::from(result);
@@ -284,8 +284,8 @@ fn test_null() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
-    mutable.extend(1, 0, 1);
+    mutable.try_extend(0, 1, 3).unwrap();
+    mutable.try_extend(1, 0, 1).unwrap();
 
     let result = mutable.freeze();
     let result = NullArray::from(result);
@@ -316,7 +316,7 @@ fn test_dictionary() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
 
     let result = mutable.freeze();
     let result = DictionaryArray::from(result);
@@ -348,7 +348,7 @@ fn test_struct() {
     let arrays = vec![&array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
@@ -381,7 +381,7 @@ fn test_struct_offset() {
     let arrays = vec![&array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
@@ -416,7 +416,7 @@ fn test_struct_nulls() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
+    mutable.try_extend(0, 1, 3).unwrap();
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
@@ -452,8 +452,8 @@ fn test_struct_many() {
     let arrays = vec![&array, &array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 3);
-    mutable.extend(1, 0, 2);
+    mutable.try_extend(0, 1, 3).unwrap();
+    mutable.try_extend(1, 0, 2).unwrap();
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
@@ -508,7 +508,7 @@ fn test_union_dense() {
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
     // Slice it by `MutableArrayData`
-    mutable.extend(0, 4, 7);
+    mutable.try_extend(0, 4, 7).unwrap();
     let data = mutable.freeze();
     let array = UnionArray::from(data);
 
@@ -536,8 +536,8 @@ fn test_binary_fixed_sized_offsets() {
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
-    mutable.extend(0, 1, 2);
-    mutable.extend(0, 0, 1);
+    mutable.try_extend(0, 1, 2).unwrap();
+    mutable.try_extend(0, 0, 1).unwrap();
 
     let result = mutable.freeze();
     let result = FixedSizeBinaryArray::from(result);
@@ -571,9 +571,9 @@ fn test_list_append() {
     let c = b.slice(1, 2);
 
     let mut mutable = MutableArrayData::new(vec![&a, &b, &c], false, 1);
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
-    mutable.extend(2, 0, c.len());
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
+    mutable.try_extend(2, 0, c.len()).unwrap();
 
     let finished = mutable.freeze();
 
@@ -641,10 +641,10 @@ fn test_list_nulls_append() {
 
     let mut mutable = MutableArrayData::new(vec![&a, &b, &c, &d], false, 10);
 
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
-    mutable.extend(2, 0, c.len());
-    mutable.extend(3, 0, d.len());
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
+    mutable.try_extend(2, 0, c.len()).unwrap();
+    mutable.try_extend(3, 0, d.len()).unwrap();
     let result = mutable.freeze();
 
     let expected_int_array = Int64Array::from(vec![
@@ -734,10 +734,10 @@ fn test_map_nulls_append() {
 
     let mut mutable = MutableArrayData::new(vec![&a, &b, &c, &d], false, 10);
 
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
-    mutable.extend(2, 0, c.len());
-    mutable.extend(3, 0, d.len());
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
+    mutable.try_extend(2, 0, c.len()).unwrap();
+    mutable.try_extend(3, 0, d.len()).unwrap();
     let result = mutable.freeze();
 
     let expected_key_array = Int64Array::from(vec![
@@ -798,11 +798,19 @@ fn test_map_nulls_append() {
 
     let expected_entry_array = StructArray::from(vec![
         (
-            Arc::new(Field::new("keys", DataType::Int64, false)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
             Arc::new(expected_key_array) as ArrayRef,
         ),
         (
-            Arc::new(Field::new("values", DataType::Int64, true)),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                true,
+            )),
             Arc::new(expected_value_array) as ArrayRef,
         ),
     ]);
@@ -812,10 +820,10 @@ fn test_map_nulls_append() {
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("keys", DataType::Int64, false),
-                    Field::new("values", DataType::Int64, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int64, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int64, true),
                 ])),
                 false,
             )),
@@ -907,10 +915,10 @@ fn test_list_of_strings_append() {
 
     let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
 
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
-    mutable.extend(1, 1, 3);
-    mutable.extend(1, 0, 0);
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
+    mutable.try_extend(1, 1, 3).unwrap();
+    mutable.try_extend(1, 0, 0).unwrap();
     let result = mutable.freeze();
 
     let expected_string_array = StringArray::from(vec![
@@ -972,11 +980,11 @@ fn test_fixed_size_binary_append() {
 
     let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
 
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
-    mutable.extend(1, 1, 4);
-    mutable.extend(1, 2, 3);
-    mutable.extend(1, 5, 5);
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
+    mutable.try_extend(1, 1, 4).unwrap();
+    mutable.try_extend(1, 2, 3).unwrap();
+    mutable.try_extend(1, 5, 5).unwrap();
     let result = mutable.freeze();
 
     let expected = vec![
@@ -1009,8 +1017,8 @@ fn test_fixed_size_binary_append() {
 fn test_extend_nulls() {
     let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
     let mut mutable = MutableArrayData::new(vec![&int], true, 4);
-    mutable.extend(0, 2, 3);
-    mutable.extend_nulls(2);
+    mutable.try_extend(0, 2, 3).unwrap();
+    mutable.try_extend_nulls(2).unwrap();
 
     let data = mutable.freeze();
     data.validate_full().unwrap();
@@ -1025,7 +1033,7 @@ fn test_extend_nulls() {
 fn test_extend_nulls_panic() {
     let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
     let mut mutable = MutableArrayData::new(vec![&int], false, 4);
-    mutable.extend_nulls(2);
+    mutable.try_extend_nulls(2).unwrap();
 }
 
 #[test]
@@ -1043,10 +1051,10 @@ fn test_string_view() {
     a2.validate_full().unwrap();
 
     let mut mutable = MutableArrayData::new(vec![&a1, &a2], false, 4);
-    mutable.extend(1, 0, 1);
-    mutable.extend(0, 1, 2);
-    mutable.extend(0, 0, 1);
-    mutable.extend(1, 2, 3);
+    mutable.try_extend(1, 0, 1).unwrap();
+    mutable.try_extend(0, 1, 2).unwrap();
+    mutable.try_extend(0, 0, 1).unwrap();
+    mutable.try_extend(1, 2, 3).unwrap();
 
     let array = StringViewArray::from(mutable.freeze());
     assert_eq!(array.data_buffers().len(), 2);
@@ -1102,12 +1110,12 @@ fn test_fixed_size_list_append() {
     let b = a_builder.finish().into_data();
 
     let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
-    mutable.extend(0, 0, a.len());
-    mutable.extend(1, 0, b.len());
+    mutable.try_extend(0, 0, a.len()).unwrap();
+    mutable.try_extend(1, 0, b.len()).unwrap();
 
     // append array
-    mutable.extend(1, 1, 4);
-    mutable.extend(1, 2, 3);
+    mutable.try_extend(1, 1, 4).unwrap();
+    mutable.try_extend(1, 2, 3).unwrap();
 
     let finished = mutable.freeze();
 
@@ -1176,8 +1184,8 @@ fn test_extend_nulls_sparse_union() {
 
     let data = union_array.to_data();
     let mut mutable = MutableArrayData::new(vec![&data], true, 4);
-    mutable.extend(0, 0, 1); // copy the first element
-    mutable.extend_nulls(2); // add two nulls
+    mutable.try_extend(0, 0, 1).unwrap(); // copy the first element
+    mutable.try_extend_nulls(2).unwrap(); // add two nulls
     let result = mutable.freeze();
 
     // Union arrays must not have a null bitmap per Arrow spec
@@ -1220,8 +1228,8 @@ fn test_extend_nulls_dense_union() {
 
     let data = union_array.to_data();
     let mut mutable = MutableArrayData::new(vec![&data], true, 4);
-    mutable.extend(0, 0, 1); // copy the first element
-    mutable.extend_nulls(2); // add two nulls
+    mutable.try_extend(0, 0, 1).unwrap(); // copy the first element
+    mutable.try_extend_nulls(2).unwrap(); // add two nulls
     let result = mutable.freeze();
 
     // Union arrays must not have a null bitmap per Arrow spec
@@ -1238,4 +1246,24 @@ fn test_extend_nulls_dense_union() {
     assert_eq!(result_array.child(0).len(), 2);
     // Second child (str) should have 1 entry from extend
     assert_eq!(result_array.child(1).len(), 1);
+}
+
+#[test]
+fn test_interval_month_day_nano_aligned_to_8() {
+    let ty = DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano);
+
+    let offset = 8;
+    let mut buffer = arrow_buffer::MutableBuffer::new(0);
+    buffer.extend_zeros(offset);
+    buffer.push(IntervalMonthDayNanoType::make_value(0, 0, 0));
+    let buffer = Buffer::from(buffer).slice(offset);
+
+    let b = ArrayData::builder(ty.clone())
+        .add_buffer(buffer)
+        .align_buffers(true) // no alignment should be done
+        .build()
+        .unwrap();
+
+    // roundtripping through arraydata shouldnt panic
+    MutableArrayData::new(vec![&b], false, 0);
 }

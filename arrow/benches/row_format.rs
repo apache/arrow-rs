@@ -25,10 +25,11 @@ use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
     create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
-    create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed,
-    create_string_dict_array, create_string_view_array_with_len,
-    create_string_view_array_with_max_len,
+    create_primitive_run_array, create_string_array_with_len,
+    create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array,
+    create_string_view_array_with_len, create_string_view_array_with_max_len,
 };
+
 use arrow::util::data_gen::create_random_array;
 use arrow_array::Array;
 use arrow_array::types::{Int8Type, Int32Type};
@@ -59,6 +60,29 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     c.bench_function(&format!("convert_rows {name}"), |b| {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
+
+    // Benchmark parsing strings which may need utf8 validation.
+    fn is_stringlike(array: &ArrayRef) -> bool {
+        matches!(array.data_type(), DataType::Utf8 | DataType::Utf8View)
+    }
+    if cols.iter().all(is_stringlike) {
+        // RowParser marks rows as requiring UTF-8 validation when they are decoded
+        // back into Arrow arrays by RowConverter::convert_rows.
+        let parser = converter.parser();
+        let parsed_rows: Vec<_> = rows
+            .iter()
+            .map(|row| parser.parse(row.as_ref()).owned())
+            .collect();
+        c.bench_function(&format!("convert_rows_parsed {name}"), |b| {
+            b.iter(|| {
+                hint::black_box(
+                    converter
+                        .convert_rows(parsed_rows.iter().map(|row| row.row()))
+                        .unwrap(),
+                )
+            });
+        });
+    }
 
     let mut rows = converter.empty_rows(0, 0);
     c.bench_function(&format!("append_rows {name}"), |b| {
@@ -282,6 +306,20 @@ fn row_bench(c: &mut Criterion) {
         "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)",
         cols,
     );
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 1024,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(1024 physical)", cols);
+
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 512,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(512 physical)", cols);
+
+    let cols = vec![Arc::new(create_primitive_run_array::<Int32Type, Int64Type>(
+        4096, 256,
+    )) as ArrayRef];
+    do_bench(c, "4096 run_primitive(256 physical)", cols);
 
     // List
 

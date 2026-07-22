@@ -159,7 +159,12 @@ pub fn create_random_array(
         )),
         Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
-        FixedSizeBinary(len) => Arc::new(create_fsb_array(size, null_density, *len as usize)),
+        FixedSizeBinary(len) => {
+            let len = TryInto::<usize>::try_into(*len).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!("cannot use FixedSizeBinary({len})"))
+            })?;
+            Arc::new(create_fsb_array(size, null_density, len))
+        }
         BinaryView => Arc::new(
             create_string_view_array_with_len(size, null_density, 4, false).to_binary_view(),
         ),
@@ -176,8 +181,13 @@ pub fn create_random_array(
             crate::compute::cast(&v, d)?
         }
         Map(_, _) => create_random_map_array(field, size, null_density, true_density)?,
+        Decimal32(_, _) => create_random_decimal_array(field, size, null_density)?,
+        Decimal64(_, _) => create_random_decimal_array(field, size, null_density)?,
         Decimal128(_, _) => create_random_decimal_array(field, size, null_density)?,
         Decimal256(_, _) => create_random_decimal_array(field, size, null_density)?,
+        RunEndEncoded(index, value) => {
+            create_random_run_end_encoded_array(index, value, size, null_density, true_density)?
+        }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {other:?}"
@@ -197,6 +207,34 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
     let mut rng = seedable_rng();
 
     match field.data_type() {
+        DataType::Decimal32(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random::<i32>())
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal32Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random::<i64>())
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal64Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
         DataType::Decimal128(precision, scale) => {
             let values = (0..size)
                 .map(|_| {
@@ -227,6 +265,62 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
         }
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Cannot create decimal array for field {field}"
+        ))),
+    }
+}
+#[inline]
+fn create_random_run_end_encoded_array(
+    index: &Field,
+    value: &Field,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<ArrayRef> {
+    const MIN_RUN: usize = 8;
+    const MAX_RUN: usize = 32;
+
+    let mut rng = seedable_rng();
+    let mut run_lengths: Vec<usize> = Vec::new();
+    let mut remaining = size;
+    while remaining > 0 {
+        let len = rng.random_range(MIN_RUN..=MAX_RUN).min(remaining);
+        run_lengths.push(len);
+        remaining -= len;
+    }
+    let num_runs = run_lengths.len();
+
+    let mut cumulative: i64 = 0;
+    let run_ends_i64: Vec<i64> = run_lengths
+        .iter()
+        .map(|&l| {
+            cumulative += l as i64;
+            cumulative
+        })
+        .collect();
+
+    let values = create_random_array(value, num_runs, null_density, true_density)?;
+
+    match index.data_type() {
+        DataType::Int16 => {
+            let run_ends: Int16Array = run_ends_i64.iter().map(|&v| v as i16).collect();
+            Ok(Arc::new(RunArray::<Int16Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        DataType::Int32 => {
+            let run_ends: Int32Array = run_ends_i64.iter().map(|&v| v as i32).collect();
+            Ok(Arc::new(RunArray::<Int32Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        DataType::Int64 => {
+            let run_ends: Int64Array = run_ends_i64.iter().copied().collect();
+            Ok(Arc::new(RunArray::<Int64Type>::try_new(
+                &run_ends, &values,
+            )?))
+        }
+        other => Err(ArrowError::InvalidArgumentError(format!(
+            "Unsupported run-ends type for REE: {other:?}"
         ))),
     }
 }
@@ -649,6 +743,30 @@ mod tests {
     }
 
     #[test]
+    fn test_create_run_end_encoded_array() {
+        let size = 1000;
+        let ree_field = Field::new(
+            "ree",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ),
+            false,
+        );
+
+        let array = create_random_array(&ree_field, size, 0.25, 0.0).unwrap();
+        assert_eq!(array.len(), size);
+
+        let ree = array.as_run::<Int32Type>();
+        let run_ends = ree.run_ends().values();
+        let num_runs = run_ends.len();
+
+        assert_eq!(*run_ends.last().unwrap() as usize, size);
+
+        assert_eq!(ree.values().len(), num_runs);
+    }
+
+    #[test]
     fn test_create_list_array_nested_nullability() {
         let list_field = Field::new_list(
             "not_null_list",
@@ -731,9 +849,9 @@ mod tests {
     fn test_create_map_array() {
         let map_field = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             false,
             false,
         );

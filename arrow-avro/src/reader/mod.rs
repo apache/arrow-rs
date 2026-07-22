@@ -3040,12 +3040,16 @@ mod test {
             list_builder.append(true);
         }
         arrays.push(Arc::new(list_builder.finish()));
-        let values_field = Arc::new(Field::new("value", DataType::Int64, false));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
         let mut map_builder = MapBuilder::new(
             Some(builder::MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
+                entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
             }),
             StringBuilder::new(),
             Int64Builder::new(),
@@ -6270,9 +6274,9 @@ mod test {
         iaa_builder.append(true);
         let int_array_array = iaa_builder.finish();
         let field_names = MapFieldNames {
-            entry: "entries".to_string(),
-            key: "key".to_string(),
-            value: "value".to_string(),
+            entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+            key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+            value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
         };
         let mut int_map_builder =
             MapBuilder::new(Some(field_names), StringBuilder::new(), Int32Builder::new());
@@ -6284,9 +6288,9 @@ mod test {
         int_map_builder.append(true).unwrap(); // finalize map for row 0
         let int_map = int_map_builder.finish();
         let field_names2 = MapFieldNames {
-            entry: "entries".to_string(),
-            key: "key".to_string(),
-            value: "value".to_string(),
+            entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+            key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+            value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
         };
         let mut ima_builder = ListBuilder::new(MapBuilder::new(
             Some(field_names2),
@@ -6372,17 +6376,17 @@ mod test {
             .with_metadata(meta_h.clone());
         // G.value : Struct<{ h: ... }> with metadata (G)
         let g_value_struct_field = Field::new(
-            "value",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Struct(vec![h_field.clone()].into()),
             true,
         )
         .with_metadata(meta_g_value.clone());
         // entries struct for Map G
         let entries_struct_field = Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
                 vec![
-                    Field::new("key", DataType::Utf8, false),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     g_value_struct_field.clone(),
                 ]
                 .into(),
@@ -6441,9 +6445,9 @@ mod test {
                 },
                 {
                     let map_field_names = MapFieldNames {
-                        entry: "entries".to_string(),
-                        key: "key".to_string(),
-                        value: "value".to_string(),
+                        entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                        key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                        value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
                     };
                     let i_list_builder = ListBuilder::new(Float64Builder::new());
                     let h_struct_builder = StructBuilder::new(
@@ -6469,7 +6473,7 @@ mod test {
                     )
                     .with_values_field(Arc::new(
                         Field::new(
-                            "value",
+                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                             DataType::Struct(vec![h_field.clone()].into()),
                             true,
                         )
@@ -6808,14 +6812,8 @@ mod test {
             .unwrap();
 
         // First row should be "ACTIVE", second row should be "PENDING"
-        assert_eq!(
-            status_values.value(status_col.key(0).unwrap() as usize),
-            "ACTIVE"
-        );
-        assert_eq!(
-            status_values.value(status_col.key(1).unwrap() as usize),
-            "PENDING"
-        );
+        assert_eq!(status_values.value(status_col.key(0).unwrap()), "ACTIVE");
+        assert_eq!(status_values.value(status_col.key(1).unwrap()), "PENDING");
 
         // Get backupStatus enum values (same as status)
         let backup_status_col = batch
@@ -6831,11 +6829,11 @@ mod test {
 
         // First row should be "INACTIVE", second row should be "ACTIVE"
         assert_eq!(
-            backup_status_values.value(backup_status_col.key(0).unwrap() as usize),
+            backup_status_values.value(backup_status_col.key(0).unwrap()),
             "INACTIVE"
         );
         assert_eq!(
-            backup_status_values.value(backup_status_col.key(1).unwrap() as usize),
+            backup_status_values.value(backup_status_col.key(1).unwrap()),
             "ACTIVE"
         );
 
@@ -6862,15 +6860,15 @@ mod test {
         // First row: ["PENDING", "ACTIVE", "INACTIVE"]
         assert_eq!(first_array_dict_array.len(), 3);
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(0).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(0).unwrap()),
             "PENDING"
         );
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(1).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(1).unwrap()),
             "ACTIVE"
         );
         assert_eq!(
-            first_array_values.value(first_array_dict_array.key(2).unwrap() as usize),
+            first_array_values.value(first_array_dict_array.key(2).unwrap()),
             "INACTIVE"
         );
     }
@@ -8709,11 +8707,11 @@ mod test {
         )
         .unwrap();
         let map_entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                 Field::new(
-                    "value",
+                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                     DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
                     true,
                 ),
@@ -8743,10 +8741,10 @@ mod test {
             Field::new("y", DataType::Binary, false),
         ]);
         let union_map_entries = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
             ])),
             false,
         ));
@@ -8925,10 +8923,10 @@ mod test {
             Field::new(item_name, DataType::Struct(kv_fields.clone()), false).with_metadata(kv_md),
         );
         let map_int_entries = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Int32, false),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
             ])),
             false,
         ));
@@ -9171,8 +9169,8 @@ mod test {
                 let vals = Int32Array::from(vec![1, 2, 10]);
                 let entries = StructArray::new(
                     Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Int32, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
                     ]),
                     vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
                     None,
@@ -9320,8 +9318,8 @@ mod test {
                     let vals = StringArray::from(vec!["v"]);
                     let entries = StructArray::new(
                         Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
-                            Field::new("value", DataType::Utf8, false),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                         ]),
                         vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
                         None,
@@ -9399,9 +9397,9 @@ mod test {
             });
             let entries = StructArray::new(
                 Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     Field::new(
-                        "value",
+                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                         DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
                         true,
                     ),
@@ -9589,5 +9587,220 @@ mod test {
             expected, batch,
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
+    }
+
+    // Build Avro OCF bytes whose schema contains a TypeName::Ref
+    //
+    // Schema written to the OCF header verbatim:
+    // ```text
+    // Root {
+    //   ts:    Timestamp { seconds: long, nanos: int },
+    //   extra: Event     { time: "Timestamp" }        <- TypeName::Ref
+    // }
+    // ```
+    fn make_type_ref_ocf() -> Vec<u8> {
+        use apache_avro::{Schema as ApacheSchema, Writer as ApacheWriter, types::Value};
+        let schema_json = r#"{
+            "type": "record", "name": "Root",
+            "fields": [
+                {"name": "ts", "type": {"type": "record", "name": "Timestamp", "fields": [
+                    {"name": "seconds", "type": "long"},
+                    {"name": "nanos",   "type": "int"}
+                ]}},
+                {"name": "extra", "type": {"type": "record", "name": "Event", "fields": [
+                    {"name": "time", "type": "Timestamp"}
+                ]}}
+            ]
+        }"#;
+        let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
+        let mut out = Vec::new();
+        {
+            let mut writer = ApacheWriter::new(&schema, &mut out);
+            let ts_val = |s: i64, n: i32| {
+                Value::Record(vec![
+                    ("seconds".into(), Value::Long(s)),
+                    ("nanos".into(), Value::Int(n)),
+                ])
+            };
+            // Two rows: ts={1000,100}/extra.time={-1,-1}  and  ts={2000,200}/extra.time={-2,-2}.
+            for (ts_s, ts_n, ex_s, ex_n) in [(1000i64, 100i32, -1i64, -1i32), (2000, 200, -2, -2)] {
+                let row = Value::Record(vec![
+                    ("ts".into(), ts_val(ts_s, ts_n)),
+                    (
+                        "extra".into(),
+                        Value::Record(vec![("time".into(), ts_val(ex_s, ex_n))]),
+                    ),
+                ]);
+                writer.append_value_ref(&row).expect("append row");
+            }
+            writer.flush().expect("flush");
+        }
+        out
+    }
+
+    // writer-plain / reader-nullable mismatch.
+    //
+    // The writer schema uses a TypeName::Ref ("Timestamp" referenced in `extra.time`).
+    // The reader wraps `ts` in `["null", T]` unions and omits `extra`.
+    // The Skipper for `extra.time` resolves "Timestamp" via the resolver and must use
+    // the writer's plain field types (long, int) — not the nullable reader types - when
+    // consuming bytes.  Without the fix, it skips union-encoded fields from plain data,
+    // reads the wrong number of bytes, and corrupts row 2's `ts.seconds`.
+    #[test]
+    fn test_nullable_reader_schema_vs_plain_writer_nested_struct() {
+        let bytes = make_type_ref_ocf();
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":["null",{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":["null","long"]},
+                    {"name":"nanos",  "type":["null","int"]}
+                ]}]}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("reading should succeed");
+        assert_eq!(batch.num_rows(), 2);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 1000);
+        assert_eq!(seconds.value(1), 2000);
+    }
+
+    // Skipper must consume all writer fields, including writer-only ones.
+    //
+    // The writer schema uses a TypeName::Ref ("Timestamp" referenced in `extra.time`).
+    // The reader requests only `ts.seconds` (no `nanos`, no `extra`).
+    // The Skipper for `extra.time` resolves "Timestamp" and must skip both `seconds`
+    // and `nanos` bytes.  Without the fix it skips only `seconds`, leaving the `nanos`
+    // bytes in the buffer and corrupting row 2's `ts.seconds` read.
+    #[test]
+    fn test_skipper_consumes_writer_only_struct_fields() {
+        let bytes = make_type_ref_ocf();
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":"long"}
+                ]}}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("Skipper must consume both seconds and nanos for extra.time");
+        assert_eq!(batch.num_rows(), 2);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 1000);
+        assert_eq!(seconds.value(1), 2000);
+    }
+
+    // The Skipper for a skipped array field must consume all bytes of each element,
+    // including every field of a nested struct resolved via a TypeName::Ref.
+    //
+    // Writer: `Root { ts: Timestamp{seconds,nanos}, events: array<Event{time:"Timestamp"}> }`
+    // Reader: only `ts` with nullable wrappers; `events` is absent (forces a Skip).
+    // The Skipper for `events` resolves each element's `time` field as "Timestamp"
+    // and must use the writer's plain {seconds,nanos} definition — not the
+    // nullable-wrapped reader type — when consuming bytes.
+    #[test]
+    fn test_skip_array_of_structs_uses_writer_schema_not_resolved() {
+        use apache_avro::{Schema as ApacheSchema, Writer as ApacheWriter, types::Value};
+        let schema_json = r#"{
+            "type": "record", "name": "Root",
+            "fields": [
+                {"name": "ts", "type": {"type": "record", "name": "Timestamp", "fields": [
+                    {"name": "seconds", "type": "long"},
+                    {"name": "nanos",   "type": "int"}
+                ]}},
+                {"name": "events", "type": {"type": "array", "items": {
+                    "type": "record", "name": "Event", "fields": [
+                        {"name": "time", "type": "Timestamp"}
+                    ]
+                }}}
+            ]
+        }"#;
+        let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
+        let mut bytes = Vec::new();
+        {
+            let mut writer = ApacheWriter::new(&schema, &mut bytes);
+            // One row: ts={100, 5}, events=[{time={200, 1}}]
+            let ts_val = |s: i64, n: i32| {
+                Value::Record(vec![
+                    ("seconds".into(), Value::Long(s)),
+                    ("nanos".into(), Value::Int(n)),
+                ])
+            };
+            let row = Value::Record(vec![
+                ("ts".into(), ts_val(100, 5)),
+                (
+                    "events".into(),
+                    Value::Array(vec![Value::Record(vec![("time".into(), ts_val(200, 1))])]),
+                ),
+            ]);
+            writer.append_value_ref(&row).expect("append row");
+            writer.flush().expect("flush");
+        }
+
+        // Reader omits `events` (forces Skip) and wraps `ts` fields in nullable unions.
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":["null",{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":["null","long"]},
+                    {"name":"nanos",  "type":["null","int"]}
+                ]}]}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("Skipper must consume all events bytes using writer field types");
+        assert_eq!(batch.num_rows(), 1);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 100);
     }
 }

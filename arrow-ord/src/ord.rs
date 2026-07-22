@@ -114,10 +114,7 @@ fn compare_primitive<T: ArrowPrimitiveType>(
     left: &dyn Array,
     right: &dyn Array,
     opts: SortOptions,
-) -> DynComparator
-where
-    T::Native: ArrowNativeTypeOp,
-{
+) -> DynComparator {
     let left = left.as_primitive::<T>();
     let right = right.as_primitive::<T>();
     let l_values = left.values().clone();
@@ -571,7 +568,7 @@ pub fn make_comparator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
+    use arrow_array::builder::{Int32Builder, ListBuilder};
     use arrow_buffer::{IntervalDayTime, NullBuffer, OffsetBuffer, ScalarBuffer, i256};
     use arrow_schema::{DataType, Field, Fields, UnionFields};
     use half::f16;
@@ -1265,64 +1262,31 @@ mod tests {
     #[test]
     fn test_map() {
         // Create first map array demonstrating key priority over values:
-        // [{"a": 100, "b": 1}, {"b": 999, "c": 1}, {}, {"x": 1}]
-        let string_builder = StringBuilder::new();
-        let int_builder = Int32Builder::new();
-        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
-
-        // {"a": 100, "b": 1} - high value for "a", low value for "b"
-        map1_builder.keys().append_value("a");
-        map1_builder.values().append_value(100);
-        map1_builder.keys().append_value("b");
-        map1_builder.values().append_value(1);
-        map1_builder.append(true).unwrap();
-
-        // {"b": 999, "c": 1} - very high value for "b", low value for "c"
-        map1_builder.keys().append_value("b");
-        map1_builder.values().append_value(999);
-        map1_builder.keys().append_value("c");
-        map1_builder.values().append_value(1);
-        map1_builder.append(true).unwrap();
-
-        // {}
-        map1_builder.append(true).unwrap();
-
-        // {"x": 1}
-        map1_builder.keys().append_value("x");
-        map1_builder.values().append_value(1);
-        map1_builder.append(true).unwrap();
-
-        let map1 = map1_builder.finish();
+        let map1 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                // high value for "a", low value for "b"
+                Some(vec![("a", Some(100)), ("b", Some(1))]),
+                // very high value for "b", low value for "c"
+                Some(vec![("b", Some(999)), ("c", Some(1))]),
+                Some(vec![]),
+                Some(vec![("x", Some(1))]),
+            ],
+            false,
+        );
 
         // Create second map array:
         // [{"a": 1, "c": 999}, {"b": 1, "d": 999}, {"a": 1}, None]
-        let string_builder = StringBuilder::new();
-        let int_builder = Int32Builder::new();
-        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
-
-        // {"a": 1, "c": 999} - low value for "a", high value for "c"
-        map2_builder.keys().append_value("a");
-        map2_builder.values().append_value(1);
-        map2_builder.keys().append_value("c");
-        map2_builder.values().append_value(999);
-        map2_builder.append(true).unwrap();
-
-        // {"b": 1, "d": 999} - low value for "b", high value for "d"
-        map2_builder.keys().append_value("b");
-        map2_builder.values().append_value(1);
-        map2_builder.keys().append_value("d");
-        map2_builder.values().append_value(999);
-        map2_builder.append(true).unwrap();
-
-        // {"a": 1}
-        map2_builder.keys().append_value("a");
-        map2_builder.values().append_value(1);
-        map2_builder.append(true).unwrap();
-
-        // None
-        map2_builder.append(false).unwrap();
-
-        let map2 = map2_builder.finish();
+        let map2 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                // low value for "a", high value for "c"
+                Some(vec![("a", Some(1)), ("c", Some(999))]),
+                // low value for "b", high value for "d"
+                Some(vec![("b", Some(1)), ("d", Some(999))]),
+                Some(vec![("a", Some(1))]),
+                None,
+            ],
+            false,
+        );
 
         let opts = SortOptions {
             descending: false,
@@ -1383,59 +1347,25 @@ mod tests {
     #[test]
     fn test_map_vs_list_consistency() {
         // Create map arrays and convert them to list arrays to verify comparison consistency
-        // Map arrays: [{"a": 1, "b": 2}, {"x": 10}, {}, {"c": 3}]
-        let string_builder = StringBuilder::new();
-        let int_builder = Int32Builder::new();
-        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
+        let map1 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                Some(vec![("a", Some(1)), ("b", Some(2))]),
+                Some(vec![("x", Some(10))]),
+                Some(vec![]),
+                Some(vec![("c", Some(3))]),
+            ],
+            false,
+        );
 
-        // {"a": 1, "b": 2}
-        map1_builder.keys().append_value("a");
-        map1_builder.values().append_value(1);
-        map1_builder.keys().append_value("b");
-        map1_builder.values().append_value(2);
-        map1_builder.append(true).unwrap();
-
-        // {"x": 10}
-        map1_builder.keys().append_value("x");
-        map1_builder.values().append_value(10);
-        map1_builder.append(true).unwrap();
-
-        // {}
-        map1_builder.append(true).unwrap();
-
-        // {"c": 3}
-        map1_builder.keys().append_value("c");
-        map1_builder.values().append_value(3);
-        map1_builder.append(true).unwrap();
-
-        let map1 = map1_builder.finish();
-
-        // Second map array: [{"a": 1, "b": 2}, {"y": 20}, {"d": 4}, None]
-        let string_builder = StringBuilder::new();
-        let int_builder = Int32Builder::new();
-        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
-
-        // {"a": 1, "b": 2}
-        map2_builder.keys().append_value("a");
-        map2_builder.values().append_value(1);
-        map2_builder.keys().append_value("b");
-        map2_builder.values().append_value(2);
-        map2_builder.append(true).unwrap();
-
-        // {"y": 20}
-        map2_builder.keys().append_value("y");
-        map2_builder.values().append_value(20);
-        map2_builder.append(true).unwrap();
-
-        // {"d": 4}
-        map2_builder.keys().append_value("d");
-        map2_builder.values().append_value(4);
-        map2_builder.append(true).unwrap();
-
-        // None
-        map2_builder.append(false).unwrap();
-
-        let map2 = map2_builder.finish();
+        let map2 = MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                Some(vec![("a", Some(1)), ("b", Some(2))]),
+                Some(vec![("y", Some(20))]),
+                Some(vec![("d", Some(4))]),
+                None,
+            ],
+            false,
+        );
 
         // Convert map arrays to list arrays (Map entries are struct arrays with key-value pairs)
         let list1: ListArray = map1.clone().into();

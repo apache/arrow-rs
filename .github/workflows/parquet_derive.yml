@@ -33,6 +33,7 @@ on:
       - parquet/**
       - parquet_derive/**
       - parquet_derive_test/**
+      - rust-toolchain.toml
       - .github/**
 
 jobs:
@@ -43,7 +44,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -57,7 +58,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

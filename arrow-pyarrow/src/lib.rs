@@ -61,7 +61,7 @@
 
 use std::convert::{From, TryFrom};
 use std::ffi::CStr;
-use std::ptr::{addr_of, addr_of_mut};
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use arrow_array::ffi;
@@ -75,18 +75,14 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
-use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyCapsule, PyDict, PyList, PyTuple, PyType};
+use pyo3::types::{PyCapsule, PyDict, PyList, PyString, PyType};
+use pyo3::{CastError, import_exception, intern};
 
 import_exception!(pyarrow, ArrowException);
 /// Represents an exception raised by PyArrow.
 pub type PyArrowException = ArrowException;
-
-const ARROW_ARRAY_STREAM_CAPSULE_NAME: &CStr = c"arrow_array_stream";
-const ARROW_SCHEMA_CAPSULE_NAME: &CStr = c"arrow_schema";
-const ARROW_ARRAY_CAPSULE_NAME: &CStr = c"arrow_array";
 
 fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
@@ -120,33 +116,12 @@ impl<T: ToPyArrow> IntoPyArrow for T {
 
 fn validate_class(expected: &Bound<PyType>, value: &Bound<PyAny>) -> PyResult<()> {
     if !value.is_instance(expected)? {
-        let expected_module = expected.getattr("__module__")?;
-        let expected_name = expected.getattr("__name__")?;
-        let found_class = value.get_type();
-        let found_module = found_class.getattr("__module__")?;
-        let found_name = found_class.getattr("__name__")?;
         return Err(PyTypeError::new_err(format!(
-            "Expected instance of {expected_module}.{expected_name}, got {found_module}.{found_name}",
+            "Expected instance of {}, got {}",
+            expected.fully_qualified_name()?,
+            value.get_type().fully_qualified_name()?
         )));
     }
-    Ok(())
-}
-
-fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
-    let capsule_name = capsule.name()?;
-    if capsule_name.is_none() {
-        return Err(PyValueError::new_err(
-            "Expected schema PyCapsule to have name set.",
-        ));
-    }
-
-    let capsule_name = unsafe { capsule_name.unwrap().as_cstr().to_str()? };
-    if capsule_name != name {
-        return Err(PyValueError::new_err(format!(
-            "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'",
-        )));
-    }
-
     Ok(())
 }
 
@@ -155,37 +130,35 @@ impl FromPyArrow for DataType {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = value.getattr("__arrow_c_schema__")?.call0()?;
-            let capsule = capsule.cast::<PyCapsule>()?;
-            validate_pycapsule(capsule, "arrow_schema")?;
-
-            let schema_ptr = capsule
-                .pointer_checked(Some(ARROW_SCHEMA_CAPSULE_NAME))?
-                .cast::<FFI_ArrowSchema>();
-            unsafe {
-                let dtype = DataType::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
-                return Ok(dtype);
-            }
+        if let Some(capsule) =
+            call_capsule_method_if_exists(value, intern!(value.py(), "__arrow_c_schema__"))?
+        {
+            let schema_ptr = extract_capsule::<FFI_ArrowSchema>(
+                &capsule,
+                c"arrow_schema",
+                "__arrow_c_schema__",
+            )?;
+            return unsafe { DataType::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
 
         validate_class(data_type_class(value.py())?, value)?;
 
-        let c_schema = FFI_ArrowSchema::empty();
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let dtype = DataType::try_from(&c_schema).map_err(to_py_err)?;
-        Ok(dtype)
+        let mut c_schema = FFI_ArrowSchema::empty();
+        value.call_method1(
+            intern!(value.py(), "_export_to_c"),
+            (&raw mut c_schema as Py_uintptr_t,),
+        )?;
+        DataType::try_from(&c_schema).map_err(to_py_err)
     }
 }
 
 impl ToPyArrow for DataType {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let dtype =
-            data_type_class(py)?.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype)
+        data_type_class(py)?.call_method1(
+            intern!(py, "_import_from_c"),
+            (&raw const c_schema as Py_uintptr_t,),
+        )
     }
 }
 
@@ -194,37 +167,35 @@ impl FromPyArrow for Field {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = value.getattr("__arrow_c_schema__")?.call0()?;
-            let capsule = capsule.cast::<PyCapsule>()?;
-            validate_pycapsule(capsule, "arrow_schema")?;
-
-            let schema_ptr = capsule
-                .pointer_checked(Some(ARROW_SCHEMA_CAPSULE_NAME))?
-                .cast::<FFI_ArrowSchema>();
-            unsafe {
-                let field = Field::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
-                return Ok(field);
-            }
+        if let Some(capsule) =
+            call_capsule_method_if_exists(value, intern!(value.py(), "__arrow_c_schema__"))?
+        {
+            let schema_ptr = extract_capsule::<FFI_ArrowSchema>(
+                &capsule,
+                c"arrow_schema",
+                "__arrow_c_schema__",
+            )?;
+            return unsafe { Field::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
 
         validate_class(field_class(value.py())?, value)?;
 
-        let c_schema = FFI_ArrowSchema::empty();
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let field = Field::try_from(&c_schema).map_err(to_py_err)?;
-        Ok(field)
+        let mut c_schema = FFI_ArrowSchema::empty();
+        value.call_method1(
+            intern!(value.py(), "_export_to_c"),
+            (&raw mut c_schema as Py_uintptr_t,),
+        )?;
+        Field::try_from(&c_schema).map_err(to_py_err)
     }
 }
 
 impl ToPyArrow for Field {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let dtype =
-            field_class(py)?.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype)
+        field_class(py)?.call_method1(
+            intern!(py, "_import_from_c"),
+            (&raw const c_schema as Py_uintptr_t,),
+        )
     }
 }
 
@@ -233,37 +204,35 @@ impl FromPyArrow for Schema {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_schema__")? {
-            let capsule = value.getattr("__arrow_c_schema__")?.call0()?;
-            let capsule = capsule.cast::<PyCapsule>()?;
-            validate_pycapsule(capsule, "arrow_schema")?;
-
-            let schema_ptr = capsule
-                .pointer_checked(Some(ARROW_SCHEMA_CAPSULE_NAME))?
-                .cast::<FFI_ArrowSchema>();
-            unsafe {
-                let schema = Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
-                return Ok(schema);
-            }
+        if let Some(capsule) =
+            call_capsule_method_if_exists(value, intern!(value.py(), "__arrow_c_schema__"))?
+        {
+            let schema_ptr = extract_capsule::<FFI_ArrowSchema>(
+                &capsule,
+                c"arrow_schema",
+                "__arrow_c_schema__",
+            )?;
+            return unsafe { Schema::try_from(schema_ptr.as_ref()) }.map_err(to_py_err);
         }
 
         validate_class(schema_class(value.py())?, value)?;
 
-        let c_schema = FFI_ArrowSchema::empty();
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
-        let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
-        Ok(schema)
+        let mut c_schema = FFI_ArrowSchema::empty();
+        value.call_method1(
+            intern!(value.py(), "_export_to_c"),
+            (&raw mut c_schema as Py_uintptr_t,),
+        )?;
+        Schema::try_from(&c_schema).map_err(to_py_err)
     }
 }
 
 impl ToPyArrow for Schema {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
-        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let schema =
-            schema_class(py)?.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(schema)
+        schema_class(py)?.call_method1(
+            intern!(py, "_import_from_c"),
+            (&raw const c_schema as Py_uintptr_t,),
+        )
     }
 }
 
@@ -272,34 +241,11 @@ impl FromPyArrow for ArrayData {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_array__")? {
-            let tuple = value.getattr("__arrow_c_array__")?.call0()?;
-
-            if !tuple.is_instance_of::<PyTuple>() {
-                return Err(PyTypeError::new_err(
-                    "Expected __arrow_c_array__ to return a tuple.",
-                ));
-            }
-
-            let schema_capsule = tuple.get_item(0)?;
-            let schema_capsule = schema_capsule.cast::<PyCapsule>()?;
-            let array_capsule = tuple.get_item(1)?;
-            let array_capsule = array_capsule.cast::<PyCapsule>()?;
-
-            validate_pycapsule(schema_capsule, "arrow_schema")?;
-            validate_pycapsule(array_capsule, "arrow_array")?;
-
-            let schema_ptr = schema_capsule
-                .pointer_checked(Some(ARROW_SCHEMA_CAPSULE_NAME))?
-                .cast::<FFI_ArrowSchema>();
-            let array = unsafe {
-                FFI_ArrowArray::from_raw(
-                    array_capsule
-                        .pointer_checked(Some(ARROW_ARRAY_CAPSULE_NAME))?
-                        .cast::<FFI_ArrowArray>()
-                        .as_ptr(),
-                )
-            };
+        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
+            let schema_ptr =
+                extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
+            let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
+            let array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
             return unsafe { ffi::from_ffi(array, schema_ptr.as_ref()) }.map_err(to_py_err);
         }
 
@@ -313,10 +259,10 @@ impl FromPyArrow for ArrayData {
         // this changes the pointer's memory and is thus unsafe.
         // In particular, `_export_to_c` can go out of bounds
         value.call_method1(
-            "_export_to_c",
+            intern!(value.py(), "_export_to_c"),
             (
-                addr_of_mut!(array) as Py_uintptr_t,
-                addr_of_mut!(schema) as Py_uintptr_t,
+                &raw mut array as Py_uintptr_t,
+                &raw mut schema as Py_uintptr_t,
             ),
         )?;
 
@@ -328,32 +274,32 @@ impl ToPyArrow for ArrayData {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let array = FFI_ArrowArray::new(self);
         let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
-
-        let array = array_class(py)?.call_method1(
-            "_import_from_c",
+        array_class(py)?.call_method1(
+            intern!(py, "_import_from_c"),
             (
-                addr_of!(array) as Py_uintptr_t,
-                addr_of!(schema) as Py_uintptr_t,
+                &raw const array as Py_uintptr_t,
+                &raw const schema as Py_uintptr_t,
             ),
-        )?;
-        Ok(array)
+        )
     }
 }
 
 impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        let list = value.cast::<PyList>()?;
-        list.iter().map(|x| T::from_pyarrow_bound(&x)).collect()
+        let mut v = Vec::with_capacity(value.len().unwrap_or(0));
+        for item in value.try_iter()? {
+            v.push(T::from_pyarrow_bound(&item?)?);
+        }
+        Ok(v)
     }
 }
 
 impl<T: ToPyArrow> ToPyArrow for Vec<T> {
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let values = self
-            .iter()
+        self.iter()
             .map(|v| v.to_pyarrow(py))
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(PyList::new(py, values)?.into_any())
+            .collect::<PyResult<Vec<_>>>()?
+            .into_pyobject(py)
     }
 }
 
@@ -363,54 +309,31 @@ impl FromPyArrow for RecordBatch {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 
-        if value.hasattr("__arrow_c_array__")? {
-            let tuple = value.getattr("__arrow_c_array__")?.call0()?;
-
-            if !tuple.is_instance_of::<PyTuple>() {
-                return Err(PyTypeError::new_err(
-                    "Expected __arrow_c_array__ to return a tuple.",
-                ));
-            }
-
-            let schema_capsule = tuple.get_item(0)?;
-            let schema_capsule = schema_capsule.cast::<PyCapsule>()?;
-            let array_capsule = tuple.get_item(1)?;
-            let array_capsule = array_capsule.cast::<PyCapsule>()?;
-
-            validate_pycapsule(schema_capsule, "arrow_schema")?;
-            validate_pycapsule(array_capsule, "arrow_array")?;
-
-            let schema_ptr = schema_capsule
-                .pointer_checked(Some(ARROW_SCHEMA_CAPSULE_NAME))?
-                .cast::<FFI_ArrowSchema>();
-            let array_ptr = array_capsule
-                .pointer_checked(Some(ARROW_ARRAY_CAPSULE_NAME))?
-                .cast::<FFI_ArrowArray>();
+        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
+            let schema_ptr =
+                extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
+            let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
             let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
-            let mut array_data =
+            let array_data =
                 unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
-                return Err(PyTypeError::new_err(
-                    "Expected Struct type from __arrow_c_array.",
-                ));
+                return Err(PyTypeError::new_err(format!(
+                    "Expected Struct type from __arrow_c_array__, found {}.",
+                    array_data.data_type()
+                )));
             }
             let options = RecordBatchOptions::default().with_row_count(Some(array_data.len()));
-            // Ensure data is aligned (by potentially copying the buffers).
-            // This is needed because some python code (for example the
-            // python flight client) produces unaligned buffers
-            // See https://github.com/apache/arrow/issues/43552 for details
-            array_data.align_buffers();
             let array = StructArray::from(array_data);
             // StructArray does not embed metadata from schema. We need to override
             // the output schema with the schema from the capsule.
             let schema =
                 unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
             let (_fields, columns, nulls) = array.into_parts();
-            assert_eq!(
-                nulls.map(|n| n.null_count()).unwrap_or_default(),
-                0,
-                "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
-            );
+            if nulls.map(|n| n.null_count()).unwrap_or_default() != 0 {
+                return Err(PyValueError::new_err(
+                    "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation",
+                ));
+            }
             return RecordBatch::try_new_with_options(schema, columns, &options).map_err(to_py_err);
         }
 
@@ -444,7 +367,7 @@ impl ToPyArrow for RecordBatch {
         let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
         let py_reader = reader.into_pyarrow(py)?;
-        py_reader.call_method0("read_next_batch")
+        py_reader.call_method0(intern!(py, "read_next_batch"))
     }
 }
 
@@ -454,19 +377,12 @@ impl FromPyArrow for ArrowArrayStreamReader {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if value.hasattr("__arrow_c_stream__")? {
-            let capsule = value.getattr("__arrow_c_stream__")?.call0()?;
-            let capsule = capsule.cast::<PyCapsule>()?;
-            validate_pycapsule(capsule, "arrow_array_stream")?;
-
-            let stream = unsafe {
-                FFI_ArrowArrayStream::from_raw(
-                    capsule
-                        .pointer_checked(Some(ARROW_ARRAY_STREAM_CAPSULE_NAME))?
-                        .cast::<FFI_ArrowArrayStream>()
-                        .as_ptr(),
-                )
-            };
+        if let Some(capsule) =
+            call_capsule_method_if_exists(value, intern!(value.py(), "__arrow_c_stream__"))?
+        {
+            let stream_ptr =
+                extract_capsule(&capsule, c"arrow_array_stream", "__arrow_c_stream__")?;
+            let stream = unsafe { FFI_ArrowArrayStream::from_raw(stream_ptr.as_ptr()) };
 
             let stream_reader = ArrowArrayStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -476,20 +392,19 @@ impl FromPyArrow for ArrowArrayStreamReader {
 
         validate_class(record_batch_reader_class(value.py())?, value)?;
 
-        // prepare a pointer to receive the stream struct
+        // prepare the stream struct to receive the content
         let mut stream = FFI_ArrowArrayStream::empty();
-        let stream_ptr = &mut stream as *mut FFI_ArrowArrayStream;
 
         // make the conversion through PyArrow's private API
         // this changes the pointer's memory and is thus unsafe.
         // In particular, `_export_to_c` can go out of bounds
-        let args = PyTuple::new(value.py(), [stream_ptr as Py_uintptr_t])?;
-        value.call_method1("_export_to_c", args)?;
+        value.call_method1(
+            intern!(value.py(), "_export_to_c"),
+            (&raw mut stream as Py_uintptr_t,),
+        )?;
 
-        let stream_reader = ArrowArrayStreamReader::try_new(stream)
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-
-        Ok(stream_reader)
+        ArrowArrayStreamReader::try_new(stream)
+            .map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
 
@@ -498,13 +413,11 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
     // there is already a blanket implementation for `T: ToPyArrow`.
     fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let mut stream = FFI_ArrowArrayStream::new(self);
-
-        let stream_ptr = (&mut stream) as *mut FFI_ArrowArrayStream;
-        let reader = record_batch_reader_class(py)?
-            .call_method1("_import_from_c", (stream_ptr as Py_uintptr_t,))?;
-
-        Ok(reader)
+        let stream = FFI_ArrowArrayStream::new(self);
+        record_batch_reader_class(py)?.call_method1(
+            intern!(py, "_import_from_c"),
+            (&raw const stream as Py_uintptr_t,),
+        )
     }
 }
 
@@ -588,7 +501,7 @@ impl FromPyArrow for Table {
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
         let reader: Box<dyn RecordBatchReader> =
             Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
-        Self::try_from(reader).map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()))
+        Self::try_from(reader).map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
 
@@ -601,9 +514,7 @@ impl IntoPyArrow for Table {
         let kwargs = PyDict::new(py);
         kwargs.set_item("schema", py_schema)?;
 
-        let reader = table_class(py)?.call_method("from_batches", (py_batches,), Some(&kwargs))?;
-
-        Ok(reader)
+        table_class(py)?.call_method("from_batches", (py_batches,), Some(&kwargs))
     }
 }
 
@@ -621,6 +532,7 @@ fn record_batch_reader_class(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     static TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
     TYPE.import(py, "pyarrow", "RecordBatchReader")
 }
+
 fn data_type_class(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     static TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
     TYPE.import(py, "pyarrow", "DataType")
@@ -664,7 +576,7 @@ impl<'py, T: IntoPyArrow> IntoPyObject<'py> for PyArrowType<T> {
 
     type Error = PyErr;
 
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, PyErr> {
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         self.0.into_pyarrow(py)
     }
 }
@@ -673,4 +585,63 @@ impl<T> From<T> for PyArrowType<T> {
     fn from(s: T) -> Self {
         Self(s)
     }
+}
+
+fn call_capsule_method_if_exists<'py>(
+    object: &Bound<'py, PyAny>,
+    method_name: &Bound<'py, PyString>,
+) -> PyResult<Option<Bound<'py, PyCapsule>>> {
+    let Some(method) = object.getattr_opt(method_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(method.call0()?.extract().map_err(
+        |e: CastError| {
+            wrapping_type_error(
+                object.py(),
+                e.into(),
+                format!("Expected {method_name} to return a capsule."),
+            )
+        },
+    )?))
+}
+
+fn call_arrow_c_array_method_if_exists<'py>(
+    object: &Bound<'py, PyAny>,
+) -> PyResult<Option<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)>> {
+    let Some(method) = object.getattr_opt(intern!(object.py(), "__arrow_c_array__"))? else {
+        return Ok(None);
+    };
+    Ok(Some(method.call0()?.extract().map_err(|e| {
+        wrapping_type_error(
+            object.py(),
+            e,
+            "Expected __arrow_c_array__ to return a tuple of (schema, array) capsules.".into(),
+        )
+    })?))
+}
+
+fn extract_capsule<T>(
+    capsule: &Bound<PyCapsule>,
+    capsule_name: &CStr,
+    method_name: &'static str,
+) -> PyResult<NonNull<T>> {
+    Ok(capsule
+        .pointer_checked(Some(capsule_name))
+        .map_err(|e| {
+            wrapping_type_error(
+                capsule.py(),
+                e,
+                format!(
+                    "Expected {method_name} to return a {} capsule.",
+                    capsule_name.to_str().unwrap(),
+                ),
+            )
+        })?
+        .cast::<T>())
+}
+
+fn wrapping_type_error(py: Python<'_>, error: PyErr, message: String) -> PyErr {
+    let e = PyTypeError::new_err(message);
+    e.set_cause(py, Some(error));
+    e
 }

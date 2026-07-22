@@ -32,7 +32,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
 arrow-cast = { workspace = true }
-arrow-data = { workspace = true, optional = true }
+arrow-data = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
@@ -43,7 +43,6 @@ base64 = { version = "0.22", default-features = false, features = ["std"] }
 bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1", optional = true }
-paste = { version = "1.0" , optional = true }
 prost = { version = "0.14.1", default-features = false, features = ["derive"] }
 # For Timestamp type
 prost-types = { version = "0.14.1", default-features = false }
@@ -62,7 +61,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell"]
 # TODO: Remove in the next release
 flight-sql-experimental = ["flight-sql"]
 tls-aws-lc= ["tonic/tls-aws-lc"]
@@ -75,7 +74,10 @@ cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-root
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
+# Enable the IPC compression codecs so tests can exercise compressed Flight encoding
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 assert_cmd = "2.0.8"
+criterion = { workspace = true, default-features = false, features = ["async_tokio"] }
 http = "1.1.0"
 http-body = "1.0.0"
 hyper-util = "0.1"
@@ -105,3 +107,8 @@ required-features = ["flight-sql", "tls-ring"]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
 required-features = ["cli", "flight-sql", "tls-ring"]
+
+[[bench]]
+name = "flight"
+path = "benches/flight.rs"
+harness = false

@@ -56,7 +56,7 @@ native_buffer!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 
 impl IntoBuffer for Vec<bool> {
     fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
-        BooleanBuffer::from_iter(self).into_inner()
+        BooleanBuffer::from(self.as_slice()).into_inner()
     }
 }
 
@@ -104,10 +104,17 @@ where
     Vec<T::T>: IntoBuffer,
 {
     /// Construct primitive array reader.
+    ///
+    /// `padding_threshold` controls how null padding is applied. When
+    /// `None`, the reader pads all null positions (full padding). When
+    /// `Some(threshold)`, entries with `def < threshold` are excluded
+    /// from the value buffer (selective padding for list children).
     pub fn new(
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
+        batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
@@ -117,7 +124,10 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc);
+        let mut record_reader = RecordReader::<T>::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
 
         Ok(Self {
             data_type,
@@ -154,15 +164,16 @@ where
 
         // Convert physical data to equivalent arrow type, and then perform
         // coercion as needed
+        let len = self.record_reader.values_written();
+
         let record_data = self
             .record_reader
             .consume_record_data()
             .into_buffer(target_type);
 
-        let len = self.record_reader.num_values();
         let nulls = self
             .record_reader
-            .consume_bitmap_buffer()
+            .consume_compact_bitmap()
             .and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
 
         let array: ArrayRef = match T::get_physical_type() {
@@ -215,6 +226,10 @@ where
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 
@@ -436,6 +451,7 @@ fn pack_dictionary_impl<K: ArrowDictionaryKeyType, V: ArrowPrimitiveType>(
 mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::EmptyPageIterator;
+    use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
     use crate::basic::Encoding;
     use crate::column::page::Page;
     use crate::data_type::{Int32Type, Int64Type};
@@ -510,6 +526,8 @@ mod tests {
             Box::<EmptyPageIterator>::default(),
             schema.column(0),
             None,
+            DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap();
 
@@ -552,9 +570,14 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -622,6 +645,8 @@ mod tests {
                 let mut array_reader = PrimitiveArrayReader::<$arrow_parquet_type>::new(
                     Box::new(page_iterator),
                     column_desc.clone(),
+                    None,
+                    DEFAULT_BATCH_SIZE,
                     None,
                 )
                 .expect("Unable to get array reader");
@@ -758,9 +783,14 @@ mod tests {
 
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -834,9 +864,14 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(8,2)
@@ -893,9 +928,14 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int64Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(18,4)
@@ -955,9 +995,14 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                DEFAULT_BATCH_SIZE,
+                None,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is date

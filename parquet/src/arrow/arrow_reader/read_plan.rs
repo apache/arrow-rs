@@ -19,15 +19,64 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{
+    LoadedRowRanges, RowSelectionPolicy, RowSelectionStrategy,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
+use arrow_buffer::BooleanBuffer;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use std::sync::Arc;
+
+/// Options for [`ReadPlanBuilder::with_predicate_options`].
+pub struct PredicateOptions<'a> {
+    array_reader: Box<dyn ArrayReader>,
+    predicate: &'a mut dyn ArrowPredicate,
+    limit: Option<usize>,
+    total_rows: usize,
+}
+
+impl<'a> PredicateOptions<'a> {
+    /// Create options for evaluating `predicate` against rows produced by
+    /// `array_reader`.
+    ///
+    /// By default there is no match-count limit; the predicate is evaluated
+    /// over every row the reader yields. Use [`Self::with_limit`] to enable
+    /// early termination.
+    pub fn new(array_reader: Box<dyn ArrayReader>, predicate: &'a mut dyn ArrowPredicate) -> Self {
+        Self {
+            array_reader,
+            predicate,
+            limit: None,
+            total_rows: 0,
+        }
+    }
+
+    /// Stop scanning `array_reader` once `limit` matches have accumulated.
+    ///
+    /// Performance optimization for `LIMIT` / TopK: when the cumulative
+    /// `true_count` reaches `limit`, the current filter batch is truncated
+    /// at the `limit`-th match and remaining batches are never decoded.
+    ///
+    /// `limit` counts predicate matches, not output rows — callers applying
+    /// an offset must pass `offset + limit`.
+    ///
+    /// `total_rows` is the row count `array_reader` would yield if iterated
+    /// to completion. It is used to pad un-evaluated trailing rows as "not
+    /// selected" so the returned [`RowSelection`] covers the full row group.
+    ///
+    /// Only valid for the *last* predicate in a filter chain: intermediate
+    /// predicates' match counts do not map 1:1 to output rows.
+    pub fn with_limit(mut self, limit: usize, total_rows: usize) -> Self {
+        self.limit = Some(limit);
+        self.total_rows = total_rows;
+        self
+    }
+}
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -37,6 +86,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Row ranges with page data loaded for the current projection.
+    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
 }
 
 impl ReadPlanBuilder {
@@ -46,6 +97,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            loaded_row_ranges: None,
         }
     }
 
@@ -60,6 +112,11 @@ impl ReadPlanBuilder {
     /// Defaults to [`RowSelectionPolicy::Auto`]
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_loaded_row_ranges(mut self, ranges: Option<LoadedRowRanges>) -> Self {
+        self.loaded_row_ranges = ranges.map(Arc::new);
         self
     }
 
@@ -144,12 +201,42 @@ impl ReadPlanBuilder {
     /// or if the [`ParquetRecordBatchReader`] specified an explicit
     /// [`RowSelection`] in addition to one or more predicates.
     pub fn with_predicate(
-        mut self,
+        self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
     ) -> Result<Self> {
+        self.with_predicate_options(PredicateOptions::new(array_reader, predicate))
+    }
+
+    /// Evaluates an [`ArrowPredicate`] with the given [`PredicateOptions`],
+    /// updating this plan's `selection`.
+    ///
+    /// Like [`Self::with_predicate`], but allows additional options such as a
+    /// match-count limit for early termination (see
+    /// [`PredicateOptions::with_limit`]).
+    pub fn with_predicate_options(mut self, options: PredicateOptions<'_>) -> Result<Self> {
+        let PredicateOptions {
+            array_reader,
+            predicate,
+            limit,
+            total_rows,
+        } = options;
+
+        // Target length for the concatenated filter output:
+        // - Prior selection ⇒ the reader yields that many rows; `and_then`
+        //   below requires the filter output to match.
+        // - No prior selection ⇒ the reader yields `total_rows`. We only
+        //   need to pad when `limit` may short-circuit the loop; otherwise
+        //   iteration naturally exhausts.
+        let expected_rows = match self.selection.as_ref() {
+            Some(s) => Some(s.row_count()),
+            None => limit.map(|_| total_rows),
+        };
+
         let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
+        let mut processed_rows: usize = 0;
+        let mut matched_rows: usize = 0;
         for maybe_batch in reader {
             let maybe_batch = maybe_batch?;
             let input_rows = maybe_batch.num_rows();
@@ -161,10 +248,41 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
-            match filter.null_count() {
-                0 => filters.push(filter),
-                _ => filters.push(prep_null_mask_filter(&filter)),
+            let filter = match filter.null_count() {
+                0 => filter,
+                // RowSelection::from_filters expects non-null filters. Convert
+                // NULL predicate results to false so they are not selected.
+                _ => prep_null_mask_filter(&filter),
             };
+
+            processed_rows += input_rows;
+
+            match limit {
+                Some(limit) if limit - matched_rows <= filter.len() => {
+                    let truncated = filter.take_n_true(limit - matched_rows);
+                    matched_rows += truncated.true_count();
+                    filters.push(truncated);
+                    if matched_rows >= limit {
+                        break;
+                    }
+                }
+                _ => {
+                    matched_rows += filter.true_count();
+                    filters.push(filter);
+                }
+            }
+        }
+
+        // Pad the tail so the filters cover `expected_rows` total. This keeps
+        // the invariant that the resulting `RowSelection` spans every row the
+        // reader would have produced — rows past the early break are marked
+        // "not selected". When no limit is set the loop always exhausts and
+        // no padding is needed.
+        if let Some(expected) = expected_rows {
+            if processed_rows < expected {
+                let pad_len = expected - processed_rows;
+                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
+            }
         }
 
         // If the predicate selected all rows and there is no prior selection,
@@ -196,17 +314,17 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            loaded_row_ranges,
         } = self;
 
         let selection = selection.map(|s| s.trim());
 
         let row_selection_cursor = selection
             .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
+                let selectors: Vec<RowSelector> = s.into();
                 match selection_strategy {
                     RowSelectionStrategy::Mask => {
-                        RowSelectionCursor::new_mask_from_selectors(selectors)
+                        RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
                     }
                     RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
                 }
@@ -366,5 +484,124 @@ mod tests {
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
+    }
+
+    #[test]
+    fn mask_plan_trims_trailing_skips_before_chunking() {
+        let mut plan = ReadPlanBuilder::new(8)
+            .with_selection(Some(RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(7),
+            ])))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        let chunk = cursor.next_chunk(8).unwrap();
+        assert_eq!(chunk.chunk_rows, 1);
+        assert_eq!(chunk.selected_rows, 1);
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn with_predicate_options_limit_pads_tail_when_no_prior_selection() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        // 100 rows, all match the predicate. Limit stops the loop after 10
+        // matches — but the resulting RowSelection must still describe the
+        // full 100-row row group (90 trailing rows as "not selected"), not
+        // only the 10 rows we happened to evaluate before breaking.
+        const TOTAL_ROWS: usize = 100;
+        const LIMIT: usize = 10;
+
+        let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
+        let levels = vec![0; TOTAL_ROWS];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_predicate_options(
+                PredicateOptions::new(Box::new(struct_reader), &mut predicate)
+                    .with_limit(LIMIT, TOTAL_ROWS),
+            )
+            .unwrap();
+
+        let selection = builder
+            .selection()
+            .expect("limit-driven early break must produce a selection");
+
+        // `row_count` counts selected rows — must equal the limit.
+        assert_eq!(selection.row_count(), LIMIT);
+
+        // Total rows covered (selects + skips) must equal the full row group
+        // so downstream offset/limit math stays in absolute-row space.
+        let total: usize = selection.iter().map(|s| s.row_count).sum();
+        assert_eq!(
+            total, TOTAL_ROWS,
+            "selection must span the full row group, not only the prefix evaluated before the limit"
+        );
+    }
+
+    #[test]
+    fn with_predicate_options_limit_handles_null_filters() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        const TOTAL_ROWS: usize = 100;
+        const LIMIT: usize = 10;
+
+        let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
+        let levels = vec![0; TOTAL_ROWS];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok((0..batch.num_rows())
+                .map(|i| match i % 4 {
+                    0 | 2 => Some(true),
+                    1 => None,
+                    _ => Some(false),
+                })
+                .collect::<BooleanArray>())
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_predicate_options(
+                PredicateOptions::new(Box::new(struct_reader), &mut predicate)
+                    .with_limit(LIMIT, TOTAL_ROWS),
+            )
+            .unwrap();
+
+        let selection = builder
+            .selection()
+            .expect("limit-driven early break must produce a selection");
+
+        assert_eq!(selection.row_count(), LIMIT);
+
+        let total: usize = selection.iter().map(|s| s.row_count).sum();
+        assert_eq!(total, TOTAL_ROWS);
     }
 }

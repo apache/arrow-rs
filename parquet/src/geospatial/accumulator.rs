@@ -253,7 +253,7 @@ mod test {
 
         // Check that we have a working accumulator for Geometry
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::Geometry { crs: None }))
+            .with_logical_type(Some(LogicalType::geometry(None)))
             .build()
             .unwrap();
         let column_descr =
@@ -271,10 +271,7 @@ mod test {
 
         // Check that we have a void accumulator for Geography
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::Geography {
-                crs: None,
-                algorithm: None,
-            }))
+            .with_logical_type(Some(LogicalType::geography(None, None)))
             .build()
             .unwrap();
         let column_descr =

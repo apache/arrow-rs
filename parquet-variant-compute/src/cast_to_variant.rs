@@ -58,6 +58,13 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Fast path: any all-null input maps to an all-null VariantArray.
+    if input.null_count() == input.len() {
+        let mut array_builder = VariantArrayBuilder::new(input.len());
+        array_builder.append_nulls(input.len());
+        return Ok(array_builder.build());
+    }
+
     // Create row builder for the input array type
     let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
@@ -1976,8 +1983,8 @@ mod tests {
         let keys = StringArray::from(vec!["key1", "key2", "key3"]);
         let values = Int32Array::from(vec![1, 2, 3]);
         let entries_fields = Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Int32, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
         ]);
         let entries = StructArray::new(
             entries_fields.clone(),
@@ -1992,7 +1999,7 @@ mod tests {
         let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
 
         let map_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields),
             false,
         ));
@@ -2032,8 +2039,8 @@ mod tests {
     fn test_cast_to_variant_map_with_non_string_keys() {
         let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
         let fields = Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Int32, false),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
         ]);
         let columns = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
@@ -2041,7 +2048,11 @@ mod tests {
         ];
 
         let entries = StructArray::new(fields.clone(), columns, None);
-        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+        let field = Arc::new(Field::new(
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            DataType::Struct(fields),
+            false,
+        ));
 
         let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
 
