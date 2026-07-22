@@ -576,6 +576,8 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
 pub struct DeltaLengthByteArrayEncoder<T: DataType> {
     // length encoder
     len_encoder: DeltaBitPackEncoder<Int32Type>,
+    // length buffer
+    lengths: Vec<i32>,
     // byte array data
     data: Vec<ByteArray>,
     // data size in bytes of encoded values
@@ -594,6 +596,7 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
     pub fn new() -> Self {
         Self {
             len_encoder: DeltaBitPackEncoder::new(),
+            lengths: vec![],
             data: vec![],
             encoded_size: 0,
             _phantom: PhantomData,
@@ -612,14 +615,15 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
             .iter()
             .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap());
 
-        let mut lengths: Vec<i32> = Vec::with_capacity(values.len());
+        self.lengths.reserve(values.len());
         for byte_array in values {
             let len = byte_array.len();
-            lengths.push(len as i32);
+            self.lengths.push(len as i32);
             self.encoded_size += len;
             self.data.push(byte_array.clone());
         }
-        self.len_encoder.put(&lengths)?;
+        self.len_encoder.put(&self.lengths)?;
+        self.lengths.clear();
 
         Ok(())
     }
