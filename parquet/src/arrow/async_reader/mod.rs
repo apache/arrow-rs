@@ -49,9 +49,9 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 mod adaptive;
 mod metadata;
+pub use adaptive::AdaptiveFetcher;
 pub use metadata::*;
 
-use adaptive::AdaptiveFetcher;
 use futures::stream::{BoxStream, StreamExt as _};
 
 #[cfg(feature = "object_store")]

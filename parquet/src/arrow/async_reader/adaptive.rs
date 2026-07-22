@@ -263,11 +263,35 @@ impl<T> std::fmt::Debug for InputState<T> {
     }
 }
 
-/// Adaptive fetching state for one [`ParquetRecordBatchStream`].
+/// Adaptive fetcher for the bounded streaming mode: fetches small coalesced
+/// ranges exactly like [`AsyncFileReader::get_byte_ranges`], and consumes
+/// large spans incrementally via [`AsyncFileReader::get_bytes_stream`] with
+/// bounded buffering.
+///
+/// Used internally by [`ParquetRecordBatchStream`] when
+/// [`BoundedStreamingOptions`] are set. External drivers of
+/// [`ParquetPushDecoder`] (systems that implement their own fetch loops) can
+/// use it directly via [`Self::try_new`] and [`Self::fetch_more`]:
+///
+/// ```ignore
+/// let mut fetcher = AdaptiveFetcher::try_new(options, reader)?;
+/// loop {
+///     match decoder.try_decode()? {
+///         DecodeResult::NeedsData(ranges) => {
+///             let plan = decoder.upcoming_fetch_plan();
+///             let (ranges, data) = fetcher.fetch_more(ranges, plan).await?;
+///             decoder.push_ranges(ranges, data)?;
+///         }
+///         DecodeResult::Data(batch) => { /* ... */ }
+///         DecodeResult::Finished => break,
+///     }
+/// }
+/// ```
 ///
 /// [`ParquetRecordBatchStream`]: super::ParquetRecordBatchStream
+/// [`ParquetPushDecoder`]: crate::arrow::push_decoder::ParquetPushDecoder
 #[derive(Debug)]
-pub(crate) struct AdaptiveFetcher<T> {
+pub struct AdaptiveFetcher<T> {
     options: BoundedStreamingOptions,
     runtime: Handle,
     input: InputState<T>,
@@ -286,6 +310,59 @@ impl<T> AdaptiveFetcher<T>
 where
     T: AsyncFileReader + Send + 'static,
 {
+    /// Create a new fetcher over `input`, spawning body-draining tasks on the
+    /// current tokio runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if called outside a tokio runtime context.
+    pub fn try_new(options: BoundedStreamingOptions, input: T) -> Result<Self> {
+        let runtime = Handle::try_current().map_err(|e| {
+            ParquetError::General(format!(
+                "AdaptiveFetcher requires a tokio runtime to drive streamed request bodies: {e}"
+            ))
+        })?;
+        Ok(Self::new(options, runtime, input))
+    }
+
+    /// Fetch (at least) the data the decoder needs to make progress now.
+    ///
+    /// `needs` are the ranges from [`DecodeResult::NeedsData`] and `plan` the
+    /// corresponding [`ParquetPushDecoder::upcoming_fetch_plan`]. Returns
+    /// (ranges, data) pairs ready to be passed to
+    /// [`ParquetPushDecoder::push_ranges`]; call again with the decoder's next
+    /// request if it still needs more.
+    ///
+    /// [`DecodeResult::NeedsData`]: crate::DecodeResult::NeedsData
+    /// [`ParquetPushDecoder`]: crate::arrow::push_decoder::ParquetPushDecoder
+    /// [`ParquetPushDecoder::push_ranges`]: crate::arrow::push_decoder::ParquetPushDecoder::push_ranges
+    /// [`ParquetPushDecoder::upcoming_fetch_plan`]: crate::arrow::push_decoder::ParquetPushDecoder::upcoming_fetch_plan
+    pub async fn fetch_more(
+        &mut self,
+        needs: Vec<Range<u64>>,
+        plan: UpcomingFetchPlan,
+    ) -> Result<(Vec<Range<u64>>, Vec<Bytes>)> {
+        self.want(&needs);
+        std::future::poll_fn(|cx| {
+            loop {
+                if let Err(e) = self.plan_and_issue(&plan) {
+                    return Poll::Ready(Err(e));
+                }
+                let progressed = match self.poll_sources(cx) {
+                    Ok(progressed) => progressed,
+                    Err(e) => return Poll::Ready(Err(e)),
+                };
+                if self.has_ready() {
+                    return Poll::Ready(Ok(self.take_ready()));
+                }
+                if !progressed {
+                    return Poll::Pending;
+                }
+            }
+        })
+        .await
+    }
+
     /// `runtime` is used to spawn body-draining tasks
     pub(crate) fn new(options: BoundedStreamingOptions, runtime: Handle, input: T) -> Self {
         Self {
