@@ -318,8 +318,27 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
 impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
-    #[allow(dead_code)]
-    pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
+    ///
+    /// # Safety
+    ///
+    /// The provided `stream` must be a valid [`FFI_ArrowArrayStream`] per the
+    /// [C Stream Interface]: its callbacks (`get_schema`, `get_next`, `get_last_error`,
+    /// `release`) and `private_data` must be either null/`None` or valid to call for
+    /// the lifetime of the returned reader. Passing a stream with garbage callbacks
+    /// is undefined behavior.
+    ///
+    /// [C Stream Interface]: https://arrow.apache.org/docs/format/CStreamInterface.html
+    ///
+    /// # Example
+    ///
+    /// ```compile_fail
+    /// # use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+    /// # use arrow_array::RecordBatchReader;
+    /// // try_new is unsafe — this must not compile:
+    /// let stream = FFI_ArrowArrayStream::empty();
+    /// let _reader = ArrowArrayStreamReader::try_new(stream);
+    /// ```
+    pub unsafe fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
                 "input stream is already released".to_string(),
@@ -342,7 +361,8 @@ impl ArrowArrayStreamReader {
     ///
     /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
-        Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
+        // SAFETY: caller upholds the same contract as try_new requires
+        unsafe { Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream)) }
     }
 
     /// Get the last error from `ArrowArrayStreamReader`
@@ -488,7 +508,8 @@ mod tests {
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
-        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
+        // SAFETY: stream was constructed via FFI_ArrowArrayStream::new, so callbacks are valid
+        let stream_reader = unsafe { ArrowArrayStreamReader::try_new(stream) }.unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
@@ -550,7 +571,8 @@ mod tests {
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
-        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
+        // SAFETY: stream was constructed via FFI_ArrowArrayStream::new, so callbacks are valid
+        let stream_reader = unsafe { ArrowArrayStreamReader::try_new(stream) }.unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
