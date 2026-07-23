@@ -421,8 +421,23 @@ pub unsafe fn decode_fixed_size_list(
     let mut children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(children.len(), 1);
 
+    // Since `RowConverter` flattens certain data types (i.e. `Dictionary`),
+    // we need to use the child's actual data type rather than the
+    // declared `element_field`'s. Mirrors the `corrected_type` logic in
+    // `decode<L>` above (list.rs:~260) and `Codec::Struct`'s
+    // `corrected_fields` in `lib.rs`. Without this, a target schema of
+    // `FixedSizeList<Dictionary<K, V>>` would fail
+    // `try_new_with_length`'s child-type validation with
+    // `"FixedSizeListArray expected data type Dictionary(...) got <flattened>"`.
+    let corrected_element_field = Arc::new(
+        element_field
+            .as_ref()
+            .clone()
+            .with_data_type(children[0].data_type().clone()),
+    );
+
     FixedSizeListArray::try_new_with_length(
-        Arc::clone(element_field),
+        corrected_element_field,
         *size,
         children.pop().unwrap(),
         nulls,
