@@ -228,8 +228,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Creates new row group from this file writer.
     ///
-    /// Note: Parquet files are limited to at most 2^15 row groups in a file; and row groups must
-    /// be written sequentially.
+    /// Note: Parquet files are limited to at most 2^31 row groups in a file. If encryption is
+    /// enabled, this is reduced to 2^15, and row groups must be written sequentially.
     ///
     /// Every time the next row group is requested, the previous row group must
     /// be finalised and closed using the [`SerializedRowGroupWriter::close`]
@@ -238,13 +238,24 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.assert_previous_writer_closed()?;
         let ordinal = self.row_group_index;
 
-        let ordinal: i16 = ordinal.try_into().map_err(|_| {
+        // Thrift cannot encode lists with more than i32::MAX elements
+        let ordinal: i32 = ordinal.try_into().map_err(|_| {
             ParquetError::General(format!(
                 "Parquet does not support more than {} row groups per file (currently: {})",
-                i16::MAX,
+                i32::MAX,
                 ordinal
             ))
         })?;
+
+        // If encryption is enabled, the max is 32767
+        #[cfg(feature = "encryption")]
+        if self.file_encryptor.is_some() && ordinal > i16::MAX as i32 {
+            return Err(ParquetError::General(format!(
+                "Parquet with encryption does not support more than {} row groups per file (currently: {})",
+                i16::MAX,
+                ordinal
+            )));
+        }
 
         self.row_group_index = self
             .row_group_index
@@ -472,7 +483,7 @@ fn write_bloom_filters<W: Write + Send>(
     // iter each column
     // write bloom filter to the file
 
-    let row_group_idx: u16 = row_group
+    let row_group_idx: u32 = row_group
         .ordinal()
         .expect("Missing row group ordinal")
         .try_into()
@@ -525,7 +536,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndexMetaData>>,
     offset_indexes: Vec<Option<OffsetIndexMetaData>>,
-    row_group_index: i16,
+    row_group_index: i32,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
     #[cfg(feature = "encryption")]
@@ -545,7 +556,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
-        row_group_index: i16,
+        row_group_index: i32,
         on_close: Option<OnCloseRowGroup<'a, W>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
@@ -1799,7 +1810,7 @@ mod tests {
             let last_group = row_group_writer.close().unwrap();
             let flushed = file_writer.flushed_row_groups();
             assert_eq!(flushed.len(), idx + 1);
-            assert_eq!(Some(idx as i16), last_group.ordinal());
+            assert_eq!(Some(idx as i32), last_group.ordinal());
             assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
             assert_eq!(&flushed[idx], last_group.as_ref());
         }
@@ -2278,6 +2289,7 @@ mod tests {
         assert_eq!(page_sizes[0], unenc_size);
     }
 
+    #[cfg(feature = "encryption")]
     #[test]
     fn test_too_many_rowgroups() {
         let message_type = "
@@ -2287,10 +2299,17 @@ mod tests {
         ";
         let schema = Arc::new(parse_message_type(message_type).unwrap());
         let file: File = tempfile::tempfile().unwrap();
+
+        const AES_128_FOOTER_KEY: &[u8; 16] = b"0123456789012345"; // 128bit/16
+        let footer_key = AES_128_FOOTER_KEY;
+        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
         let props = Arc::new(
             WriterProperties::builder()
                 .set_statistics_enabled(EnabledStatistics::None)
                 .set_max_row_group_row_count(Some(1))
+                .with_file_encryption_properties(file_encryption_properties)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
@@ -2308,12 +2327,48 @@ mod tests {
                     assert_eq!(i, 0x8000);
                     assert_eq!(
                         e.to_string(),
-                        "Parquet error: Parquet does not support more than 32767 row groups per file (currently: 32768)"
+                        "Parquet error: Parquet with encryption does not support more than 32767 row groups per file (currently: 32768)"
                     );
                 }
             }
         }
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_32k_rowgroups() {
+        let message_type = "
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .set_max_row_group_row_count(Some(1))
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+
+        // Create 32k + 1 empty rowgroups. No row group ordinals should be written (but we can't
+        // test for that).
+        for _ in 0..0x8001 {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        // Parse the written metadata and check that ordinals were replaced.
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata = reader.metadata();
+
+        for (i, rg) in metadata.row_groups().iter().enumerate() {
+            assert_eq!(i as i32, rg.ordinal().unwrap());
+        }
     }
 
     #[test]
