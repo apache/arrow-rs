@@ -279,6 +279,14 @@ where
         );
         let logical_offset = self.logical_offset + logical_offset;
 
+        if logical_length == 0 {
+            return Self {
+                run_ends: self.run_ends.slice(0, 0),
+                logical_length: 0,
+                logical_offset: 0,
+            };
+        }
+
         // tmp makes it easier to use the get physical index methods here
         let tmp = Self {
             run_ends: self.run_ends.clone(),
@@ -440,10 +448,10 @@ mod tests {
         let buffer = RunEndBuffer::<i32>::new(vec![4, 8, 12].into(), 0, 12);
 
         // zero slice
-        let slice = buffer.slice(0, 0);
+        let slice = buffer.slice(2, 0);
         assert_eq!(slice.len(), 0);
         assert_eq!(slice.offset(), 0);
-        assert_eq!(slice.values(), &[4]);
+        assert!(slice.values().is_empty());
 
         // compact start only
         // [B, B, B, B, B, B, {B, B, C, C, C, C}]

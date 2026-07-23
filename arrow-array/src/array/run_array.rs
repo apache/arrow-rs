@@ -345,10 +345,50 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// - Specified slice (`offset` + `length`) exceeds existing length
     pub fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset.saturating_add(length) <= self.run_ends.len(),
+            "the length + offset of the sliced array cannot exceed the existing length"
+        );
+
+        if length == 0 {
+            return Self {
+                data_type: self.data_type.clone(),
+                run_ends: self.run_ends.slice(0, 0),
+                values: self.values.slice(0, 0),
+            };
+        }
+
+        // Compact the physical run ends & values to only what is strictly
+        // needed.
+
+        // tmp makes it easier to use the get physical index methods here
+        // SAFETY: new offset + slice is within bounds, and existing values are
+        //         valid
+        let tmp = unsafe {
+            RunEndBuffer::new_unchecked(
+                self.run_ends.inner().clone(),
+                self.run_ends.offset() + offset,
+                length,
+            )
+        };
+        let start = tmp.get_start_physical_index();
+        let end = tmp.get_end_physical_index();
+
+        let values = self.values.slice(start, end - start + 1);
+        // SAFETY: existing values are valid, and values referenced by the logical
+        //         offset are preserved
+        let run_ends = unsafe {
+            RunEndBuffer::new_unchecked(
+                tmp.inner().slice(start, end - start + 1),
+                tmp.offset(),
+                tmp.len(),
+            )
+        };
+
         Self {
             data_type: self.data_type.clone(),
-            run_ends: self.run_ends.slice(offset, length),
-            values: self.values.clone(),
+            run_ends,
+            values,
         }
     }
 }
@@ -894,6 +934,7 @@ mod tests {
                 };
             });
     }
+
     #[test]
     fn test_run_array() {
         // Construct a value array
@@ -1220,7 +1261,6 @@ mod tests {
             PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
         builder.extend(input_array.iter().copied());
         let run_array = builder.finish();
-        let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
         // test for all slice lengths.
         for slice_len in 1..=total_len {
@@ -1234,15 +1274,11 @@ mod tests {
             // test for offset = 0 and slice length = slice_len
             // slice the input array using which the run array was built.
             let sliced_input_array = &input_array[0..slice_len];
-
-            // slice the run array
-            let sliced_run_array: RunArray<Int16Type> =
-                run_array.slice(0, slice_len).into_data().into();
-
-            // Get physical indices.
+            let sliced_run_array = run_array.slice(0, slice_len);
             let physical_indices = sliced_run_array
                 .get_physical_indices(&logical_indices)
                 .unwrap();
+            let physical_values_array = sliced_run_array.values().as_primitive::<Int32Type>();
 
             compare_logical_and_physical_indices(
                 &logical_indices,
@@ -1254,17 +1290,11 @@ mod tests {
             // test for offset = total_len - slice_len and slice length = slice_len
             // slice the input array using which the run array was built.
             let sliced_input_array = &input_array[total_len - slice_len..total_len];
-
-            // slice the run array
-            let sliced_run_array: RunArray<Int16Type> = run_array
-                .slice(total_len - slice_len, slice_len)
-                .into_data()
-                .into();
-
-            // Get physical indices
+            let sliced_run_array = run_array.slice(total_len - slice_len, slice_len);
             let physical_indices = sliced_run_array
                 .get_physical_indices(&logical_indices)
                 .unwrap();
+            let physical_values_array = sliced_run_array.values().as_primitive::<Int32Type>();
 
             compare_logical_and_physical_indices(
                 &logical_indices,
@@ -1291,8 +1321,11 @@ mod tests {
         let slices = [(0, 12), (0, 2), (2, 5), (3, 0), (3, 3), (3, 4), (4, 8)];
         for (offset, length) in slices {
             let a = array.slice(offset, length);
-            let n = a.logical_nulls().unwrap();
-            let n = n.into_iter().collect::<Vec<_>>();
+            let n = if let Some(nulls) = a.logical_nulls() {
+                nulls.into_iter().collect::<Vec<_>>()
+            } else {
+                vec![true; length]
+            };
             assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
     }
@@ -1364,33 +1397,32 @@ mod tests {
 
     #[test]
     fn test_run_array_values_slice() {
-        // 0, 0, 1, 1, 1, 2...2 (15 2s)
-        let run_ends: PrimitiveArray<Int32Type> = vec![2, 5, 20].into();
+        // 0, 0, 1, 1, 1, 2
+        let run_ends: PrimitiveArray<Int32Type> = vec![2, 5, 6].into();
         let values: PrimitiveArray<Int32Type> = vec![0, 1, 2].into();
         let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
-        let slice = array.slice(1, 4); // 0 | 1, 1, 1 |
+        let slice = array.slice(1, 4); // 0, 1, 1, 1 |
         // logical indices: 1, 2, 3, 4
         // physical indices: 0, 1, 1, 1
-        // values at 0 is 0
-        // values at 1 is 1
-        // values slice should be [0, 1]
         assert_eq!(slice.get_start_physical_index(), 0);
         assert_eq!(slice.get_end_physical_index(), 1);
 
-        let values_slice = slice.values_slice();
-        let values_slice = values_slice.as_primitive::<Int32Type>();
-        assert_eq!(values_slice.values(), &[0, 1]);
+        assert_eq!(slice.run_ends.len(), 4);
+        assert_eq!(slice.run_ends.offset(), 1);
+        assert_eq!(slice.run_ends.values(), &[2, 5]);
+        assert_eq!(slice.values().as_ref(), &Int32Array::from(vec![0, 1]));
 
         let slice2 = array.slice(2, 3); // 1, 1, 1
         // logical indices: 2, 3, 4
-        // physical indices: 1, 1, 1
-        assert_eq!(slice2.get_start_physical_index(), 1);
-        assert_eq!(slice2.get_end_physical_index(), 1);
+        // physical indices: 0, 0, 0
+        assert_eq!(slice2.get_start_physical_index(), 0);
+        assert_eq!(slice2.get_end_physical_index(), 0);
 
-        let values_slice2 = slice2.values_slice();
-        let values_slice2 = values_slice2.as_primitive::<Int32Type>();
-        assert_eq!(values_slice2.values(), &[1]);
+        assert_eq!(slice2.run_ends.len(), 3);
+        assert_eq!(slice2.run_ends.offset(), 2);
+        assert_eq!(slice2.run_ends.values(), &[5]);
+        assert_eq!(slice2.values().as_ref(), &Int32Array::from(vec![1]));
     }
 
     #[test]
