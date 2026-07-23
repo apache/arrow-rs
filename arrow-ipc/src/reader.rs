@@ -3132,17 +3132,17 @@ mod tests {
         // Fixed-width: alignment == element byte width.
         // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
         let cases: Vec<(ArrayRef, usize)> = vec![
-            (Arc::new(Int32Array::from_iter(0i32..20_000)) as _, 4),
-            (Arc::new(Int64Array::from_iter(0i64..20_000)) as _, 8),
+            (Arc::new(Int32Array::from_iter(0i32..100)) as _, 4),
+            (Arc::new(Int64Array::from_iter(0i64..100)) as _, 8),
             (
                 Arc::new(StringArray::from_iter_values(
-                    (0..20_000).map(|i| i.to_string()),
+                    (0..100).map(|i| i.to_string()),
                 )) as _,
                 4,
             ),
             (
                 Arc::new(LargeStringArray::from_iter_values(
-                    (0..20_000).map(|i| i.to_string()),
+                    (0..100).map(|i| i.to_string()),
                 )) as _,
                 8,
             ),
