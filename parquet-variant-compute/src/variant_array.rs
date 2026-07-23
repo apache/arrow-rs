@@ -317,24 +317,25 @@ impl VariantArray {
         };
         validate_binary_array(metadata_col.as_ref(), "metadata")?;
 
+        let shredding_state = ShreddingState::try_from(inner)?;
+
+        // `try_from` synthesizes an all-null `value` when the input omits it. Rebuild the inner
+        // struct so `inner()` and write-back carry the column too.
+        if inner.column_by_name("value").is_none() {
+            return Ok(Self::from_parts(
+                metadata_col.clone(),
+                shredding_state.value_column().clone(),
+                shredding_state.typed_value_column().cloned(),
+                inner.nulls().cloned(),
+            ));
+        }
+
         // Note these clones are cheap, they just bump the ref count
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata_col.clone(),
-            shredding_state: ShreddingState::try_from(inner)?,
+            shredding_state,
         })
-    }
-
-    /// Construct a perfectly shredded `VariantArray`: every value is in
-    /// `typed_value` and the required `value` column is all-null.
-    #[cfg(test)]
-    pub(crate) fn perfectly_shredded(
-        metadata: ArrayRef,
-        typed_value: ArrayRef,
-        nulls: Option<NullBuffer>,
-    ) -> Self {
-        let value = all_null_value_column(typed_value.len());
-        Self::from_parts(metadata, value, Some(typed_value), nulls)
     }
 
     /// Note: annotates `value` as nullable, which the spec only permits for shredded
@@ -447,7 +448,11 @@ impl VariantArray {
         match self.typed_value_column() {
             // Always prefer typed_value, if available
             Some(typed_value) if typed_value.is_valid(index) => {
-                typed_value_to_variant(typed_value, value, index)
+                if !matches!(typed_value.data_type(), DataType::Struct(_)) && value.is_valid(index) {
+                    // Only a partially shredded struct is allowed to have values for both columns
+                    panic!("Invalid variant, conflicting value and typed_value");
+                }
+                typed_value_to_variant(typed_value, index)
             }
             // Otherwise fall back to value, if available
             _ if value.is_valid(index) => variant_from_arrays_at(&self.metadata, value, index)
@@ -720,10 +725,22 @@ impl ShreddedVariantFieldArray {
             ));
         };
 
+        let shredding_state = ShreddingState::try_from(inner_struct)?;
+
+        // `try_from` synthesizes an all-null `value` when the input omits it. Rebuild the inner
+        // struct so `inner()` and write-back carry the column too (see `VariantArray::try_new`).
+        if inner_struct.column_by_name("value").is_none() {
+            return Ok(Self::from_parts(
+                shredding_state.value_column().clone(),
+                shredding_state.typed_value_column().cloned(),
+                inner_struct.nulls().cloned(),
+            ));
+        }
+
         // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::try_from(inner_struct)?,
+            shredding_state,
         })
     }
 
@@ -745,14 +762,6 @@ impl ShreddedVariantFieldArray {
     /// Returns a reference to the underlying [`StructArray`].
     pub fn inner(&self) -> &StructArray {
         &self.inner
-    }
-
-    /// Construct a perfectly shredded field: every value is in `typed_value`
-    /// and the required `value` column is all-null.
-    #[cfg(test)]
-    pub(crate) fn perfectly_shredded(typed_value: ArrayRef) -> Self {
-        let value = all_null_value_column(typed_value.len());
-        Self::from_parts(value, Some(typed_value), None)
     }
 
     pub(crate) fn from_parts(
@@ -908,14 +917,22 @@ impl TryFrom<&StructArray> for ShreddingState {
     type Error = ArrowError;
 
     fn try_from(inner_struct: &StructArray) -> Result<Self> {
-        let Some(value) = inner_struct.column_by_name("value") else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
-            ));
-        };
-        validate_binary_array(value.as_ref(), "value")?;
         let typed_value = inner_struct.column_by_name("typed_value").cloned();
-        Ok(ShreddingState::new(value.clone(), typed_value))
+        let value = match inner_struct.column_by_name("value") {
+            Some(value) => {
+                validate_binary_array(value.as_ref(), "value")?;
+                value.clone()
+            }
+            // Lenient read: a shredded group may omit the spec-required `value`. Synthesize an
+            // all-null one so the model always has a `value`.
+            None if typed_value.is_some() => all_null_value_column(inner_struct.len()),
+            None => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
+                ));
+            }
+        };
+        Ok(ShreddingState::new(value, typed_value))
     }
 }
 
@@ -982,16 +999,8 @@ impl StructArrayBuilder {
 }
 
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant<'a>(
-    typed_value: &'a ArrayRef,
-    value: &'a ArrayRef,
-    index: usize,
-) -> Result<Variant<'a, 'a>> {
+fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Variant<'_, '_>> {
     let data_type = typed_value.data_type();
-    if !matches!(data_type, DataType::Struct(_)) && value.is_valid(index) {
-        // Only a partially shredded struct is allowed to have values for both columns
-        panic!("Invalid variant, conflicting value and typed_value");
-    }
     match data_type {
         DataType::Null => Ok(Variant::Null),
         DataType::Boolean => {
@@ -1295,6 +1304,28 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
     Ok(Cow::Owned(Arc::new(new_field)))
 }
 
+/// Test-only constructors for perfectly shredded arrays, where every value lives in
+/// `typed_value` and the required `value` column is all-null.
+#[cfg(test)]
+impl VariantArray {
+    pub(crate) fn perfectly_shredded(
+        metadata: ArrayRef,
+        typed_value: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let value = all_null_value_column(typed_value.len());
+        Self::from_parts(metadata, value, Some(typed_value), nulls)
+    }
+}
+
+#[cfg(test)]
+impl ShreddedVariantFieldArray {
+    pub(crate) fn perfectly_shredded(typed_value: ArrayRef) -> Self {
+        let value = all_null_value_column(typed_value.len());
+        Self::from_parts(value, Some(typed_value), None)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::VariantArrayBuilder;
@@ -1334,11 +1365,32 @@ mod test {
     }
 
     #[test]
-    fn invalid_missing_value() {
+    fn read_missing_value_column() {
+        // With `typed_value` present, a missing `value` is read leniently: an all-null `value` is
+        // synthesized and normalized into the inner struct (so a write-back emits it), and values
+        // still decode from `typed_value`.
+        let typed_value = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), false)
+            .with_field("typed_value", typed_value, true)
+            .build();
+        assert!(struct_array.column_by_name("value").is_none());
+
+        let variant_array = VariantArray::try_new(&struct_array).unwrap();
+        assert_eq!(variant_array.value_column().len(), 3);
+        assert_eq!(variant_array.value_column().null_count(), 3);
+        assert!(variant_array.inner().column_by_name("value").is_some());
+        assert!(variant_array.typed_value_column().is_some());
+        assert_eq!(variant_array.value(0), Variant::from(1i64));
+        assert_eq!(variant_array.value(1), Variant::Null);
+        assert_eq!(variant_array.value(2), Variant::from(3i64));
+
+        // With no `typed_value` either, there is nothing to read, so `value` stays required.
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
-        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // The spec requires the `value` field to always be present in the schema
-        let err = VariantArray::try_new(&array);
+        let metadata_only = StructArray::new(fields, vec![make_binary_view_array()], None);
+        let err = VariantArray::try_new(&metadata_only);
         assert_eq!(
             err.unwrap_err().to_string(),
             "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"

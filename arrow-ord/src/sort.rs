@@ -55,6 +55,9 @@ pub use arrow_schema::SortOptions;
 /// assert_eq!(sorted_array.as_ref(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
 /// ```
 pub fn sort(values: &dyn Array, options: Option<SortOptions>) -> Result<ArrayRef, ArrowError> {
+    if values.is_empty() {
+        return Ok(new_empty_array(values.data_type()));
+    }
     downcast_primitive_array!(
         values => sort_native_type(values, options),
         DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
@@ -158,6 +161,9 @@ pub fn sort_limit(
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<ArrayRef, ArrowError> {
+    if values.is_empty() || limit == Some(0) {
+        return Ok(new_empty_array(values.data_type()));
+    }
     if let DataType::RunEndEncoded(_, _) = values.data_type() {
         return sort_run(values, options, limit);
     }
@@ -273,6 +279,10 @@ pub fn sort_to_indices(
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<UInt32Array, ArrowError> {
+    if array.is_empty() || limit == Some(0) {
+        return Ok(UInt32Array::from(Vec::<u32>::new()));
+    }
+
     let options = options.unwrap_or_default();
 
     let (v, n) = partition_validity(array);
@@ -5406,5 +5416,26 @@ mod tests {
 
         assert_eq!(sorted_strings, expected);
         assert_eq!(sorted_strings.len(), limit);
+    }
+
+    #[test]
+    fn test_empty_run() {
+        let run = RunArray::try_new(
+            &Int16Array::from(vec![1, 2, 3]),
+            &Int32Array::from(vec![1, 5, 2]),
+        )
+        .unwrap();
+
+        let sorted = sort(&run.slice(1, 0), None).unwrap();
+        assert!(sorted.is_empty());
+        // ensure output run array upholds safety invariants
+        sorted.into_data().validate_full().unwrap();
+
+        let sorted = sort_limit(&run, None, Some(0)).unwrap();
+        assert!(sorted.is_empty());
+        sorted.into_data().validate_full().unwrap();
+
+        let indices = sort_to_indices(&run, None, Some(0)).unwrap();
+        assert!(indices.is_empty());
     }
 }
