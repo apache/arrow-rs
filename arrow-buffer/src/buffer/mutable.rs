@@ -35,6 +35,7 @@ use super::Buffer;
 
 /// Error returned by fallible [`MutableBuffer`] operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MutableBufferError {
     /// Arithmetic overflow when computing the required buffer length or capacity.
     LengthOverflow,
