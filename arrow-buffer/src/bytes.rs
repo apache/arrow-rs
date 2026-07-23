@@ -25,11 +25,8 @@ use std::{fmt::Debug, fmt::Formatter};
 
 use crate::alloc::Deallocation;
 use crate::buffer::dangling_ptr;
-
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
-#[cfg(feature = "pool")]
-use std::sync::Mutex;
+use crate::{MemoryPool, TrackedReservation};
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
@@ -57,7 +54,7 @@ pub(crate) struct Bytes {
 
     /// Memory reservation for tracking memory usage
     #[cfg(feature = "pool")]
-    pub(super) reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
+    pub(super) reservation: TrackedReservation,
 }
 
 impl Bytes {
@@ -80,7 +77,7 @@ impl Bytes {
             len,
             deallocation,
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 
@@ -110,7 +107,7 @@ impl Bytes {
     /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior reservation.
     #[cfg(feature = "pool")]
     pub(crate) fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        self.reservation.claim(pool, self.capacity());
     }
 
     /// Resize the memory reservation of this buffer
@@ -118,14 +115,7 @@ impl Bytes {
     /// This is a no-op if this buffer doesn't have a reservation.
     #[cfg(feature = "pool")]
     fn resize_reservation(&self, new_size: usize) {
-        let mut guard = self.reservation.lock().unwrap();
-        if let Some(mut reservation) = guard.take() {
-            // Resize the reservation
-            reservation.resize(new_size);
-
-            // Put it back
-            *guard = Some(reservation);
-        }
+        self.reservation.resize(new_size);
     }
 
     /// Try to reallocate the underlying memory region to a new size (smaller or larger).
@@ -234,7 +224,7 @@ impl From<bytes::Bytes> for Bytes {
             ptr: NonNull::new(value.as_ptr() as _).unwrap(),
             deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 }

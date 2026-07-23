@@ -27,9 +27,7 @@ use crate::{
 };
 
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
-#[cfg(feature = "pool")]
-use std::sync::Mutex;
+use crate::pool::{MemoryPool, TrackedReservation};
 
 use super::Buffer;
 
@@ -105,7 +103,7 @@ pub struct MutableBuffer {
 
     /// Memory reservation for tracking memory usage
     #[cfg(feature = "pool")]
-    reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
+    reservation: TrackedReservation,
 }
 
 impl MutableBuffer {
@@ -145,7 +143,7 @@ impl MutableBuffer {
             len: 0,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 
@@ -179,7 +177,7 @@ impl MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 
@@ -193,7 +191,8 @@ impl MutableBuffer {
         let len = bytes.len();
         let data = bytes.ptr();
         #[cfg(feature = "pool")]
-        let reservation = bytes.reservation.lock().unwrap().take();
+        let reservation = bytes.reservation.take();
+
         mem::forget(bytes);
 
         Ok(Self {
@@ -201,7 +200,7 @@ impl MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(reservation),
+            reservation,
         })
     }
 
@@ -392,11 +391,7 @@ impl MutableBuffer {
         self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
         self.layout = new_layout;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.layout.size());
-            }
-        }
+        self.reservation.resize(self.layout.size());
     }
 
     /// Truncates this buffer to `len` bytes
@@ -409,11 +404,7 @@ impl MutableBuffer {
         }
         self.len = len;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
     }
 
     /// Resizes the buffer, either truncating its contents (with no change in capacity), or
@@ -442,12 +433,9 @@ impl MutableBuffer {
         }
         // this truncates the buffer when new_len < self.len
         self.len = new_len;
+
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
     }
 
     /// Shrinks the capacity of the buffer as much as possible.
@@ -502,11 +490,7 @@ impl MutableBuffer {
     pub fn clear(&mut self) {
         self.len = 0;
         #[cfg(feature = "pool")]
-        {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.len);
-            }
-        }
+        self.reservation.resize(self.len);
     }
 
     /// Returns the data stored in this buffer as a slice.
@@ -537,10 +521,7 @@ impl MutableBuffer {
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         #[cfg(feature = "pool")]
-        {
-            let reservation = self.reservation.lock().unwrap().take();
-            *bytes.reservation.lock().unwrap() = reservation;
-        }
+        bytes.reservation.replace(self.reservation.take());
         std::mem::forget(self);
         Buffer::from(bytes)
     }
@@ -845,7 +826,7 @@ impl MutableBuffer {
     /// multiple arrays.
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        self.reservation.claim(pool, self.capacity());
     }
 }
 
@@ -892,7 +873,7 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
             len,
             layout,
             #[cfg(feature = "pool")]
-            reservation: std::sync::Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 }
