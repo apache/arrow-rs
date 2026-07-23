@@ -84,6 +84,7 @@ impl std::fmt::Debug for IpcWriteContext {
 }
 
 /// Deprecated alias for [`IpcWriteContext`].
+#[expect(dead_code)]
 #[deprecated(since = "59.1.0", note = "Use IpcWriteContext instead")]
 pub type CompressionContext = IpcWriteContext;
 
