@@ -25,9 +25,10 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantMetadata, VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
+use crate::variant_array::binary_array_value;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::{VariantArray, VariantType, unshred_variant};
 
@@ -241,6 +242,7 @@ fn shredded_get_path(
             } else {
                 as_field.map(|f| f.data_type())
             };
+            let has_path = !path.is_empty();
             let mut builder = make_variant_to_arrow_row_builder(
                 target.metadata_column(),
                 path,
@@ -248,20 +250,64 @@ fn shredded_get_path(
                 cast_options,
                 target.len(),
             )?;
-            for i in 0..target.len() {
-                if target.is_null(i) {
-                    builder.append_null()?;
-                } else if !cast_options.safe {
-                    let value = target.try_value(i)?;
-                    builder.append_value(value)?;
-                } else {
-                    let _ = match target.try_value(i) {
-                        Ok(v) => builder.append_value(v)?,
-                        Err(_) => {
-                            builder.append_null()?;
-                            false // add this to make match arms have the same return type
+
+            if has_path
+                && target.typed_value_column().is_none()
+                && let Some(value_column) = target.value_column()
+            {
+                let metadata_column = target.metadata_column();
+                let mut cached_metadata = None::<((*const u8, usize), VariantMetadata<'_>)>;
+
+                for i in 0..target.len() {
+                    if target.is_null(i) || value_column.is_null(i) {
+                        builder.append_null()?;
+                        continue;
+                    }
+
+                    let metadata_bytes = binary_array_value(metadata_column.as_ref(), i)
+                        .ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "variant metadata must be binary-like, got {}",
+                                metadata_column.data_type()
+                            ))
+                        })?;
+                    let metadata_identity = (metadata_bytes.as_ptr(), metadata_bytes.len());
+                    let metadata = match cached_metadata.as_ref() {
+                        Some((identity, metadata)) if *identity == metadata_identity => {
+                            metadata.clone()
+                        }
+                        _ => {
+                            let metadata = VariantMetadata::try_new(metadata_bytes)?;
+                            cached_metadata = Some((metadata_identity, metadata.clone()));
+                            metadata
                         }
                     };
+                    let value_bytes =
+                        binary_array_value(value_column.as_ref(), i).ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "variant value must be binary-like, got {}",
+                                value_column.data_type()
+                            ))
+                        })?;
+                    let value = Variant::new_with_metadata(metadata, value_bytes);
+                    builder.append_value(value)?;
+                }
+            } else {
+                for i in 0..target.len() {
+                    if target.is_null(i) {
+                        builder.append_null()?;
+                    } else if !cast_options.safe {
+                        let value = target.try_value(i)?;
+                        builder.append_value(value)?;
+                    } else {
+                        let _ = match target.try_value(i) {
+                            Ok(v) => builder.append_value(v)?,
+                            Err(_) => {
+                                builder.append_null()?;
+                                false // add this to make match arms have the same return type
+                            }
+                        };
+                    }
                 }
             }
             builder.finish()
@@ -508,8 +554,8 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
-        VariantDecimalType, VariantPath,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16, VariantDecimalType, VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
@@ -564,6 +610,58 @@ mod test {
                 .unwrap()
                 .join("inner_field"),
             "1234",
+        );
+    }
+
+    #[test]
+    fn get_path_resolves_field_ids_for_each_metadata_dictionary() {
+        fn object_bytes(field_names: &[&str], fields: &[(&str, i32)]) -> (Vec<u8>, Vec<u8>) {
+            let mut builder = VariantBuilder::new().with_field_names(field_names.iter().copied());
+            let mut object = builder.new_object();
+            for (name, value) in fields {
+                object.insert(name, *value);
+            }
+            object.finish();
+            builder.finish()
+        }
+
+        // `target` has a different numeric field id in each metadata dictionary.
+        let (metadata_without_target, value_without_target) =
+            object_bytes(&["other"], &[("other", 5)]);
+        let (metadata_0, value_0) = object_bytes(&["target", "other"], &[("target", 10)]);
+        let (metadata_1, value_1) = object_bytes(&["other", "target"], &[("target", 20)]);
+        let (_, value_missing) = object_bytes(&["other", "target"], &[("other", 30)]);
+
+        let metadata: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(metadata_without_target.as_slice()),
+            Some(metadata_0.as_slice()),
+            Some(metadata_1.as_slice()),
+            Some(metadata_1.as_slice()),
+            Some(metadata_0.as_slice()),
+        ]));
+        let value: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(value_without_target.as_slice()),
+            Some(value_0.as_slice()),
+            Some(value_1.as_slice()),
+            Some(value_missing.as_slice()),
+            Some(value_0.as_slice()),
+        ]));
+        let input: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]),
+            vec![metadata, value],
+            Some(NullBuffer::from(vec![true, true, true, true, false])),
+        ));
+        let options = GetOptions::new_with_path(VariantPath::try_from("target").unwrap())
+            .with_as_type(Some(Arc::new(Field::new("target", DataType::Int32, true))));
+
+        let result = variant_get(&input, options).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(
+            result,
+            &Int32Array::from(vec![None, Some(10), Some(20), None, None])
         );
     }
 

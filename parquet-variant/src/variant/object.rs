@@ -359,10 +359,24 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
+        let field_id = self.try_field_id(i)?;
+        self.metadata.get(field_id as _)
+    }
+
+    /// Attempts to retrieve the ith field id from the field id region of the byte buffer.
+    fn try_field_id(&self, i: usize) -> Result<u32, ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
-        self.metadata.get(field_id as _)
+        self.header.field_id_size.unpack_u32(field_id_bytes, i)
+    }
+
+    /// Returns the ith field id, or `None` if `i` is out of bounds.
+    fn field_id(&self, i: usize) -> Option<u32> {
+        if i >= self.len() {
+            return None;
+        }
+
+        self.try_field_id(i).ok()
     }
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
@@ -403,6 +417,26 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // and probing the dictionary for a field id is always O(1) work.
         let cmp = |i| Some(self.field_name(i)?.cmp(name));
         let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
+        self.field(i)
+    }
+
+    /// Returns the value of the field with the specified field id, if any.
+    ///
+    /// `field_id` must be resolved from this object's metadata dictionary, for example with
+    /// [`VariantMetadata::get_entry`]. A field id from a different metadata dictionary may refer
+    /// to a different field name.
+    ///
+    /// The search cost is logarithmic when the metadata dictionary is sorted and linear otherwise.
+    pub fn get_by_field_id(&self, field_id: u32) -> Option<Variant<'m, 'v>> {
+        let i = if self.metadata.is_sorted() {
+            // Object fields are ordered lexically by name. For a sorted metadata dictionary,
+            // lexical name order is the same as numeric field id order.
+            let cmp = |i| Some(self.field_id(i)?.cmp(&field_id));
+            try_binary_search_range_by(0..self.len(), cmp)?.ok()?
+        } else {
+            (0..self.len()).find(|i| self.field_id(*i) == Some(field_id))?
+        };
+
         self.field(i)
     }
 }
@@ -505,6 +539,18 @@ mod tests {
         assert!(name_field.is_some());
         assert_eq!(name_field.unwrap().as_string(), Some("hello"));
 
+        // Test field access by id with a sorted metadata dictionary
+        assert_eq!(
+            variant_obj.get_by_field_id(0).unwrap().as_boolean(),
+            Some(true)
+        );
+        assert_eq!(variant_obj.get_by_field_id(1).unwrap().as_int8(), Some(42));
+        assert_eq!(
+            variant_obj.get_by_field_id(2).unwrap().as_string(),
+            Some("hello")
+        );
+        assert!(variant_obj.get_by_field_id(3).is_none());
+
         // Test non-existent field
         let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
@@ -558,6 +604,44 @@ mod tests {
         let variant_obj = variant.as_object().unwrap();
         assert_eq!(variant_obj.len(), 1);
         assert_eq!(variant_obj.get(""), Some(Variant::from(42)));
+    }
+
+    #[test]
+    fn test_variant_object_get_by_field_id_unsorted_metadata() {
+        let mut builder =
+            VariantBuilder::new().with_field_names(["name", "missing", "age", "active"]);
+        let mut object = builder.new_object();
+        object.insert("active", true);
+        object.insert("age", 42_i8);
+        object.insert("name", "hello");
+        object.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::new(&metadata, &value);
+        assert!(!variant.metadata().is_sorted());
+
+        let active_id = variant.metadata().get_entry("active").unwrap().0;
+        let age_id = variant.metadata().get_entry("age").unwrap().0;
+        let name_id = variant.metadata().get_entry("name").unwrap().0;
+        let missing_id = variant.metadata().get_entry("missing").unwrap().0;
+
+        assert_eq!(
+            variant
+                .get_object_field_by_id(active_id)
+                .unwrap()
+                .as_boolean(),
+            Some(true)
+        );
+        assert_eq!(
+            variant.get_object_field_by_id(age_id).unwrap().as_int8(),
+            Some(42)
+        );
+        assert_eq!(
+            variant.get_object_field_by_id(name_id).unwrap().as_string(),
+            Some("hello")
+        );
+        assert_eq!(variant.get_object_field_by_id(missing_id), None);
+        assert_eq!(variant.get_object_field_by_id(u32::MAX), None);
     }
 
     #[test]
