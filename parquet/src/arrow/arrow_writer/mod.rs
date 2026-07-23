@@ -1640,6 +1640,11 @@ fn write_leaf(
                     let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
                 }
+                ArrowDataType::UInt32 => {
+                    let array: arrow_array::Int64Array =
+                        column.as_primitive::<UInt32Type>().unary(i64::from);
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::UInt64 => {
                     let values = column.as_primitive::<UInt64Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map

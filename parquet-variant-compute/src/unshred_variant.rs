@@ -28,7 +28,8 @@ use arrow::array::{
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
+    Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType, UInt8Type,
+    UInt16Type, UInt32Type,
 };
 use arrow::error::{ArrowError, Result};
 use arrow::temporal_conversions::time64us_to_time;
@@ -101,6 +102,9 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveInt16(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int16Type>>),
     PrimitiveInt32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int32Type>>),
     PrimitiveInt64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int64Type>>),
+    PrimitiveUInt8(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<UInt8Type>>),
+    PrimitiveUInt16(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<UInt16Type>>),
+    PrimitiveUInt32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<UInt32Type>>),
     PrimitiveFloat32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float32Type>>),
     PrimitiveFloat64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float64Type>>),
     Decimal32(DecimalUnshredRowBuilder<'a, Decimal32Type, VariantDecimal4>),
@@ -146,6 +150,9 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveInt16(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveInt32(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveInt64(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveUInt8(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveUInt16(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveUInt32(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveFloat32(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveFloat64(b) => b.append_row(builder, metadata, index),
             Self::Decimal32(b) => b.append_row(builder, metadata, index),
@@ -204,6 +211,9 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Int16 => primitive_builder!(PrimitiveInt16, as_primitive),
             DataType::Int32 => primitive_builder!(PrimitiveInt32, as_primitive),
             DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
+            DataType::UInt8 => primitive_builder!(PrimitiveUInt8, as_primitive),
+            DataType::UInt16 => primitive_builder!(PrimitiveUInt16, as_primitive),
+            DataType::UInt32 => primitive_builder!(PrimitiveUInt32, as_primitive),
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
             DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
@@ -443,6 +453,9 @@ impl_append_to_variant_builder!(PrimitiveArray<Int8Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Int16Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Int32Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Int64Type>);
+impl_append_to_variant_builder!(PrimitiveArray<UInt8Type>, |value| i16::from(value));
+impl_append_to_variant_builder!(PrimitiveArray<UInt16Type>, |value| i32::from(value));
+impl_append_to_variant_builder!(PrimitiveArray<UInt32Type>, |value| i64::from(value));
 impl_append_to_variant_builder!(PrimitiveArray<Float32Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Float64Type>);
 
