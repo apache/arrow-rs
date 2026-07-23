@@ -6169,22 +6169,7 @@ mod tests {
         assert_eq!(&list, &back[0]);
     }
 
-    /// Regression test: `FixedSizeList<Dictionary<K, V>>` used to fail
-    /// `RowConverter::convert_rows` with a schema-mismatch
-    /// (`"FixedSizeListArray expected data type Dictionary(...) got
-    /// <flattened>"`), because `decode_fixed_size_list` reused the
-    /// declared `element_field` while its children came back
-    /// flattened. The other list-like decoders (`List`, `LargeList`,
-    /// `ListView`, `LargeListView`, `Map`) already applied the
-    /// `corrected_type` step — this test pins that `FixedSizeList`
-    /// now behaves the same way.
-    ///
-    /// The round-trip lands the children back as their flattened
-    /// (non-`Dictionary`) type — consistent with how the other
-    /// list-like decoders and `Codec::Struct` also flatten `Dictionary`
-    /// children on decode. Callers that need the declared dictionary
-    /// type back can re-encode after `convert_rows` (that's the
-    /// documented contract; see the module docs).
+    /// Ensure dictionaries nested within FixedSizeLists are not flattened
     #[test]
     fn test_fixed_size_list_of_dictionaries_round_trips() {
         // Build one row = ["a", "b"] as
