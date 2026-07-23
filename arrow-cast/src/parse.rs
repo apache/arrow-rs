@@ -445,6 +445,9 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
+        if let Some(raw_float) = lexical_core::parse(string.as_bytes()).ok() {
+            return Some(f16::from_f32(raw_float));
+        }
         let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes())
             .ok()
@@ -454,6 +457,9 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
+        if let Some(raw_float) = lexical_core::parse(string.as_bytes()).ok() {
+            return Some(raw_float);
+        }
         let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
@@ -484,13 +490,24 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                let string_bytes = trim_pre_and_post_whitespace(string).as_bytes();
-                if !string_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
-                    return None;
+                // let string_bytes = trim_pre_and_post_whitespace(string).as_bytes();
+                let mut raw_bytes = string.as_bytes();
+                if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                    raw_bytes = raw_bytes.trim_ascii_end();
+                    if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                        return None;
+                    }
                 }
-                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(string_bytes) {
-                    (Some(n), x) if x == string.len() => Some(n),
-                    _ => None,
+                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(raw_bytes) {
+                    (Some(n), x) if x == raw_bytes.len() => Some(n),
+                    _ => {
+                        let trimmed = raw_bytes.trim_ascii_start();
+                        match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(trimmed)
+                        {
+                            (Some(n), x) if x == trimmed.len() => Some(n),
+                            _ => None,
+                        }
+                    }
                 }
             }
         }
