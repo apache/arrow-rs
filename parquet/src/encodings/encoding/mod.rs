@@ -670,7 +670,7 @@ pub struct DeltaByteArrayEncoder<T: DataType> {
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,
     prefix_lengths: Vec<i32>,
     suffixes: Vec<ByteArray>,
-    previous: ByteArray,
+    previous: Vec<u8>,
     _phantom: PhantomData<T>,
 }
 
@@ -688,7 +688,7 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
             suffix_writer: DeltaLengthByteArrayEncoder::new(),
             prefix_lengths: Vec::new(),
             suffixes: Vec::new(),
-            previous: Bytes::new().into(),
+            previous: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -707,10 +707,10 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             ),
         });
 
-        let mut previous_array = &self.previous;
+        let mut previous = self.previous.as_slice();
+        let mut previous_array = &ByteArray::from(Bytes::new());
         for current_array in values {
             let current = current_array.data();
-            let previous = previous_array.data();
             // Maximum prefix length that is shared between previous value and current value
             let prefix_len = cmp::min(previous.len(), current.len());
             let mut match_len = 0;
@@ -721,9 +721,11 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             self.suffixes
                 .push(current_array.slice(match_len, current.len() - match_len));
             // Update previous for the next prefix
+            previous = current;
             previous_array = current_array;
         }
-        self.previous = previous_array.clone();
+        self.previous.clear();
+        self.previous.extend_from_slice(previous_array.data());
 
         self.prefix_len_encoder.put(&self.prefix_lengths)?;
         self.suffix_writer.put(&self.suffixes)?;
@@ -751,7 +753,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
                 // ... followed by suffixes
                 self.suffix_writer.flush_to(out)?;
 
-                self.previous = Bytes::new().into();
+                self.previous.clear();
                 Ok(())
             }
             _ => panic!(
