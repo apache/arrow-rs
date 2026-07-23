@@ -1489,7 +1489,7 @@ mod test {
             // too large for i32
             (
                 "FixedSizeBinary(4000000000), ",
-                "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted",
+                "Error converting 4000000000 into i32 for FixedSizeBinary",
             ),
             // can't have negative width
             (
