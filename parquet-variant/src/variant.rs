@@ -562,10 +562,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// .and_hms_nano_opt(12, 34, 56, 123456000)
     /// .unwrap()
     /// .and_utc();
-    /// // construct the variant directly, because variant::from will treat this into a timestamp variant
+    /// // construct the variant directly, because variant::from will treat this into a timestamp micro variant
     /// let v2 = Variant::TimestampNanos(datetime_nanos);
     /// assert_eq!(v2.as_timestamp_micros(), Some(datetime_nanos));
-    /// // but not for other variants.
+    ///
+    /// // but not for a non-microsecond-aligned nanosecond variant
     /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
     ///     .unwrap()
     ///     .and_hms_nano_opt(12, 33, 54, 123456789)
@@ -573,6 +574,10 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///     .and_utc();
     /// let v3 = Variant::from(datetime_nanos);
     /// assert_eq!(v3.as_timestamp_micros(), None);
+    ///
+    /// // or from other variant
+    /// let v4 = Variant::from("hello");
+    /// assert_eq!(v4.as_timestamp_micros(), None);
     /// ```
     pub fn as_timestamp_micros(&self) -> Option<DateTime<Utc>> {
         match *self {
@@ -610,13 +615,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::TimestampNtzNanos(datetime_nanos);
     /// assert_eq!(v2.as_timestamp_ntz_micros(), Some(datetime_nanos));
     ///
-    /// // but not for other variants.
+    /// // but not for a non-microsecond-aligned nanosecond variant.
     /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
     ///     .unwrap()
     ///     .and_hms_nano_opt(12, 33, 54, 123456789)
     ///     .unwrap();
     /// let v3 = Variant::from(datetime_nanos);
-    /// assert_eq!(v3.as_timestamp_micros(), None);
+    /// assert_eq!(v3.as_timestamp_ntz_micros(), None);
+    ///
+    /// // or other variant
+    /// let v4 = Variant::from("hello");
+    /// assert_eq!(v4.as_timestamp_ntz_micros(), None);
     /// ```
     pub fn as_timestamp_ntz_micros(&self) -> Option<NaiveDateTime> {
         match *self {
@@ -785,11 +794,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to an `i8` for int variants if possible.
+    /// Converts this variant to an `i8` if possible.
     ///
-    /// Returns `Some(i8)` for int variant, decimal variant(scale=0) that fit in `i8` range,
-    /// `None` for other variants or values that would overflow.
-    ///
+    /// Returns `Some(i8)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    ///  that fits in `i8` range, `None` for other variants or values that would overflow.
     /// # Examples
     ///
     /// ```
@@ -799,7 +807,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(123i64);
     /// assert_eq!(v1.as_int8(), Some(123i8));
     ///
-    /// // or from a decimal variant that fit in i8 range
+    /// // or from a decimal variant with scale = 0 that fits in i8 range
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int8(), Some(123i8));
@@ -810,7 +818,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v3.as_int8(), Some(1i8));
     ///
     /// // but not if it would overflow
-    /// let v4 = Variant::from(1234i64);
+    /// let d = VariantDecimal4::try_new(1234i32, 0).unwrap();
+    /// let v4 = Variant::from(d);
     /// assert_eq!(v4.as_int8(), None);
     ///
     /// // or if the variant cannot be cast into an integer
@@ -832,8 +841,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i16` if possible.
     ///
-    /// Returns `Some(i16)` for int variants, decimal variants(scale=0) that fit in `i16` range,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(i16)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `i16` range, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -844,7 +853,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(123i64);
     /// assert_eq!(v1.as_int16(), Some(123i16));
     ///
-    /// // or from a decimal variant
+    /// // or from a decimal variant that scale = 0
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int16(), Some(123i16));
@@ -852,10 +861,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // or from a decimal variant that unscaled value is divisible by 10^scale
     /// let d = VariantDecimal4::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_int16(), Some(1i16));
     ///
     /// // but not if it would overflow
-    /// let v4 = Variant::from(123456i64);
+    /// let d = VariantDecimal4::try_new(123456i32, 0).unwrap();
+    /// let v4 = Variant::from(d);
     /// assert_eq!(v4.as_int16(), None);
     ///
     /// // or if the variant cannot be cast into an integer
@@ -877,13 +887,13 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i32` if possible.
     ///
-    /// Returns `Some(i32)` for int variants, decimal variants(scale=0) that fit in `i32` range,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(i32)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `i32` range, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::{Variant, VariantDecimal4};
+    /// use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8};
     ///
     /// // you can read an int32 variant into an i32
     /// let v1 = Variant::from(123i32);
@@ -893,23 +903,24 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(1231i64);
     /// assert_eq!(v2.as_int32(), Some(1231i32));
     ///
-    /// // or from a decimal variant that unscaled value is divisible by 10^scale
-    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
-    /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
-    ///
-    /// // or from decimal variant(scale=0)
+    /// // or from decimal variant that scale=0
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v4 = Variant::from(d);
     /// assert_eq!(v4.as_int32(), Some(123i32));
     ///
+    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// let d = VariantDecimal4::try_new(100, 2).unwrap();
+    /// let v3 = Variant::from(d);
+    /// assert_eq!(v3.as_int32(), Some(1i32));
+    ///
     /// // but not if it would overflow
-    /// let v5 = Variant::from(1234567890123i64);
-    /// assert_eq!(v5.as_f32(), None);
+    /// let d = VariantDecimal8::try_new(1234567890123, 0).unwrap();
+    /// let v5 = Variant::from(d);
+    /// assert_eq!(v5.as_int32(), None);
     ///
     /// // or if the variant cannot be cast into an integer
     /// let v6 = Variant::from("hello");
-    /// assert_eq!(v6.as_f32(), None)
+    /// assert_eq!(v6.as_int32(), None)
     /// ```
     pub fn as_int32(&self) -> Option<i32> {
         match *self {
@@ -924,21 +935,21 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts this variant to an `i64`.
+    /// Converts this variant to an `i64` if possible.
     ///
-    /// Returns `Some(i64)` for int variants or decimal variants(scale=0) that fit in `i64` range,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(i64)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `i64` range, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::{Variant, VariantDecimal4};
+    /// use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4};
     ///
     /// // you can read an int64 variant into an i64
     /// let v1 = Variant::from(123i64);
     /// assert_eq!(v1.as_int64(), Some(123i64));
     ///
-    /// // or from a decimal variant
+    /// // or from a decimal variant that scale = 0
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_int64(), Some(123i64));
@@ -946,9 +957,14 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // or from a decimal variant that unscaled value is divisible by 10^scale
     /// let d = VariantDecimal4::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_int64(), Some(1i64));
     ///
-    /// // but not a variant that cannot be cast into an integer
+    /// // but not if it would overflow
+    /// let d = VariantDecimal16::try_new(i128::from(i64::MAX) + 1, 0).unwrap();
+    /// let v4 = Variant::from(d);
+    /// assert_eq!(v4.as_int64(), None);
+    ///
+    /// // or if the variant cannot be cast into an integer
     /// let v4 = Variant::from("hello!");
     /// assert_eq!(v4.as_int64(), None);
     /// ```
@@ -983,8 +999,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `u8` if possible.
     ///
-    /// Returns `Some(u8)` for int variants, decimal variants(scale=0) that fit in `u8`,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(u8)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `u8`, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -995,18 +1011,19 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u8(), Some(123u8));
     ///
-    /// // or from decimal variant with scale = 0
+    /// // or from decimal variant that scale = 0
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_u8(), Some(123u8));
     ///
-    /// // or from a decimal variant that unscaled value is divisible by 10^scale
+    /// // or from a decimal variant that unscaled integer is divisible by 10^scale
     /// let d = VariantDecimal4::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_u8(), Some(1u8));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
+    /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
+    ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u8(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1019,8 +1036,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u16` if possible.
     ///
-    /// Returns `Some(u16)` for int variants, decimal variants(scale=0) that fit in `u16`,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(u16)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `u16`, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1031,7 +1048,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u16(), Some(123u16));
     ///
-    /// // or from decimal variant with scale = 0
+    /// // or from decimal variant that scale = 0
     /// let d = VariantDecimal4::try_new(123, 0).unwrap();
     /// let v2 = Variant::from(d);
     /// assert_eq!(v2.as_u16(), Some(123u16));
@@ -1039,10 +1056,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // or from a decimal variant that unscaled value is divisible by 10^scale
     /// let d = VariantDecimal4::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_u16(), Some(1u16));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
+    /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
+    ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u16(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1055,8 +1073,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u32` if possible.
     ///
-    /// Returns `Some(u32)` for int variants, decimal variants(scale=0) that fit in `u32`,
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(u32)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `u32`, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1067,7 +1085,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u32(), Some(123u32));
     ///
-    ///  // or from decimal variant with scale = 0
+    ///  // or from decimal variant that scale = 0
     ///  let d = VariantDecimal4::try_new(123, 0).unwrap();
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u32(), Some(123u32));
@@ -1075,10 +1093,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // or from a decimal variant that unscaled value is divisible by 10^scale
     /// let d = VariantDecimal4::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_u32(), Some(1u32));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
+    /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
+    ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u32(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1091,13 +1110,13 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u64` if possible.
     ///
-    /// Returns `Some(u64)` for integer variants, decimal variants(scale=0) that fit in `u64`
-    /// `None` for other variants or values that would overflow.
+    /// Returns `Some(u64)` for integer variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
+    /// that fits in `u64`, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
     /// ```
-    ///  use parquet_variant::{Variant, VariantDecimal16};
+    ///  use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4};
     ///
     ///  // you can read an int64 variant into an u64
     ///  let v1 = Variant::from(123i64);
@@ -1111,10 +1130,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // or from a decimal variant that unscaled value is divisible by 10^scale
     /// let d = VariantDecimal16::try_new(100, 2).unwrap();
     /// let v3 = Variant::from(d);
-    /// assert_eq!(v3.as_int8(), Some(1i8));
+    /// assert_eq!(v3.as_u64(), Some(1u64));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
+    /// let d = VariantDecimal4::try_new(-1, 0).unwrap();
+    ///  let v4 = Variant::from(d);
     ///  assert_eq!(v4.as_u64(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1125,9 +1145,9 @@ impl<'m, 'v> Variant<'m, 'v> {
         Self::convert_to_unsigned_num(self)
     }
 
-    /// Converts this variant to tuple with a 4-byte unscaled value.
+    /// Converts this variant to tuple with a 4-byte unscaled value if possible.
     ///
-    /// Returns `Some((i32, u8))` for decimal variants, int variant where the unscaled value fit in
+    /// Returns `Some((i32, u8))` for decimal variants, int variants where the unscaled value fits in
     /// `i32` range, `None` for other variants or the value would overflow.
     ///
     /// # Examples
@@ -1188,13 +1208,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
     /// assert_eq!(v2.as_decimal8(), VariantDecimal8::try_new(1234_i64, 2).ok());
     ///
+    /// // or from int variants if they fit
+    /// let v3 = Variant::from(123);
+    /// assert_eq!(v3.as_decimal8(), VariantDecimal8::try_new(123_i64, 0).ok());
+    ///
     /// // but not if the value would overflow i64
-    /// let v3 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
-    /// assert_eq!(v3.as_decimal8(), None);
+    /// let v4 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
+    /// assert_eq!(v4.as_decimal8(), None);
     ///
     /// // or if the variant is not a decimal
-    /// let v4 = Variant::from("hello");
-    /// assert_eq!(v4.as_decimal8(), None);
+    /// let v5 = Variant::from("hello");
+    /// assert_eq!(v5.as_decimal8(), None);
     /// ```
     pub fn as_decimal8(&self) -> Option<VariantDecimal8> {
         match *self {
@@ -1212,7 +1236,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Converts this variant to tuple with a 16-byte unscaled value if possible.
     ///
     /// Returns `Some((i128, u8))` for decimal variants, int variants where the unscaled value
-    /// fit in `i128` range, `None` for other variants or values that would overflow.
+    /// fits in `i128` range, `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1224,9 +1248,13 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(d);
     /// assert_eq!(v1.as_decimal16(), VariantDecimal16::try_new(2e19 as i128, 2).ok());
     ///
+    /// // or from int variants
+    /// let v2 = Variant::from(123);
+    /// assert_eq!(v2.as_decimal16(), VariantDecimal16::try_new(123_i128, 0).ok());
+    ///
     /// // but not if the variant is not a decimal
-    /// let v2 = Variant::from("hello");
-    /// assert_eq!(v2.as_decimal16(), None);
+    /// let v3 = Variant::from("hello");
+    /// assert_eq!(v3.as_decimal16(), None);
     /// ```
     pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
