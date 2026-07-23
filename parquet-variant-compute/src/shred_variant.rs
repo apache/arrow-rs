@@ -2552,14 +2552,14 @@ mod tests {
     }
 
     macro_rules! validate_decimal_shredding {
-        ($shred_type: expr, $array_type: ty, $expected_typed_value: ident) => {{
+        ($shred_type: expr, $array_type: ty, $expected_typed_value: ident $(, $expected_precision: literal, $expected_scale:literal)? $(,)?) => {{
             let input = VariantArray::from_iter(vec![
                 Variant::from(12i8),
                 Variant::from(234i16),
                 Variant::from(456i32),
                 Variant::from(456i64),
-                Variant::from(VariantDecimal4::try_new(1234, 2).unwrap()),
-                Variant::from(VariantDecimal8::try_new(1234, 2).unwrap()),
+                Variant::from(VariantDecimal4::try_new(1200, 2).unwrap()),
+                Variant::from(VariantDecimal8::try_new(1230, 2).unwrap()),
                 Variant::from(VariantDecimal16::try_new(1234, 2).unwrap()),
             ]);
 
@@ -2577,8 +2577,9 @@ mod tests {
                 .downcast_ref::<$array_type>()
                 .unwrap();
 
-            assert_eq!(typed_value.precision(), $expected_typed_value.precision());
-            assert_eq!(typed_value.scale(), $expected_typed_value.scale());
+            $(assert_eq!(typed_value.precision(), $expected_precision);)?
+            $(assert_eq!(typed_value.scale(), $expected_scale);)?
+
             for i in 0..$expected_typed_value.len() {
                 assert_eq!(value.is_valid(i), $expected_typed_value.is_null(i));
                 assert_eq!(typed_value.is_valid(i), $expected_typed_value.is_valid(i));
@@ -2594,8 +2595,8 @@ mod tests {
             None, // 234 can't convert decimal32(4, 2)
             None, // 456 can't convert to decimal32(4, 2)
             None, // 456 can't convert to decimal32(4, 2)
-            Some(1234),
-            Some(1234),
+            Some(1200),
+            Some(1230),
             Some(1234),
         ])
         .with_precision_and_scale(4, 2)
@@ -2603,7 +2604,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal32(4, 2),
             arrow::array::Decimal32Array,
-            expected_array
+            expected_array,
+            4,
+            2,
         );
     }
 
@@ -2614,8 +2617,8 @@ mod tests {
             Some(234000),
             Some(456000),
             Some(456000),
-            Some(12340),
-            Some(12340),
+            Some(12000),
+            Some(12300),
             Some(12340),
         ])
         .with_precision_and_scale(6, 3)
@@ -2624,7 +2627,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal32(6, 3),
             arrow::array::Decimal32Array,
-            expected_array
+            expected_array,
+            6,
+            3,
         );
     }
 
@@ -2635,8 +2640,8 @@ mod tests {
             Some(234),
             Some(456),
             Some(456),
-            None, // VariantDecimal4(1234, 2) can't convert to decimal32(6, 0),
-            None, // VariantDecimal8(1234, 2) can't convert to decimal32(6, 0),
+            Some(12),
+            None, // VariantDecimal8(1230, 2) can't convert to decimal32(6, 0),
             None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
         ])
         .with_precision_and_scale(6, 0)
@@ -2644,7 +2649,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal32(6, 0),
             arrow::array::Decimal32Array,
-            expected_array
+            expected_array,
+            6,
+            0
         );
     }
 
@@ -2655,8 +2662,8 @@ mod tests {
             None, // 234 can't convert decimal64(4, 2)
             None, // 456 can't convert to decimal64(4, 2)
             None, // 456 can't convert to decimal64(4, 2)
-            Some(1234),
-            Some(1234),
+            Some(1200),
+            Some(1230),
             Some(1234),
         ])
         .with_precision_and_scale(4, 2)
@@ -2664,7 +2671,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal64(4, 2),
             arrow::array::Decimal64Array,
-            expected_array_decimal64_same_scale
+            expected_array_decimal64_same_scale,
+            4,
+            2
         );
     }
 
@@ -2675,8 +2684,8 @@ mod tests {
             Some(234000),
             Some(456000),
             Some(456000),
-            Some(12340),
-            Some(12340),
+            Some(12000),
+            Some(12300),
             Some(12340),
         ])
         .with_precision_and_scale(6, 3)
@@ -2684,7 +2693,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal64(6, 3),
             arrow::array::Decimal64Array,
-            expected_array
+            expected_array,
+            6,
+            3,
         );
     }
 
@@ -2695,7 +2706,7 @@ mod tests {
             Some(234),
             Some(456),
             Some(456),
-            None, // VariantDecimal4(1234, 2) can't convert to decimal32(6, 0),
+            Some(12),
             None, // VariantDecimal8(1234, 2) can't convert to decimal32(6, 0),
             None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
         ])
@@ -2704,7 +2715,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal64(6, 0),
             arrow::array::Decimal64Array,
-            expected_array
+            expected_array,
+            6,
+            0
         );
     }
 
@@ -2715,8 +2728,8 @@ mod tests {
             None, // 234 can't convert decimal128(4, 2)
             None, // 456 can't convert to decimal128(4, 2)
             None, // 456 can't convert to decimal128(4, 2)
-            Some(1234),
-            Some(1234),
+            Some(1200),
+            Some(1230),
             Some(1234),
         ])
         .with_precision_and_scale(4, 2)
@@ -2725,7 +2738,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal128(4, 2),
             arrow::array::Decimal128Array,
-            expected_array
+            expected_array,
+            4,
+            2,
         );
     }
 
@@ -2736,8 +2751,8 @@ mod tests {
             Some(234000),
             Some(456000),
             Some(456000),
-            Some(12340),
-            Some(12340),
+            Some(12000),
+            Some(12300),
             Some(12340),
         ])
         .with_precision_and_scale(6, 3)
@@ -2745,7 +2760,9 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal128(6, 3),
             arrow::array::Decimal128Array,
-            expected_array
+            expected_array,
+            6,
+            3
         );
     }
 
@@ -2756,7 +2773,7 @@ mod tests {
             Some(234),
             Some(456),
             Some(456),
-            None, // VariantDecimal4(1234, 2) can't convert to decimal32(6, 0),
+            Some(12),
             None, // VariantDecimal8(1234, 2) can't convert to decimal32(6, 0),
             None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
         ])
@@ -2765,8 +2782,25 @@ mod tests {
         validate_decimal_shredding!(
             DataType::Decimal128(6, 0),
             arrow::array::Decimal128Array,
-            expected_array
+            expected_array,
+            6,
+            0
         );
+    }
+
+    #[test]
+    fn test_shredding_decimal128_to_integer() {
+        let expected_array = Int64Array::from(vec![
+            Some(12),
+            Some(234),
+            Some(456),
+            Some(456),
+            Some(12),
+            None, // VariantDecimal8(1230, 2) can't convert to integer
+            None, // VariantDecimal8(1234, 2) can't convert to integer
+        ]);
+
+        validate_decimal_shredding!(DataType::Int64, arrow::array::Int64Array, expected_array);
     }
 
     #[test]
