@@ -445,7 +445,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
-        if let Some(raw_float) = lexical_core::parse(string.as_bytes()).ok() {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
             return Some(f16::from_f32(raw_float));
         }
         let string = trim_pre_and_post_whitespace(string);
@@ -457,7 +457,7 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
-        if let Some(raw_float) = lexical_core::parse(string.as_bytes()).ok() {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
             return Some(raw_float);
         }
         let string = trim_pre_and_post_whitespace(string);
