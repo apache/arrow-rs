@@ -766,7 +766,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.prefix_len_encoder.estimated_memory_size()
             + self.suffix_writer.estimated_memory_size()
-            + (self.previous.len() * std::mem::size_of::<u8>())
+            + (self.previous.capacity() * std::mem::size_of::<u8>())
     }
 }
 
