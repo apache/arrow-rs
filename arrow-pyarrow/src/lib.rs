@@ -384,7 +384,8 @@ impl FromPyArrow for ArrowArrayStreamReader {
                 extract_capsule(&capsule, c"arrow_array_stream", "__arrow_c_stream__")?;
             let stream = unsafe { FFI_ArrowArrayStream::from_raw(stream_ptr.as_ptr()) };
 
-            let stream_reader = ArrowArrayStreamReader::try_new(stream)
+            // SAFETY: stream came from a valid capsule pointer provided by the C stream interface
+            let stream_reader = unsafe { ArrowArrayStreamReader::try_new(stream) }
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
             return Ok(stream_reader);
@@ -403,7 +404,8 @@ impl FromPyArrow for ArrowArrayStreamReader {
             (&raw mut stream as Py_uintptr_t,),
         )?;
 
-        ArrowArrayStreamReader::try_new(stream)
+        // SAFETY: stream was populated by PyArrow's _export_to_c, which fills a valid C stream
+        unsafe { ArrowArrayStreamReader::try_new(stream) }
             .map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
