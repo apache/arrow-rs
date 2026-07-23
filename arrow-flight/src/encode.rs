@@ -675,7 +675,7 @@ fn split_batch_for_grpc_response(
     let size = batch
         .columns()
         .iter()
-        .map(|col| col.get_buffer_memory_size())
+        .map(|col| col.to_data().get_slice_memory_size().unwrap())
         .sum::<usize>();
 
     let n_batches =
@@ -794,8 +794,9 @@ mod tests {
     };
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
-    use arrow_buffer::ScalarBuffer;
+    use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
     use arrow_cast::pretty::pretty_format_batches;
+    use arrow_data::ArrayData;
     use arrow_ipc::{CompressionType, MetadataVersion};
     use arrow_schema::{UnionFields, UnionMode};
     use builder::MapBuilder;
@@ -2152,5 +2153,104 @@ mod tests {
             allowed_overage, max_overage_seen,
             "Specified overage was too high"
         );
+    }
+
+    // Helper function to write data into a MutableBuffer and return it as a Buffer
+    fn create_buffer_from_data(data: Vec<u8>) -> Buffer {
+        let mut mbuf = MutableBuffer::new(data.len());
+        for v in data {
+            mbuf.push(v);
+        }
+        mbuf.into()
+    }
+
+    // Helper function to build arrays from a Buffer
+    fn build_array_from_buffer(buffer: Buffer, data_type: DataType, len: usize) -> ArrayRef {
+        let array_data = ArrayData::builder(data_type.clone())
+            .len(len)
+            .add_buffer(buffer)
+            .build()
+            .expect("failed to build array data");
+
+        match data_type {
+            DataType::UInt32 => Arc::new(UInt32Array::from(array_data)),
+            DataType::Int64 => Arc::new(Int64Array::from(array_data)),
+            DataType::Float32 => Arc::new(Float32Array::from(array_data)),
+            DataType::Int8 => Arc::new(Int8Array::from(array_data)),
+            _ => panic!("Unsupported data type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_reencode_flight_data() {
+        const ROW_COUNT: usize = 5_000_000;
+        const SPLIT_SIZE: usize = 4;
+
+        let int_buf = create_buffer_from_data(vec![1u8; ROW_COUNT * std::mem::size_of::<u32>()]);
+        let long_buf = create_buffer_from_data(vec![2u8; ROW_COUNT * std::mem::size_of::<i64>()]);
+        let float_buf = create_buffer_from_data(vec![3u8; ROW_COUNT * std::mem::size_of::<f32>()]);
+        // Int8 buffer: one byte per row
+        let int8_buf = create_buffer_from_data(vec![0u8; ROW_COUNT * std::mem::size_of::<i8>()]);
+
+        // Short arrays / batch
+        let int_array_short =
+            build_array_from_buffer(int_buf.clone(), DataType::UInt32, ROW_COUNT / SPLIT_SIZE);
+        let long_array_short =
+            build_array_from_buffer(long_buf.clone(), DataType::Int64, ROW_COUNT / SPLIT_SIZE);
+        let float_array_short =
+            build_array_from_buffer(float_buf.clone(), DataType::Float32, ROW_COUNT / SPLIT_SIZE);
+        let int8_array_short =
+            build_array_from_buffer(int8_buf.clone(), DataType::Int8, ROW_COUNT / SPLIT_SIZE);
+
+        let batch_short = RecordBatch::try_from_iter(vec![
+            ("int_col", int_array_short),
+            ("long_col", long_array_short),
+            ("float_col", float_array_short),
+            ("int8_col", int8_array_short),
+        ])
+        .expect("failed to create short record batch");
+
+        // Build long arrays:  set each column to ROW_COUNT rows
+        let int_array_long = build_array_from_buffer(int_buf, DataType::UInt32, ROW_COUNT);
+        let long_array_long = build_array_from_buffer(long_buf, DataType::Int64, ROW_COUNT);
+        let float_array_long = build_array_from_buffer(float_buf, DataType::Float32, ROW_COUNT);
+        let int8_array_long = build_array_from_buffer(int8_buf, DataType::Int8, ROW_COUNT);
+
+        let batch_long = RecordBatch::try_from_iter(vec![
+            ("int_col", int_array_long),
+            ("long_col", long_array_long),
+            ("float_col", float_array_long),
+            ("int8_col", int8_array_long),
+        ])
+        .expect("failed to create long record batch");
+
+        let split_short = split_batch_for_grpc_response(batch_short.clone(), 2 * 1024 * 1024);
+        let split_long = split_batch_for_grpc_response(batch_long.clone(), 2 * 1024 * 1024);
+        assert!(split_short.len() != split_long.len()); // more data split divided by the same max size should result in more sub-slices
+
+        // Compare memory calculations for short and long batches
+        let total_buffer_memory_short = batch_short
+            .columns()
+            .iter()
+            .map(|col| col.get_buffer_memory_size())
+            .sum::<usize>();
+        let total_slice_memory_short = batch_short
+            .columns()
+            .iter()
+            .map(|col| col.to_data().get_slice_memory_size().unwrap())
+            .sum::<usize>();
+
+        let total_buffer_memory_long = batch_long
+            .columns()
+            .iter()
+            .map(|col| col.get_buffer_memory_size())
+            .sum::<usize>();
+        let total_slice_memory_long = batch_long
+            .columns()
+            .iter()
+            .map(|col| col.to_data().get_slice_memory_size().unwrap())
+            .sum::<usize>();
+        assert!(total_buffer_memory_short > total_slice_memory_short); // 85 mb > 21mb
+        assert_eq!(total_buffer_memory_long, total_slice_memory_long); // 85 MB == 85 mb
     }
 }
