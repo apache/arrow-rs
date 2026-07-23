@@ -789,8 +789,8 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 mod tests {
     use crate::decode::{DecodedPayload, FlightDataDecoder};
     use arrow_array::builder::{
-        FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, ListBuilder,
-        StringDictionaryBuilder, StructBuilder,
+        FixedSizeListBuilder, GenericByteDictionaryBuilder, GenericListViewBuilder, Int32Builder,
+        LargeListBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
     };
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};
@@ -1831,23 +1831,67 @@ mod tests {
         assert!(got.metadata().contains_key("some_key"));
     }
 
-    #[test]
-    fn test_large_list_schema_encoded() {
-        let list_field =
-            Field::new("item", DataType::Int32, false).with_metadata(HashMap::from([(
-                "nested".to_owned(),
-                "metadata".to_owned(),
-            )]));
-        let field = Arc::new(
-            Field::new_large_list("large_list", list_field.clone(), true)
-                .with_metadata(HashMap::from([("field".to_owned(), "metadata".to_owned())])),
+    #[tokio::test]
+    async fn test_list_schema_round_trip() {
+        let list_item = Field::new("list_item", DataType::Int32, false).with_metadata(
+            HashMap::from([("level".to_owned(), "list_item".to_owned())]),
         );
-        let schema = Schema::new(vec![Arc::clone(&field)]);
-        let mut dictionary_tracker = DictionaryTracker::new(false);
+        let mut list_builder = ListBuilder::new(Int32Builder::new()).with_field(list_item);
+        list_builder.append_value([Some(1), Some(2)]);
+        list_builder.append_value([Some(3)]);
+        let list = Arc::new(list_builder.finish()) as ArrayRef;
+        let list_field = Field::new("list", list.data_type().clone(), false)
+            .with_metadata(HashMap::from([("level".to_owned(), "list".to_owned())]));
 
-        let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
+        let nested_item = Field::new("nested_item", DataType::Int32, true).with_metadata(
+            HashMap::from([("level".to_owned(), "nested_item".to_owned())]),
+        );
+        let nested_list_builder =
+            ListBuilder::new(Int32Builder::new()).with_field(nested_item.clone());
+        let nested_list = Field::new_list("nested_list", nested_item, false).with_metadata(
+            HashMap::from([("level".to_owned(), "nested_list".to_owned())]),
+        );
+        let mut large_list_builder =
+            LargeListBuilder::new(nested_list_builder).with_field(nested_list);
+        large_list_builder.values().append_value([Some(4), None]);
+        large_list_builder.values().append_value([Some(5)]);
+        large_list_builder.append(true);
+        large_list_builder.append(false);
+        let large_list = Arc::new(large_list_builder.finish()) as ArrayRef;
+        let large_list_field =
+            Field::new("large_list", large_list.data_type().clone(), true).with_metadata(
+                HashMap::from([("level".to_owned(), "large_list".to_owned())]),
+            );
 
-        assert_eq!(got.field(0), field.as_ref());
+        let fixed_size_item = Field::new("fixed_size_item", DataType::Int32, true).with_metadata(
+            HashMap::from([("level".to_owned(), "fixed_size_item".to_owned())]),
+        );
+        let mut fixed_size_list_builder =
+            FixedSizeListBuilder::new(Int32Builder::new(), 2).with_field(fixed_size_item);
+        fixed_size_list_builder.values().append_value(6);
+        fixed_size_list_builder.values().append_null();
+        fixed_size_list_builder.append(true);
+        fixed_size_list_builder.values().append_value(7);
+        fixed_size_list_builder.values().append_value(8);
+        fixed_size_list_builder.append(true);
+        let fixed_size_list = Arc::new(fixed_size_list_builder.finish()) as ArrayRef;
+        let fixed_size_list_field = Field::new(
+            "fixed_size_list",
+            fixed_size_list.data_type().clone(),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            "level".to_owned(),
+            "fixed_size_list".to_owned(),
+        )]));
+
+        let schema = Arc::new(
+            Schema::new(vec![list_field, large_list_field, fixed_size_list_field])
+                .with_metadata(HashMap::from([("level".to_owned(), "schema".to_owned())])),
+        );
+        let batch = RecordBatch::try_new(schema, vec![list, large_list, fixed_size_list]).unwrap();
+
+        verify_flight_round_trip(vec![batch]).await;
     }
 
     #[test]
