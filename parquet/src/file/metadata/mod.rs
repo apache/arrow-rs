@@ -2046,10 +2046,12 @@ mod tests {
             .set_row_groups(row_group_meta_with_stats)
             .build();
 
+        // Sizes include the `root_to_first_leaf: Vec<usize>` cache that
+        // SchemaDescriptor adds to make `parquet_column` lookups O(1).
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2734;
+        let base_expected_size = 2774;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2902;
+        let base_expected_size = 2942;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2078,9 +2080,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3160;
+        let bigger_expected_size = 3200;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3328;
+        let bigger_expected_size = 3368;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2127,7 +2129,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2042;
+        let base_expected_size = 2082;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -2153,7 +2155,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3056;
+        let expected_size_with_decryptor = 3096;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

@@ -31,7 +31,8 @@ use std::sync::Arc;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{
-    ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
+    ParquetField, parquet_to_arrow_schema_and_field_levels_with_virtual,
+    virtual_type::is_virtual_column,
 };
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
@@ -798,6 +799,24 @@ impl ArrowReaderOptions {
         })
     }
 
+    /// Returns the configured virtual columns, if any.
+    pub fn virtual_columns(&self) -> &[FieldRef] {
+        &self.virtual_columns
+    }
+
+    /// Returns the supplied arrow [`Schema`], if one was provided via
+    /// [`Self::with_schema`].
+    pub fn supplied_schema(&self) -> Option<&SchemaRef> {
+        self.supplied_schema.as_ref()
+    }
+
+    /// Returns whether the reader will skip the embedded arrow schema
+    /// metadata stored in the parquet file (set via
+    /// [`Self::with_skip_arrow_metadata`]).
+    pub fn skip_arrow_metadata(&self) -> bool {
+        self.skip_arrow_metadata
+    }
+
     #[deprecated(
         since = "57.2.0",
         note = "Use `column_index_policy` or `offset_index_policy` instead"
@@ -892,6 +911,43 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
+    /// Construct an [`ArrowReaderMetadata`] from precomputed
+    /// [`FieldLevels`].
+    ///
+    /// Use this when the caller has already computed the arrow [`Schema`]
+    /// and [`FieldLevels`] for `metadata` (e.g. by calling
+    /// [`parquet_to_arrow_field_levels`]) and wants to avoid recomputing
+    /// them. For wide schemas the field-levels conversion walks every leaf
+    /// in the parquet schema, so reusing it across reader builds for the
+    /// same metadata is significantly cheaper than calling [`Self::try_new`]
+    /// repeatedly.
+    ///
+    /// `arrow_schema` and `field_levels` must describe the same columns:
+    /// they are normally produced together by
+    /// [`parquet_to_arrow_schema_and_field_levels`]. `arrow_schema` is taken
+    /// separately only because it additionally carries the file's key/value
+    /// metadata, which [`FieldLevels`] does not.
+    ///
+    /// [`parquet_to_arrow_field_levels`]: crate::arrow::schema::parquet_to_arrow_field_levels
+    /// [`parquet_to_arrow_schema_and_field_levels`]: crate::arrow::schema::parquet_to_arrow_schema_and_field_levels
+    pub fn from_field_levels(
+        metadata: Arc<ParquetMetaData>,
+        arrow_schema: SchemaRef,
+        field_levels: FieldLevels,
+    ) -> Self {
+        let FieldLevels { fields, levels } = field_levels;
+        debug_assert_eq!(
+            arrow_schema.fields(),
+            &fields,
+            "arrow_schema fields must match field_levels fields"
+        );
+        Self {
+            metadata,
+            schema: arrow_schema,
+            fields: levels.map(Arc::new),
+        }
+    }
+
     /// Create a new [`ArrowReaderMetadata`] from a pre-existing
     /// [`ParquetMetaData`] and [`ArrowReaderOptions`].
     ///
@@ -912,18 +968,18 @@ impl ArrowReaderMetadata {
                     false => metadata.file_metadata().key_value_metadata(),
                 };
 
-                let (schema, fields) = parquet_to_arrow_schema_and_fields(
+                let (schema, field_levels) = parquet_to_arrow_schema_and_field_levels_with_virtual(
                     metadata.file_metadata().schema_descr(),
                     ProjectionMask::all(),
                     kv_metadata,
                     &options.virtual_columns,
                 )?;
 
-                Ok(Self {
+                Ok(Self::from_field_levels(
                     metadata,
-                    schema: Arc::new(schema),
-                    fields: fields.map(Arc::new),
-                })
+                    Arc::new(schema),
+                    field_levels,
+                ))
             }
         }
     }
