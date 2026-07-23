@@ -33,7 +33,7 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-use arrow_array::RecordBatch;
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
@@ -570,6 +570,30 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
+    /// Read and decode the dictionary page for a column in a row group, if any.
+    ///
+    /// Returns `Ok(None)` if the column chunk has no dictionary page, or if
+    /// its physical type is not `BYTE_ARRAY` (the only physical type
+    /// currently supported).
+    ///
+    /// Note this does not verify that the *entire* column chunk is
+    /// dictionary-encoded -- callers that need that guarantee (e.g. to treat
+    /// the dictionary as an exhaustive set of the column's values) should
+    /// check the column chunk's page encoding statistics themselves.
+    pub async fn get_row_group_column_dictionary(
+        &mut self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        ParquetMetaDataReader::read_column_dictionary_async(
+            &mut self.input.0,
+            &self.metadata,
+            row_group_idx,
+            column_idx,
+        )
+        .await
+    }
+
     /// Build a new [`ParquetRecordBatchStream`]
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
@@ -982,6 +1006,44 @@ mod tests {
                 offset_2 as usize..(offset_2 + length_2) as usize
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_row_group_column_dictionary() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let values: Vec<&str> = ["alpha", "beta", "gamma"]
+            .iter()
+            .copied()
+            .cycle()
+            .take(30)
+            .collect();
+        let array: ArrayRef = Arc::new(StringArray::from(values));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut buf = Vec::new();
+        {
+            let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        let data = Bytes::from(buf);
+
+        let async_reader = TestReader::new(data);
+        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
+
+        let dictionary = builder
+            .get_row_group_column_dictionary(0, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        let dictionary = dictionary.as_any().downcast_ref::<StringArray>().unwrap();
+        let dictionary_values: Vec<&str> = dictionary.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(dictionary_values, vec!["alpha", "beta", "gamma"]);
     }
 
     #[tokio::test]
