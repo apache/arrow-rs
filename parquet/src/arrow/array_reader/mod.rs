@@ -55,6 +55,9 @@ pub(crate) mod test_util;
 use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
+// Re-exported (beyond the `experimental` feature) so `file::metadata::dictionary`
+// can PLAIN-decode a raw dictionary page without duplicating this logic.
+pub(crate) use byte_array::ByteArrayDecoderPlain;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use byte_view_array::make_byte_view_array_reader;

@@ -553,12 +553,12 @@ enum SerializedPageReaderState {
 }
 
 #[derive(Default)]
-struct SerializedPageReaderContext {
+pub(crate) struct SerializedPageReaderContext {
     /// Controls decoding of page-level statistics
-    read_stats: bool,
+    pub(crate) read_stats: bool,
     /// Crypto context carrying objects required for decryption
     #[cfg(feature = "encryption")]
-    crypto_context: Option<Arc<CryptoContext>>,
+    pub(crate) crypto_context: Option<Arc<CryptoContext>>,
 }
 
 /// A serialized implementation for Parquet [`PageReader`].
@@ -771,23 +771,30 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         let header = context.read_page_header(&mut tracked, page_index, dictionary_page)?;
         Ok((tracked.bytes_read, header))
     }
+}
 
-    fn read_page_header_len_from_bytes(
-        context: &SerializedPageReaderContext,
-        buffer: &[u8],
-        page_index: usize,
-        dictionary_page: bool,
-    ) -> Result<(usize, PageHeader)> {
-        let mut input = std::io::Cursor::new(buffer);
-        let header = context.read_page_header(&mut input, page_index, dictionary_page)?;
-        let header_len = input.position() as usize;
-        Ok((header_len, header))
-    }
+/// Reads (and decrypts, if `context` carries a crypto context) the page header stored
+/// at the front of `buffer`, returning the header and the number of bytes of `buffer`
+/// it occupies.
+///
+/// This is exposed for callers that need to decode a single page directly from an
+/// already-fetched byte range, outside of the normal [`SerializedPageReader`] iteration
+/// -- e.g. decoding a dictionary page standalone.
+pub(crate) fn read_page_header_len_from_bytes(
+    context: &SerializedPageReaderContext,
+    buffer: &[u8],
+    page_index: usize,
+    dictionary_page: bool,
+) -> Result<(usize, PageHeader)> {
+    let mut input = std::io::Cursor::new(buffer);
+    let header = context.read_page_header(&mut input, page_index, dictionary_page)?;
+    let header_len = input.position() as usize;
+    Ok((header_len, header))
 }
 
 #[cfg(not(feature = "encryption"))]
 impl SerializedPageReaderContext {
-    fn read_page_header<T: Read>(
+    pub(crate) fn read_page_header<T: Read>(
         &self,
         input: &mut T,
         _page_index: usize,
@@ -801,7 +808,7 @@ impl SerializedPageReaderContext {
         }
     }
 
-    fn decrypt_page_data<T>(
+    pub(crate) fn decrypt_page_data<T>(
         &self,
         buffer: T,
         _page_index: usize,
@@ -813,7 +820,7 @@ impl SerializedPageReaderContext {
 
 #[cfg(feature = "encryption")]
 impl SerializedPageReaderContext {
-    fn read_page_header<T: Read>(
+    pub(crate) fn read_page_header<T: Read>(
         &self,
         input: &mut T,
         page_index: usize,
@@ -851,7 +858,12 @@ impl SerializedPageReaderContext {
         }
     }
 
-    fn decrypt_page_data<T>(&self, buffer: T, page_index: usize, dictionary_page: bool) -> Result<T>
+    pub(crate) fn decrypt_page_data<T>(
+        &self,
+        buffer: T,
+        page_index: usize,
+        dictionary_page: bool,
+    ) -> Result<T>
     where
         T: AsRef<[u8]>,
         T: From<Vec<u8>>,
@@ -897,7 +909,7 @@ fn verify_page_header_len(header_len: usize, remaining_bytes: u64) -> Result<()>
     Ok(())
 }
 
-fn verify_page_size(
+pub(crate) fn verify_page_size(
     compressed_size: i32,
     uncompressed_size: i32,
     remaining_bytes: u64,
@@ -991,7 +1003,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let page_len = usize::try_from(front.compressed_page_size)?;
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    let (offset, header) = Self::read_page_header_len_from_bytes(
+                    let (offset, header) = read_page_header_len_from_bytes(
                         &self.context,
                         buffer.as_ref(),
                         *page_index,
