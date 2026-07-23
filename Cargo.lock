@@ -139,7 +139,7 @@ dependencies = [
  "miniz_oxide",
  "num-bigint 0.4.7",
  "quad-rand",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex-lite",
  "serde",
  "serde_bytes",
@@ -191,7 +191,7 @@ dependencies = [
  "criterion",
  "half",
  "memmap2",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
 ]
 
@@ -226,7 +226,7 @@ dependencies = [
  "num-complex",
  "num-integer",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -254,7 +254,7 @@ dependencies = [
  "num-bigint 0.5.1",
  "object_store",
  "once_cell",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "sha2",
@@ -275,7 +275,7 @@ dependencies = [
  "half",
  "num-bigint 0.5.1",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -297,7 +297,7 @@ dependencies = [
  "insta",
  "lexical-core",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ryu",
 ]
 
@@ -445,7 +445,7 @@ dependencies = [
  "lexical-core",
  "memchr",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ryu",
  "serde",
  "serde_core",
@@ -464,7 +464,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "half",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -489,7 +489,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "half",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -515,7 +515,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -1517,7 +1517,7 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_distr",
  "zerocopy",
 ]
@@ -2360,7 +2360,7 @@ dependencies = [
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ring",
  "seq-macro",
  "serde",
@@ -2397,7 +2397,7 @@ dependencies = [
  "half",
  "indexmap",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
  "simdutf8",
  "uuid",
 ]
@@ -2414,7 +2414,7 @@ dependencies = [
  "indexmap",
  "parquet-variant",
  "parquet-variant-json",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde_json",
  "uuid",
 ]
@@ -2737,7 +2737,7 @@ dependencies = [
  "bytes",
  "getrandom 0.3.4",
  "lru-slab",
- "rand 0.9.4",
+ "rand 0.9.5",
  "ring",
  "rustc-hash",
  "rustls",
@@ -2786,9 +2786,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha",
  "rand_core 0.9.5",
@@ -2837,7 +2837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
