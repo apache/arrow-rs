@@ -373,7 +373,12 @@ impl FlightDataEncoder {
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
 
-        for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
+        let batches = split_batch_for_grpc_response(batch, self.max_flight_data_size);
+        let last = batches.len().saturating_sub(1); // handle empty batches  
+        for (i, batch) in batches.into_iter().enumerate() {
+            self.encoder
+                .ipc_write_context
+                .set_reserve_scratch(i != last);
             let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
             for dict in flight_dictionaries {
                 self.queue_message(dict);
@@ -666,7 +671,7 @@ fn prepare_schema_for_flight(
 fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_flight_data_size: usize,
-) -> impl Iterator<Item = RecordBatch> {
+) -> Vec<RecordBatch> {
     let size = batch
         .columns()
         .iter()
@@ -678,17 +683,15 @@ fn split_batch_for_grpc_response(
     let num_rows = batch.num_rows();
     let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
+    let mut batches = Vec::with_capacity(n_batches);
 
-    std::iter::from_fn(move || {
-        if offset < num_rows {
-            let length = rows_per_batch.min(num_rows - offset);
-            let slice = batch.slice(offset, length);
-            offset += length;
-            Some(slice)
-        } else {
-            None
-        }
-    })
+    while offset < num_rows {
+        let length = rows_per_batch.min(num_rows - offset);
+        batches.push(batch.slice(offset, length));
+        offset += length;
+    }
+
+    batches
 }
 
 /// The data needed to encode a stream of flight data, holding on to
@@ -1500,9 +1503,19 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new_dictionary("keys", DataType::UInt16, DataType::Utf8, false),
-            Field::new_dictionary("values", DataType::UInt16, DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new_dictionary(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::UInt16,
+                DataType::Utf8,
+                false,
+            ),
+            Field::new_dictionary(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::UInt16,
+                DataType::Utf8,
+                true,
+            ),
             false,
             false,
         )]));
@@ -1517,9 +1530,9 @@ mod tests {
         let mut decoder = FlightDataDecoder::new(encoder);
         let expected_schema = Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new("keys", DataType::Utf8, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             false,
             false,
         )]);
@@ -1596,9 +1609,19 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new_map(
             "dict_map",
-            "entries",
-            Field::new_dictionary("keys", DataType::UInt16, DataType::Utf8, false),
-            Field::new_dictionary("values", DataType::UInt16, DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new_dictionary(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::UInt16,
+                DataType::Utf8,
+                false,
+            ),
+            Field::new_dictionary(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::UInt16,
+                DataType::Utf8,
+                true,
+            ),
             false,
             false,
         )]));
@@ -1877,8 +1900,7 @@ mod tests {
         let c = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split: Vec<_> =
-            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
+        let split: Vec<_> = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
         assert_eq!(split.len(), 1);
         assert_eq!(batch, split[0]);
 
@@ -1888,8 +1910,7 @@ mod tests {
         let c = UInt8Array::from((0..n_rows).map(|i| (i % 256) as u8).collect::<Vec<_>>());
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split: Vec<_> =
-            split_batch_for_grpc_response(batch.clone(), max_flight_data_size).collect();
+        let split: Vec<_> = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
         assert_eq!(split.len(), 3);
         assert_eq!(
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
@@ -1934,7 +1955,7 @@ mod tests {
         let input_rows = batch.num_rows();
 
         let split: Vec<_> =
-            split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes).collect();
+            split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
         let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
         let output_rows: usize = sizes.iter().sum();
 

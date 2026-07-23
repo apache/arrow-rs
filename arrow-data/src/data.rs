@@ -530,7 +530,19 @@ impl ArrayData {
         for spec in layout.buffers.iter() {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
-                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
+                    // Offset buffers contain len+1 elements: one boundary per element
+                    // plus a final boundary marking the end of the last element.
+                    let len = match self.data_type {
+                        DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Map(_, _) => self.len + 1,
+                        _ => self.len,
+                    };
+                    let buffer_size = len.checked_mul(*byte_width).ok_or_else(|| {
                         ArrowError::ComputeError(
                             "Integer overflow computing buffer size".to_string(),
                         )
@@ -2617,6 +2629,44 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
+        // 2-element array ["hello", "world"]: array len = 2, 10 bytes
+        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        // offsets need array_len+1 entries to mark the end of every string:
+        //   [0, 5, 10] -> 3 i32s = 12 bytes
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
+        let array = ArrayData::try_new(
+            DataType::Utf8,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 22); // 12 + 10
+    }
+
+    #[test]
+    fn test_slice_memory_size_binary_offset_buffer_len_plus_one() {
+        // 2-element array: array len = 2, not 3
+        // values: 5 bytes
+        let data_buffer = Buffer::from_slice_ref([0u8, 1, 2, 3, 4]);
+        // offsets need array_len+1 entries to mark the end of every element:
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 5_i32]);
+        let array = ArrayData::try_new(
+            DataType::Binary,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 17); // 12 + 5
+    }
+
+    #[test]
     fn test_slice_memory_size() {
         let mut bit_v: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut bit_v, 0);
@@ -2834,7 +2884,7 @@ mod tests {
     #[test]
     fn should_fail_validation_when_having_map_entries_only_have_1_field() {
         let struct_data_type = DataType::Struct(Fields::from(vec![Field::new(
-            "key",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Int32,
             false,
         )]));
@@ -2851,7 +2901,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2881,8 +2939,8 @@ mod tests {
     #[test]
     fn should_fail_validation_when_having_map_entries_have_3_fields() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             Field::new("other", DataType::Int32, true),
         ]));
 
@@ -2902,7 +2960,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2932,8 +2998,8 @@ mod tests {
     #[test]
     fn should_fail_validation_when_having_nullable_map_keys() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -2949,7 +3015,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2976,8 +3050,8 @@ mod tests {
     #[test]
     fn should_fail_validation_when_having_entries_is_nullable_for_map() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -2994,7 +3068,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, true).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    true,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3022,8 +3104,8 @@ mod tests {
     #[test]
     fn should_allow_to_create_map_from_data() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -3039,7 +3121,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3085,10 +3175,10 @@ mod tests {
     fn empty_and_null_map_array_should_pass_validation() {
         let dt = DataType::Map(
             Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, false),
-                    Field::new("values", DataType::Utf8, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                 ])),
                 false,
             )

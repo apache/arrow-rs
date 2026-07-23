@@ -33,6 +33,8 @@
 //! cargo run --features=cli --bin parquet-show-bloom-filter -- --file-name XYZ.parquet --column id --values a
 //! ```
 
+mod cli;
+
 use clap::Parser;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
@@ -49,8 +51,10 @@ use std::{fs::File, path::Path};
 struct Args {
     #[clap(help("Path to the parquet file"))]
     file_name: String,
-    #[clap(help(
-        "Check the bloom filter indexes for the given column. Only string typed columns or columns with an Int32 or Int64 physical type are supported"
+    #[clap(help(concat!(
+        "Dot-separated column path to check bloom filter for. Literal dots can be escaped as `\\.`. ",
+        "Only string typed columns or columns with an Int32 or Int64 physical type are supported."
+    )
     ))]
     column: String,
     #[clap(
@@ -80,6 +84,14 @@ fn main() {
     )
     .expect("Unable to open file as Parquet");
     let metadata = file_reader.metadata();
+    let column_path = match cli::parse_column_path(&args.column) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+    };
+
     for (ri, row_group) in metadata.row_groups().iter().enumerate() {
         println!("Row group #{ri}");
         println!("{}", "=".repeat(80));
@@ -87,7 +99,7 @@ fn main() {
             .columns()
             .iter()
             .enumerate()
-            .find(|(_, column)| column.column_path().string() == args.column)
+            .find(|(_, column)| column.column_path().parts() == column_path.as_slice())
         {
             let row_group_reader = file_reader
                 .get_row_group(ri)

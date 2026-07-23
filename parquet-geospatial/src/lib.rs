@@ -19,13 +19,6 @@
 //!
 //! [Geometry and Geography Encoding]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 //! [Apache Parquet]: https://parquet.apache.org/
-//!
-//! ## 🚧 Work In Progress
-//!
-//! This crate is under active development and is not yet ready for production use.
-//! If you are interested in helping, you can find more information on the GitHub [Geometry issue]
-//!
-//! [Geometry issue]: https://github.com/apache/arrow-rs/issues/8373
 
 pub mod bounding;
 pub mod interval;

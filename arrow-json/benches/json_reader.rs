@@ -363,11 +363,11 @@ fn build_map_values(rows: usize, entries: usize) -> Vec<Value> {
 
 fn build_map_schema() -> Arc<Schema> {
     let entries_field = Arc::new(Field::new(
-        "entries",
+        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
         DataType::Struct(
             vec![
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int64, true),
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int64, true),
             ]
             .into(),
         ),
