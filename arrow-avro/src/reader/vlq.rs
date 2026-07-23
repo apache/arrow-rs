@@ -32,9 +32,8 @@ pub struct VLQDecoder {
 impl VLQDecoder {
     /// Decode a signed long from `buf`
     ///
-    /// Returns `Err` if `buf` starts with more than 10 continuation bytes without a
-    /// terminator, which would otherwise overflow the accumulated `u64` (matching the
-    /// bound already enforced by [`read_varint_array`] for the stateless decoders below).
+    /// Returns `Err` if more than 10 continuation bytes accumulate across calls without a
+    /// terminator, which would otherwise overflow the accumulated `i64`.
     pub fn long(&mut self, buf: &mut &[u8]) -> Result<Option<i64>, AvroError> {
         while let Some(byte) = buf.first().copied() {
             if self.shift == 63 && byte >= 0x02 {
