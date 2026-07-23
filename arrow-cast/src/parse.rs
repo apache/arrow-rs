@@ -490,7 +490,6 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                // let string_bytes = trim_pre_and_post_whitespace(string).as_bytes();
                 let mut raw_bytes = string.as_bytes();
                 if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
                     raw_bytes = raw_bytes.trim_ascii_end();
