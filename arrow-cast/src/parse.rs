@@ -2906,7 +2906,6 @@ mod tests {
     }
     #[test]
     fn test_parse_prefix_white_space() {
-        /*
         assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
         assert_eq!(Float64Type::parse("\t\n 20.54"), Some(20.54));
         assert_eq!(Float64Type::parse("\n2.5"), Some(2.5));
@@ -2948,7 +2947,6 @@ mod tests {
         assert_eq!(Int32Type::parse("30x"), None);
         assert_eq!(Int32Type::parse("100px"), None);
         assert_eq!(Int32Type::parse("-25!"), None);
-        */
         assert_eq!(Int32Type::parse("3j"), None);
         assert_eq!(Int32Type::parse("3"), Some(3));
     }
