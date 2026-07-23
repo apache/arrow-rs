@@ -104,6 +104,11 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
 
     /// Returns the scale (number of digits after the decimal point)
     fn scale(&self) -> u8;
+
+    /// Converts the decimal as an integer if possible,
+    /// Return Some(integer value) if scale is 0 or the unscaled integer is divisible by 10^scale.
+    /// None for other values.
+    fn as_integer(&self) -> Option<Self::Native>;
 }
 
 /// Implements the complete variant decimal type: methods, Display, and VariantDecimalType trait
@@ -141,6 +146,37 @@ macro_rules! impl_variant_decimal {
             pub fn scale(&self) -> u8 {
                 self.scale
             }
+
+            #[doc = concat!(
+                        "Returns Some(`",
+                        stringify!($native),
+                        "`) if scale is zero or integer of the decimal is divisible by 10^scale,\n",
+                        "None for other values.\n\n",
+                        "",
+                        "# Examples\n",
+                        "```rust\n",
+                        "use parquet_variant::", stringify!($struct_name), ";\n",
+                        "//Return the integer if scale is 0\n",
+                        "let d1 = ", stringify!($struct_name), "::try_new(123, 0).unwrap();\n",
+                        "assert_eq!(d1.as_integer(), Some(123));\n",
+                        "// or if the integer is divisible by 10^scale\n",
+                        "let d2 = ", stringify!($struct_name), "::try_new(100, 2).unwrap();\n",
+                        "assert_eq!(d2.as_integer(), Some(1));\n",
+                        "// or if the integer is 0\n",
+                        "let d3 = ", stringify!($struct_name), "::try_new(0, 4).unwrap();\n",
+                        "assert_eq!(d3.as_integer(), Some(0));\n",
+                        "// but not if the integer is not divisible by 10^scale\n",
+                        "let d4 = ", stringify!($struct_name), "::try_new(123, 2).unwrap();\n",
+                        "assert_eq!(d4.as_integer(), None);\n",
+                        "```\n",
+                    )]
+            pub fn as_integer(&self) -> Option<$native> {
+                if self.scale == 0 {
+                    return Some(self.integer);
+                }
+                let divisor = <$native>::pow(10, self.scale as u32);
+                (self.integer % divisor == 0).then(|| self.integer / divisor)
+            }
         }
 
         impl VariantDecimalType for $struct_name {
@@ -173,6 +209,10 @@ macro_rules! impl_variant_decimal {
 
             fn scale(&self) -> u8 {
                 self.scale()
+            }
+
+            fn as_integer(&self) -> Option<$native> {
+                self.as_integer()
             }
         }
 
