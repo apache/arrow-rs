@@ -292,10 +292,9 @@ fn shredded_get_path(
                     // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
                     // a new empty metadata array. (n * 3 bytes vs Arc bump)
                     let metadata = input.metadata_column().clone();
-                    let arr = VariantArray::from_parts(
+                    let arr = VariantArray::from_parts_unshredded(
                         metadata,
                         all_null_value_column(num_rows),
-                        None,
                         all_nulls,
                     );
                     return Ok(ArrayRef::from(arr));
@@ -2427,6 +2426,22 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_variant_get_missing_path_as_variant_annotates_value_non_nullable() {
+        let (unshredded, shredded) = create_variant_get_as_variant_test_data();
+        let variant_field = VariantArray::try_new(&unshredded).unwrap().field("result");
+
+        // indexing into a struct typed_value can never match: all-null variant output
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name[0]").unwrap())
+            .with_as_type(Some(FieldRef::from(variant_field)));
+        let result = variant_get(&shredded, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.inner().null_count(), result_variant.len());
+        let (_, value_field) = result_variant.inner().fields().find("value").unwrap();
+        assert!(!value_field.is_nullable());
+    }
+
     fn create_variant_get_as_variant_test_data() -> (ArrayRef, ArrayRef) {
         let input_json: ArrayRef = Arc::new(StringArray::from(vec![
             Some(r#"{"field_name": {"k": 100000}}"#),
@@ -2458,6 +2473,8 @@ mod test {
 
         assert!(result_variant.typed_value_column().is_none());
         assert!(result_variant.value_column().null_count() < result_variant.len());
+        let (_, value_field) = result_variant.inner().fields().find("value").unwrap();
+        assert!(!value_field.is_nullable());
 
         let expected_json: ArrayRef = Arc::new(StringArray::from(vec![
             Some(r#"{"k":100000}"#),
