@@ -530,7 +530,19 @@ impl ArrayData {
         for spec in layout.buffers.iter() {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
-                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
+                    // Offset buffers contain len+1 elements: one boundary per element
+                    // plus a final boundary marking the end of the last element.
+                    let len = match self.data_type {
+                        DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Map(_, _) => self.len + 1,
+                        _ => self.len,
+                    };
+                    let buffer_size = len.checked_mul(*byte_width).ok_or_else(|| {
                         ArrowError::ComputeError(
                             "Integer overflow computing buffer size".to_string(),
                         )
@@ -991,6 +1003,11 @@ impl ArrayData {
                     )));
                 }
             }
+            DataType::Map(f, _) if f.is_nullable() => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "The nullable should be set to false for the map entries field.".to_string(),
+                ));
+            }
             _ => {}
         };
 
@@ -1140,7 +1157,7 @@ impl ArrayData {
     /// Validates the layout of `child_data` ArrayData structures
     fn validate_child_data(&self) -> Result<(), ArrowError> {
         match &self.data_type {
-            DataType::List(field) | DataType::Map(field, _) => {
+            DataType::List(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
                 Ok(())
@@ -1148,6 +1165,30 @@ impl ArrayData {
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
+                Ok(())
+            }
+            DataType::Map(field, _) => {
+                let DataType::Struct(entries_fields) = field.data_type() else {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Map field should be a entries struct data type, got {:?} instead",
+                        field.data_type()
+                    )));
+                };
+                if entries_fields.len() != 2 {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Map entries data type should be a struct containing 2 fields, got {} fields",
+                        entries_fields.len()
+                    )));
+                }
+
+                // Key field
+                if entries_fields[0].is_nullable() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Map key field must not be nullable".to_string(),
+                    ));
+                }
+                let values_data = self.get_single_valid_child_data(field.data_type())?;
+                self.validate_offsets::<i32>(values_data.len)?;
                 Ok(())
             }
             DataType::ListView(field) => {
@@ -2303,6 +2344,7 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
 
     // See arrow/tests/array_data_validation.rs for test of array validation
@@ -2587,6 +2629,44 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
+        // 2-element array ["hello", "world"]: array len = 2, 10 bytes
+        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        // offsets need array_len+1 entries to mark the end of every string:
+        //   [0, 5, 10] -> 3 i32s = 12 bytes
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
+        let array = ArrayData::try_new(
+            DataType::Utf8,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 22); // 12 + 10
+    }
+
+    #[test]
+    fn test_slice_memory_size_binary_offset_buffer_len_plus_one() {
+        // 2-element array: array len = 2, not 3
+        // values: 5 bytes
+        let data_buffer = Buffer::from_slice_ref([0u8, 1, 2, 3, 4]);
+        // offsets need array_len+1 entries to mark the end of every element:
+        let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 5_i32]);
+        let array = ArrayData::try_new(
+            DataType::Binary,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(array.get_slice_memory_size().unwrap(), 17); // 12 + 5
+    }
+
+    #[test]
     fn test_slice_memory_size() {
         let mut bit_v: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut bit_v, 0);
@@ -2765,5 +2845,370 @@ mod tests {
             res.to_string(),
             format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
         );
+    }
+
+    #[test]
+    fn should_fail_validation_when_having_map_field_type_is_not_struct() {
+        let map_field = Field::new("key", DataType::Int32, false);
+
+        let map_field_data = valid_non_nullable_int32_array_data(2);
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(map_field.into(), false),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![map_field_data],
+        );
+
+        for result in results {
+            let array_data_err = result.expect_err("should fail for non struct field");
+
+            match array_data_err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert_eq!(
+                        msg,
+                        "Map field should be a entries struct data type, got Int32 instead"
+                    )
+                }
+                _ => panic!("unexpected error type {array_data_err}"),
+            };
+        }
+    }
+
+    #[test]
+    fn should_fail_validation_when_having_map_entries_only_have_1_field() {
+        let struct_data_type = DataType::Struct(Fields::from(vec![Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        )]));
+
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+
+        let struct_data = {
+            let builder = ArrayDataBuilder::new(struct_data_type.clone())
+                .len(2)
+                .nulls(None)
+                .child_data(vec![key_array_data]);
+
+            builder.build().unwrap()
+        };
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![struct_data],
+        );
+
+        for result in results {
+            let array_data_err = result.expect_err("should fail for nullable key");
+
+            match array_data_err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert_eq!(
+                        msg,
+                        "Map entries data type should be a struct containing 2 fields, got 1 fields"
+                    )
+                }
+                _ => panic!("unexpected error type {array_data_err}"),
+            };
+        }
+    }
+
+    #[test]
+    fn should_fail_validation_when_having_map_entries_have_3_fields() {
+        let struct_data_type = DataType::Struct(Fields::from(vec![
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+            Field::new("other", DataType::Int32, true),
+        ]));
+
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+
+        let values_array_data = valid_string_array_data(2);
+
+        let other_array_data = key_array_data.clone();
+
+        let struct_data = {
+            let builder = ArrayDataBuilder::new(struct_data_type.clone())
+                .len(2)
+                .nulls(None)
+                .child_data(vec![key_array_data, values_array_data, other_array_data]);
+
+            builder.build().unwrap()
+        };
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![struct_data],
+        );
+
+        for result in results {
+            let array_data_err = result.expect_err("should fail for nullable key");
+
+            match array_data_err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert_eq!(
+                        msg,
+                        "Map entries data type should be a struct containing 2 fields, got 3 fields"
+                    )
+                }
+                _ => panic!("unexpected error type {array_data_err}"),
+            };
+        }
+    }
+
+    #[test]
+    fn should_fail_validation_when_having_nullable_map_keys() {
+        let struct_data_type = DataType::Struct(Fields::from(vec![
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+        ]));
+
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+        let values_array_data = valid_string_array_data(2);
+
+        let struct_data = {
+            let builder = ArrayDataBuilder::new(struct_data_type.clone())
+                .len(2)
+                .nulls(None)
+                .child_data(vec![key_array_data, values_array_data]);
+
+            builder.build().unwrap()
+        };
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![struct_data],
+        );
+
+        for result in results {
+            let array_data_err = result.expect_err("should fail for nullable key");
+
+            match array_data_err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert_eq!(msg, "Map key field must not be nullable")
+                }
+                _ => panic!("unexpected error type {array_data_err}"),
+            };
+        }
+    }
+
+    #[test]
+    fn should_fail_validation_when_having_entries_is_nullable_for_map() {
+        let struct_data_type = DataType::Struct(Fields::from(vec![
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+        ]));
+
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+
+        let values_array_data = valid_string_array_data(2);
+
+        let struct_data = {
+            let builder = ArrayDataBuilder::new(struct_data_type.clone())
+                .len(2)
+                .nulls(None)
+                .child_data(vec![key_array_data, values_array_data]);
+
+            builder.build().unwrap()
+        };
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    true,
+                )
+                .into(),
+                false,
+            ),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![struct_data],
+        );
+
+        for result in results {
+            let array_data_err = result.expect_err("should fail for nullable entries");
+
+            match array_data_err {
+                ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                    msg,
+                    "The nullable should be set to false for the map entries field."
+                ),
+                _ => panic!("unexpected error type {array_data_err}"),
+            };
+        }
+    }
+
+    #[test]
+    fn should_allow_to_create_map_from_data() {
+        let struct_data_type = DataType::Struct(Fields::from(vec![
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+        ]));
+
+        let key_array_data = valid_non_nullable_int32_array_data(2);
+        let values_array_data = valid_string_array_data(2);
+
+        let struct_data = {
+            let builder = ArrayDataBuilder::new(struct_data_type.clone())
+                .len(2)
+                .nulls(None)
+                .child_data(vec![key_array_data, values_array_data]);
+
+            builder.build().unwrap()
+        };
+
+        let results = test_both_builder_and_array_data(
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
+            1,
+            None,
+            0,
+            vec![
+                OffsetBuffer::<i32>::from_lengths(vec![2])
+                    .into_inner()
+                    .into(),
+            ],
+            vec![struct_data],
+        );
+
+        for result in results {
+            result.expect("should be able to create map ArrayData");
+        }
+    }
+
+    fn valid_string_array_data(length: usize) -> ArrayData {
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![0; length])
+            .into_inner()
+            .into_inner();
+        let empty_bytes = Buffer::default();
+
+        let builder = ArrayDataBuilder::new(DataType::Utf8)
+            .len(length)
+            .buffers(vec![offsets, empty_bytes])
+            .nulls(None);
+
+        builder.build().unwrap()
+    }
+
+    fn valid_non_nullable_int32_array_data(length: usize) -> ArrayData {
+        let builder = ArrayDataBuilder::new(DataType::Int32)
+            .len(length)
+            .nulls(None)
+            .buffers(vec![
+                ScalarBuffer::<i32>::from(vec![1; length]).into_inner(),
+            ]);
+
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn empty_and_null_map_array_should_pass_validation() {
+        let dt = DataType::Map(
+            Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                DataType::Struct(Fields::from(vec![
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+                ])),
+                false,
+            )
+            .into(),
+            false,
+        );
+
+        ArrayData::new_empty(&dt).validate_full().unwrap();
+        ArrayData::new_null(&dt, 1).validate_full().unwrap();
+    }
+
+    fn test_both_builder_and_array_data(
+        data_type: DataType,
+        len: usize,
+        null_bit_buffer: Option<Buffer>,
+        offset: usize,
+        buffers: Vec<Buffer>,
+        child_data: Vec<ArrayData>,
+    ) -> [Result<ArrayData, ArrowError>; 2] {
+        let from_builder_res = ArrayData::builder(data_type.clone())
+            .len(len)
+            .add_buffers(buffers.clone())
+            .null_bit_buffer(null_bit_buffer.clone())
+            .offset(offset)
+            .child_data(child_data.clone())
+            .build();
+
+        let from_try_new_res =
+            ArrayData::try_new(data_type, len, null_bit_buffer, offset, buffers, child_data);
+
+        [from_builder_res, from_try_new_res]
     }
 }

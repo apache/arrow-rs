@@ -336,6 +336,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         Vec::new()
     };
 
+    let null_sentinel = null_sentinel(options);
     let mut views = vec![0_u128; len];
     for (i, row) in rows.iter_mut().enumerate() {
         let start_offset = values.len();
@@ -344,7 +345,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         // overwrite short strings in the values buffer as we inline those to
         // views.
         let decoded_len = values.len() - start_offset;
-        if row[0] == null_sentinel(options) {
+        if row[0] == null_sentinel {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
         } else {
