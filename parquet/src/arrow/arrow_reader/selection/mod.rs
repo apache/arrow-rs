@@ -93,14 +93,17 @@ impl RowSelector {
     }
 }
 
-/// [`RowSelection`] allows selecting or skipping a provided number of rows
-/// when scanning the parquet file.
+/// [`RowSelection`] represents selecting a subset of rows
+/// when scanning a parquet file.
 ///
 /// This is applied prior to reading column data, and can therefore
 /// be used to skip IO to fetch data into memory
 ///
 /// A typical use-case would be using the [`PageIndex`] to filter out rows
 /// that don't satisfy a predicate
+///
+/// Depending on the pattern of rows to be selected, [`RowSelection`] has
+/// either a bitmap or an RLE ([`RowSelector`]) based implementation.
 ///
 /// # Example
 /// ```
@@ -140,7 +143,8 @@ impl RowSelector {
 /// assert_eq!(selection.row_count(), 3);
 /// ```
 ///
-/// A [`RowSelection`] maintains the following invariants:
+/// An RLE ([`RowSelector`]) backed [`RowSelection`] maintains the following
+/// invariants (they do not apply to the bitmap backed implementation):
 ///
 /// * It contains no [`RowSelector`] of 0 rows
 /// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
@@ -233,7 +237,17 @@ impl<'a> Iterator for RowSelectionIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
 }
+
+impl ExactSizeIterator for RowSelectionIter<'_> {}
+
+// once it returns None, it will continue returning None
+impl std::iter::FusedIterator for RowSelectionIter<'_> {}
 
 #[inline]
 fn scan_ranges_from_selectors<I>(selectors: I, page_locations: &[PageLocation]) -> Vec<Range<u64>>
@@ -342,6 +356,9 @@ where
 }
 
 impl RowSelection {
+    /// Not `pub`: unlike `From<Vec<RowSelector>>`, this performs no
+    /// validation/normalization of the selectors (e.g. combining adjacent
+    /// selectors), so callers must uphold the invariants themselves.
     fn from_selectors(selectors: Vec<RowSelector>) -> Self {
         Self {
             inner: RowSelectionInner::Selectors(selectors),
@@ -370,8 +387,10 @@ impl RowSelection {
     /// Returns the underlying mask if this selection is mask-backed.
     ///
     /// Public so that engines composing selections (e.g. DataFusion's
-    /// `ParquetAccessPlan::into_overall_row_selection`) can concatenate
+    /// [`ParquetAccessPlan::into_overall_row_selection`]) can concatenate
     /// mask-backed selections without materialising the RLE form.
+    ///
+    /// [`ParquetAccessPlan::into_overall_row_selection`]: https://docs.rs/datafusion-datasource-parquet/latest/datafusion_datasource_parquet/access_plan/struct.ParquetAccessPlan.html#method.into_overall_row_selection
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
             RowSelectionInner::Mask(m) => Some(m.mask()),
