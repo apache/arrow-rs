@@ -384,131 +384,134 @@ impl LevelInfoBuilder {
             return;
         }
 
-        // Fast path for "last-level list": when the child has no nested rep_levels,
-        // each child element produces exactly one rep_level entry. We can batch
-        // contiguous non-empty list slots into a single child.write() call, then
-        // fix up the rep_levels at list-slot boundaries using offsets directly.
-        //
-        // Kept as a separate function so the compiler can optimize write_list's
+        // Dispatch to separate functions so the compiler can optimize each
         // hot loop independently (function body size affects codegen quality).
         if is_last_level {
-            Self::write_list_last_level(child, ctx, offsets, nulls, range);
-            return;
-        }
-
-        let offsets = &offsets[range.start..range.end + 1];
-
-        let write_non_null_slice =
-            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                child.write(start_idx..end_idx);
-                child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
-                    let mut rev = rep_levels.iter_mut().rev();
-                    let mut remaining = end_idx - start_idx;
-
-                    loop {
-                        let next = rev.next().unwrap();
-                        if *next > ctx.rep_level {
-                            // Nested element - ignore
-                            continue;
-                        }
-
-                        remaining -= 1;
-                        if remaining == 0 {
-                            *next = ctx.rep_level - 1;
-                            break;
-                        }
-                    }
-                })
-            };
-
-        // In a list column, each row falls into one of three categories:
-        // - "null": the list slot is absent (!is_valid), encoded at def_level - 2
-        // - "empty": the list slot is present but has zero elements
-        //   (offsets[i] == offsets[i+1]), encoded at def_level - 1
-        // - non-empty: the list slot has child values, which are recursed into
-        //
-        // Consecutive runs of null or empty rows are batched and written together.
-        let write_null_run = |child: &mut LevelInfoBuilder, count: usize| {
-            if count > 0 {
-                child.visit_leaves(|leaf| {
-                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
-                    leaf.append_def_level_run(ctx.def_level - 2, count);
-                });
-            }
-        };
-
-        let write_empty_run = |child: &mut LevelInfoBuilder, count: usize| {
-            if count > 0 {
-                child.visit_leaves(|leaf| {
-                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
-                    leaf.append_def_level_run(ctx.def_level - 1, count);
-                });
-            }
-        };
-
-        match nulls {
-            Some(nulls) => {
-                let null_offset = range.start;
-                let mut pending_nulls: usize = 0;
-                let mut pending_empties: usize = 0;
-
-                // TODO: Faster bitmask iteration (#1757)
-                for (idx, w) in offsets.windows(2).enumerate() {
-                    let is_valid = nulls.is_valid(idx + null_offset);
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
-
-                    if !is_valid {
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        pending_nulls += 1;
-                    } else if start_idx == end_idx {
-                        write_null_run(child, pending_nulls);
-                        pending_nulls = 0;
-                        pending_empties += 1;
-                    } else {
-                        write_null_run(child, pending_nulls);
-                        pending_nulls = 0;
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        write_non_null_slice(child, start_idx, end_idx);
-                    }
-                }
-                write_null_run(child, pending_nulls);
-                write_empty_run(child, pending_empties);
-            }
-            None => {
-                let mut pending_empties: usize = 0;
-                for w in offsets.windows(2) {
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
-                    if start_idx == end_idx {
-                        pending_empties += 1;
-                    } else {
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        write_non_null_slice(child, start_idx, end_idx);
-                    }
-                }
-                write_empty_run(child, pending_empties);
-            }
+            Self::write_list_direct(child, ctx, offsets, nulls, range);
+        } else {
+            Self::write_list_scan(child, ctx, offsets, nulls, range);
         }
     }
 
-    /// Optimized write path for lists whose child has no nested repetition levels.
+    /// Batch write for lists whose child has no nested repetition.
     ///
-    /// When the child is a leaf (or a struct of leaves), each child element maps to
-    /// exactly one rep_level entry. This lets us batch contiguous non-empty list
-    /// slots into a single `child.write()` call, then stamp the list-start markers
-    /// at positions computed directly from offsets — avoiding per-slot `write` +
-    /// reverse-scan overhead.
-    fn write_list_last_level<O: OffsetSizeTrait>(
+    /// "direct" means writing the child rep levels using offsets without scanning.
+    fn write_list_direct<O: OffsetSizeTrait>(
         child: &mut LevelInfoBuilder,
         ctx: &LevelContext,
         offsets: &[O],
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
+    ) {
+        let list_start_rep = ctx.rep_level - 1;
+
+        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
+            let values_start = run_offsets[0].as_usize();
+            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
+
+            child.write(values_start..values_end);
+
+            // The first element of each list slot needs rep_level =
+            // list_start_rep to mark a new list boundary. Because there's a 1:1
+            // mapping between child elements and rep_level entries, the position
+            // of each slot's first element is directly computable from offsets.
+            child.visit_leaves(|leaf| {
+                debug_assert!(leaf.max_rep_level == ctx.rep_level);
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
+                let batch_len = values_end - values_start;
+                let batch_base = rep_levels.len() - batch_len;
+                for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                    let pos = batch_base + (slot_offset.as_usize() - values_start);
+                    rep_levels[pos] = list_start_rep;
+                }
+            });
+        };
+
+        Self::write_list_impl(child, ctx, offsets, nulls, range, emit_non_empty_run);
+    }
+
+    /// Batch write for lists whose child has nested repetition.
+    ///
+    /// After batch-writing child elements, scans backward through rep_levels
+    /// counting child-element starts to find and stamp slot boundaries.
+    ///
+    /// Scan backward because we don't know start offset before writing.
+    fn write_list_scan<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let list_start_rep = ctx.rep_level - 1;
+
+        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
+            let values_start = run_offsets[0].as_usize();
+            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
+
+            child.write(values_start..values_end);
+
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
+
+                if leaf.max_rep_level == ctx.rep_level {
+                    // This algorithm is the same as write_list_direct.
+                    // Use a separate function because the branch code size would affect codegen
+                    // quality of the hot loop of write_list_direct.
+                    let batch_len = values_end - values_start;
+                    let batch_base = rep_levels.len() - batch_len;
+                    for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                        let pos = batch_base + (slot_offset.as_usize() - values_start);
+                        rep_levels[pos] = list_start_rep;
+                    }
+                } else {
+                    // Backward scan: count child-element starts (rep <= ctx.rep_level)
+                    // and stamp list_start_rep at slot boundaries.
+                    let mut slot_bounds = run_offsets[..run_offsets.len() - 1].iter().rev();
+                    let mut next_stamp_at = values_end - slot_bounds.next().unwrap().as_usize();
+                    let mut seen = 0usize;
+
+                    for rep in rep_levels.iter_mut().rev() {
+                        // Asserting rep >= ctx.rep_level to ensure low level depth haven't
+                        // being written.
+                        debug_assert!(*rep >= ctx.rep_level);
+                        // Count element starts by skipping nested reps (rep > ctx.rep_level).
+                        //
+                        // `==` would also work here: the child is written before the
+                        // parent, so no entry within the batch has rep < ctx.rep_level.
+                        // Benchmarks show no difference, so keep the more defensive `<=`.
+                        if *rep <= ctx.rep_level {
+                            seen += 1;
+                            if seen == next_stamp_at {
+                                *rep = list_start_rep;
+                                match slot_bounds.next() {
+                                    Some(offset) => next_stamp_at = values_end - offset.as_usize(),
+                                    None => break,
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        };
+
+        Self::write_list_impl(child, ctx, offsets, nulls, range, emit_non_empty_run);
+    }
+
+    /// Shared run-classification loop for write_list_direct and write_list_scan.
+    /// Monomorphized per `emit_non_empty_run` closure type, giving the compiler
+    /// separate optimization contexts for each backfill strategy.
+    fn write_list_impl<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+        mut emit_non_empty_run: impl FnMut(&mut LevelInfoBuilder, &[O]),
     ) {
         let null_offset = range.start;
         let offsets = &offsets[range.start..range.end + 1];
@@ -525,33 +528,6 @@ impl LevelInfoBuilder {
             child.visit_leaves(|leaf| {
                 leaf.append_rep_level_run(list_start_rep, count);
                 leaf.append_def_level_run(ctx.def_level - 1, count);
-            });
-        };
-
-        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
-            debug_assert!(run_offsets.len() >= 2);
-            let values_start = run_offsets[0].as_usize();
-            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
-            debug_assert!(values_end > values_start);
-
-            // Write all leaf values in one batch. Since the child has no nested
-            // rep, this emits (values_end - values_start) rep_levels all equal
-            // to ctx.rep_level (= "continuation within list").
-            child.write(values_start..values_end);
-
-            // The first element of each list slot needs rep_level =
-            // list_start_rep to mark a new list boundary. Because there's a 1:1
-            // mapping between child elements and rep_level entries, the position
-            // of each slot's first element is directly computable from offsets.
-            child.visit_leaves(|leaf| {
-                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
-                let batch_len = values_end - values_start;
-                let batch_base = rep_levels.len() - batch_len;
-
-                for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
-                    let list_start_pos = batch_base + (slot_offset.as_usize() - values_start);
-                    rep_levels[list_start_pos] = list_start_rep;
-                }
             });
         };
 
@@ -591,7 +567,9 @@ impl LevelInfoBuilder {
         }
 
         match nulls {
-            Some(nulls) => {
+            // A null buffer without any null can skip the per-slot validity
+            // checks and use the null-free classification loop below.
+            Some(nulls) if nulls.null_count() > 0 => {
                 let mut run_kind = classify!(0, nulls);
                 let mut run_start: usize = 0;
                 for i in 1..num_slots {
@@ -604,7 +582,7 @@ impl LevelInfoBuilder {
                 }
                 flush_run!(run_kind, run_start, num_slots);
             }
-            None => {
+            _ => {
                 let mut run_kind = if offsets[0] == offsets[1] {
                     SlotKind::Empty
                 } else {
