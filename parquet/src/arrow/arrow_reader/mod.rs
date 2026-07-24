@@ -1386,8 +1386,7 @@ impl FilterMaskAccumulator {
         *self = match std::mem::take(self) {
             Self::Empty => Self::Single(mask),
             Self::Single(first) => {
-                let mut combined = BooleanBufferBuilder::new(first.len() + mask.len());
-                combined.append_buffer(&first);
+                let mut combined = first.into_builder_or_clone();
                 combined.append_buffer(&mask);
                 Self::Combined(combined)
             }
