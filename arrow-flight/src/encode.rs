@@ -2253,4 +2253,91 @@ mod tests {
         assert!(total_buffer_memory_short > total_slice_memory_short); // 85 mb > 21mb
         assert_eq!(total_buffer_memory_long, total_slice_memory_long); // 85 MB == 85 mb
     }
+
+    async fn collect_decoded_batches(decoder: &mut FlightDataDecoder) -> Vec<RecordBatch> {
+        let mut batches = vec![];
+        while let Some(decoded) = decoder.next().await {
+            if let DecodedPayload::RecordBatch(b) = decoded.unwrap().payload {
+                batches.push(b);
+            }
+        }
+        batches
+    }
+
+    /// encode → decode → re-encode must not produce more FlightData messages than the initial encode.
+    #[tokio::test]
+    async fn test_roundtrip_encode_decode_reencode_no_extra_flight_data() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "data",
+            Arc::new(Int32Array::from_iter_values(0..1_000_000)) as ArrayRef,
+        )])
+        .unwrap();
+
+        let max_size = 256 * 1024; // 256KB forces ~16 splits across the 4MB batch
+
+        let encoder = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_size)
+            .build(futures::stream::iter(vec![Ok(batch.clone())]));
+        let encoded: Vec<FlightData> = encoder.map(|r| r.unwrap()).collect().await;
+        let encoded_count = encoded.len();
+        assert!(encoded_count > 2, "batch must split for this test to be meaningful");
+
+        let mut decoder =
+            FlightDataDecoder::new(futures::stream::iter(encoded.into_iter().map(Ok)));
+        let decoded_batches = collect_decoded_batches(&mut decoder).await;
+
+        let reencoded_count = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_size)
+            .build(futures::stream::iter(decoded_batches.into_iter().map(Ok)))
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>()
+            .await
+            .len();
+
+        assert!(
+            reencoded_count <= encoded_count,
+            "re-encode produced {reencoded_count} messages but initial encode produced {encoded_count}"
+        );
+    }
+
+    /// A zero-copy slice shares the original backing buffer, so get_buffer_memory_size() sees
+    /// the full allocation regardless of how many rows the slice covers. The encoder must use
+    /// get_slice_memory_size() — otherwise a 4MB slice of a 16MB batch produces as many
+    /// FlightData messages as the full 16MB batch.
+    #[tokio::test]
+    async fn test_slice_encodes_fewer_flight_data_than_full_buffer() {
+        const FULL_ROWS: usize = 4_000_000; // 16MB
+        const SLICE_ROWS: usize = FULL_ROWS / 4; // 4MB
+
+        let full_batch = RecordBatch::try_from_iter(vec![(
+            "col",
+            Arc::new(UInt32Array::from_iter_values(0..FULL_ROWS as u32)) as ArrayRef,
+        )])
+        .unwrap();
+        let slice_batch = full_batch.slice(0, SLICE_ROWS);
+
+        let max_size = 512 * 1024; // 512KB
+
+        let full_count = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_size)
+            .build(futures::stream::iter(vec![Ok(full_batch)]))
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>()
+            .await
+            .len();
+
+        let slice_count = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_size)
+            .build(futures::stream::iter(vec![Ok(slice_batch)]))
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>()
+            .await
+            .len();
+
+        assert!(
+            slice_count < full_count,
+            "slice ({SLICE_ROWS} rows) produced {slice_count} messages, same as full batch \
+             ({FULL_ROWS} rows, {full_count} messages) — encoder is accounting for the entire backing buffer"
+        );
+    }
 }
