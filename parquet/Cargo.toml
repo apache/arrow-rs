@@ -157,6 +157,11 @@ name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
 
+[[example]]
+name = "object_store"
+required-features = ["arrow", "async"]
+path = "./examples/object_store.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]

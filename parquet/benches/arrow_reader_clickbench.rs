@@ -42,6 +42,7 @@ use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
 };
+#[allow(deprecated)]
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::PageIndexPolicy;
@@ -737,6 +738,7 @@ impl ReadTest {
     }
 
     /// Run the filter and projection using the async `ObjectStore` reader
+    #[allow(deprecated)]
     async fn run_async_object_store(&self) {
         let hits_path = hits_1();
         let parent = hits_path.parent().unwrap();

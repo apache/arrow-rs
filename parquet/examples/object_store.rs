@@ -15,30 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Example [`ParquetObjectReader`] and [`ParquetObjectWriter`] that
+//! read and write Parquet files to object storage using [`ObjectStore`].
+//!
+//! These structures used to be a direct part of the `parquet` crate, but will
+//! be moved to this example to avoid a dependency on `object_store` and simplify
+//! the dependency chain.
+//!
+//! # Upgrade Guide from Parquet 59 and earlier:
+//!
+//! To upgrade, simply copy/paste the code from this file into your own crate
+//! and update the imports to point to your crate instead of
+//! `parquet::arrow::async_reader` and `parquet::arrow::async_writer`.
+
 use std::{ops::Range, sync::Arc};
 
-use crate::arrow::arrow_reader::ArrowReaderOptions;
-use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
-use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
 use object_store::ObjectStoreExt;
+use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetRange};
 use object_store::{ObjectStore, path::Path};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+use parquet::arrow::async_writer::AsyncFileWriter;
+use parquet::errors::{ParquetError, Result};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
+
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
-/// This structure is deprecated and will be removed in a future release, in
-/// order to remove the `parquet` crate's dependency on `object_store`. To
-/// upgrade, copy the implementation from the [`object_store` example] into
-/// your own codebase. See [#10308] for more details.
-///
-/// [`object_store` example]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs
-/// [#10308]: https://github.com/apache/arrow-rs/issues/10308
-///
 /// ```no_run
-/// # #![allow(deprecated)]
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
@@ -60,10 +68,6 @@ use tokio::runtime::Handle;
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
 /// # }
 /// ```
-#[deprecated(
-    since = "59.4.0",
-    note = "copy the implementation from https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs into your own codebase"
-)]
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
@@ -75,7 +79,6 @@ pub struct ParquetObjectReader {
     runtime: Option<Handle>,
 }
 
-#[allow(deprecated)]
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -182,7 +185,6 @@ impl ParquetObjectReader {
     }
 }
 
-#[allow(deprecated)]
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
@@ -191,25 +193,36 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
         };
         self.spawn(|store, path| {
             async move {
-                let resp = store.get_opts(path, options).await?;
-                Ok::<_, ParquetError>(resp.bytes().await?)
+                let resp = store
+                    .get_opts(path, options)
+                    .await
+                    .map_err(to_parquet_err)?;
+                let bytes = resp.bytes().await.map_err(to_parquet_err)?;
+                Ok::<_, ParquetError>(bytes)
             }
             .boxed()
         })
     }
 }
 
-#[allow(deprecated)]
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        self.spawn(|store, path| store.get_range(path, range).boxed())
+        self.spawn(|store, path| store.get_range(path, range).map_err(to_parquet_err).boxed())
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+        self.spawn(|store, path| {
+            async move {
+                store
+                    .get_ranges(path, &ranges)
+                    .await
+                    .map_err(to_parquet_err)
+            }
+            .boxed()
+        })
     }
 
     // This method doesn't directly call `self.spawn` because all of the IO that is done down the
@@ -233,7 +246,7 @@ impl AsyncFileReader for ParquetObjectReader {
             #[cfg(feature = "encryption")]
             if let Some(options) = options {
                 metadata = metadata.with_decryption_properties(
-                    options.file_decryption_properties.as_ref().map(Arc::clone),
+                    options.file_decryption_properties().map(Arc::clone),
                 );
             }
 
@@ -262,26 +275,154 @@ impl AsyncFileReader for ParquetObjectReader {
     }
 }
 
-#[cfg(test)]
-#[allow(deprecated)]
-mod tests {
-    use crate::arrow::async_reader::ArrowReaderOptions;
-    use crate::file::metadata::PageIndexPolicy;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+/// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
+///
+/// ```
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use object_store::memory::InMemory;
+/// # use object_store::path::Path;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
+/// # use std::sync::Arc;
+///
+/// # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+/// # use parquet::arrow::async_writer::ParquetObjectWriter;
+/// # use parquet::arrow::AsyncArrowWriter;
+///
+/// # #[tokio::main(flavor="current_thread")]
+/// # async fn main() {
+///     let store = Arc::new(InMemory::new());
+///
+///     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+///     let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+///
+///     let object_store_writer = ParquetObjectWriter::new(store.clone(), Path::from("test"));
+///     let mut writer =
+///         AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None).unwrap();
+///     writer.write(&to_write).await.unwrap();
+///     writer.close().await.unwrap();
+///
+///     let buffer = store
+///         .get(&Path::from("test"))
+///         .await
+///         .unwrap()
+///         .bytes()
+///         .await
+///         .unwrap();
+///     let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
+///         .unwrap()
+///         .build()
+///         .unwrap();
+///     let read = reader.next().unwrap().unwrap();
+///
+///     assert_eq!(to_write, read);
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct ParquetObjectWriter {
+    w: BufWriter,
+}
 
+impl ParquetObjectWriter {
+    /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
+    ///
+    /// To configure the writer behavior, please build [`BufWriter`] and then use [`Self::from_buf_writer`]
+    pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
+        Self::from_buf_writer(BufWriter::new(store, path))
+    }
+
+    /// Construct a new ParquetObjectWriter via a existing BufWriter.
+    pub fn from_buf_writer(w: BufWriter) -> Self {
+        Self { w }
+    }
+
+    /// Consume the writer and return the underlying BufWriter.
+    pub fn into_inner(self) -> BufWriter {
+        self.w
+    }
+}
+
+impl AsyncFileWriter for ParquetObjectWriter {
+    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            self.w
+                .put(bs)
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))
+        })
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            self.w
+                .shutdown()
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))
+        })
+    }
+}
+impl From<BufWriter> for ParquetObjectWriter {
+    fn from(w: BufWriter) -> Self {
+        Self::from_buf_writer(w)
+    }
+}
+
+fn to_parquet_err(e: object_store::Error) -> ParquetError {
+    ParquetError::External(Box::new(e))
+}
+
+/// Writes a [`RecordBatch`] to an in-memory [`ObjectStore`] using
+/// [`ParquetObjectWriter`] and reads it back using [`ParquetObjectReader`].
+///
+/// [`RecordBatch`]: arrow_array::RecordBatch
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use futures::TryStreamExt;
+    use object_store::memory::InMemory;
+    use parquet::arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder};
 
-    use crate::arrow::ParquetRecordBatchStreamBuilder;
-    use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-    use crate::errors::ParquetError;
+    let store = Arc::new(InMemory::new());
+    let path = Path::from("example.parquet");
+
+    // Write a RecordBatch to the object store
+    let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+    let to_write = RecordBatch::try_from_iter([("col", col)])?;
+    let writer = ParquetObjectWriter::new(Arc::clone(&store) as _, path.clone());
+    let mut writer = AsyncArrowWriter::try_new(writer, to_write.schema(), None)?;
+    writer.write(&to_write).await?;
+    writer.close().await?;
+
+    // Read the RecordBatch back from the object store
+    let reader = ParquetObjectReader::new(store as _, path);
+    let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+    let batches: Vec<_> = builder.build()?.try_collect().await?;
+
+    assert_eq!(batches, vec![to_write]);
+    println!(
+        "Round tripped {} batches through the object store",
+        batches.len()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
     use arrow::util::test_util::parquet_test_data;
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use futures::FutureExt;
+    use futures::TryStreamExt;
     use object_store::local::LocalFileSystem;
+    use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+    use parquet::arrow::AsyncArrowWriter;
+    use parquet::arrow::ParquetRecordBatchStreamBuilder;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::errors::ParquetError;
+    use parquet::file::metadata::PageIndexPolicy;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
@@ -523,5 +664,34 @@ mod tests {
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
         assert!(metadata.column_index().is_some() && metadata.column_index().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_async_writer() {
+        let store = Arc::new(InMemory::new());
+
+        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+        let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+
+        let object_store_writer = ParquetObjectWriter::new(store.clone(), Path::from("test"));
+        let mut writer =
+            AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None).unwrap();
+        writer.write(&to_write).await.unwrap();
+        writer.close().await.unwrap();
+
+        let buffer = store
+            .get(&Path::from("test"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
+            .unwrap()
+            .build()
+            .unwrap();
+        let read = reader.next().unwrap().unwrap();
+
+        assert_eq!(to_write, read);
     }
 }

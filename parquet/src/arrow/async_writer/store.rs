@@ -28,7 +28,16 @@ use tokio::io::AsyncWriteExt;
 
 /// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
 ///
+/// This structure is deprecated and will be removed in a future release, in
+/// order to remove the `parquet` crate's dependency on `object_store`. To
+/// upgrade, copy the implementation from the [`object_store` example] into
+/// your own codebase. See [#10308] for more details.
+///
+/// [`object_store` example]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs
+/// [#10308]: https://github.com/apache/arrow-rs/issues/10308
+///
 /// ```
+/// # #![allow(deprecated)]
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use object_store::memory::InMemory;
 /// # use object_store::path::Path;
@@ -68,11 +77,16 @@ use tokio::io::AsyncWriteExt;
 ///     assert_eq!(to_write, read);
 /// # }
 /// ```
+#[deprecated(
+    since = "59.4.0",
+    note = "copy the implementation from https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs into your own codebase"
+)]
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
     w: BufWriter,
 }
 
+#[allow(deprecated)]
 impl ParquetObjectWriter {
     /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
     ///
@@ -92,6 +106,7 @@ impl ParquetObjectWriter {
     }
 }
 
+#[allow(deprecated)]
 impl AsyncFileWriter for ParquetObjectWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {
@@ -111,12 +126,14 @@ impl AsyncFileWriter for ParquetObjectWriter {
         })
     }
 }
+#[allow(deprecated)]
 impl From<BufWriter> for ParquetObjectWriter {
     fn from(w: BufWriter) -> Self {
         Self::from_buf_writer(w)
     }
 }
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use object_store::memory::InMemory;
