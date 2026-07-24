@@ -47,8 +47,12 @@ use crate::bloom_filter::{
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
+mod adaptive;
 mod metadata;
+pub use adaptive::AdaptiveFetcher;
 pub use metadata::*;
+
+use futures::stream::BoxStream;
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -90,6 +94,31 @@ pub trait AsyncFileReader: Send {
         .boxed()
     }
 
+    /// Retrieve the bytes in `range` as a stream of chunks that can be
+    /// consumed incrementally, without buffering the whole range in memory,
+    /// or `None` if this reader does not support streamed requests.
+    ///
+    /// Used by the bounded streaming mode (see
+    /// [`BoundedStreamingOptions`](crate::arrow::arrow_reader::BoundedStreamingOptions))
+    /// to consume large column chunks incrementally: the returned future
+    /// issues the request, and the resulting stream yields the body as it
+    /// arrives. Both the future and the stream are `'static` (owning their
+    /// connection) so several streamed requests can be opened concurrently
+    /// and remain in flight while the reader issues other requests.
+    ///
+    /// The default implementation returns `None`, which makes callers fall
+    /// back to [`Self::get_byte_ranges`] (existing implementors keep working,
+    /// without the memory benefit). Implementations backed by a network store
+    /// should return the response body stream directly; see the
+    /// `ParquetObjectReader` implementation.
+    fn get_bytes_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
+        let _ = range;
+        None
+    }
+
     /// Return a future which results in the [`ParquetMetaData`] for this Parquet file.
     ///
     /// This is an asynchronous operation as it may involve reading the file
@@ -120,6 +149,13 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         self.as_mut().get_byte_ranges(ranges)
+    }
+
+    fn get_bytes_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
+        self.as_mut().get_bytes_stream(range)
     }
 
     fn get_metadata<'a>(
@@ -589,6 +625,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset,
             metrics,
             max_predicate_cache_size,
+            bounded_streaming,
         } = self;
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -614,15 +651,27 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset,
             metrics,
             max_predicate_cache_size,
+            bounded_streaming: bounded_streaming.clone(),
         }
         .build()?;
 
-        let request_state = RequestState::None { input: input.0 };
+        // Adaptive streamed fetching requires a tokio runtime to drive request
+        // bodies in the background; without one, fall back to the materialized
+        // path (identical behavior to the option being off)
+        let (request_state, adaptive) =
+            match bounded_streaming.zip(tokio::runtime::Handle::try_current().ok()) {
+                Some((options, runtime)) => (
+                    RequestState::Done,
+                    Some(AdaptiveFetcher::new(options, runtime, input.0)),
+                ),
+                None => (RequestState::None { input: input.0 }, None),
+            };
 
         Ok(ParquetRecordBatchStream {
             schema: projected_schema,
             decoder,
             request_state,
+            adaptive,
         })
     }
 }
@@ -709,10 +758,14 @@ impl<T> std::fmt::Debug for RequestState<T> {
 pub struct ParquetRecordBatchStream<T> {
     /// Output schema of the stream
     schema: SchemaRef,
-    /// Input and Outstanding IO request, if any
+    /// Input and Outstanding IO request, if any (owns the input unless
+    /// adaptive streaming is active)
     request_state: RequestState<T>,
     /// Decoding state machine (no IO)
     decoder: ParquetPushDecoder,
+    /// When bounded streaming is enabled, owns the input and all in-flight
+    /// requests instead of `request_state`
+    adaptive: Option<AdaptiveFetcher<T>>,
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -750,7 +803,38 @@ where
     /// - `Ok(None)` if the stream has ended.
     /// - `Err(error)` if the stream has errored. All subsequent calls will return `Ok(None)`.
     /// - `Ok(Some(reader))` which holds all the data for the row group.
+    ///
+    /// Note: when bounded streaming is enabled (see
+    /// [`BoundedStreamingOptions`](crate::arrow::arrow_reader::BoundedStreamingOptions)),
+    /// row groups with large column chunks are decoded in bounded windows and
+    /// this method returns one reader per *window* rather than per row group.
+    /// Each returned reader still owns all the data it needs.
     pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
+        if self.adaptive.is_some() {
+            let result = std::future::poll_fn(|cx| {
+                let Self {
+                    decoder, adaptive, ..
+                } = self;
+                let fetcher = adaptive.as_mut().expect("checked above");
+                match Self::poll_adaptive(decoder, fetcher, cx, |d| d.try_next_reader()) {
+                    Ok(poll) => poll.map(Ok),
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            })
+            .await;
+            return match result {
+                Ok(DecodeResult::Data(reader)) => Ok(Some(reader)),
+                Ok(DecodeResult::Finished) => Ok(None),
+                Ok(DecodeResult::NeedsData(_)) => Err(ParquetError::General(
+                    "Internal Error: adaptive poll returned NeedsData".to_string(),
+                )),
+                Err(e) => {
+                    // drop in-flight requests and stop
+                    self.adaptive = None;
+                    Err(e)
+                }
+            };
+        }
         loop {
             // Take ownership of request state to process, leaving self in a
             // valid state
@@ -800,6 +884,8 @@ where
             }
             Err(e) => {
                 self.request_state = RequestState::Done;
+                // drop any in-flight adaptive requests
+                self.adaptive = None;
                 Poll::Ready(Some(Err(e)))
             }
         }
@@ -810,11 +896,65 @@ impl<T> ParquetRecordBatchStream<T>
 where
     T: AsyncFileReader + Unpin + Send + 'static,
 {
+    /// Drive the decoder with the adaptive fetcher until it produces a result
+    /// or everything is pending.
+    ///
+    /// `decode` is the decoder entry point to drive ([`ParquetPushDecoder::try_decode`]
+    /// or [`ParquetPushDecoder::try_next_reader`]). Never returns
+    /// `Poll::Ready(DecodeResult::NeedsData)`.
+    fn poll_adaptive<R: std::fmt::Debug>(
+        decoder: &mut ParquetPushDecoder,
+        fetcher: &mut AdaptiveFetcher<T>,
+        cx: &mut Context<'_>,
+        decode: impl Fn(&mut ParquetPushDecoder) -> Result<DecodeResult<R>>,
+    ) -> Result<Poll<DecodeResult<R>>> {
+        loop {
+            if fetcher.has_ready() {
+                let (ranges, data) = fetcher.take_ready();
+                decoder.push_ranges(ranges, data)?;
+            }
+            match decode(decoder)? {
+                DecodeResult::NeedsData(now) => {
+                    fetcher.want(&now);
+                    loop {
+                        // (Re)plan: a no-op when everything needed is already
+                        // in flight, otherwise issues the new requests (which
+                        // may have to wait for the input to become idle)
+                        let plan = decoder.upcoming_fetch_plan();
+                        fetcher.plan_and_issue(&plan)?;
+                        let progressed = fetcher.poll_sources(cx)?;
+                        if fetcher.has_ready() {
+                            break; // outer loop pushes the data and decodes
+                        }
+                        if !progressed {
+                            return Ok(Poll::Pending);
+                        }
+                    }
+                }
+                other => return Ok(Poll::Ready(other)),
+            }
+        }
+    }
+
     /// Inner state machine
     ///
     /// Note this is separate from poll_next so we can use ? operator to check for errors
     /// as it returns `Result<Poll<Option<RecordBatch>>>`
     fn poll_next_inner(&mut self, cx: &mut Context<'_>) -> Result<Poll<Option<RecordBatch>>> {
+        if self.adaptive.is_some() {
+            let Self {
+                decoder, adaptive, ..
+            } = self;
+            let fetcher = adaptive.as_mut().expect("checked above");
+            return match Self::poll_adaptive(decoder, fetcher, cx, |d| d.try_decode())? {
+                Poll::Ready(DecodeResult::Data(batch)) => Ok(Poll::Ready(Some(batch))),
+                Poll::Ready(DecodeResult::Finished) => Ok(Poll::Ready(None)),
+                Poll::Ready(DecodeResult::NeedsData(_)) => Err(ParquetError::General(
+                    "Internal Error: adaptive poll returned NeedsData".to_string(),
+                )),
+                Poll::Pending => Ok(Poll::Pending),
+            };
+        }
         loop {
             let request_state = std::mem::replace(&mut self.request_state, RequestState::Done);
             match request_state {
@@ -1995,5 +2135,339 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// [`AsyncFileReader`] over in-memory data with a chunked
+    /// [`AsyncFileReader::get_bytes_stream`], recording all requests
+    #[derive(Clone)]
+    struct StreamingTestReader {
+        data: Bytes,
+        /// chunk size for streamed responses
+        chunk_size: usize,
+        /// each get_byte_ranges call's ranges
+        range_requests: Arc<Mutex<Vec<Vec<Range<u64>>>>>,
+        /// each get_bytes_stream span
+        stream_requests: Arc<Mutex<Vec<Range<u64>>>>,
+    }
+
+    impl StreamingTestReader {
+        fn new(data: Bytes) -> Self {
+            Self {
+                data,
+                chunk_size: 1024,
+                range_requests: Default::default(),
+                stream_requests: Default::default(),
+            }
+        }
+    }
+
+    impl AsyncFileReader for StreamingTestReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+            self.range_requests
+                .lock()
+                .unwrap()
+                .push(vec![range.clone()]);
+            futures::future::ready(Ok(self
+                .data
+                .slice(range.start as usize..range.end as usize)))
+            .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+            self.range_requests.lock().unwrap().push(ranges.clone());
+            let result = ranges
+                .iter()
+                .map(|r| self.data.slice(r.start as usize..r.end as usize))
+                .collect();
+            futures::future::ready(Ok(result)).boxed()
+        }
+
+        fn get_bytes_stream(
+            &mut self,
+            range: Range<u64>,
+        ) -> Option<BoxFuture<'static, Result<BoxStream<'static, Result<Bytes>>>>> {
+            self.stream_requests.lock().unwrap().push(range.clone());
+            let data = self.data.slice(range.start as usize..range.end as usize);
+            let chunk_size = self.chunk_size;
+            let chunks: Vec<Result<Bytes>> = (0..data.len())
+                .step_by(chunk_size)
+                .map(|offset| Ok(data.slice(offset..(offset + chunk_size).min(data.len()))))
+                .collect();
+            Some(futures::future::ready(Ok(futures::stream::iter(chunks).boxed())).boxed())
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+            let mut metadata_reader = ParquetMetaDataReader::new();
+            if let Some(opts) = options {
+                metadata_reader = metadata_reader
+                    .with_column_index_policy(opts.column_index_policy())
+                    .with_offset_index_policy(opts.offset_index_policy());
+            }
+            let metadata = Arc::new(metadata_reader.parse_and_finish(&self.data).unwrap());
+            futures::future::ready(Ok(metadata)).boxed()
+        }
+    }
+
+    /// A file with skewed column sizes: tiny int, small strings, large binary
+    /// values; several row groups, small pages
+    fn skewed_test_file() -> Bytes {
+        let mut rand = rng();
+        let mut buf = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(500))
+            .set_write_batch_size(50)
+            .set_data_page_size_limit(16 * 1024)
+            .build();
+
+        let ids = Int32Array::from_iter(0..1500);
+        let smalls = StringArray::from_iter_values((0..1500).map(|i| format!("string-value-{i}")));
+        let bigs = arrow_array::BinaryArray::from_iter_values((0..1500).map(|i| {
+            let len = 2048 + (i % 7) * 331;
+            (0..len)
+                .map(|j| ((i * 31 + j * 7 + rand.random_range(0..13)) % 251) as u8)
+                .collect::<Vec<u8>>()
+        }));
+        let batch = RecordBatch::try_from_iter([
+            ("i", Arc::new(ids) as ArrayRef),
+            ("s", Arc::new(smalls) as ArrayRef),
+            ("b", Arc::new(bigs) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        buf.into()
+    }
+
+    async fn read_all_with_options(
+        data: Bytes,
+        streaming: Option<crate::arrow::arrow_reader::BoundedStreamingOptions>,
+        projection: Option<Vec<usize>>,
+        batch_size: usize,
+        selection: Option<RowSelection>,
+        limit_offset: Option<(usize, usize)>,
+    ) -> (Vec<RecordBatch>, StreamingTestReader) {
+        let reader = StreamingTestReader::new(data);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let mut builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(reader.clone(), options)
+                .await
+                .unwrap()
+                .with_batch_size(batch_size);
+        if let Some(streaming) = streaming {
+            builder = builder.with_bounded_streaming(streaming);
+        }
+        if let Some(projection) = projection {
+            let mask = ProjectionMask::leaves(builder.parquet_schema(), projection);
+            builder = builder.with_projection(mask);
+        }
+        if let Some(selection) = selection {
+            builder = builder.with_row_selection(selection);
+        }
+        if let Some((offset, limit)) = limit_offset {
+            builder = builder.with_offset(offset).with_limit(limit);
+        }
+        let stream = builder.build().unwrap();
+        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+        (batches, reader)
+    }
+
+    fn test_streaming_options() -> crate::arrow::arrow_reader::BoundedStreamingOptions {
+        crate::arrow::arrow_reader::BoundedStreamingOptions {
+            stream_threshold: 256 * 1024,
+            window_bytes: 128 * 1024,
+            coalesce_gap: 1024 * 1024,
+            min_window_bytes_per_column: 16 * 1024,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bounded_streaming_byte_identical_full_scan() {
+        let data = skewed_test_file();
+
+        let (baseline, baseline_reader) =
+            read_all_with_options(data.clone(), None, None, 100, None, None).await;
+        let (streamed, streamed_reader) = read_all_with_options(
+            data.clone(),
+            Some(test_streaming_options()),
+            None,
+            100,
+            None,
+            None,
+        )
+        .await;
+
+        // exact same batches, including batch boundaries
+        assert_eq!(baseline, streamed);
+
+        // the large binary chunks were streamed: one streamed request per row
+        // group (columns are adjacent so each row group is a single coalesced
+        // group ending in the large chunk)
+        let streams = streamed_reader.stream_requests.lock().unwrap();
+        assert_eq!(streams.len(), 3, "streams: {streams:?}");
+
+        // request count: baseline issues one call per row group; adaptive
+        // replaces each with a single streamed request and no materialized
+        // requests
+        let baseline_calls = baseline_reader.range_requests.lock().unwrap().len();
+        let streamed_calls = streamed_reader.range_requests.lock().unwrap().len();
+        let streamed_materialized: usize = streamed_reader
+            .range_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.len())
+            .sum();
+        assert_eq!(baseline_calls, 3);
+        assert_eq!(streamed_materialized, 0, "everything rides the streams");
+        assert_eq!(streams.len() + streamed_calls, 3);
+    }
+
+    #[tokio::test]
+    async fn test_bounded_streaming_mixed_projection_with_gap() {
+        let data = skewed_test_file();
+        // project only the tiny and huge columns; use a small coalesce gap so
+        // the unprojected string column splits them into separate groups
+        let options = crate::arrow::arrow_reader::BoundedStreamingOptions {
+            coalesce_gap: 1024,
+            ..test_streaming_options()
+        };
+
+        let (baseline, _) =
+            read_all_with_options(data.clone(), None, Some(vec![0, 2]), 333, None, None).await;
+        let (streamed, reader) = read_all_with_options(
+            data.clone(),
+            Some(options),
+            Some(vec![0, 2]),
+            333,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(baseline, streamed);
+
+        // the tiny int column materializes, the big binary column streams
+        let streams = reader.stream_requests.lock().unwrap();
+        assert_eq!(streams.len(), 3);
+        let materialized: Vec<Vec<Range<u64>>> = reader.range_requests.lock().unwrap().clone();
+        assert_eq!(materialized.len(), 3, "one materialize call per row group");
+        // no materialized range overlaps a streamed span
+        for call in &materialized {
+            for range in call {
+                for span in streams.iter() {
+                    assert!(
+                        range.end <= span.start || range.start >= span.end,
+                        "materialized {range:?} overlaps streamed {span:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bounded_streaming_with_row_selection_fuzz() {
+        let data = skewed_test_file();
+        let mut rand = rng();
+
+        for _ in 0..10 {
+            let mut selectors = vec![];
+            let mut total_rows = 0;
+            let mut skip = false;
+            while total_rows < 1500 {
+                let row_count: usize = rand.random_range(1..320).min(1500 - total_rows);
+                selectors.push(RowSelector { row_count, skip });
+                total_rows += row_count;
+                skip = !skip;
+            }
+            let selection = RowSelection::from(selectors);
+            let batch_size = rand.random_range(16..600);
+            let projection: Vec<usize> = match rand.random_range(0..3) {
+                0 => vec![0, 1, 2],
+                1 => vec![0, 2],
+                _ => vec![2],
+            };
+            // small enough that streaming engages for at least full-ish
+            // selections
+            let options = crate::arrow::arrow_reader::BoundedStreamingOptions {
+                stream_threshold: 64 * 1024,
+                window_bytes: 32 * 1024,
+                coalesce_gap: 4 * 1024,
+                min_window_bytes_per_column: 8 * 1024,
+            };
+
+            let (baseline, _) = read_all_with_options(
+                data.clone(),
+                None,
+                Some(projection.clone()),
+                batch_size,
+                Some(selection.clone()),
+                None,
+            )
+            .await;
+            let (streamed, _) = read_all_with_options(
+                data.clone(),
+                Some(options),
+                Some(projection),
+                batch_size,
+                Some(selection),
+                None,
+            )
+            .await;
+            assert_eq!(baseline, streamed);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bounded_streaming_offset_limit() {
+        let data = skewed_test_file();
+        for (offset, limit) in [(0, 100), (700, 600), (499, 2), (1400, 1000)] {
+            let (baseline, _) =
+                read_all_with_options(data.clone(), None, None, 128, None, Some((offset, limit)))
+                    .await;
+            let (streamed, _) = read_all_with_options(
+                data.clone(),
+                Some(test_streaming_options()),
+                None,
+                128,
+                None,
+                Some((offset, limit)),
+            )
+            .await;
+            assert_eq!(baseline, streamed, "offset={offset} limit={limit}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bounded_streaming_cancel_mid_stream() {
+        let data = skewed_test_file();
+        let reader = StreamingTestReader::new(data);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let mut stream = ParquetRecordBatchStreamBuilder::new_with_options(reader.clone(), options)
+            .await
+            .unwrap()
+            .with_batch_size(100)
+            .with_bounded_streaming(crate::arrow::arrow_reader::BoundedStreamingOptions {
+                stream_threshold: 64 * 1024,
+                window_bytes: 32 * 1024,
+                coalesce_gap: 1024 * 1024,
+                min_window_bytes_per_column: 8 * 1024,
+            })
+            .build()
+            .unwrap();
+
+        // read one batch then drop mid row group
+        let batch = stream.next().await.unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 100);
+        assert!(!reader.stream_requests.lock().unwrap().is_empty());
+        drop(stream);
+        // give the pump tasks a chance to observe the closed channels
+        tokio::task::yield_now().await;
     }
 }

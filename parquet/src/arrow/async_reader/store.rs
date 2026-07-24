@@ -196,6 +196,31 @@ impl AsyncFileReader for ParquetObjectReader {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 
+    fn get_bytes_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> Option<BoxFuture<'static, Result<futures::stream::BoxStream<'static, Result<Bytes>>>>>
+    {
+        use futures::{StreamExt as _, TryStreamExt};
+        let store = Arc::clone(&self.store);
+        let path = self.path.clone();
+        let options = GetOptions {
+            range: Some(GetRange::Bounded(range)),
+            ..Default::default()
+        };
+        Some(
+            async move {
+                let result = store.get_opts(&path, options).await?;
+                // Note: for file-backed stores this streams in small (8KiB)
+                // chunks; wrap the store in `object_store::chunked::ChunkedStore`
+                // for larger chunks if that matters
+                let stream = result.into_stream().map_err(ParquetError::from).boxed();
+                Ok::<_, ParquetError>(stream)
+            }
+            .boxed(),
+        )
+    }
+
     // This method doesn't directly call `self.spawn` because all of the IO that is done down the
     // line due to this method call is done through `self.get_bytes` and/or `self.get_byte_ranges`.
     // When `self` is passed into `ParquetMetaDataReader::load_and_finish`, it treats it as

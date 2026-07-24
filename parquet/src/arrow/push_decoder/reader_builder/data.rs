@@ -54,6 +54,11 @@ impl DataRequest {
             .collect()
     }
 
+    /// All ranges this request will read
+    pub fn ranges(&self) -> &[Range<u64>] {
+        &self.ranges
+    }
+
     /// Returns the chunks from the buffers that satisfy this request
     fn get_chunks(&self, buffers: &PushBuffers) -> Result<Vec<Bytes>, ParquetError> {
         self.ranges
@@ -84,6 +89,29 @@ impl DataRequest {
         projection: &ProjectionMask,
         buffers: &mut PushBuffers,
     ) -> Result<InMemoryRowGroup<'a>, ParquetError> {
+        self.try_into_in_memory_row_group_retaining(
+            row_group_idx,
+            row_count,
+            parquet_metadata,
+            projection,
+            buffers,
+            &|_| false,
+        )
+    }
+
+    /// Like [`Self::try_into_in_memory_row_group`], but ranges for which
+    /// `retain` returns true are kept in `buffers` instead of being cleared
+    /// (used by windowed decoding, where dictionary pages and window-boundary
+    /// pages are shared between successive windows).
+    pub fn try_into_in_memory_row_group_retaining<'a>(
+        self,
+        row_group_idx: usize,
+        row_count: usize,
+        parquet_metadata: &'a ParquetMetaData,
+        projection: &ProjectionMask,
+        buffers: &mut PushBuffers,
+        retain: &dyn Fn(&Range<u64>) -> bool,
+    ) -> Result<InMemoryRowGroup<'a>, ParquetError> {
         let chunks = self.get_chunks(buffers)?;
 
         let Self {
@@ -101,12 +129,14 @@ impl DataRequest {
             offset_index: get_offset_index(parquet_metadata, row_group_idx),
             row_group_idx,
             metadata: parquet_metadata,
+            dictionary_page_cache: None,
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
 
-        // Clear the ranges that were explicitly requested
-        buffers.clear_ranges(&ranges);
+        // Clear the ranges that were explicitly requested, except retained ones
+        let ranges_to_clear: Vec<Range<u64>> = ranges.into_iter().filter(|r| !retain(r)).collect();
+        buffers.clear_ranges(&ranges_to_clear);
 
         Ok(in_memory_row_group)
     }
@@ -205,6 +235,7 @@ impl<'a> DataRequestBuilder<'a> {
             offset_index: get_offset_index(parquet_metadata, row_group_idx),
             row_group_idx,
             metadata: parquet_metadata,
+            dictionary_page_cache: None,
         };
 
         let FetchRanges {
