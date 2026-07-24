@@ -49,6 +49,19 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
+/// The maximum number of nested objects and arrays a [`Variant`] may contain.
+///
+/// Full [validation] recurses into nested values, so unbounded nesting would overflow the stack --
+/// an abort, not a catchable panic. Validation therefore rejects more deeply nested values, which
+/// also bounds the recursion of infallible accesses such as [`Debug`] and [`PartialEq`].
+///
+/// The variant [spec] does not specify a limit. This value matches the default `serde_json`
+/// recursion limit, so any variant parsed from JSON already satisfies it.
+///
+/// [validation]: Variant#Validation
+/// [spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+pub const MAX_NESTING_DEPTH: usize = 128;
+
 /// A Variant [`ShortString`]
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
@@ -403,7 +416,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?.with_full_validation()
+        Self::try_new_with_metadata_at_depth(metadata, value, 0)
+    }
+
+    // Same as [`Self::try_new_with_metadata`], tracking how deeply validation has recursed.
+    pub(crate) fn try_new_with_metadata_at_depth(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?
+            .with_full_validation_at_depth(depth)
     }
 
     /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
@@ -501,13 +524,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// If [`Self::is_fully_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
     /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [objects]: VariantObject#Validation
     /// [arrays]: VariantList#Validation
     pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(self, depth: usize) -> Result<Self, ArrowError> {
         use Variant::*;
         match self {
-            List(list) => list.with_full_validation().map(List),
-            Object(obj) => obj.with_full_validation().map(Object),
+            List(list) => list.with_full_validation_at_depth(depth).map(List),
+            Object(obj) => obj.with_full_validation_at_depth(depth).map(Object),
             _ => Ok(self),
         }
     }
