@@ -135,6 +135,31 @@ impl<'a> IpcBodySink<'a> {
     }
 }
 
+struct MetadataLayout {
+    padded_header_len: usize,
+    padded_metadata_len: usize,
+    metadata_padding: usize,
+}
+
+#[inline]
+fn metadata_layout(metadata_len: usize, write_options: &IpcWriteOptions) -> MetadataLayout {
+    let prefix_size = if write_options.write_legacy_ipc_format {
+        4
+    } else {
+        8
+    };
+    let alignment_mask = usize::from(write_options.alignment - 1);
+    let padded_header_len = (metadata_len + prefix_size + alignment_mask) & !alignment_mask;
+    let padded_metadata_len = padded_header_len - prefix_size;
+    let metadata_padding = padded_metadata_len - metadata_len;
+
+    MetadataLayout {
+        padded_header_len,
+        padded_metadata_len,
+        metadata_padding,
+    }
+}
+
 /// Destination for a complete framed IPC message.
 ///
 /// This emits the stream/file framing around the serialized FlatBuffer
@@ -213,21 +238,13 @@ trait IpcMessageSink {
             ));
         }
 
-        let alignment_mask = usize::from(write_options.alignment - 1);
         let metadata = encoded.ipc_message;
         let metadata_len = metadata.len();
-        let prefix_size = if write_options.write_legacy_ipc_format {
-            4
-        } else {
-            8
-        };
-        let padded_header_len = (metadata_len + prefix_size + alignment_mask) & !alignment_mask;
-        let padded_metadata_len = padded_header_len - prefix_size;
-        let metadata_padding = padded_metadata_len - metadata_len;
+        let layout = metadata_layout(metadata_len, write_options);
 
-        self.write_continuation(write_options, padded_metadata_len as i32)?;
+        self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_vec(metadata)?;
-        self.write_padding(metadata_padding)?;
+        self.write_padding(layout.metadata_padding)?;
 
         let body_len = if arrow_data_len > 0 {
             self.write_body_data(encoded.arrow_data, write_options.alignment)?
@@ -235,7 +252,7 @@ trait IpcMessageSink {
             0
         };
 
-        Ok((padded_header_len, body_len))
+        Ok((layout.padded_header_len, body_len))
     }
 
     /// Writes a record batch message from its encoded metadata and body buffers.
@@ -252,19 +269,11 @@ trait IpcMessageSink {
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
-        let prefix_size = if write_options.write_legacy_ipc_format {
-            4
-        } else {
-            8
-        };
-        let alignment_mask = usize::from(alignment - 1);
-        let padded_header_len = (metadata.len() + prefix_size + alignment_mask) & !alignment_mask;
-        let padded_metadata_len = padded_header_len - prefix_size;
-        let metadata_padding = padded_metadata_len - metadata.len();
+        let layout = metadata_layout(metadata.len(), write_options);
 
-        self.write_continuation(write_options, padded_metadata_len as i32)?;
+        self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_vec(metadata)?;
-        self.write_padding(metadata_padding)?;
+        self.write_padding(layout.metadata_padding)?;
         for enc in encoded_buffers {
             let len = enc.len();
             self.write_encoded_buffer(enc)?;
@@ -272,7 +281,7 @@ trait IpcMessageSink {
         }
         self.write_padding(tail_pad)?;
 
-        Ok((padded_header_len, body_len))
+        Ok((layout.padded_header_len, body_len))
     }
 
     /// Writes the IPC end-of-stream marker.
@@ -302,26 +311,18 @@ where
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
-        let prefix_size = if write_options.write_legacy_ipc_format {
-            4
-        } else {
-            8
-        };
-        let alignment_mask = usize::from(alignment - 1);
-        let padded_header_len = (metadata.len() + prefix_size + alignment_mask) & !alignment_mask;
-        let padded_metadata_len = padded_header_len - prefix_size;
-        let metadata_padding = padded_metadata_len - metadata.len();
+        let layout = metadata_layout(metadata.len(), write_options);
 
-        self.write_continuation(write_options, padded_metadata_len as i32)?;
+        self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_all(&metadata)?;
-        self.write_all(&PADDING[..metadata_padding])?;
+        self.write_all(&PADDING[..layout.metadata_padding])?;
         for enc in &encoded_buffers {
             self.write_all(enc.as_slice())?;
             self.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
         }
         self.write_all(&PADDING[..tail_pad])?;
 
-        Ok((padded_header_len, body_len))
+        Ok((layout.padded_header_len, body_len))
     }
 }
 
