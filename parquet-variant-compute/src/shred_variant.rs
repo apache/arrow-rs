@@ -164,13 +164,16 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
         }
-        // Supported shredded primitive types, see Variant shredding spec:
-        // https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
+        // Supported Arrow canonical Variant primitive types:
+        // https://arrow.apache.org/docs/format/CanonicalExtensions.html#primitive-type-mappings
         DataType::Boolean
         | DataType::Int8
         | DataType::Int16
         | DataType::Int32
         | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
         | DataType::Float32
         | DataType::Float64
         | DataType::Decimal32(..)
@@ -1454,7 +1457,7 @@ mod tests {
         let input = VariantArray::from_iter([Variant::from(42)]);
 
         let invalid_types = vec![
-            DataType::UInt8,
+            DataType::UInt64,
             DataType::Float16,
             DataType::Decimal256(38, 10),
             DataType::Date64,
@@ -1496,6 +1499,105 @@ mod tests {
                 err
             );
         }
+    }
+
+    #[test]
+    fn test_unsigned_shredding() {
+        let fallback = Variant::Int8(-1);
+        let cases = [
+            (
+                vec![
+                    Variant::Int16(0),
+                    Variant::Int16(i16::from(u8::MAX)),
+                    fallback.clone(),
+                ],
+                DataType::UInt8,
+            ),
+            (
+                vec![
+                    Variant::Int32(0),
+                    Variant::Int32(i32::from(u16::MAX)),
+                    fallback.clone(),
+                ],
+                DataType::UInt16,
+            ),
+            (
+                vec![
+                    Variant::Int64(0),
+                    Variant::Int64(i64::from(u32::MAX)),
+                    fallback.clone(),
+                ],
+                DataType::UInt32,
+            ),
+        ];
+
+        for (expected, data_type) in cases {
+            let input = VariantArray::from_iter(expected.iter().cloned());
+            let shredded = shred_variant(&input, &data_type).unwrap();
+
+            assert_eq!(
+                shredded.typed_value_column().unwrap().data_type(),
+                &data_type
+            );
+            let array = ArrayRef::from(shredded);
+            let shredded = VariantArray::try_new(array.as_ref()).unwrap();
+            let unshredded = crate::unshred_variant(&shredded).unwrap();
+            let fallback_index = expected.len() - 1;
+            for (index, expected) in expected[..fallback_index].iter().cloned().enumerate() {
+                assert_eq!(shredded.value(index), expected);
+                assert_eq!(unshredded.value(index), expected);
+            }
+            assert!(
+                shredded
+                    .typed_value_column()
+                    .unwrap()
+                    .is_null(fallback_index)
+            );
+            assert_eq!(shredded.value(fallback_index), fallback);
+            assert_eq!(unshredded.value(fallback_index), fallback);
+        }
+    }
+
+    #[test]
+    fn test_nested_unsigned_shredding() {
+        let input = build_variant_array(vec![VariantRow::Object(vec![(
+            "items",
+            VariantValue::List(vec![VariantValue::from(Variant::Int16(i16::from(u8::MAX)))]),
+        )])]);
+        let list_type = DataType::List(Arc::new(Field::new("item", DataType::UInt8, true)));
+        let target = ShreddedSchemaBuilder::default()
+            .with_path("items", list_type)
+            .unwrap()
+            .build();
+
+        let shredded = shred_variant(&input, &target).unwrap();
+        let object = shredded
+            .typed_value_column()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let items =
+            ShreddedVariantFieldArray::try_new(object.column_by_name("items").unwrap()).unwrap();
+        let items = items
+            .typed_value_column()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let item = ShreddedVariantFieldArray::try_new(items.values().as_ref()).unwrap();
+        assert_eq!(
+            item.typed_value_column().unwrap().data_type(),
+            &DataType::UInt8
+        );
+        let array = ArrayRef::from(shredded);
+        let shredded = VariantArray::try_new(&array).unwrap();
+        let unshredded = crate::unshred_variant(&shredded).unwrap();
+        let value = unshredded.value(0);
+        let object = value.as_object().unwrap();
+        let items = object.get("items").unwrap();
+        let items = items.as_list().unwrap();
+        assert_eq!(items.get(0), Some(Variant::Int16(i16::from(u8::MAX))));
     }
 
     #[test]

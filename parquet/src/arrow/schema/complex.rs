@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
+#[cfg(feature = "variant_experimental")]
+use crate::arrow::schema::extension::validate_variant_type;
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::schema::virtual_type::{RowGroupIndex, RowNumber};
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
@@ -747,6 +749,13 @@ fn convert_field(
 
     match arrow_hint {
         Some(hint) => {
+            #[cfg(feature = "variant_experimental")]
+            if matches!(
+                parquet_type.get_basic_info().logical_type_ref(),
+                Some(crate::basic::LogicalType::Variant(_))
+            ) {
+                validate_variant_type(parquet_type)?;
+            }
             // If the inferred type is a dictionary, preserve dictionary metadata
             #[allow(deprecated)]
             let field = match (&data_type, hint.dict_id(), hint.dict_is_ordered()) {

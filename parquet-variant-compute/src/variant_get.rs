@@ -502,6 +502,7 @@ mod test {
         LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
         NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        UInt8Array, UInt16Array, UInt32Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
@@ -685,6 +686,21 @@ mod test {
         i64
     );
     numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint8_variant_array,
+        UInt8Array,
+        u8
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint16_variant_array,
+        UInt16Array,
+        u16
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint32_variant_array,
+        UInt32Array,
+        u32
+    );
+    numeric_partially_shredded_variant_array_fn!(
         partially_shredded_float32_variant_array,
         Float32Array,
         f32
@@ -742,6 +758,21 @@ mod test {
     #[test]
     fn get_variant_partially_shredded_float64_as_variant() {
         numeric_partially_shredded_test!(f64, partially_shredded_float64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint8_as_variant() {
+        numeric_partially_shredded_test!(i16, partially_shredded_uint8_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint16_as_variant() {
+        numeric_partially_shredded_test!(i32, partially_shredded_uint16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint32_as_variant() {
+        numeric_partially_shredded_test!(i64, partially_shredded_uint32_variant_array);
     }
 
     #[test]
