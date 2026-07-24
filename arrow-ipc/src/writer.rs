@@ -139,77 +139,19 @@ impl<'a> IpcBodySink<'a> {
 ///
 /// This emits the stream/file framing around the serialized FlatBuffer
 /// [`crate::Message`] metadata plus its optional body buffers.
-enum IpcMessageSink<'a> {
-    /// Write bytes directly to a synchronous writer.
-    Writer(&'a mut dyn Write),
-    /// Accumulate ordered buffers for deferred writing.
-    Buffers(&'a mut Vec<Buffer>),
-}
+trait IpcMessageSink {
+    fn write_vec(&mut self, bytes: Vec<u8>) -> Result<(), ArrowError>;
 
-impl IpcMessageSink<'_> {
-    fn write_vec(&mut self, bytes: Vec<u8>) -> Result<(), ArrowError> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
+    fn write_encoded_buffer(&mut self, buffer: EncodedBuffer) -> Result<(), ArrowError>;
 
-        match self {
-            Self::Writer(writer) => writer.write_all(&bytes)?,
-            Self::Buffers(out) => out.push(Buffer::from(bytes)),
-        }
-        Ok(())
-    }
-
-    fn write_encoded_buffer(&mut self, buffer: EncodedBuffer) -> Result<(), ArrowError> {
-        match (self, buffer) {
-            (Self::Writer(writer), buffer) => writer.write_all(buffer.as_slice())?,
-            (Self::Buffers(out), EncodedBuffer::Raw(buffer)) => out.push(buffer),
-            (Self::Buffers(out), EncodedBuffer::Compressed(bytes)) => out.push(Buffer::from(bytes)),
-        }
-        Ok(())
-    }
-
-    fn write_padding(&mut self, len: usize) -> Result<(), ArrowError> {
-        if len == 0 {
-            return Ok(());
-        }
-
-        match self {
-            Self::Writer(writer) => writer.write_all(&PADDING[..len])?,
-            Self::Buffers(out) => out.push(Buffer::from(&PADDING[..len])),
-        }
-        Ok(())
-    }
+    fn write_padding(&mut self, len: usize) -> Result<(), ArrowError>;
 
     /// Writes the IPC continuation marker and metadata length prefix.
     fn write_continuation(
         &mut self,
         write_options: &IpcWriteOptions,
         metadata_len: i32,
-    ) -> Result<(), ArrowError> {
-        let mut buffer = Vec::with_capacity(8);
-
-        match write_options.metadata_version {
-            crate::MetadataVersion::V1
-            | crate::MetadataVersion::V2
-            | crate::MetadataVersion::V3 => {
-                unreachable!("Options with the metadata version cannot be created")
-            }
-            crate::MetadataVersion::V4 => {
-                if !write_options.write_legacy_ipc_format {
-                    // v0.15.0 format
-                    buffer.extend_from_slice(&CONTINUATION_MARKER);
-                }
-                buffer.extend_from_slice(&metadata_len.to_le_bytes()[..]);
-            }
-            crate::MetadataVersion::V5 => {
-                buffer.extend_from_slice(&CONTINUATION_MARKER);
-                buffer.extend_from_slice(&metadata_len.to_le_bytes()[..]);
-            }
-            z => panic!("Unsupported crate::MetadataVersion {z:?}"),
-        }
-
-        self.write_vec(buffer)
-    }
+    ) -> Result<(), ArrowError>;
 
     fn write_body_data(&mut self, data: Vec<u8>, alignment: u8) -> Result<usize, ArrowError> {
         let len = data.len();
@@ -301,6 +243,158 @@ impl IpcMessageSink<'_> {
     fn write_eos(&mut self, write_options: &IpcWriteOptions) -> Result<(), ArrowError> {
         self.write_continuation(write_options, 0)?;
         Ok(())
+    }
+}
+
+/// Writes complete framed IPC messages to a synchronous writer.
+struct Writer<'a, W: Write> {
+    writer: &'a mut W,
+}
+
+impl<W: Write> IpcMessageSink for Writer<'_, W> {
+    fn write_vec(&mut self, bytes: Vec<u8>) -> Result<(), ArrowError> {
+        if !bytes.is_empty() {
+            self.writer.write_all(&bytes)?;
+        }
+        Ok(())
+    }
+
+    fn write_encoded_buffer(&mut self, buffer: EncodedBuffer) -> Result<(), ArrowError> {
+        self.writer.write_all(buffer.as_slice())?;
+        Ok(())
+    }
+
+    fn write_padding(&mut self, len: usize) -> Result<(), ArrowError> {
+        if len > 0 {
+            self.writer.write_all(&PADDING[..len])?;
+        }
+        Ok(())
+    }
+
+    fn write_continuation(
+        &mut self,
+        write_options: &IpcWriteOptions,
+        metadata_len: i32,
+    ) -> Result<(), ArrowError> {
+        let mut buffer = [0; 8];
+        let len = match write_options.metadata_version {
+            crate::MetadataVersion::V1
+            | crate::MetadataVersion::V2
+            | crate::MetadataVersion::V3 => {
+                unreachable!("Options with the metadata version cannot be created")
+            }
+            crate::MetadataVersion::V4 => {
+                let metadata_len_bytes = metadata_len.to_le_bytes();
+                if !write_options.write_legacy_ipc_format {
+                    // v0.15.0 format
+                    buffer[..4].copy_from_slice(&CONTINUATION_MARKER);
+                    buffer[4..].copy_from_slice(&metadata_len_bytes);
+                    8
+                } else {
+                    buffer[..4].copy_from_slice(&metadata_len_bytes);
+                    4
+                }
+            }
+            crate::MetadataVersion::V5 => {
+                buffer[..4].copy_from_slice(&CONTINUATION_MARKER);
+                buffer[4..].copy_from_slice(&metadata_len.to_le_bytes());
+                8
+            }
+            z => panic!("Unsupported crate::MetadataVersion {z:?}"),
+        };
+        self.writer.write_all(&buffer[..len])?;
+        Ok(())
+    }
+
+    fn write_record_batch(
+        &mut self,
+        metadata: Vec<u8>,
+        encoded_buffers: Vec<EncodedBuffer>,
+        body_len: usize,
+        tail_pad: usize,
+        write_options: &IpcWriteOptions,
+    ) -> Result<(usize, usize), ArrowError> {
+        let alignment = write_options.alignment;
+        let prefix_size = if write_options.write_legacy_ipc_format {
+            4
+        } else {
+            8
+        };
+        let alignment_mask = usize::from(alignment - 1);
+        let padded_header_len = (metadata.len() + prefix_size + alignment_mask) & !alignment_mask;
+        let padded_metadata_len = padded_header_len - prefix_size;
+        let metadata_padding = padded_metadata_len - metadata.len();
+
+        self.write_continuation(write_options, padded_metadata_len as i32)?;
+        self.writer.write_all(&metadata)?;
+        self.writer.write_all(&PADDING[..metadata_padding])?;
+        for enc in &encoded_buffers {
+            self.writer.write_all(enc.as_slice())?;
+            self.writer
+                .write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
+        }
+        self.writer.write_all(&PADDING[..tail_pad])?;
+
+        Ok((padded_header_len, body_len))
+    }
+}
+
+/// Accumulates complete framed IPC messages as ordered buffers.
+struct Buffers<'a> {
+    out: &'a mut Vec<Buffer>,
+}
+
+impl IpcMessageSink for Buffers<'_> {
+    fn write_vec(&mut self, bytes: Vec<u8>) -> Result<(), ArrowError> {
+        if !bytes.is_empty() {
+            self.out.push(Buffer::from(bytes));
+        }
+        Ok(())
+    }
+
+    fn write_encoded_buffer(&mut self, buffer: EncodedBuffer) -> Result<(), ArrowError> {
+        match buffer {
+            EncodedBuffer::Raw(buffer) => self.out.push(buffer),
+            EncodedBuffer::Compressed(bytes) => self.out.push(Buffer::from(bytes)),
+        }
+        Ok(())
+    }
+
+    fn write_padding(&mut self, len: usize) -> Result<(), ArrowError> {
+        if len > 0 {
+            self.out.push(Buffer::from(&PADDING[..len]));
+        }
+        Ok(())
+    }
+
+    fn write_continuation(
+        &mut self,
+        write_options: &IpcWriteOptions,
+        metadata_len: i32,
+    ) -> Result<(), ArrowError> {
+        let mut buffer = Vec::with_capacity(8);
+
+        match write_options.metadata_version {
+            crate::MetadataVersion::V1
+            | crate::MetadataVersion::V2
+            | crate::MetadataVersion::V3 => {
+                unreachable!("Options with the metadata version cannot be created")
+            }
+            crate::MetadataVersion::V4 => {
+                if !write_options.write_legacy_ipc_format {
+                    // v0.15.0 format
+                    buffer.extend_from_slice(&CONTINUATION_MARKER);
+                }
+                buffer.extend_from_slice(&metadata_len.to_le_bytes()[..]);
+            }
+            crate::MetadataVersion::V5 => {
+                buffer.extend_from_slice(&CONTINUATION_MARKER);
+                buffer.extend_from_slice(&metadata_len.to_le_bytes()[..]);
+            }
+            z => panic!("Unsupported crate::MetadataVersion {z:?}"),
+        }
+
+        self.write_vec(buffer)
     }
 }
 
@@ -845,7 +939,7 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
         writer: &mut W,
     ) -> Result<IpcWriteMetadata, ArrowError> {
-        let mut sink = IpcMessageSink::Writer(writer);
+        let mut sink = Writer { writer };
         self.write_to_sink(
             batch,
             dictionary_tracker,
@@ -865,7 +959,7 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
         out: &mut Vec<Buffer>,
     ) -> Result<IpcWriteMetadata, ArrowError> {
-        let mut sink = IpcMessageSink::Buffers(out);
+        let mut sink = Buffers { out };
         self.write_to_sink(
             batch,
             dictionary_tracker,
@@ -875,13 +969,13 @@ impl IpcDataGenerator {
         )
     }
 
-    fn write_to_sink(
+    fn write_to_sink<S: IpcMessageSink>(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         ipc_write_context: &mut IpcWriteContext,
-        sink: &mut IpcMessageSink<'_>,
+        sink: &mut S,
     ) -> Result<IpcWriteMetadata, ArrowError> {
         let encoded_dictionaries =
             self.encode_all_dicts(batch, dictionary_tracker, write_options, ipc_write_context)?;
@@ -1665,7 +1759,9 @@ impl<W: Write> FileWriter<W> {
 
         // write EOS
         {
-            let mut sink = IpcMessageSink::Writer(&mut self.writer);
+            let mut sink = Writer {
+                writer: &mut self.writer,
+            };
             sink.write_eos(&self.write_options)?;
         }
 
@@ -1868,7 +1964,7 @@ impl StreamEncoder {
 
         let mut out = vec![];
         self.encode_schema(&mut out)?;
-        let mut sink = IpcMessageSink::Buffers(&mut out);
+        let mut sink = Buffers { out: &mut out };
         sink.write_eos(&self.write_options)?;
         self.finished = true;
         Ok(out)
@@ -1881,7 +1977,7 @@ impl StreamEncoder {
                 &mut self.dictionary_tracker,
                 &self.write_options,
             );
-            let mut sink = IpcMessageSink::Buffers(out);
+            let mut sink = Buffers { out };
             sink.write_encoded_data(encoded_message, &self.write_options)?;
             self.schema_encoded = true;
         }
@@ -2058,7 +2154,9 @@ impl<W: Write> StreamWriter<W> {
         }
 
         {
-            let mut sink = IpcMessageSink::Writer(&mut self.writer);
+            let mut sink = Writer {
+                writer: &mut self.writer,
+            };
             sink.write_eos(&self.write_options)?;
         }
         self.writer.flush()?;
@@ -2158,7 +2256,9 @@ pub fn write_message<W: Write>(
     encoded: EncodedData,
     write_options: &IpcWriteOptions,
 ) -> Result<(usize, usize), ArrowError> {
-    let mut sink = IpcMessageSink::Writer(&mut writer);
+    let mut sink = Writer {
+        writer: &mut writer,
+    };
     sink.write_encoded_data(encoded, write_options)
 }
 
