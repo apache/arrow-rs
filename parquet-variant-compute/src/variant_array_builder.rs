@@ -501,7 +501,7 @@ mod test {
 
         // the metadata and value fields of non shredded variants should not be null
         assert!(variant_array.metadata_column().nulls().is_none());
-        assert!(variant_array.value_column().unwrap().nulls().is_none());
+        assert!(variant_array.value_column().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };
@@ -647,7 +647,7 @@ mod test {
 
         let array2 = VariantArray::from_parts(
             array.metadata_column().clone(),
-            Some(Arc::new(value_builder.build().unwrap())),
+            Arc::new(value_builder.build().unwrap()),
             None,
             None,
         );

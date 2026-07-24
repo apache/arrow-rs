@@ -6169,6 +6169,61 @@ mod tests {
         assert_eq!(&list, &back[0]);
     }
 
+    /// Ensure dictionaries nested within FixedSizeLists are not flattened
+    #[test]
+    fn test_fixed_size_list_of_dictionaries_round_trips() {
+        // Build one row = ["a", "b"] as
+        // `FixedSizeList<Dictionary<Int32, Utf8>, 2>`.
+        let dict_dt = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let element_field = Arc::new(Field::new("item", dict_dt.clone(), true));
+        let fsl_dt = DataType::FixedSizeList(Arc::clone(&element_field), 2);
+
+        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let keys = Int32Array::from(vec![0, 1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let fsl: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&element_field),
+            2,
+            Arc::new(dict),
+            None,
+        ));
+
+        assert!(RowConverter::supports_fields(&[SortField::new(
+            fsl_dt.clone()
+        )]));
+
+        let converter = RowConverter::new(vec![SortField::new(fsl_dt.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&fsl)]).unwrap();
+
+        // Before the fix this panicked at the `.unwrap()` because
+        // `convert_rows` returned `Err(InvalidArgumentError(...))`.
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+
+        // The returned array is a `FixedSizeList` with a decoded
+        // (flattened) child — same self-consistent shape the other
+        // list-like decoders produce for dictionary children.
+        let out = back[0]
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("decoded array must be a FixedSizeListArray");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.value_length(), 2);
+        // Child data type is the flattened `Utf8`, not the declared
+        // `Dictionary`. Callers that want the dictionary back need to
+        // re-encode (see the module docs).
+        assert_eq!(out.values().data_type(), &DataType::Utf8);
+
+        // Sanity: values survived the round trip.
+        let values = out
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("child must be a StringArray after flattening");
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
+    }
+
     // Test List<Null> with various combinations of nulls and empty lists
     #[test]
     fn test_list_null_variations() {

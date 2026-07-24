@@ -505,6 +505,7 @@ pub use lz4_codec::*;
 mod zstd_codec {
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
+    use std::io::Cursor;
 
     /// Codec for Zstandard compression algorithm.
     ///
@@ -534,22 +535,34 @@ mod zstd_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let capacity = uncompress_size.unwrap_or_else(|| {
-                // Get the decompressed size from the zstd frame header
-                zstd::zstd_safe::get_frame_content_size(input_buf)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(input_buf.len() as u64 * 4) as usize
-            });
-            let decompressed = self.decompressor.decompress(input_buf, capacity)?;
-            let len = decompressed.len();
-            output_buf.extend_from_slice(&decompressed);
+            let offset = output_buf.len();
+            let len = uncompress_size
+                .or_else(|| {
+                    // Get the decompressed size from the zstd frame header
+                    zstd::zstd_safe::get_frame_content_size(input_buf)
+                        .ok()
+                        .flatten()
+                        .map(|size| size as usize)
+                })
+                .unwrap_or(input_buf.len().saturating_mul(4));
+            output_buf.reserve(len);
+
+            let mut cursor = Cursor::new(output_buf);
+            cursor.set_position(offset as u64);
+            let len = self
+                .decompressor
+                .decompress_to_buffer(input_buf, &mut cursor)?;
             Ok(len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let compressed = self.compressor.compress(input_buf)?;
-            output_buf.extend_from_slice(&compressed);
+            let offset = output_buf.len();
+            let len = zstd::zstd_safe::compress_bound(input_buf.len());
+            output_buf.reserve(len);
+
+            let mut cursor = Cursor::new(output_buf);
+            cursor.set_position(offset as u64);
+            let _written = self.compressor.compress_to_buffer(input_buf, &mut cursor)?;
             Ok(())
         }
     }
