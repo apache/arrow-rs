@@ -52,7 +52,7 @@ lz4 = ["lz4_flex"]
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = "3.3"
-tokio = "1.43.0"
+tokio = { version = "1.43.0", features = ["io-util", "macros", "rt"] }
 # used in benches
 memmap2 = "0.9.3"
 bytes = "1.9"
