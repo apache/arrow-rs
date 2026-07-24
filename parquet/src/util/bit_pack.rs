@@ -225,21 +225,30 @@ mod tests {
         for i in 0..=16 {
             output.fill(0);
             pack16(&[u16::MAX; 16], &mut output, i);
-            assert!(output[..2 * i].iter().all(|&b| b == u8::MAX), "num_bits = {i}");
+            assert!(
+                output[..2 * i].iter().all(|&b| b == u8::MAX),
+                "num_bits = {i}"
+            );
             assert!(output[2 * i..].iter().all(|&b| b == 0), "num_bits = {i}");
         }
 
         for i in 0..=32 {
             output.fill(0);
             pack32(&[u32::MAX; 32], &mut output, i);
-            assert!(output[..4 * i].iter().all(|&b| b == u8::MAX), "num_bits = {i}");
+            assert!(
+                output[..4 * i].iter().all(|&b| b == u8::MAX),
+                "num_bits = {i}"
+            );
             assert!(output[4 * i..].iter().all(|&b| b == 0), "num_bits = {i}");
         }
 
         for i in 0..=64 {
             output.fill(0);
             pack64(&[u64::MAX; 64], &mut output, i);
-            assert!(output[..8 * i].iter().all(|&b| b == u8::MAX), "num_bits = {i}");
+            assert!(
+                output[..8 * i].iter().all(|&b| b == u8::MAX),
+                "num_bits = {i}"
+            );
             assert!(output[8 * i..].iter().all(|&b| b == 0), "num_bits = {i}");
         }
     }

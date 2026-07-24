@@ -31,7 +31,7 @@ use crate::encodings::decoding::byte_stream_split_decoder::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{self, BitReader, BitPacking};
+use crate::util::bit_util::{self, BitPacking, BitReader};
 
 mod byte_stream_split_decoder;
 

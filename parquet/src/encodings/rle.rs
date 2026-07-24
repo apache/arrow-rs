@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, BitPacking};
+use crate::util::bit_util::{self, BitPacking, BitReader, BitWriter};
 
 /// Number of values in one bit-packed group. The Parquet RLE/bit-packing hybrid
 /// format always bit-packs values in multiples of this count (see the
