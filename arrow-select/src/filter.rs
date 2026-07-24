@@ -26,6 +26,7 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, NullBuffer, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
@@ -689,6 +690,26 @@ pub(crate) fn filter_null_mask(
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    // The compress path scans the entire filter mask a word at a time, so it
+    // is only worthwhile when `pext` is available in hardware and the filter
+    // is neither very sparse nor very dense: it must keep more than one bit
+    // per word on average (otherwise visiting each kept bit individually is
+    // faster) and drop more than one bit per word on average (otherwise
+    // copying whole ranges via the slices strategies is faster)
+    let len = predicate.filter.len();
+    let predicate_count = predicate.count;
+    let upper = predicate_count < len - (len / 64);
+    let lower = predicate_count > len / 64;
+    if bit_util::compress_available() && upper && lower {
+        return filter_bits_compress(buffer, predicate);
+    }
+
+    filter_bits_strategy(buffer, predicate)
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` using its
+/// [`IterationStrategy`]
+fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
     assert!(buffer.len() >= predicate.filter.len());
@@ -728,6 +749,42 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` by extracting the kept
+/// bits of each 64-bit word with [`bit_util::compress`] (`pext`)
+fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    assert!(buffer.len() >= predicate.filter.len());
+    let mask_chunks = predicate.filter.values().bit_chunks();
+    let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
+
+    let mut out = MutableBuffer::new(bit_util::ceil(predicate.count, 8));
+    // Bits extracted from each chunk are packed into `current` until it
+    // contains a complete word, which is then flushed to `out`
+    let mut current = 0_u64;
+    let mut filled = 0_u32;
+
+    let chunks = value_chunks.iter_padded().zip(mask_chunks.iter_padded());
+
+    for (values, mask) in chunks {
+        let bits = bit_util::compress(values, mask);
+        let count = mask.count_ones();
+        current |= bits << filled;
+        if filled + count >= 64 {
+            out.extend_from_slice(&current.to_le_bytes());
+            filled = filled + count - 64;
+            // The bits of `bits` that did not fit in `current`, if any
+            // (`checked_shr` yields 0 when the carry is a full word)
+            current = bits.checked_shr(count - filled).unwrap_or(0);
+        } else {
+            filled += count;
+        }
+    }
+
+    if filled > 0 {
+        out.extend_from_slice(&current.to_le_bytes()[..bit_util::ceil(filled as usize, 8)]);
+    }
+    out.into()
 }
 
 /// `filter` implementation for boolean buffers
@@ -1647,6 +1704,77 @@ mod tests {
 
         test_case_filter_sliced_list_view::<i32>();
         test_case_filter_sliced_list_view::<i64>();
+    }
+
+    /// Tests [`filter_bits_compress`] and [`filter_bits_strategy`] on the
+    /// same inputs against a naive bit-by-bit filter, verifying both pathways
+    /// produce the same output. Both are called directly rather than through
+    /// [`filter_bits`], whose dispatch depends on whether the build has
+    /// hardware `pext`, so both get coverage on every platform
+    #[test]
+    fn test_filter_bits() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Lengths exercising partial words, exact word multiples, and the
+        // carry logic across flushed words
+        let lens = [0, 1, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
+        // Densities covering empty, sparse, balanced, dense and full masks
+        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
+        // Bit offsets of the value buffer, including non byte-aligned ones
+        let offsets = [0, 3, 8, 67];
+
+        for len in lens {
+            for density in densities {
+                for offset in offsets {
+                    let values: BooleanBuffer =
+                        (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
+                    let values = values.slice(offset, len);
+                    let filter: BooleanArray =
+                        (0..len).map(|_| Some(rng.random_bool(density))).collect();
+
+                    let predicate = FilterBuilder::new(&filter).build();
+
+                    let expected: BooleanBuffer = values
+                        .iter()
+                        .zip(filter.values().iter())
+                        .filter_map(|(value, keep)| keep.then_some(value))
+                        .collect();
+
+                    let compressed = filter_bits_compress(&values, &predicate);
+                    let compressed = BooleanBuffer::new(compressed, 0, predicate.count);
+
+                    assert_eq!(
+                        compressed, expected,
+                        "compress: len={len} density={density} offset={offset}"
+                    );
+
+                    // `filter_bits` is never reached with the `All` / `None`
+                    // strategies, they are short-circuited by the callers
+                    match predicate.strategy {
+                        IterationStrategy::All | IterationStrategy::None => continue,
+                        _ => {}
+                    }
+
+                    let strategy = filter_bits_strategy(&values, &predicate);
+                    let strategy = BooleanBuffer::new(strategy, 0, predicate.count);
+
+                    assert_eq!(
+                        strategy, expected,
+                        "{:?}: len={len} density={density} offset={offset}",
+                        predicate.strategy
+                    );
+
+                    // Also cover the dispatch between the two pathways
+                    let dispatched = filter_bits(&values, &predicate);
+                    let dispatched = BooleanBuffer::new(dispatched, 0, predicate.count);
+
+                    assert_eq!(
+                        dispatched, expected,
+                        "dispatch: len={len} density={density} offset={offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
