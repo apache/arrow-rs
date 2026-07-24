@@ -242,6 +242,29 @@ impl<'a> Iterator for RowSelectionIter<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()
     }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.0.count()
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.0.nth(n)
+    }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        self.0.last()
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.0.fold(init, f)
+    }
 }
 
 impl ExactSizeIterator for RowSelectionIter<'_> {}
