@@ -53,10 +53,14 @@
 //! # }
 //! ```
 //!
-//! [`object_store`] provides it's native implementation of [`AsyncFileWriter`] by [`ParquetObjectWriter`].
+//! There is a blanket implementation of [`AsyncFileWriter`] for all types that
+//! implement [`AsyncWrite`], so writers such as `tokio::fs::File`, or
+//! `object_store::buffered::BufWriter` for writing to object storage, can be
+//! passed to [`AsyncArrowWriter`] directly.
 
 #[cfg(feature = "object_store")]
 mod store;
+#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 

@@ -35,16 +35,21 @@ use arrow::compute::{like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, StringViewArray};
 use arrow_schema::{ArrowError, DataType, Schema};
+use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
-use futures::StreamExt;
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryFutureExt};
 use object_store::local::LocalFileSystem;
+use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
 };
-use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::errors::ParquetError;
 use parquet::file::metadata::PageIndexPolicy;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -100,6 +105,75 @@ criterion_group!(
     async_reader_object_store
 );
 criterion_main!(benches);
+
+fn to_parquet_err(e: object_store::Error) -> ParquetError {
+    ParquetError::External(Box::new(e))
+}
+
+/// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+/// example on the [`AsyncFileReader`] trait documentation
+#[derive(Clone)]
+struct ObjectStoreReader {
+    store: Arc<dyn ObjectStore>,
+    path: object_store::path::Path,
+}
+
+impl AsyncFileReader for ObjectStoreReader {
+    fn get_bytes(
+        &mut self,
+        range: std::ops::Range<u64>,
+    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        self.store
+            .get_range(&self.path, range)
+            .map_err(to_parquet_err)
+            .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<std::ops::Range<u64>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, ParquetError>> {
+        async move {
+            self.store
+                .get_ranges(&self.path, &ranges)
+                .await
+                .map_err(to_parquet_err)
+        }
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>, ParquetError>> {
+        async move {
+            let metadata = ParquetMetaDataReader::new()
+                .with_arrow_reader_options(options)
+                .load_via_suffix_and_finish(self)
+                .await?;
+            Ok(Arc::new(metadata))
+        }
+        .boxed()
+    }
+}
+
+impl MetadataSuffixFetch for &mut ObjectStoreReader {
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        let options = GetOptions {
+            range: Some(GetRange::Suffix(suffix as u64)),
+            ..Default::default()
+        };
+        async move {
+            let resp = self
+                .store
+                .get_opts(&self.path, options)
+                .await
+                .map_err(to_parquet_err)?;
+            resp.bytes().await.map_err(to_parquet_err)
+        }
+        .boxed()
+    }
+}
 
 /// Predicate Function.
 ///
@@ -736,7 +810,7 @@ impl ReadTest {
         self.check_row_count(row_count);
     }
 
-    /// Run the filter and projection using the async `ObjectStore` reader
+    /// Like [`Self::run_async`] but reading via an [`ObjectStore`] based reader
     async fn run_async_object_store(&self) {
         let hits_path = hits_1();
         let parent = hits_path.parent().unwrap();
@@ -744,7 +818,10 @@ impl ReadTest {
         let store = Arc::new(LocalFileSystem::new_with_prefix(parent).unwrap());
         let location = object_store::path::Path::from(file_name);
 
-        let reader = ParquetObjectReader::new(store, location);
+        let reader = ObjectStoreReader {
+            store,
+            path: location,
+        };
 
         // setup the reader
         let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(

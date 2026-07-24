@@ -101,15 +101,18 @@
 //! read and write [`RecordBatch`]es  asynchronously.
 //!
 //! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
-//! for reading. When the `object_store` feature is enabled, [`ParquetObjectReader`]
-//! provides efficient integration with object storage services such as S3 via the [object_store]
-//! crate, automatically optimizing IO based on any predicates or projections provided.
+//! for reading, automatically optimizing IO based on any predicates or projections provided.
+//! Object storage services such as S3 can be integrated by implementing
+//! [`AsyncFileReader`] on top of a client such as the [object_store] crate,
+//! or by passing a writer implementing [`AsyncWrite`] (such as
+//! `object_store::buffered::BufWriter`) to [`AsyncArrowWriter`].
 //!
 //! [`async_reader`]: arrow::async_reader
 //! [`async_writer`]: arrow::async_writer
 //! [`AsyncArrowWriter`]: arrow::async_writer::AsyncArrowWriter
+//! [`AsyncFileReader`]: arrow::async_reader::AsyncFileReader
+//! [`AsyncWrite`]: https://docs.rs/tokio/latest/tokio/io/trait.AsyncWrite.html
 //! [`ParquetRecordBatchStreamBuilder`]: arrow::async_reader::ParquetRecordBatchStreamBuilder
-//! [`ParquetObjectReader`]: arrow::async_reader::ParquetObjectReader
 //!
 //! ## Variant Logical Type (`variant_experimental` feature)
 //!
