@@ -25,7 +25,7 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{BufferAllocationStrategy, RecordBatchDecoder, read_dictionary_impl};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -48,6 +48,10 @@ pub struct StreamDecoder {
     /// See [`StreamDecoder::with_skip_validation`] for details.
     ///
     skip_validation: UnsafeFlag,
+    /// How buffers backing the decoded arrays are allocated.
+    ///
+    /// See [`StreamDecoder::with_buffer_allocation_strategy`] for details.
+    strategy: crate::reader::BufferAllocationStrategy,
 }
 
 #[derive(Debug)]
@@ -105,6 +109,23 @@ impl StreamDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Set how buffers backing the decoded arrays are allocated (defaults to
+    /// [`BufferAllocationStrategy::Shared`](crate::reader::BufferAllocationStrategy::Shared)).
+    ///
+    /// [`StreamDecoder`] is push-based and decodes out of an in-memory [`Buffer`],
+    /// so it cannot read piecewise:
+    /// [`OwnedIfFree`](crate::reader::BufferAllocationStrategy::OwnedIfFree) is
+    /// equivalent to `Shared` here, and only
+    /// [`Owned`](crate::reader::BufferAllocationStrategy::Owned) forces per-buffer
+    /// allocations, by copying.
+    pub fn with_buffer_allocation_strategy(
+        mut self,
+        strategy: crate::reader::BufferAllocationStrategy,
+    ) -> Self {
+        self.strategy = strategy;
         self
     }
 
@@ -247,11 +268,13 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_copy_shared(self.strategy == BufferAllocationStrategy::Owned)
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
                         }
                         MessageHeader::DictionaryBatch => {
+                            let copy_shared = self.strategy == BufferAllocationStrategy::Owned;
                             let dictionary = message.header_as_dictionary_batch().unwrap();
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
@@ -264,6 +287,7 @@ impl StreamDecoder {
                                 &version,
                                 self.require_alignment,
                                 self.skip_validation.clone(),
+                                copy_shared,
                             )?;
                             self.state = DecoderState::default();
                         }

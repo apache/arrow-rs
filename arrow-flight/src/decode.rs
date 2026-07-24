@@ -316,6 +316,7 @@ impl FlightDataDecoder {
                     &message.version(),
                     false,
                     self.skip_validation.clone(),
+                    false,
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
