@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SqlInfoValue"],"static":["SQL_INFO_SCHEMA","UNION_TYPE"],"struct":["GetSqlInfoBuilder","SqlInfoData","SqlInfoDataBuilder","SqlInfoUnionBuilder"],"trait":["SqlInfoName"]};

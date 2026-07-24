@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":[["primitive_parse",1]],"struct":["PrimitiveArrayDecoder"],"trait":["ParseJsonNumber"]};

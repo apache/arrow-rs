@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_SHORT_STRING_BYTES"],"enum":["NumericKind","Variant"],"macro":[["impl_decimal_cast_target",1]],"mod":["decimal","list","metadata","object"],"struct":["HexString","InvalidVariant","ShortString","Uuid","f16"],"trait":["DecimalCastTarget"]};

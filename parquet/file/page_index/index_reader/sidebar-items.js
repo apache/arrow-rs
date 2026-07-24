@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["acc_range","decode_column_index","decode_offset_index"],"struct":["ThriftColumnIndex"]};

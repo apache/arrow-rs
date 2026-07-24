@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_format_string","release_schema"],"struct":["FFI_ArrowSchema","Flags","SchemaPrivateData"]};
