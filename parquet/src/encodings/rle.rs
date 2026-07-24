@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
+use crate::util::bit_util::{self, BitReader, BitWriter, BitPacking};
 
 /// Number of values in one bit-packed group. The Parquet RLE/bit-packing hybrid
 /// format always bit-packs values in multiples of this count (see the
@@ -282,7 +282,9 @@ impl RleEncoder {
             self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
         }
 
-        // Write all buffered values as bit-packed literals
+        // Write all buffered values as bit-packed literals. This stays on `put_value`
+        // rather than `put_batch`: runs are flushed in groups of only 8 values, which
+        // is below the batch sizes the packing kernels need to pay off
         for v in &self.buffered_values[..self.num_buffered_values] {
             self.bit_writer.put_value(*v, self.bit_width as usize);
         }
@@ -390,7 +392,7 @@ impl RleDecoder {
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
     #[allow(unused)]
-    pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
+    pub fn get<T: BitPacking>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= size_of::<u64>());
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
@@ -423,7 +425,7 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBitpacked + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: BitPacking + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= size_of::<u64>());
 
         let mut values_read = 0;
