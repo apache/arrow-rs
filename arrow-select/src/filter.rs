@@ -660,33 +660,6 @@ where
     RunArray::try_new(&run_ends, &values)
 }
 
-/// Computes a new null mask for `data` based on `predicate`
-///
-/// If the predicate selected no null-rows, returns `None`, otherwise returns
-/// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
-/// in the filtered output, and `null_buffer` is the filtered null buffer
-///
-pub(crate) fn filter_null_mask(
-    nulls: Option<&NullBuffer>,
-    predicate: &FilterPredicate,
-) -> Option<(usize, Buffer)> {
-    let nulls = nulls?;
-    if nulls.null_count() == 0 {
-        return None;
-    }
-
-    let nulls = filter_bits(nulls.inner(), predicate);
-    // The filtered `nulls` has a length of `predicate.count` bits and
-    // therefore the null count is this minus the number of valid bits
-    let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);
-
-    if null_count == 0 {
-        return None;
-    }
-
-    Some((null_count, nulls))
-}
-
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
