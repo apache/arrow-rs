@@ -1580,7 +1580,12 @@ mod tests {
         Some("c".as_bytes())
     );
 
-    test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
+    test_binary!(
+        test_binary_min_max_all_nulls,
+        vec![None::<&[u8]>, None],
+        None,
+        None
+    );
 
     test_binary!(
         test_binary_min_max_1,
