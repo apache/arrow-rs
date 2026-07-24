@@ -2264,6 +2264,7 @@ mod tests {
         batches
     }
 
+    /// https://github.com/apache/arrow-rs/issues/9388
     /// encode → decode → re-encode must not produce more FlightData messages than the initial encode.
     #[tokio::test]
     async fn test_roundtrip_encode_decode_reencode_no_extra_flight_data() {
@@ -2280,7 +2281,10 @@ mod tests {
             .build(futures::stream::iter(vec![Ok(batch.clone())]));
         let encoded: Vec<FlightData> = encoder.map(|r| r.unwrap()).collect().await;
         let encoded_count = encoded.len();
-        assert!(encoded_count > 2, "batch must split for this test to be meaningful");
+        assert!(
+            encoded_count > 2,
+            "batch must split for this test to be meaningful"
+        );
 
         let mut decoder =
             FlightDataDecoder::new(futures::stream::iter(encoded.into_iter().map(Ok)));
@@ -2302,7 +2306,7 @@ mod tests {
 
     /// A zero-copy slice shares the original backing buffer, so get_buffer_memory_size() sees
     /// the full allocation regardless of how many rows the slice covers. The encoder must use
-    /// get_slice_memory_size() — otherwise a 4MB slice of a 16MB batch produces as many
+    /// get_slice_memory_size() instead, otherwise a 4MB slice of a 16MB batch produces as many
     /// FlightData messages as the full 16MB batch.
     #[tokio::test]
     async fn test_slice_encodes_fewer_flight_data_than_full_buffer() {
