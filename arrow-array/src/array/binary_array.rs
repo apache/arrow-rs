@@ -116,6 +116,12 @@ impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<Option<&[u8; C]>>>
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<Vec<u8>>>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<Option<Vec<u8>>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> From<Vec<&[u8]>> for GenericBinaryArray<OffsetSize> {
     fn from(v: Vec<&[u8]>) -> Self {
         Self::from_iter_values(v)
@@ -134,6 +140,12 @@ impl<OffsetSize: OffsetSizeTrait, const C: usize> From<Vec<&[u8; C]>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<&[u8; C]>) -> Self {
+        Self::from_iter_values(v)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Vec<u8>>> for GenericBinaryArray<OffsetSize> {
+    fn from(v: Vec<Vec<u8>>) -> Self {
         Self::from_iter_values(v)
     }
 }
