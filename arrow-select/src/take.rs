@@ -29,8 +29,9 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
     ScalarBuffer, bit_util,
 };
+use arrow_cmp::make_comparator;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
+use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 
 use num_traits::Zero;
 
@@ -959,9 +960,19 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
     let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
     let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
+
+    let values_cmp = make_comparator(
+        run_array.values().as_ref(),
+        run_array.values().as_ref(),
+        SortOptions::default(),
+    )?;
+
     for ix in 1..physical_indices.len() {
-        if physical_indices[ix] != physical_indices[ix - 1] {
-            take_value_indices.append(I::Native::from_usize(physical_indices[ix - 1]).unwrap());
+        let prev_idx = physical_indices[ix - 1];
+        let cur_idx = physical_indices[ix];
+        let is_new_run = cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne();
+        if is_new_run {
+            take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
             new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
         }
     }
@@ -2612,11 +2623,16 @@ mod tests {
         let take_out = take_run(&run_array, &take_indices).unwrap();
 
         assert_eq!(take_out.len(), 7);
-        assert_eq!(take_out.run_ends().len(), 7);
-        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
+        // adjacent identical values are merged: [2,2,2,2,2,1,1] -> 2 runs
+        assert_eq!(
+            take_out.run_ends().values().len(),
+            2,
+            "expected two physical runs"
+        );
+        assert_eq!(take_out.run_ends().values(), &[5_i32, 7]);
 
         let take_out_values = take_out.values().as_primitive::<Int32Type>();
-        assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
+        assert_eq!(take_out_values.values(), &[2, 1]);
     }
 
     #[test]
@@ -2633,6 +2649,14 @@ mod tests {
 
         let result = take_run(&run_array, &take_indices).unwrap();
         let result = result.downcast::<Int32Array>().unwrap();
+
+        // [3, 5, 5, 3, 4] -> 4 physical runs (no adjacent duplicates to merge)
+        assert_eq!(
+            result.run_ends().values().len(),
+            4,
+            "expected four physical runs"
+        );
+        assert_eq!(result.run_ends().values(), &[1_i32, 3, 4, 5]);
 
         let expected = vec![3, 5, 5, 3, 4];
         let actual = result.into_iter().flatten().collect::<Vec<_>>();
@@ -2914,5 +2938,103 @@ mod tests {
             .expect("result should be a RunArray");
         assert_eq!(run_result.run_ends().len(), 0);
         assert_eq!(run_result.values().len(), 0);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_runs() {
+        // https://github.com/apache/arrow-rs/issues/7710
+        // Indices [0,1,4,5] select from [1,1,0,0,1,1] — the 0s are skipped,
+        // so the output should be a single run of 1s, not two.
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 0, 0, 1, 1].into_iter().map(Some));
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<Int32Array>()
+            .unwrap();
+
+        // Verify physical layout: all four logical values collapse into one run.
+        assert_eq!(
+            result.run_ends().values().len(),
+            1,
+            "expected a single physical run"
+        );
+        assert_eq!(result.run_ends().values(), &[4_i32]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_string_runs() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
+
+        // Verify physical layout: all four logical values collapse into one run.
+        assert_eq!(
+            result.run_ends().values().len(),
+            1,
+            "expected a single physical run"
+        );
+        assert_eq!(result.run_ends().values(), &[4_i32]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec!["bob", "bob", "bob", "bob"]);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_mixed_runs() {
+        // Validates that runs are merged whether the same logical value comes
+        // from the same physical index (repeated indices) or distinct physical indices.
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob", "eve", "eve"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        // [bob,bob,bob,bob,bob,alice,alice,alice,eve,eve,eve]
+        let indexes = Int32Array::from_iter_values(vec![0, 0, 1, 4, 5, 2, 3, 2, 6, 7, 6]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
+
+        // Verify physical layout: 11 logical values across exactly 3 physical runs.
+
+        println!("run_ends_raw: {:?}", result.run_ends());
+        println!("run_ends: {:?}", result.run_ends().values());
+        println!("values : {:?}", result.values());
+        assert_eq!(
+            result.run_ends().values().len(),
+            3,
+            "expected three physical runs"
+        );
+        assert_eq!(result.run_ends().values(), &[5_i32, 8, 11]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                "bob", "bob", "bob", "bob", "bob", "alice", "alice", "alice", "eve", "eve", "eve"
+            ]
+        );
     }
 }

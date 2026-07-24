@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-select"
+name = "arrow-cmp"
 version = { workspace = true }
-description = "Selection kernels for arrow arrays"
+description = "Basic comparator/ordering building blocks for Apache Arrow, shared by crates that need slot-wise comparison without pulling in the full arrow-ord kernels"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
@@ -29,20 +29,16 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "arrow_select"
+name = "arrow_cmp"
 bench = false
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-arrow-buffer = { workspace = true }
-arrow-cmp = { workspace = true }
-arrow-data = { workspace = true }
-arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
-num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
-ahash = { version = "0.8", default-features = false}
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
 
 [dev-dependencies]
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
