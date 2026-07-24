@@ -21,7 +21,8 @@ use half::f16;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
+    compare_greater_with, fallback_encoding, has_dictionary_support, is_nan_with, update_max,
+    update_min,
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
@@ -400,9 +401,12 @@ where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
+    let logical_type = descr.logical_type_ref();
+    let converted_type = descr.converted_type();
+
     let first = loop {
         let next = iter.next()?;
-        if !is_nan(descr, next) {
+        if !is_nan_with(logical_type, next) {
             break next;
         }
     };
@@ -410,13 +414,13 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(descr, val) {
+        if is_nan_with(logical_type, val) {
             continue;
         }
-        if compare_greater(descr, min, val) {
+        if compare_greater_with(logical_type, converted_type, min, val) {
             min = val;
         }
-        if compare_greater(descr, val, max) {
+        if compare_greater_with(logical_type, converted_type, val, max) {
             max = val;
         }
     }
@@ -429,14 +433,18 @@ where
     //
     // For max, it has similar logic but will be written as 0.0
     // (positive zero)
-    let min = replace_zero(min, descr, -0.0);
-    let max = replace_zero(max, descr, 0.0);
+    let min = replace_zero(min, logical_type, -0.0);
+    let max = replace_zero(max, logical_type, 0.0);
 
     Some((min, max))
 }
 
-#[inline]
-fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace: f32) -> T {
+#[inline(always)]
+fn replace_zero<T: ParquetValueType>(
+    val: &T,
+    logical_type_ref: Option<&LogicalType>,
+    replace: f32,
+) -> T {
     match T::PHYSICAL_TYPE {
         Type::FLOAT if f32::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
             T::try_from_le_slice(&f32::to_le_bytes(replace)).unwrap()
@@ -445,7 +453,7 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
             T::try_from_le_slice(&f64::to_le_bytes(replace as f64)).unwrap()
         }
         Type::FIXED_LEN_BYTE_ARRAY
-            if descr.logical_type_ref() == Some(LogicalType::Float16).as_ref()
+            if logical_type_ref == Some(LogicalType::Float16).as_ref()
                 && f16::from_le_bytes(val.as_bytes().try_into().unwrap()) == f16::NEG_ZERO =>
         {
             T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
