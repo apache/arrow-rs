@@ -467,6 +467,9 @@ impl Parser for Float32Type {
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(raw_float);
+        }
         let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
