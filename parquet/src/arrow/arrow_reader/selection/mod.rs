@@ -33,6 +33,7 @@ use crate::file::page_index::offset_index::PageLocation;
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -55,10 +56,7 @@ pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
 use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
 pub use selector::{RowSelectionIter, RowSelector};
-use selector::{
-    combine_selectors, limit_selectors, offset_selectors, selectors_from_consecutive_ranges,
-    split_off_selectors,
-};
+use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
 /// [`RowSelection`] represents selecting a subset of rows
 /// when scanning a parquet file.
@@ -330,7 +328,33 @@ impl RowSelection {
         ranges: I,
         total_rows: usize,
     ) -> Self {
-        Self::from_selectors(selectors_from_consecutive_ranges(ranges, total_rows))
+        let mut selectors: Vec<RowSelector> = Vec::with_capacity(ranges.size_hint().0);
+        let mut last_end = 0;
+        for range in ranges {
+            let len = range.end - range.start;
+            if len == 0 {
+                continue;
+            }
+
+            match range.start.cmp(&last_end) {
+                Ordering::Equal => match selectors.last_mut() {
+                    Some(last) => last.row_count = last.row_count.checked_add(len).unwrap(),
+                    None => selectors.push(RowSelector::select(len)),
+                },
+                Ordering::Greater => {
+                    selectors.push(RowSelector::skip(range.start - last_end));
+                    selectors.push(RowSelector::select(len))
+                }
+                Ordering::Less => panic!("out of order"),
+            }
+            last_end = range.end;
+        }
+
+        if last_end != total_rows {
+            selectors.push(RowSelector::skip(total_rows - last_end))
+        }
+
+        Self::from_selectors(selectors)
     }
 
     /// Given an offset index, return the byte ranges for all data pages selected by `self`
@@ -653,7 +677,27 @@ impl From<BooleanBuffer> for RowSelection {
 
 impl FromIterator<RowSelector> for RowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
-        Self::from_selectors(combine_selectors(iter))
+        let iter = iter.into_iter();
+
+        // Capacity before filter
+        let mut selectors = Vec::with_capacity(iter.size_hint().0);
+
+        let mut filtered = iter.filter(|x| x.row_count != 0);
+        if let Some(x) = filtered.next() {
+            selectors.push(x);
+        }
+
+        for s in filtered {
+            // Combine consecutive selectors
+            let last = selectors.last_mut().unwrap();
+            if last.skip == s.skip {
+                last.row_count = last.row_count.checked_add(s.row_count).unwrap();
+            } else {
+                selectors.push(s)
+            }
+        }
+
+        Self::from_selectors(selectors)
     }
 }
 

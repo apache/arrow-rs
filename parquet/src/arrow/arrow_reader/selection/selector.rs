@@ -24,9 +24,6 @@
 //!
 //! [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
 
-use std::cmp::Ordering;
-use std::ops::Range;
-
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
 ///
@@ -110,77 +107,6 @@ impl ExactSizeIterator for RowSelectionIter<'_> {}
 
 // once it returns None, it will continue returning None
 impl std::iter::FusedIterator for RowSelectionIter<'_> {}
-
-/// Normalizes a sequence of selectors: drops the empty ones and combines
-/// consecutive selectors that both skip or both select.
-pub(super) fn combine_selectors<I>(iter: I) -> Vec<RowSelector>
-where
-    I: IntoIterator<Item = RowSelector>,
-{
-    let iter = iter.into_iter();
-
-    // Capacity before filter
-    let mut selectors = Vec::with_capacity(iter.size_hint().0);
-
-    let mut filtered = iter.filter(|x| x.row_count != 0);
-    if let Some(x) = filtered.next() {
-        selectors.push(x);
-    }
-
-    for s in filtered {
-        if s.row_count == 0 {
-            continue;
-        }
-
-        // Combine consecutive selectors
-        let last = selectors.last_mut().unwrap();
-        if last.skip == s.skip {
-            last.row_count = last.row_count.checked_add(s.row_count).unwrap();
-        } else {
-            selectors.push(s)
-        }
-    }
-
-    selectors
-}
-
-/// Builds the selectors keeping `ranges` out of `total_rows` rows.
-///
-/// # Panics
-///
-/// Panics if `ranges` are not in ascending order.
-pub(super) fn selectors_from_consecutive_ranges<I>(ranges: I, total_rows: usize) -> Vec<RowSelector>
-where
-    I: Iterator<Item = Range<usize>>,
-{
-    let mut selectors: Vec<RowSelector> = Vec::with_capacity(ranges.size_hint().0);
-    let mut last_end = 0;
-    for range in ranges {
-        let len = range.end - range.start;
-        if len == 0 {
-            continue;
-        }
-
-        match range.start.cmp(&last_end) {
-            Ordering::Equal => match selectors.last_mut() {
-                Some(last) => last.row_count = last.row_count.checked_add(len).unwrap(),
-                None => selectors.push(RowSelector::select(len)),
-            },
-            Ordering::Greater => {
-                selectors.push(RowSelector::skip(range.start - last_end));
-                selectors.push(RowSelector::select(len))
-            }
-            Ordering::Less => panic!("out of order"),
-        }
-        last_end = range.end;
-    }
-
-    if last_end != total_rows {
-        selectors.push(RowSelector::skip(total_rows - last_end))
-    }
-
-    selectors
-}
 
 /// Splits `selectors` at the first `row_count` rows, returning `(head, tail)`.
 pub(super) fn split_off_selectors(
