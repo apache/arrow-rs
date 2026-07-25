@@ -125,9 +125,9 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
 /// constant, since every row has to read its payload out of the values buffer. The direct path
 /// therefore only wins when the dictionary is substantially larger than the array is long.
 ///
-/// The measured crossover sits near `keys ~= 0.6 * values`, so this deliberately switches at half
-/// that rather than at the crossover itself: at `keys * 2 == values` the direct path is still
-/// comfortably ahead, which leaves margin for the exact crossover moving with cache size or
+/// The measured crossover sits near `keys ~= 0.6 * values`, so this deliberately switches short
+/// of it rather than at the crossover itself: at `keys * 2 == values` the direct path is still
+/// ahead by 15-30%, which leaves margin for the exact crossover moving with cache size or
 /// microarchitecture. Being wrong in this direction merely forgoes a win; being wrong the other
 /// way is a large regression on the common case.
 #[inline]
