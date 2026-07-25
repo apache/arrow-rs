@@ -20,9 +20,11 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
-use arrow_schema::{DataType, SortOptions};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
+use arrow_data::MAX_INLINE_VIEW_LEN;
+use arrow_schema::SortOptions;
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -67,6 +69,15 @@ pub(crate) fn non_null_padded_length(len: usize) -> usize {
         // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
         MINI_BLOCK_COUNT + ceil(len, BLOCK_SIZE) * (BLOCK_SIZE + 1)
     }
+}
+
+/// Decodes a single byte from each row, where a valid value is determined via
+/// a configurable sentinel. Optionally returns `None` if there are no null values.
+pub(crate) fn decode_nulls_sentinel(rows: &[&[u8]], options: SortOptions) -> Option<NullBuffer> {
+    let null_sentinel = null_sentinel(options);
+    let nulls = BooleanBuffer::collect_bool(rows.len(), |x| rows[x][0] != null_sentinel);
+    let nulls = NullBuffer::new(nulls);
+    (nulls.null_count() > 0).then_some(nulls)
 }
 
 /// Variable length values are encoded as
@@ -270,12 +281,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     options: SortOptions,
 ) -> GenericBinaryArray<I> {
     let len = rows.len();
-    let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel(options);
-        null_count += !valid as usize;
-        valid
-    });
+    let nulls = decode_nulls_sentinel(rows, options);
 
     let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
     let mut offsets = BufferBuilder::<I>::new(len + 1);
@@ -292,70 +298,56 @@ pub fn decode_binary<I: OffsetSizeTrait>(
         values.as_slice_mut().iter_mut().for_each(|o| *o = !*o)
     }
 
-    let d = match I::IS_LARGE {
-        true => DataType::LargeBinary,
-        false => DataType::Binary,
-    };
-
-    let builder = ArrayDataBuilder::new(d)
-        .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(offsets.finish())
-        .add_buffer(values.into());
-
     // SAFETY:
     // Valid by construction above
-    unsafe { GenericBinaryArray::from(builder.build_unchecked()) }
+    unsafe {
+        GenericBinaryArray::new_unchecked(
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            values.into(),
+            nulls,
+        )
+    }
 }
 
-fn decode_binary_view_inner(
+fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
-    validate_utf8: bool,
 ) -> BinaryViewArray {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
-    let mut null_count = 0;
+    let nulls = decode_nulls_sentinel(rows, options);
 
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel(options);
-        null_count += !valid as usize;
-        valid
-    });
-
-    // If we are validating UTF-8, decode all string values (including short strings)
-    // into the values buffer and validate UTF-8 once. If not validating,
-    // we save memory by only copying long strings to the values buffer, as short strings
-    // will be inlined into the view and do not need to be stored redundantly.
-    let values_capacity = if validate_utf8 {
-        // Capacity for all long and short strings
-        rows.iter().map(|row| decoded_len(row, options)).sum()
-    } else {
-        // Capacity for all long strings plus room for one short string
-        rows.iter().fold(0, |acc, row| {
-            let len = decoded_len(row, options);
-            if len > inline_str_max_len {
-                acc + len
-            } else {
-                acc
-            }
-        }) + inline_str_max_len
-    };
+    // Capacity for all long strings plus room for one short string
+    let mut values_capacity = inline_str_max_len;
+    let mut inline_capacity = 0;
+    for row in rows.iter() {
+        let len = decoded_len(row, options);
+        if len > inline_str_max_len {
+            values_capacity += len;
+        } else if VALIDATE_UTF8 {
+            inline_capacity += len;
+        }
+    }
     let mut values = MutableBuffer::new(values_capacity);
+    let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
+        Vec::with_capacity(inline_capacity)
+    } else {
+        Vec::new()
+    };
 
-    let mut views = BufferBuilder::<u128>::new(len);
-    for row in rows {
+    let null_sentinel = null_sentinel(options);
+    let mut views = vec![0_u128; len];
+    for (i, row) in rows.iter_mut().enumerate() {
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
-        // Measure string length via change in values buffer.
-        // Used to check if decoded value should be truncated (short string) when validate_utf8 is false
+        // Measure string length via change in values buffer. This way we can
+        // overwrite short strings in the values buffer as we inline those to
+        // views.
         let decoded_len = values.len() - start_offset;
-        if row[0] == null_sentinel(options) {
+        if row[0] == null_sentinel {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
-            views.append(0);
         } else {
             // Safety: we just appended the data to the end of the buffer
             let val = unsafe { values.get_unchecked_mut(start_offset..) };
@@ -364,38 +356,31 @@ fn decode_binary_view_inner(
                 val.iter_mut().for_each(|o| *o = !*o);
             }
 
-            let view = make_view(val, 0, start_offset as u32);
-            views.append(view);
+            views[i] = make_view(val, 0, start_offset as u32);
 
-            // truncate inline string in values buffer if validate_utf8 is false
-            if !validate_utf8 && decoded_len <= inline_str_max_len {
+            if decoded_len <= inline_str_max_len {
+                if VALIDATE_UTF8 {
+                    view_utf8_validation_buffer.extend_from_slice(val);
+                }
                 values.truncate(start_offset);
             }
         }
         *row = &row[offset..];
     }
 
-    if validate_utf8 {
-        // the values contains all data, no matter if it is short or long
-        // we can validate utf8 in one go.
-        std::str::from_utf8(values.as_slice()).unwrap();
+    if VALIDATE_UTF8 {
+        std::str::from_utf8(&values).unwrap();
+        std::str::from_utf8(&view_utf8_validation_buffer).unwrap();
     }
-
-    let builder = ArrayDataBuilder::new(DataType::BinaryView)
-        .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
-        .add_buffer(views.finish())
-        .add_buffer(values.into());
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::from(builder.build_unchecked()) }
+    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()], nulls) }
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
 pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
-    decode_binary_view_inner(rows, options, false)
+    decode_binary_view_inner::<false>(rows, options)
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -414,14 +399,11 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
         return GenericStringArray::from(decoded);
     }
 
-    let builder = decoded
-        .into_data()
-        .into_builder()
-        .data_type(GenericStringArray::<I>::DATA_TYPE);
+    let (offsets, values, nulls) = decoded.into_parts();
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(unsafe { builder.build_unchecked() })
+    unsafe { GenericStringArray::new_unchecked(offsets, values, nulls) }
 }
 
 /// Decodes a string view array from `rows` with the provided `options`
@@ -434,7 +416,11 @@ pub unsafe fn decode_string_view(
     options: SortOptions,
     validate_utf8: bool,
 ) -> StringViewArray {
-    let view = decode_binary_view_inner(rows, options, validate_utf8);
+    let view = if validate_utf8 {
+        decode_binary_view_inner::<true>(rows, options)
+    } else {
+        decode_binary_view_inner::<false>(rows, options)
+    };
     unsafe { view.to_string_view_unchecked() }
 }
 

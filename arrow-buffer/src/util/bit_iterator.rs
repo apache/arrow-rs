@@ -365,14 +365,10 @@ impl<'a> Iterator for BitIndexU32Iterator<'a> {
                 return Some((self.chunk_offset + tz as i64) as u32);
             }
             // Advance to next 64-bit chunk
-            match self.iter.next() {
-                Some(next_chunk) => {
-                    // Move offset forward by 64 bits
-                    self.chunk_offset += 64;
-                    self.curr = next_chunk;
-                }
-                None => return None,
-            }
+            let next_chunk = self.iter.next()?;
+            // Move offset forward by 64 bits
+            self.chunk_offset += 64;
+            self.curr = next_chunk;
         }
     }
 }

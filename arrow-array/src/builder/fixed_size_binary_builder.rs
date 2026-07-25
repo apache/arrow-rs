@@ -206,11 +206,11 @@ mod tests {
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(6, array.len());
         assert_eq!(3, array.null_count());
-        assert_eq!(10, array.value_offset(2));
-        assert_eq!(15, array.value_offset(3));
         assert_eq!(5, array.value_length());
+        assert_eq!(b"arrow", array.value(2));
         assert!(array.is_null(3));
         assert!(array.is_null(4));
+        assert_eq!(b"world", array.value(5));
     }
 
     #[test]
@@ -226,8 +226,8 @@ mod tests {
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(3, array.len());
         assert_eq!(1, array.null_count());
-        assert_eq!(10, array.value_offset(2));
         assert_eq!(5, array.value_length());
+        assert_eq!(b"arrow", array.value(2));
 
         //  [b"finis", null, "clone"]
         builder.append_value(b"finis").unwrap();
@@ -239,8 +239,8 @@ mod tests {
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(6, array.len());
         assert_eq!(2, array.null_count());
-        assert_eq!(25, array.value_offset(5));
         assert_eq!(5, array.value_length());
+        assert_eq!(b"clone", array.value(5));
     }
 
     #[test]
@@ -256,7 +256,6 @@ mod tests {
         assert_eq!(&DataType::FixedSizeBinary(0), array.data_type());
         assert_eq!(3, array.len());
         assert_eq!(1, array.null_count());
-        assert_eq!(0, array.value_offset(2));
         assert_eq!(0, array.value_length());
         assert_eq!(b"", array.value(0));
         assert_eq!(b"", array.value(2));
@@ -307,10 +306,6 @@ mod tests {
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(6, array.len());
         assert_eq!(2, array.null_count());
-        for i in 0..6 {
-            assert_eq!(i * 5, array.value_offset(i as usize));
-        }
-
         assert_eq!(b"hello", array.value(0));
         assert!(array.is_null(1));
         assert_eq!(b"arrow", array.value(2));

@@ -559,7 +559,8 @@ fn make_bytearray_batch(
         .iter()
         .map(|value| Some(value.as_slice()))
         .collect::<Vec<_>>()
-        .into();
+        .try_into()
+        .unwrap();
     let service_large_binary: LargeBinaryArray = large_binary_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![

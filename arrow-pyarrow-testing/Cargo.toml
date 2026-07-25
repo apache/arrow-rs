@@ -47,5 +47,6 @@ publish = false
 [dependencies]
 # Note no dependency on arrow, to ensure arrow-pyarrow can be used by itself
 arrow-array = { path = "../arrow-array" }
+arrow-schema = { path = "../arrow-schema" }
 arrow-pyarrow = { path = "../arrow-pyarrow" }
-pyo3 = { version = "0.28.0", default-features = false }
+pyo3 = { version = "0.29.0", default-features = false }

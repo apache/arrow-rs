@@ -530,6 +530,42 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("eq dictionary[10] string[4])", |b| {
         b.iter(|| eq(&dict_arr_a, &dict_arr_b).unwrap())
     });
+
+    // RunEndEncoded benchmarks
+
+    let mut group = c.benchmark_group("ree_comparison");
+
+    for (physical, logical) in [(64, SIZE), (1024, SIZE), (SIZE / 2, SIZE)] {
+        let ree_a = create_primitive_run_array::<Int32Type, Int32Type>(logical, physical);
+        let ree_b = create_primitive_run_array::<Int32Type, Int32Type>(logical, physical);
+        let scalar = Int32Array::from(vec![1]);
+
+        let tag = format!("phys={physical},log={logical}");
+
+        group.bench_function(format!("eq_ree_scalar({tag})"), |b| {
+            b.iter(|| eq(&ree_a, &Scalar::new(&scalar)).unwrap())
+        });
+
+        group.bench_function(format!("lt_ree_scalar({tag})"), |b| {
+            b.iter(|| lt(&ree_a, &Scalar::new(&scalar)).unwrap())
+        });
+
+        group.bench_function(format!("eq_ree_ree({tag})"), |b| {
+            b.iter(|| eq(&ree_a, &ree_b).unwrap())
+        });
+
+        group.bench_function(format!("lt_ree_ree({tag})"), |b| {
+            b.iter(|| lt(&ree_a, &ree_b).unwrap())
+        });
+
+        let flat = create_primitive_array_with_seed::<Int32Type>(logical, 0., 42);
+
+        group.bench_function(format!("eq_ree_flat({tag})"), |b| {
+            b.iter(|| eq(&ree_a, &flat).unwrap())
+        });
+    }
+
+    group.finish();
 }
 
 criterion_group!(benches, add_benchmark);

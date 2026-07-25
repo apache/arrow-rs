@@ -92,7 +92,7 @@ arrow = { workspace = true, features = ["prettyprint"] }
 futures = "0.3.31"
 async-stream = "0.3.6"
 apache-avro = "0.21.0"
-num-bigint = "0.4"
+num-bigint = "0.5"
 object_store = { workspace = true, features = ["fs"] }
 once_cell = "1.21.3"
 half = { version = "2.1", default-features = false }

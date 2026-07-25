@@ -219,9 +219,7 @@ mod tests {
 
     #[test]
     fn test_binary_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -257,9 +255,7 @@ mod tests {
 
     #[test]
     fn test_binary_array_with_offsets() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
@@ -283,9 +279,7 @@ mod tests {
 
     #[test]
     fn test_large_binary_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -321,9 +315,7 @@ mod tests {
 
     #[test]
     fn test_large_binary_array_with_offsets() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset

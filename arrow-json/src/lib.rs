@@ -390,4 +390,42 @@ mod tests {
         assert_list_view_roundtrip::<i32>();
         assert_list_view_roundtrip::<i64>();
     }
+
+    #[test]
+    fn test_json_roundtrip_fixed_size_list() {
+        let inner = Arc::new(Field::new("item", DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("flat", DataType::FixedSizeList(inner.clone(), 3), true),
+            Field::new(
+                "nested",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::FixedSizeList(inner, 2), true)),
+                    2,
+                ),
+                true,
+            ),
+        ]));
+
+        let input = r#"{"flat":[1,2,3],"nested":[[1,2],[3,4]]}
+{"flat":[4,null,5]}
+{"flat":[6,7,8],"nested":[[null,5],[6,null]]}
+"#
+        .as_bytes();
+
+        let batches: Vec<RecordBatch> = ReaderBuilder::new(schema.clone())
+            .with_batch_size(1024)
+            .build(Cursor::new(input))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let mut output = Vec::new();
+        let mut writer = WriterBuilder::new().build::<_, LineDelimited>(&mut output);
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(input, &output);
+    }
 }

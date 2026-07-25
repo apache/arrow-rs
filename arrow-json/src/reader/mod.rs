@@ -151,7 +151,9 @@ use crate::reader::binary_array::{
 };
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
-use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
+use crate::reader::list_array::{
+    FixedSizeListArrayDecoder, ListArrayDecoder, ListViewArrayDecoder,
+};
 use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
@@ -835,6 +837,7 @@ fn make_decoder(
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
         DataType::ListView(_) => Ok(Box::new(ListViewArrayDecoder::<i32>::new(ctx, data_type, is_nullable)?)),
         DataType::LargeListView(_) => Ok(Box::new(ListViewArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
+        DataType::FixedSizeList(_, _) => Ok(Box::new(FixedSizeListArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
         DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
@@ -856,11 +859,10 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, BooleanArray, Float64Array, GenericListViewArray, Int32Array, ListArray, MapArray,
-        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArray, make_array,
+        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArray,
     };
-    use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer};
+    use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_data::ArrayDataBuilder;
     use arrow_schema::{Field, Fields};
     use serde_json::json;
     use std::fs::File;
@@ -1285,9 +1287,13 @@ mod tests {
         "#;
         let map = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new_list(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                Field::new("element", DataType::Utf8, true),
+                true,
+            ),
             false,
             true,
         );
@@ -2174,12 +2180,13 @@ mod tests {
             None,
             None,
         ]);
-        let c = ArrayDataBuilder::new(c_field.data_type().clone())
-            .len(7)
-            .add_child_data(d.to_data())
-            .null_bit_buffer(Some(Buffer::from([0b00111011])))
-            .build()
-            .unwrap();
+        let c = StructArray::new(
+            vec![Field::new("d", DataType::Utf8, true)].into(),
+            vec![Arc::new(d.clone()) as ArrayRef],
+            Some(NullBuffer::from(vec![
+                true, true, false, true, true, true, false,
+            ])),
+        );
         let b = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -2189,21 +2196,22 @@ mod tests {
             Some(true),
             None,
         ]);
-        let a = ArrayDataBuilder::new(a_struct_field.data_type().clone())
-            .len(7)
-            .add_child_data(b.to_data())
-            .add_child_data(c.clone())
-            .null_bit_buffer(Some(Buffer::from([0b00111111])))
-            .build()
-            .unwrap();
-        let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
-            .len(6)
-            .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
-            .add_child_data(a)
-            .null_bit_buffer(Some(Buffer::from([0b00110111])))
-            .build()
-            .unwrap();
-        let expected = make_array(a_list);
+        let a = StructArray::new(
+            vec![Field::new("b", DataType::Boolean, true), c_field.clone()].into(),
+            vec![
+                Arc::new(b.clone()) as ArrayRef,
+                Arc::new(c.clone()) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![
+                true, true, true, true, true, true, false,
+            ])),
+        );
+        let a_list = ListArray::new(
+            Arc::new(a_struct_field.clone()),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 3, 6, 6, 6, 7])),
+            Arc::new(a),
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
 
         // compare `a` with result from json reader
         let batch = reader.next().unwrap().unwrap();
@@ -2211,7 +2219,7 @@ mod tests {
         assert_eq!(read.len(), 6);
         // compare the arrays the long way around, to better detect differences
         let read: &ListArray = read.as_list::<i32>();
-        let expected = expected.as_list::<i32>();
+        let expected = &a_list;
         assert_eq!(read.value_offsets(), &[0, 2, 3, 6, 6, 6, 7]);
         // compare list null buffers
         assert_eq!(read.nulls(), expected.nulls());
@@ -2229,7 +2237,7 @@ mod tests {
         let read_b = struct_array.column(0);
         assert_eq!(read_b.as_ref(), &b);
         let read_c = struct_array.column(1);
-        assert_eq!(read_c.to_data(), c);
+        assert_eq!(read_c.as_struct(), &c);
         let read_c = read_c.as_struct();
         let read_d = read_c.column(0);
         assert_eq!(read_d.as_ref(), &d);
@@ -2306,6 +2314,178 @@ mod tests {
     fn test_read_list_view() {
         assert_read_list_view::<i32>();
         assert_read_list_view::<i64>();
+    }
+
+    #[test]
+    fn test_fixed_size_list() {
+        let buf = r#"
+        {"a": [1, 2, 3]}
+        {"a": [4, 5, 6]}
+        {"a": [7, 8, 9]}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 3),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.value_length(), 3);
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn test_fixed_size_list_nullable() {
+        let buf = r#"
+        {"a": [1, 2]}
+        {"a": null}
+        {"a": [3, null]}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            true,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1));
+        assert!(col.is_valid(2));
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(4), 3);
+        assert!(values.is_null(5));
+    }
+
+    #[test]
+    fn test_fixed_size_list_zero_size_non_nullable() {
+        let buf = r#"
+        {"a": []}
+        {"a": []}
+        {"a": []}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 0),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.value_length(), 0);
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert!(values.values().is_empty());
+    }
+
+    #[test]
+    fn test_fixed_size_list_wrong_size() {
+        let buf = r#"{"a": [1, 2, 3]}"#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            false,
+        )]));
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("expected 2 but got 3"), "{}", err);
+    }
+
+    #[test]
+    fn test_fixed_size_list_nested() {
+        let buf = r#"
+        {"a": [[1, 2], [3, 4]]}
+        {"a": [[5, 6], [7, 8]]}
+        "#;
+
+        let inner_field = Field::new_list_field(DataType::Int32, true);
+        let inner_type = DataType::FixedSizeList(Arc::new(inner_field), 2);
+        let outer_field = Arc::new(Field::new_list_field(inner_type.clone(), true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(outer_field, 2),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.value_length(), 2);
+
+        let inner = col.values().as_fixed_size_list();
+        assert_eq!(inner.len(), 4);
+        assert_eq!(inner.value_length(), 2);
+
+        let values = inner.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_fixed_size_list_ignore_type_conflicts() {
+        let field = Field::new("item", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            true,
+        )]));
+
+        let json = vec![
+            json!({"a": [1, 2]}),
+            json!({"a": "not a list"}),
+            json!({"a": 42}),
+            json!({"a": [6, 7]}),
+        ];
+
+        let mut decoder = ReaderBuilder::new(schema)
+            .with_ignore_type_conflicts(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+
+        let col = batch.column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 4);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1)); // string -> null
+        assert!(col.is_null(2)); // number -> null
+        assert!(col.is_valid(3));
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(6), 6);
+        assert_eq!(values.value(7), 7);
     }
 
     #[test]
@@ -2723,6 +2903,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_serialize_f32_into_string() {
+        // Coercing an f32 into a string column must render the value, not its raw bit pattern.
+        let field = Field::new("f", DataType::Utf8, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .with_coerce_primitive(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&[1.5_f32, -2.25_f32]).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        let values = batch.column(0).as_string::<i32>();
+        assert_eq!(values.value(0), "1.5");
+        assert_eq!(values.value(1), "-2.25");
+    }
+
     // Parse the given `row` in `struct_mode` as a type given by fields.
     //
     // If as_struct == true, wrap the fields in a Struct field with name "r".
@@ -2817,9 +3012,9 @@ mod tests {
             Field::new("b", DataType::new_list(DataType::Int32, true), true),
             Field::new_map(
                 "c",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),
@@ -3007,10 +3202,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3257,13 +3452,18 @@ mod tests {
                 false,
             ),
             Field::new(
+                "fixed_size_list",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
+                false,
+            ),
+            Field::new(
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3313,13 +3513,18 @@ mod tests {
                 true,
             ),
             Field::new(
+                "fixed_size_list",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
+                true,
+            ),
+            Field::new(
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),

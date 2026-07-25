@@ -16,9 +16,12 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::{
+    FilterIndices, FilterPredicate, FilterSelection, FilterSlices, filter_null_mask,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -59,6 +62,95 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
             self.current.reserve(self.batch_size);
         }
     }
+
+    fn append_values_by_indices(
+        current: &mut Vec<T::Native>,
+        values: &[T::Native],
+        indices: FilterIndices<'_>,
+        selected_count: usize,
+    ) {
+        let current_len = current.len();
+        let mut written = 0;
+
+        unsafe {
+            let mut out = current
+                .spare_capacity_mut()
+                .as_mut_ptr()
+                .cast::<T::Native>();
+
+            indices.for_each(|idx| {
+                // SAFETY: indices are derived from the filter predicate for this source.
+                out.write(*values.get_unchecked(idx));
+                out = out.add(1);
+                written += 1;
+            });
+
+            current.set_len(current_len + written);
+        }
+
+        debug_assert_eq!(written, selected_count);
+    }
+
+    fn append_values_by_slices(
+        current: &mut Vec<T::Native>,
+        values: &[T::Native],
+        slices: FilterSlices<'_>,
+        selected_count: usize,
+    ) {
+        let current_len = current.len();
+        let mut written = 0;
+
+        unsafe {
+            let mut out = current
+                .spare_capacity_mut()
+                .as_mut_ptr()
+                .cast::<T::Native>();
+
+            slices.for_each(|(start, end)| {
+                let len = end - start;
+                // SAFETY: slices are derived from the filter predicate for this source.
+                std::ptr::copy_nonoverlapping(values.as_ptr().add(start), out, len);
+                out = out.add(len);
+                written += len;
+            });
+
+            current.set_len(current_len + written);
+        }
+
+        debug_assert_eq!(written, selected_count);
+    }
+}
+
+#[inline]
+fn primitive_source<T: ArrowPrimitiveType>(
+    source: &Option<ArrayRef>,
+) -> Result<&PrimitiveArray<T>, ArrowError> {
+    Ok(source
+        .as_ref()
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
+            )
+        })?
+        .as_primitive::<T>())
+}
+
+fn append_filtered_nulls(
+    nulls: &mut NullBufferBuilder,
+    source_nulls: Option<&NullBuffer>,
+    filter: &FilterPredicate,
+) {
+    if let Some((null_count, filtered_nulls)) = filter_null_mask(source_nulls, filter) {
+        let filtered_nulls = unsafe {
+            NullBuffer::new_unchecked(
+                BooleanBuffer::new(filtered_nulls, 0, filter.count()),
+                null_count,
+            )
+        };
+        nulls.append_buffer(&filtered_nulls);
+    } else {
+        nulls.append_n_non_nulls(filter.count());
+    }
 }
 
 impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
@@ -69,15 +161,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         self.ensure_capacity();
 
-        let s = self
-            .source
-            .as_ref()
-            .ok_or_else(|| {
-                ArrowError::InvalidArgumentError(
-                    "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
-                )
-            })?
-            .as_primitive::<T>();
+        let s = primitive_source::<T>(&self.source)?;
 
         // add nulls if necessary
         if let Some(nulls) = s.nulls().as_ref() {
@@ -88,10 +172,47 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         };
 
         // Copy the values
+        let values = s.values();
+        // SAFETY: copy_rows is called with ranges derived from the source array.
         self.current
-            .extend_from_slice(&s.values()[offset..offset + len]);
+            .extend_from_slice(unsafe { values.get_unchecked(offset..offset + len) });
 
         Ok(())
+    }
+
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+        match filter.selection() {
+            FilterSelection::Indices(indices) => {
+                self.ensure_capacity();
+                let s = primitive_source::<T>(&self.source)?;
+
+                append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
+                self.current.reserve(filter.count());
+                Self::append_values_by_indices(
+                    &mut self.current,
+                    s.values(),
+                    indices,
+                    filter.count(),
+                );
+                Ok(())
+            }
+            FilterSelection::Slices(slices) => {
+                self.ensure_capacity();
+                let s = primitive_source::<T>(&self.source)?;
+
+                append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
+                self.current.reserve(filter.count());
+                Self::append_values_by_slices(
+                    &mut self.current,
+                    s.values(),
+                    slices,
+                    filter.count(),
+                );
+                Ok(())
+            }
+            // Other selection shapes reuse the generic copy_rows path.
+            selection => self.copy_rows_by_selection(selection),
+        }
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
@@ -104,5 +225,161 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             // preserve timezone / precision+scale if applicable
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(array))
+    }
+
+    fn size(&self) -> usize {
+        self.source
+            .as_ref()
+            .map_or(0, |source| source.get_array_memory_size())
+            + self.current.capacity() * std::mem::size_of::<T::Native>()
+            + self.nulls.allocated_size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::FilterBuilder;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{BooleanArray, Int32Array};
+
+    #[test]
+    fn test_copy_rows_by_filter_index_iterator() {
+        let source =
+            Int32Array::from_iter((0..21).map(|idx| if idx % 5 == 0 { None } else { Some(idx) }));
+        let filter = BooleanArray::from_iter(
+            (0..21).map(|idx| Some(matches!(idx, 0 | 1 | 2 | 3 | 5 | 8 | 13))),
+        );
+        let predicate = FilterBuilder::new(&filter).build();
+        let FilterSelection::Indices(indices) = predicate.selection() else {
+            panic!("expected index iterator selection");
+        };
+        let mut selected_indices = Vec::new();
+        indices.for_each(|idx| selected_indices.push(idx));
+        assert_eq!(selected_indices, vec![0, 1, 2, 3, 5, 8, 13]);
+
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(7, DataType::Int32);
+        in_progress.set_source(Some(Arc::new(source)));
+        in_progress.copy_rows_by_filter(&predicate).unwrap();
+
+        let result = in_progress.finish().unwrap();
+        let result = result.as_primitive::<Int32Type>();
+        let expected = Int32Array::from(vec![
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(8),
+            Some(13),
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_slice_iterator() {
+        let source =
+            Int32Array::from_iter((0..16).map(|idx| if idx % 5 == 0 { None } else { Some(idx) }));
+        let filter = BooleanArray::from_iter((0..16).map(|idx| Some(!matches!(idx, 3 | 9))));
+        let predicate = FilterBuilder::new(&filter).build();
+        let FilterSelection::Slices(slices) = predicate.selection() else {
+            panic!("expected slice iterator selection");
+        };
+        let mut selected_slices = Vec::new();
+        slices.for_each(|slice| selected_slices.push(slice));
+        assert_eq!(selected_slices, vec![(0, 3), (4, 9), (10, 16)]);
+
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(14, DataType::Int32);
+        in_progress.set_source(Some(Arc::new(source)));
+        in_progress.copy_rows_by_filter(&predicate).unwrap();
+
+        let result = in_progress.finish().unwrap();
+        let result = result.as_primitive::<Int32Type>();
+        let expected = Int32Array::from(vec![
+            None,
+            Some(1),
+            Some(2),
+            Some(4),
+            None,
+            Some(6),
+            Some(7),
+            Some(8),
+            None,
+            Some(11),
+            Some(12),
+            Some(13),
+            Some(14),
+            None,
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_size_empty() {
+        // A fresh in-progress array has allocated nothing yet
+        let in_progress = InProgressPrimitiveArray::<Int32Type>::new(64, DataType::Int32);
+        assert_eq!(in_progress.size(), 0);
+    }
+
+    #[test]
+    fn test_size_counts_source() {
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(64, DataType::Int32);
+        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        in_progress.set_source(Some(Arc::clone(&source)));
+        // Nothing copied yet, so size is exactly the source's memory
+        assert_eq!(in_progress.size(), source.get_array_memory_size());
+    }
+
+    #[test]
+    fn test_size_counts_values_buffer_and_resets_on_finish() {
+        const BATCH_SIZE: usize = 64;
+        let mut in_progress =
+            InProgressPrimitiveArray::<Int32Type>::new(BATCH_SIZE, DataType::Int32);
+        // Non-null source: the nulls builder stays empty (allocated_size == 0),
+        // so the only growth is the values buffer.
+        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        let source_size = source.get_array_memory_size();
+        in_progress.set_source(Some(Arc::clone(&source)));
+
+        in_progress.copy_rows(0, 50).unwrap();
+        assert!(
+            in_progress.size() >= source_size + 50 * size_of::<i32>(),
+            "values buffer under-counted: {} < {} + {} * {}",
+            in_progress.size(),
+            source_size,
+            50,
+            size_of::<i32>(),
+        );
+
+        // finish() takes the buffered values/nulls but keeps the source, so the
+        // reported size drops back to exactly the source.
+        in_progress.finish().unwrap();
+        assert_eq!(in_progress.size(), source_size);
+    }
+
+    #[test]
+    fn test_size_counts_null_buffer() {
+        const BATCH_SIZE: usize = 64;
+
+        let in_progress_bytes = |source: ArrayRef| {
+            let mut in_progress =
+                InProgressPrimitiveArray::<Int32Type>::new(BATCH_SIZE, DataType::Int32);
+            let source_len = source.len();
+            in_progress.set_source(Some(source));
+            in_progress.copy_rows(0, source_len / 2).unwrap();
+            in_progress.size()
+        };
+
+        // All values valid: the nulls builder never allocates.
+        let all_valid = in_progress_bytes(Arc::new(Int32Array::from_iter_values(0..100)));
+        // Some values null: copying materializes a null buffer that must count.
+        let with_nulls = in_progress_bytes(Arc::new(Int32Array::from_iter(
+            (0..100).map(|i| (i % 2 == 0).then_some(i)),
+        )));
+
+        assert!(
+            with_nulls > all_valid,
+            "null buffer must be included in size(): with_nulls={with_nulls} all_valid={all_valid}"
+        );
     }
 }

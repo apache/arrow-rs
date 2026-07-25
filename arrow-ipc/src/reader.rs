@@ -146,7 +146,7 @@ impl RecordBatchDecoder<'_> {
                 let null_buffer = self.next_buffer()?;
 
                 // read the arrays for each field
-                let mut struct_arrays = vec![];
+                let mut struct_arrays = Vec::with_capacity(struct_fields.len());
                 // TODO investigate whether just knowing the number of buffers could
                 // still work
                 for struct_field in struct_fields {
@@ -474,7 +474,7 @@ pub struct RecordBatchDecoder<'a> {
 
 impl<'a> RecordBatchDecoder<'a> {
     /// Create a reader for decoding arrays from an encoded [`RecordBatch`]
-    fn try_new(
+    pub fn try_new(
         buf: &'a Buffer,
         batch: crate::RecordBatch<'a>,
         schema: SchemaRef,
@@ -530,22 +530,22 @@ impl<'a> RecordBatchDecoder<'a> {
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
     ///
-    /// Note this API is somewhat "funky" as it allows the caller to skip validation
-    /// without having to use `unsafe` code. If this is ever made public
-    /// it should be made clearer that this is a potentially unsafe by
-    /// using an `unsafe` function that takes a boolean flag.
-    ///
+    /// When enabled, the following checks are bypassed:
+    /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
+    /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
+    /// - Null count consistency and buffer length checks
     /// # Safety
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
-    /// certain that the data is valid
-    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+    /// certain that the data is valid. Invalid data that bypasses these checks
+    /// may cause undefined behavior when the arrays are later accessed.
+    pub fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
         self.skip_validation = skip_validation;
         self
     }
 
     /// Read the record batch, consuming the reader
-    fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
+    pub fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
             .variadicBufferCounts()
@@ -557,14 +557,23 @@ impl<'a> RecordBatchDecoder<'a> {
 
         let schema = Arc::clone(&self.schema);
         if let Some(projection) = self.projection {
-            let mut arrays = vec![];
+            let mut arrays = Vec::with_capacity(projection.len());
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
-                // Create array for projected field
-                if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                    let child = self.create_array(field, &mut variadic_counts)?;
-                    arrays.push((proj_idx, child));
-                } else {
+                // A projected field can appear more than once, so collect all matching positions.
+                let mut child = None;
+                for (proj_idx, projected_idx) in projection.iter().enumerate() {
+                    if *projected_idx == idx {
+                        if child.is_none() {
+                            child = Some(self.create_array(field, &mut variadic_counts)?);
+                        }
+
+                        // Reuse the decoded array for duplicate projection entries.
+                        arrays.push((proj_idx, child.as_ref().unwrap().clone()));
+                    }
+                }
+
+                if child.is_none() {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
@@ -588,7 +597,7 @@ impl<'a> RecordBatchDecoder<'a> {
                 RecordBatch::try_new_with_options(schema, columns, &options)
             }
         } else {
-            let mut children = vec![];
+            let mut children = Vec::with_capacity(schema.fields().len());
             // keep track of index as lists require more than one node
             for field in schema.fields() {
                 let child = self.create_array(field, &mut variadic_counts)?;
@@ -669,6 +678,12 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer();
                 self.skip_field(list_field, variadic_count)?;
             }
+            ListView(list_field) | LargeListView(list_field) => {
+                self.skip_buffer(); // Null buffer
+                self.skip_buffer(); // Offsets
+                self.skip_buffer(); // Sizes
+                self.skip_field(list_field, variadic_count)?;
+            }
             FixedSizeList(list_field, _) => {
                 self.skip_buffer();
                 self.skip_field(list_field, variadic_count)?;
@@ -690,10 +705,13 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer(); // Indices
             }
             Union(fields, mode) => {
-                self.skip_buffer(); // Nulls
+                if self.version < MetadataVersion::V5 {
+                    self.skip_buffer(); // Null buffer
+                }
+                self.skip_buffer(); // Type ids
 
                 match mode {
-                    UnionMode::Dense => self.skip_buffer(),
+                    UnionMode::Dense => self.skip_buffer(), // Offsets
                     UnionMode::Sparse => {}
                 };
 
@@ -701,8 +719,33 @@ impl<'a> RecordBatchDecoder<'a> {
                     self.skip_field(field, variadic_count)?
                 }
             }
-            Null => {} // No buffer increases
-            _ => {
+            // Null has no buffers to skip
+            Null => {}
+
+            // Fixed-width and boolean types: skip null buffer + values buffer
+            Boolean
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Timestamp(_, _)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 self.skip_buffer();
                 self.skip_buffer();
             }
@@ -720,7 +763,7 @@ impl<'a> RecordBatchDecoder<'a> {
 /// If `require_alignment` is false, this function will automatically allocate a new aligned buffer
 /// and copy over the data if any array data in the input `buf` is not properly aligned.
 /// (Properly aligned array data will remain zero-copy.)
-/// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
+/// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct [`arrow_data::ArrayData`].
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
@@ -755,7 +798,8 @@ pub fn read_dictionary(
     )
 }
 
-fn read_dictionary_impl(
+/// Low-level version of [`read_dictionary`] with alignment and validation controls
+pub fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
@@ -1012,7 +1056,7 @@ impl FileDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
@@ -2098,6 +2142,133 @@ mod tests {
         }
     }
 
+    /// Test that the reader can read legacy files where empty list arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_list_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new_list(
+            "items",
+            Field::new_list_field(DataType::Int32, true),
+            true,
+        )]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty list arrays.
+        // Keep reader compatibility with such files by accepting a 0-byte offsets buffer.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // list node
+            FieldNode::new(0, 0), // child int32 node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // list validity
+            crate::Buffer::new(0, 0), // list offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // child validity
+            crate::Buffer::new(0, 0), // child values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let list = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(list.len(), 0);
+        assert_eq!(list.values().len(), 0);
+    }
+
+    /// Test that the reader can read legacy files where empty Utf8/Binary arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_utf8_and_binary_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("payload", DataType::Binary, true),
+        ]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty Utf8/Binary arrays.
+        // Keep reader compatibility with such files by accepting 0-byte offsets buffers.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // utf8 node
+            FieldNode::new(0, 0), // binary node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // utf8 validity
+            crate::Buffer::new(0, 0), // utf8 offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // utf8 values
+            crate::Buffer::new(0, 0), // binary validity
+            crate::Buffer::new(0, 0), // binary offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // binary values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let utf8 = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(utf8.len(), 0);
+        assert_eq!(utf8.value_offsets(), [0]);
+
+        let binary = read_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(binary.len(), 0);
+        assert_eq!(binary.value_offsets(), [0]);
+    }
+
     #[test]
     fn test_projection_array_values() {
         // define schema
@@ -2132,6 +2303,30 @@ mod tests {
                 FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(vec![3, 2, 1]));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
+            assert_eq!(read_batch, expected_batch);
+        }
+    }
+
+    #[test]
+    fn test_projection_duplicate_indices() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        // Write the batch to IPC
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Verify duplicate([1, 1]) and reordered([2, 0, 2]) projection indices
+        for projection in [vec![1, 1], vec![2, 0, 2]] {
+            let reader =
+                FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(projection.clone()));
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+
+            let expected_batch = batch.project(&projection).unwrap();
             assert_eq!(read_batch, expected_batch);
         }
     }
@@ -2500,26 +2695,68 @@ mod tests {
     }
 
     #[test]
+    fn test_ipc_writers_reject_dictionary_of_dictionary_schema() {
+        let values = Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef;
+        let inner = Arc::new(DictionaryArray::new(
+            UInt32Array::from_iter_values([0, 1]),
+            values,
+        )) as ArrayRef;
+        let outer = Arc::new(DictionaryArray::new(
+            UInt32Array::from_iter_values([0, 1, 0]),
+            inner,
+        )) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            outer.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![outer]).unwrap();
+
+        let mut stream = Vec::new();
+        let Err(err) = crate::writer::StreamWriter::try_new(&mut stream, batch.schema_ref()) else {
+            panic!("IPC stream writer should reject dictionary-of-dictionary schemas");
+        };
+        assert!(stream.is_empty());
+
+        assert!(
+            err.to_string().contains("dictionary-of-dictionary values"),
+            "unexpected error: {err}"
+        );
+
+        let mut file = Vec::new();
+        let Err(err) = crate::writer::FileWriter::try_new(&mut file, batch.schema_ref()) else {
+            panic!("IPC file writer should reject dictionary-of-dictionary schemas");
+        };
+        assert!(file.is_empty());
+
+        assert!(
+            err.to_string().contains("dictionary-of-dictionary values"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_roundtrip_stream_nested_dict_of_map_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("b"), Some("c")]);
         let values = Arc::new(values) as ArrayRef;
         let value_dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 3, 1]);
         let value_dict_array = DictionaryArray::new(value_dict_keys, values.clone());
 
-        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 1, 1, 3]);
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, values);
 
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
-            "keys",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            true, // It is technically not legal for this field to be null.
+            false,
             1,
             false,
         ));
         #[allow(deprecated)]
         let values_field = Arc::new(Field::new_dict(
-            "values",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             2,
@@ -2531,7 +2768,7 @@ mod tests {
         ]);
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -2718,13 +2955,13 @@ mod tests {
         let bin_view_array = Arc::new(BinaryViewArray::from_iter(bin_values));
         let utf8_view_array = Arc::new(StringViewArray::from_iter(utf8_values));
 
-        let key_dict_keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 0, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, utf8_view_array.clone());
         #[allow(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
-            "keys",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8View)),
-            true,
+            false,
             1,
             false,
         ));
@@ -2733,7 +2970,7 @@ mod tests {
         let value_dict_array = DictionaryArray::new(value_dict_keys, bin_view_array);
         #[allow(deprecated)]
         let values_field = Arc::new(Field::new_dict(
-            "values",
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::BinaryView)),
             true,
             2,
@@ -2746,7 +2983,7 @@ mod tests {
 
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -2877,6 +3114,101 @@ mod tests {
             "Invalid argument error: Misaligned buffers[0] in array of type Int32, \
              offset from expected alignment of 4 by 1"
         );
+    }
+
+    /// Verify that misaligned IPC buffers are caught by `require_alignment = true`.
+    ///
+    /// For each array type we shift the IPC body by every byte offset in 0..OFFSET_RANGE and
+    /// assert that the decoder errors exactly when the offset violates the type's
+    /// minimum alignment requirement.  The Arrow columnar spec permits alignment to
+    /// any multiple of 8 or 64 bytes, so multiples of 8 (which include every multiple
+    /// of 64) must succeed; everything else must return a "Misaligned buffers" error.
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding>.
+    #[test]
+    fn test_misaligned_buffers_error() {
+        const OFFSET_RANGE: usize = 128;
+
+        // (array, minimum required alignment in bytes)
+        // Fixed-width: alignment == element byte width.
+        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
+        let cases: Vec<(ArrayRef, usize)> = vec![
+            (Arc::new(Int32Array::from_iter(0i32..100)) as _, 4),
+            (Arc::new(Int64Array::from_iter(0i64..100)) as _, 8),
+            (
+                Arc::new(StringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )) as _,
+                4,
+            ),
+            (
+                Arc::new(LargeStringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )) as _,
+                8,
+            ),
+        ];
+
+        for (array, alignment) in cases {
+            let batch = RecordBatch::try_from_iter(vec![("col", Arc::clone(&array))]).unwrap();
+            let encoder = IpcDataGenerator {};
+            let mut dict_tracker = DictionaryTracker::new(false);
+            let (_, encoded) = encoder
+                .encode(
+                    &batch,
+                    &mut dict_tracker,
+                    &Default::default(),
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let message = root_as_message(&encoded.ipc_message).unwrap();
+            let ipc_batch = message.header_as_record_batch().unwrap();
+
+            for offset in 0..OFFSET_RANGE {
+                // MutableBuffer always allocates at a 64-byte aligned base address.
+                // Slicing by `offset` bytes yields a pointer at `base_ptr + offset`,
+                // whose alignment is gcd(64, offset).  That makes `offset` the sole
+                // determinant of the resulting alignment — without this guarantee the
+                // test would be non-deterministic depending on what the allocator returns.
+                let mut storage = MutableBuffer::with_capacity(encoded.arrow_data.len() + offset);
+                for _ in 0..offset {
+                    storage.push(0_u8);
+                }
+                storage.extend_from_slice(&encoded.arrow_data);
+                let buf = Buffer::from(storage).slice(offset);
+
+                let result = RecordBatchDecoder::try_new(
+                    &buf,
+                    ipc_batch,
+                    batch.schema(),
+                    &Default::default(),
+                    &message.version(),
+                )
+                .unwrap()
+                .with_require_alignment(true)
+                .read_record_batch();
+
+                if offset % alignment == 0 {
+                    assert!(
+                        result.is_ok(),
+                        "type={} offset={offset}: expected Ok but got {:?}",
+                        array.data_type(),
+                        result.unwrap_err(),
+                    );
+                } else {
+                    let err = result
+                        .expect_err(&format!(
+                            "type={} offset={offset}: expected Err for misaligned buffer",
+                            array.data_type()
+                        ))
+                        .to_string();
+                    assert!(
+                        err.contains("Misaligned buffers"),
+                        "type={} offset={offset}: unexpected error: {err}",
+                        array.data_type(),
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -3325,5 +3657,213 @@ mod tests {
         assert_eq!(col.len(), 4);
         // The result must be a dictionary-typed array.
         assert!(matches!(col.data_type(), DataType::Dictionary(_, _)));
+    }
+
+    // Tests projected reads where a ListView column is skipped before another column.
+    // This catches cases where skipping the ListView consumes the wrong number of buffers.
+    #[test]
+    fn test_projection_skip_list_view() {
+        use crate::reader::FileReader;
+        use crate::writer::FileWriter;
+        use arrow_array::{
+            GenericListViewArray, Int32Array, RecordBatch,
+            builder::{GenericListViewBuilder, UInt32Builder},
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Build a small ListView column with a mix of valid and null entries
+        let mut builder = GenericListViewBuilder::<i32, _>::new(UInt32Builder::new());
+
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+
+        builder.append(false);
+
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.append(true);
+
+        let list_view: GenericListViewArray<i32> = builder.finish();
+
+        // Second column with simple values
+        let values = Int32Array::from(vec![10, 20, 30]);
+
+        // Schema: first column is ListView, second is Int32
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", list_view.data_type().clone(), true),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        // Create a batch with both columns
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(list_view), Arc::new(values.clone())])
+                .unwrap();
+
+        // Write the batch to IPC
+        let mut buf = Vec::new();
+        {
+            let mut writer = FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Skip ListView column and Project only column "b"
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+
+        // Verify that the projected column is read correctly
+        assert_eq!(read_batch.num_columns(), 1);
+        assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when a preceding V4 Union column is skipped.
+    // V4 Union columns include a null buffer and type ids (and offsets for dense unions).
+    #[test]
+    fn test_projection_skip_union_v4() {
+        use crate::MetadataVersion;
+        use crate::reader::FileReader;
+        use crate::writer::{FileWriter, IpcWriteOptions};
+        use arrow_array::{
+            ArrayRef, Int32Array, RecordBatch, builder::UnionBuilder, types::Int32Type,
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Build a dense Union column with simple Int32 values
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("a", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let union = builder.build().unwrap();
+
+        // Second column with known values to verify correctness after projection
+        let values = Int32Array::from(vec![10, 20, 30]);
+
+        // Schema: first column is Union (to be skipped), second is Int32 (to be read)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("union", union.data_type().clone(), false),
+            Field::new("values", DataType::Int32, false),
+        ]));
+
+        // Create a batch containing both columns
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(union) as ArrayRef, Arc::new(values.clone())],
+        )
+        .unwrap();
+
+        // Write IPC using V4 metadata to trigger Union null buffer behavior
+        let mut buf = Vec::new();
+        {
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut buf, &batch.schema(), options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        // Read only the second column (skip the Union column)
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+
+        // Verify that the projected column is read correctly after skipping Union
+        assert_eq!(read_batch.num_columns(), 1);
+        assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when preceding fixed-width and boolean columns are skipped.
+    // Covers all types that use the same two-buffer layout (null + values).
+    // Verifies that skipping these types does not affect subsequent column decoding.
+    #[test]
+    fn test_projection_skip_fixed_width_types() {
+        use std::sync::Arc;
+
+        use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
+        use arrow_buffer::Buffer;
+        use arrow_data::ArrayData;
+        use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+
+        use crate::reader::FileReader;
+        use crate::writer::FileWriter;
+
+        // Create a minimal array for a given fixed-width or boolean type
+        fn make_array_for_type(data_type: DataType) -> ArrayRef {
+            let len = 3;
+
+            if matches!(data_type, DataType::Boolean) {
+                return Arc::new(BooleanArray::from(vec![true, false, true]));
+            }
+
+            let width = data_type.primitive_width().unwrap();
+            let data = ArrayData::builder(data_type)
+                .len(len)
+                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .build()
+                .unwrap();
+
+            make_array(data)
+        }
+
+        // List of types that follow the same two-buffer layout (null + values)
+        let data_types = vec![
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Second),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(38, 2),
+            DataType::Decimal256(76, 2),
+        ];
+
+        // For each type:
+        // - write a batch with [skipped_column, values]
+        // - read only the second column
+        // - verify the result is correct
+        for data_type in data_types {
+            let skipped = make_array_for_type(data_type.clone());
+            let values = Int32Array::from(vec![10, 20, 30]);
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("skipped", data_type, false),
+                Field::new("values", DataType::Int32, false),
+            ]));
+
+            let batch =
+                RecordBatch::try_new(schema, vec![skipped, Arc::new(values.clone())]).unwrap();
+
+            // Serialize the batch into IPC format
+            let mut buf = Vec::new();
+            {
+                let mut writer = FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            }
+
+            // Read back only the second column (skip the first)
+            let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+
+            // Verify that the returned column matches the original values column
+            assert_eq!(read_batch.num_columns(), 1);
+            assert_eq!(read_batch.column(0).as_ref(), &values);
+        }
     }
 }

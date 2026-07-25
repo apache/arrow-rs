@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{FlightData, trailers::LazyTrailers, utils::flight_data_to_arrow_batch};
+use crate::{FlightData, trailers::LazyTrailers};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
+use arrow_data::UnsafeFlag;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{Stream, StreamExt, ready, stream::BoxStream};
@@ -228,6 +229,8 @@ pub struct FlightDataDecoder {
     state: Option<FlightStreamState>,
     /// Seen the end of the inner stream?
     done: bool,
+    /// Skip validation of decoded arrays (UTF-8, offset bounds, null counts).
+    skip_validation: UnsafeFlag,
 }
 
 impl Debug for FlightDataDecoder {
@@ -236,6 +239,7 @@ impl Debug for FlightDataDecoder {
             .field("response", &"<stream>")
             .field("state", &self.state)
             .field("done", &self.done)
+            .field("skip_validation", &self.skip_validation)
             .finish()
     }
 }
@@ -250,7 +254,15 @@ impl FlightDataDecoder {
             state: None,
             response: response.boxed(),
             done: false,
+            skip_validation: UnsafeFlag::new(),
         }
+    }
+
+    /// # Safety
+    /// Invalid data may cause undefined behavior. Only use for trusted senders.
+    pub unsafe fn with_skip_validation(mut self) -> Self {
+        unsafe { self.skip_validation.set(true) };
+        self
     }
 
     /// Returns the current schema for this stream
@@ -296,12 +308,14 @@ impl FlightDataDecoder {
                     )
                 })?;
 
-                arrow_ipc::reader::read_dictionary(
+                arrow_ipc::reader::read_dictionary_impl(
                     &buffer,
                     dictionary_batch,
                     &state.schema,
                     &mut state.dictionaries_by_field,
                     &message.version(),
+                    false,
+                    self.skip_validation.clone(),
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
@@ -319,11 +333,29 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let batch = flight_data_to_arrow_batch(
-                    &data,
+                let record_batch = message.header_as_record_batch().ok_or_else(|| {
+                    FlightError::DecodeError(
+                        "Unable to convert flight data header to a record batch".to_string(),
+                    )
+                })?;
+                let buffer = {
+                    // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
+                    // reuse the allocation if already aligned, otherwise copy into a fresh aligned buffer.
+                    if data.data_body.as_ptr() as usize % 64 == 0 {
+                        &Buffer::from(data.data_body.clone())
+                    } else {
+                        &Buffer::from(data.data_body.as_ref())
+                    }
+                };
+                let batch = arrow_ipc::reader::RecordBatchDecoder::try_new(
+                    buffer,
+                    record_batch,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
-                )
+                    &message.version(),
+                )?
+                .with_skip_validation(self.skip_validation.clone())
+                .read_record_batch()
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
                 })?;

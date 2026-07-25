@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, MutableBuffer, OffsetBufferBuilder};
+use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -237,6 +237,157 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.0.ptr_eq(&other.0)
+    }
+
+    /// Check if any null positions in the `null_buffer` correspond to
+    /// non-empty ranges in this [`OffsetBuffer`].
+    ///
+    /// In variable-length array types (e.g., `StringArray`, `ListArray`),
+    /// null entries may or may not have empty offset ranges. This method
+    /// detects cases where a null entry has a non-empty range
+    /// (i.e., `offsets[i] != offsets[i+1]`), which means the underlying
+    /// data buffer contains data behind nulls.
+    ///
+    /// This matters because unwrapping (flattening) a list array exposes
+    /// the child values, including those behind null entries. If null
+    /// entries point to non-empty ranges, the unwrapped values will
+    /// contain data that may not be meaningful to operate on and could
+    /// cause errors (e.g., division by zero in the child values).
+    ///
+    /// Returns `false` if `null_buffer` is `None` or contains no nulls.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer, NullBuffer};
+    /// // Offsets where null at index 1 has an empty range (3..3)
+    /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
+    /// let nulls = NullBuffer::from(vec![true, false, true]);
+    /// assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    ///
+    /// // Offsets where null at index 1 has a non-empty range (3..7)
+    /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
+    /// let nulls = NullBuffer::from(vec![true, false, true]);
+    /// assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of the `null_buffer` does not equal `self.len() - 1`.
+    pub fn has_non_empty_nulls(&self, null_buffer: Option<&NullBuffer>) -> bool {
+        let Some(null_buffer) = null_buffer else {
+            return false;
+        };
+
+        assert_eq!(
+            self.len() - 1,
+            null_buffer.len(),
+            "The length of the offsets should be 1 more than the length of the null buffer"
+        );
+
+        if null_buffer.null_count() == 0 {
+            return false;
+        }
+
+        // Offsets always have at least 1 value
+        let initial_offset = self[0];
+        let last_offset = self[self.len() - 1];
+
+        // If all the values are null (offsets have 1 more value than the length of the array)
+        if null_buffer.null_count() == self.len() - 1 {
+            return last_offset != initial_offset;
+        }
+
+        let mut valid_slices_iter = null_buffer.valid_slices();
+
+        // This is safe as we validated that are at least 1 valid value in the array
+        let (start, end) = valid_slices_iter.next().unwrap();
+
+        // If the nulls before have length greater than 0
+        if self[start] != initial_offset {
+            return true;
+        }
+
+        // End is exclusive, so it already point to the last offset value
+        // This is valid as the length of the array is always 1 less than the length of the offsets
+        let mut end_offset_of_last_valid_value = self[end];
+
+        for (start, end) in valid_slices_iter {
+            // If there is a null value that point to a non-empty value than the start offset of the valid value
+            // will be different that the end offset of the last valid value
+            if self[start] != end_offset_of_last_valid_value {
+                return true;
+            }
+
+            // End is exclusive, so it already point to the last offset value
+            // This is valid as the length of the array is always 1 less than the length of the offsets
+            end_offset_of_last_valid_value = self[end];
+        }
+
+        end_offset_of_last_valid_value != last_offset
+    }
+
+    /// Subtract `rhs` from all offsets
+    /// This will try to reuse the existing allocation as much as possible
+    ///
+    /// Panics: this will panic if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths(vec![4, 1, 5, 6]);
+    /// assert_eq!(offsets.as_ref(), &[0, 4, 5, 10, 16]);
+    ///
+    /// let sliced_offsets = offsets.slice(1, 2);
+    /// assert_eq!(sliced_offsets.as_ref(), &[4, 5, 10]);
+    ///
+    /// let shifted_offsets = sliced_offsets.subtract(4);
+    /// assert_eq!(shifted_offsets.as_ref(), &[0, 1, 6]);
+    /// ```
+    ///
+    pub fn subtract(self, rhs: O) -> Self
+    where
+        O: std::ops::Sub<Output = O> + std::cmp::PartialOrd + num_traits::CheckedSub,
+    {
+        if rhs == O::usize_as(0) {
+            return self;
+        }
+
+        let len = self.len();
+
+        // Offset buffer is guaranteed to be non-empty
+        assert!(
+            self[0] >= rhs,
+            "shifted offsets will become negative which is not allowed"
+        );
+
+        // If negative, make sure that this will not create an overflow
+        if rhs < O::usize_as(0) {
+            self[len - 1].checked_sub(&rhs).expect("must not overflow");
+        }
+
+        // try and reuse buffer
+        let shifted_offsets: Vec<O> = match self.into_inner().into_inner().into_vec() {
+            // If we can reuse the buffer, update in place
+            Ok(mut v) => {
+                for offset in v.iter_mut() {
+                    *offset = *offset - rhs;
+                }
+                v
+            }
+            // otherwise, buffer is shared so we need a copy
+            Err(buffer) => {
+                let offsets = ScalarBuffer::<O>::from(buffer);
+                offsets.iter().map(|offset| *offset - rhs).collect()
+            }
+        };
+        let shifted_buffer = ScalarBuffer::from(shifted_offsets);
+        // Safety: offsets are valid as they are coming from a valid
+        // offset buffer and we checked overflow above, and we
+        // subtracted the same value from all offsets, thus keeping the
+        // same properties as the input buffer
+        unsafe { Self::new_unchecked(shifted_buffer) }
     }
 }
 
@@ -470,5 +621,409 @@ mod tests {
             buffer.as_ref(),
             &[0, third_max as i32, (third_max * 2) as i32]
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Tests for has_non_empty_nulls
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn has_non_empty_nulls_none_null_buffer() {
+        // No null buffer at all -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        assert!(!offsets.has_non_empty_nulls(None));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_valid() {
+        // Null buffer with zero nulls -> false (early return via filter)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(3);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_empty_offsets() {
+        // All values are null and all offsets are equal (no data behind nulls) -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 0, 0]));
+        let nulls = NullBuffer::new_null(3);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_non_empty_offsets() {
+        // All values are null but offsets span data -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 7]));
+        let nulls = NullBuffer::new_null(3);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_nonzero_but_equal_offsets() {
+        // All null, offsets start at non-zero but are all equal -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![5, 5, 5]));
+        let nulls = NullBuffer::new_null(2);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_leading_nulls_with_data() {
+        // Nulls at the beginning that point to non-empty ranges -> true
+        // offsets: [0, 3, 5, 8]  nulls: [false, true, true]
+        // Index 0 is null with range 0..3 (non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::from(vec![false, true, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_leading_nulls_without_data() {
+        // Nulls at the beginning with empty ranges -> continue checking
+        // offsets: [0, 0, 3, 6]  nulls: [false, true, true]
+        // Index 0 is null with range 0..0 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6]));
+        let nulls = NullBuffer::from(vec![false, true, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_only_trailing_null_has_data() {
+        // Only the trailing null region has data, everything else is clean
+        // offsets: [0, 0, 3, 6, 8]  nulls: [false, true, true, false]
+        // Null at 0 (0..0 empty), valid at 1,2 (0..3, 3..6), null at 3 (6..8 non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6, 8]));
+        let nulls = NullBuffer::from(vec![false, true, true, false]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_trailing_nulls_without_data() {
+        // Nulls at the end with empty ranges -> false
+        // offsets: [0, 3, 6, 6]  nulls: [true, true, false]
+        // Index 2 is null with range 6..6 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 6]));
+        let nulls = NullBuffer::from(vec![true, true, false]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_middle_nulls_with_data() {
+        // Null in the middle with non-empty range -> true
+        // offsets: [0, 3, 7, 10]  nulls: [true, false, true]
+        // Index 1 is null with range 3..7 (non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_middle_nulls_without_data() {
+        // Null in the middle with empty range -> false
+        // offsets: [0, 3, 3, 6]  nulls: [true, false, true]
+        // Index 1 is null with range 3..3 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_alternating_null_valid_all_empty() {
+        // Alternating null/valid where every null has an empty range -> false.
+
+        // Ends with null
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+
+        // Ends with valid
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6, 9]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_multiple_null_regions_second_has_data() {
+        // Two null regions: first empty, second non-empty -> true
+        // offsets: [0, 0, 3, 5, 6]  nulls: [false, true, false, true]
+        // Null at index 0 (0..0 empty), null at index 2 (3..5 non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 5, 6]));
+        let nulls = NullBuffer::from(vec![false, true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_multiple_null_regions_later_gap_has_data() {
+        // Three null regions: first two empty, third non-empty -> true
+        // offsets: [0, 0, 3, 3, 6, 8, 10]  nulls: [false, true, false, true, false, true]
+        // valid_slices: (1,2), (3,4), (5,6)
+        // first slice: start=1, self[1]=0 == initial_offset=0 OK, end_offset=self[2]=3
+        // loop iter 1: start=3, self[3]=3 == 3 OK (first gap empty), end_offset=self[4]=6
+        // loop iter 2: start=5, self[5]=8 != 6 -> true (second gap has data)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 8, 10]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_null_empty() {
+        // Single element, null with empty range -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0]));
+        let nulls = NullBuffer::new_null(1);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_null_non_empty() {
+        // Single element, null with non-empty range -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
+        let nulls = NullBuffer::new_null(1);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_valid() {
+        // Single element, valid -> false (no nulls at all)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
+        let nulls = NullBuffer::new_valid(1);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices() {
+        // Multiple consecutive nulls between valid regions
+        // offsets: [0, 2, 2, 2, 5, 8]  nulls: [true, false, false, true, true]
+        // Valid: [0], nulls: [1,2], valid: [3,4]
+        // Null region [1,2] has offsets 2..2..2 (empty) -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 2, 2, 5, 8]));
+        let nulls = NullBuffer::from(vec![true, false, false, true, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices_with_data() {
+        // Multiple consecutive nulls between valid regions, nulls have data
+        // offsets: [0, 2, 3, 4, 5, 8]  nulls: [true, false, false, true, true]
+        // valid_slices: (0,1), (3,5)
+        // first slice: start=0, end=1 -> self[0]=0 == initial_offset=0 OK
+        //   end_offset_of_last_valid_value = self[1] = 2
+        // second slice: start=3, end=5 -> self[3]=4 != 2 -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 4, 5, 8]));
+        let nulls = NullBuffer::from(vec![true, false, false, true, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_nonzero_initial_offset_all_null_equal() {
+        // Non-zero starting offset, all null, all offsets equal -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 10, 10]));
+        let nulls = NullBuffer::new_null(2);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_nonzero_initial_offset_with_data() {
+        // Non-zero starting offset, null has data
+        // offsets: [10, 15, 20]  nulls: [false, true]
+        // Null at index 0 with range 10..15 (non-empty) -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 15, 20]));
+        let nulls = NullBuffer::from(vec![false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_sliced_no_nulls_in_null_region() {
+        // Original: [0, 3, 3, 6, 6, 9]  -> slice(1, 3) -> [3, 3, 6, 6]
+        // initial_offset=3, last_offset=6
+        // nulls: [false, true, false]  (null at index 0 has range 3..3 = empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6, 6, 9]));
+        let sliced = offsets.slice(1, 3);
+        let nulls = NullBuffer::from(vec![false, true, false]);
+        assert!(!sliced.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_sliced_null_has_data() {
+        // Original: [0, 3, 7, 10, 15]  -> slice(1, 2) -> [3, 7, 10]
+        // initial_offset=3, last_offset=10
+        // nulls: [false, true]  (null at index 0 has range 3..7 = non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10, 15]));
+        let sliced = offsets.slice(1, 2);
+        let nulls = NullBuffer::from(vec![false, true]);
+        assert!(sliced.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "The length of the offsets should be 1 more than the length of the null buffer"
+    )]
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_short() {
+        // All-valid null buffer with wrong length should still panic
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(2); // expects 3
+        offsets.has_non_empty_nulls(Some(&nulls));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "The length of the offsets should be 1 more than the length of the null buffer"
+    )]
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_long() {
+        // All-valid null buffer with wrong length should still panic
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(5); // expects 3
+        offsets.has_non_empty_nulls(Some(&nulls));
+    }
+
+    #[test]
+    #[should_panic(expected = "shifted offsets will become negative which is not allowed")]
+    fn should_panic_for_subtract_by_value_that_will_cause_offsets_to_be_less_than_zero() {
+        // self[0] = 0, rhs = 1 -> 0 >= 1 is false -> assert fires
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        offsets.subtract(1);
+    }
+
+    #[test]
+    fn subtract_by_value_that_will_cause_offsets_to_be_less_than_zero_for_outside_the_slice() {
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 7]));
+        let sliced = offsets.slice(1, 2); // [1, 4, 7]
+        drop(offsets);
+        assert_eq!(sliced.as_ref(), &[1, 4, 7]);
+
+        let result = sliced.subtract(1);
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not overflow")]
+    fn should_panic_subtract_by_value_that_will_cause_offsets_to_overflow() {
+        // rhs = -1 (negative). self[0] = 0 >= -1 passes.
+        // last offset i32::MAX - (-1) = i32::MAX + 1 -> checked_sub returns None -> expect fires
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5, i32::MAX]));
+        offsets.subtract(-1);
+    }
+
+    #[test]
+    fn subtract_by_value_that_will_cause_offsets_to_overflow_outside_the_slice() {
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, i32::MAX]));
+        let sliced = offsets.slice(0, 2); // [0, 3, 6]
+        assert_eq!(sliced.as_ref(), &[0, 3, 6]);
+
+        let result = sliced.subtract(-1);
+        assert_eq!(result.as_ref(), &[1, 4, 7]);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn when_shift_is_0_subtract_should_reuse_the_buffer_even_when_it_is_shared() {
+        // subtract(0) hits the early `return self` before any into_mutable,
+        // so the returned buffer is the exact same allocation even while shared.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        let shared = offsets.clone(); // refcount now 2 -> shared
+        let result = offsets.subtract(0);
+        assert!(
+            result.ptr_eq(&shared),
+            "subtract(0) must return the same underlying buffer, even when shared"
+        );
+    }
+
+    #[test]
+    fn should_reuse_the_underline_data_when_the_buffer_is_not_shared() {
+        // Unique ownership, offset 0 -> into_mutable succeeds -> mutate in place,
+        // and MutableBuffer -> Buffer keeps the same allocation.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![2, 5, 8]));
+        let ptr_before = offsets.as_ptr();
+        let result = offsets.subtract(2);
+        assert_eq!(
+            ptr_before,
+            result.as_ptr(),
+            "a non-shared buffer should be mutated in place, reusing the allocation"
+        );
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
+    }
+
+    #[test]
+    fn should_create_a_new_buffer_when_the_buffer_is_shared() {
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![2, 5, 8]));
+        let shared = offsets.clone();
+        let ptr_before = offsets.as_ptr();
+        let result = offsets.subtract(2);
+        assert_ne!(
+            ptr_before,
+            result.as_ptr(),
+            "a shared buffer must not be mutated in place; a new allocation is created"
+        );
+        assert_eq!(result.as_ref(), &[0, 3, 6]);
+        // The shared view is untouched.
+        assert_eq!(shared.as_ref(), &[2, 5, 8]);
+    }
+
+    #[test]
+    fn when_shift_is_negative_it_should_shift_offsets_in_the_right_direction() {
+        // rhs = -2 -> offset - (-2) = offset + 2, so all offsets move up.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+        let result = offsets.subtract(-2);
+        assert_eq!(result.as_ref(), &[2, 5, 8]);
+    }
+
+    // Replace this test with test that assert a reuse after PR #10118 is merged
+    #[test]
+    fn for_sliced_unshared_buffer_shift_should_not_reuse_buffer() {
+        // Underlying [0, 3, 6, 9, 12]; slice -> view [3, 6, 9].
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![1, 3, 6, 9, 12]));
+        let sliced = offsets.slice(1, 2); // [3, 6, 9]
+        drop(offsets); // uniquely owned
+        assert_eq!(sliced.as_ref(), &[3, 6, 9]);
+
+        let ptr_before = sliced.as_ptr();
+        let result = sliced.subtract(1);
+
+        assert_ne!(
+            ptr_before,
+            result.as_ptr(),
+            "should not be reused until #10118 is merged"
+        );
+
+        assert_eq!(result.as_ref(), &[2, 5, 8]);
+    }
+
+    #[test]
+    fn for_sliced_but_start_at_0_unshared_buffer_shift_should_reuse_buffer() {
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![1, 3, 6, 9, 12]));
+        let sliced = offsets.slice(0, 2);
+        drop(offsets); // uniquely owned
+        assert_eq!(sliced.as_ref(), &[1, 3, 6]);
+
+        let ptr_before = sliced.as_ptr();
+        let result = sliced.subtract(1);
+
+        assert_eq!(ptr_before, result.as_ptr(), "should be reused");
+
+        assert_eq!(result.as_ref(), &[0, 2, 5]);
+    }
+
+    #[test]
+    fn for_sliced_shared_buffer_shifted_buffer_should_only_include_the_sliced_data() {
+        // Underlying: [0, 3, 6, 9, 12]; slice(1, 2) -> view [3, 6, 9].
+        // `offsets` stays alive, so the sliced buffer is shared -> Err branch.
+        // The Err branch copies `len` (= 3) elements from the *sliced* typed_data,
+        // so the result contains only the sliced data, shifted.
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
+        let sliced = offsets.slice(1, 2);
+        assert_eq!(sliced.as_ref(), &[3, 6, 9]);
+
+        let result = sliced.subtract(3);
+
+        assert_eq!(
+            result.as_ref(),
+            &[0, 3, 6],
+            "shifted result should contain only the sliced data"
+        );
+        assert_eq!(result.len(), 3);
+
+        // Assert that the underlying buffer of the result is not sliced to make sure it does not include the data outside the slice range from the original buffer
+        let underlying_buffer = result.inner().inner();
+        assert_eq!(underlying_buffer.ptr_offset(), 0);
+        assert_eq!(underlying_buffer.len(), 3 * std::mem::size_of::<i32>());
     }
 }

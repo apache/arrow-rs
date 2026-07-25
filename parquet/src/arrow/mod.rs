@@ -435,24 +435,14 @@ impl ProjectionMask {
             root_leaf_counts[root_idx] += 1;
         }
 
-        // Keep only leaves whose root has exactly one leaf (non-nested) and is not a
-        // LIST. LIST is encoded as a wrapped logical type with a single leaf, e.g.
-        // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-        //
-        // ```text
-        // // List<String> (list non-null, elements nullable)
-        // required group my_list (LIST) {
-        //   repeated group list {
-        //     optional binary element (STRING);
-        //   }
-        // }
-        // ```
+        // Cache only top-level primitive columns.
+        // Even a one-leaf group is nested; caching it drops parent def levels.
         let mut included_leaves = Vec::new();
         for leaf_idx in 0..num_leaves {
             if self.leaf_included(leaf_idx) {
                 let root = schema.get_column_root(leaf_idx);
                 let root_idx = schema.get_column_root_idx(leaf_idx);
-                if root_leaf_counts[root_idx] == 1 && !root.is_list() {
+                if root_leaf_counts[root_idx] == 1 && root.is_primitive() {
                     included_leaves.push(leaf_idx);
                 }
             }
@@ -495,7 +485,8 @@ pub fn parquet_column<'a>(
 mod test {
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::{
-        ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter,
+        PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+        ParquetMetaDataWriter,
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::schema::parser::parse_message_type;
@@ -507,7 +498,6 @@ mod test {
     use super::ProjectionMask;
 
     #[test]
-    #[allow(deprecated)]
     // Reproducer for https://github.com/apache/arrow-rs/issues/6464
     fn test_metadata_read_write_partial_offset() {
         let parquet_bytes = create_parquet_file();
@@ -524,7 +514,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let err = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true) // there are no page indexes in the metadata
+            .with_page_index_policy(PageIndexPolicy::Required) // there are no page indexes in the metadata
             .parse_and_finish(&metadata_bytes)
             .err()
             .unwrap();
@@ -563,7 +553,6 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 
@@ -572,7 +561,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
@@ -581,7 +570,7 @@ mod test {
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
-            .with_page_indexes(true)
+            .with_page_index_policy(PageIndexPolicy::Required)
             .parse_and_finish(&metadata_bytes)
             .unwrap();
 
@@ -1039,6 +1028,39 @@ mod test {
         assert_eq!(
             Some(ProjectionMask::leaves(&schema, [1])),
             mask.without_nested_types(&schema),
+        );
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_single_leaf_struct() {
+        // Regression: a single-leaf struct is still nested.
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL group address {
+                    REQUIRED BYTE_ARRAY street (UTF8);
+                }
+                REQUIRED INT32 id;
+            }
+            ",
+        );
+
+        // street -> empty; root is a struct
+        let mask = ProjectionMask::leaves(&schema, [0]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+
+        // street, id --> id only
+        let mask = ProjectionMask::leaves(&schema, [0, 1]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [1])),
+            mask.without_nested_types(&schema)
+        );
+
+        // all --> id only
+        let mask = ProjectionMask::all();
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [1])),
+            mask.without_nested_types(&schema)
         );
     }
 

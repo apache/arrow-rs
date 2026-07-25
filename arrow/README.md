@@ -76,6 +76,25 @@ The `arrow` crate provides the following features which may be enabled in your `
 
 The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists which features of Arrow this crate supports.
 
+
+## Security
+
+`arrow-rs` follows the [Apache Arrow Security Model].
+
+Unexpected behavior (e.g., panics, crashes, or infinite loops) triggered by
+malformed input, and instances of undefined behavior (UB) triggered via safe
+APIs are considered bugs rather than security vulnerabilities unless they are exploitable
+by an attacker to
+
+* Execute arbitrary code (Remote Code Execution);
+* Exfiltrate sensitive information from process memory (Information Disclosure);
+
+We welcome your help in fixing such bugs and security issues. See our
+[Security Policy] for reporting.
+
+[Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
+[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
+
 ## Safety
 
 Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html). Specifically:

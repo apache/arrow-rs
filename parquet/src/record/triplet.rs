@@ -263,6 +263,9 @@ impl<T: DataType> TypedTripletIter<T> {
     /// If field is required, then maximum definition level is returned.
     #[inline]
     fn current_def_level(&self) -> i16 {
+        if !self.has_next {
+            return 0;
+        }
         match self.def_levels {
             Some(ref vec) => vec[self.curr_triplet_index],
             None => self.max_def_level,
@@ -273,6 +276,9 @@ impl<T: DataType> TypedTripletIter<T> {
     /// If field is required, then maximum repetition level is returned.
     #[inline]
     fn current_rep_level(&self) -> i16 {
+        if !self.has_next {
+            return 0;
+        }
         match self.rep_levels {
             Some(ref vec) => vec[self.curr_triplet_index],
             None => self.max_rep_level,
@@ -315,6 +321,7 @@ impl<T: DataType> TypedTripletIter<T> {
 
             // No more values or levels to read
             if records_read == 0 && values_read == 0 && levels_read == 0 {
+                self.curr_triplet_index = 0;
                 self.has_next = false;
                 return Ok(false);
             }
@@ -560,5 +567,42 @@ mod tests {
         assert_eq!(values, expected_values);
         assert_eq!(def_levels, expected_def_levels);
         assert_eq!(rep_levels, expected_rep_levels);
+    }
+
+    fn open_triplet_iter(file_name: &str, path: &[&str], batch_size: usize) -> TripletIter {
+        let column_path = ColumnPath::from(path.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        let file = get_test_file(file_name);
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let metadata = file_reader.metadata();
+        let schema = metadata.file_metadata().schema_descr();
+        let row_group_reader = file_reader.get_row_group(0).unwrap();
+        for i in 0..schema.num_columns() {
+            let descr = schema.column(i);
+            if descr.path() == &column_path {
+                let reader = row_group_reader.get_column_reader(i).unwrap();
+                return TripletIter::new(descr.clone(), reader, batch_size);
+            }
+        }
+        panic!("Column {column_path:?} not found in {file_name}");
+    }
+
+    #[test]
+    fn test_current_def_level_safe_after_exhaustion() {
+        let mut iter = open_triplet_iter("nulls.snappy.parquet", &["b_struct", "b_c_int"], 256);
+        while let Ok(true) = iter.read_next() {}
+        assert!(!iter.has_next());
+        assert_eq!(iter.current_def_level(), 0);
+    }
+
+    #[test]
+    fn test_current_rep_level_safe_after_exhaustion() {
+        let mut iter = open_triplet_iter(
+            "nested_lists.snappy.parquet",
+            &["a", "list", "element", "list", "element", "list", "element"],
+            256,
+        );
+        while let Ok(true) = iter.read_next() {}
+        assert!(!iter.has_next());
+        assert_eq!(iter.current_rep_level(), 0);
     }
 }

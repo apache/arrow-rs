@@ -243,6 +243,11 @@ name = "array_slice"
 harness = false
 
 [[bench]]
+name = "concatenate_elements"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "concatenate_kernel"
 harness = false
 required-features = ["test_utils"]

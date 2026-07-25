@@ -36,6 +36,7 @@ use crate::{
     write_thrift_field,
 };
 use std::io::Error;
+use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 #[derive(Debug)]
@@ -46,6 +47,7 @@ pub(crate) enum ThriftProtocolError {
     InvalidElementType(u8),
     FieldDeltaOverflow { field_delta: u8, last_field_id: i16 },
     InvalidBoolean(u8),
+    IntegerOverflow,
     Utf8Error,
     SkipDepth(FieldType),
     SkipUnsupportedType(FieldType),
@@ -57,9 +59,10 @@ impl From<ThriftProtocolError> for ParquetError {
         match e {
             ThriftProtocolError::Eof => eof_err!("Unexpected EOF"),
             ThriftProtocolError::IO(e) => e.into(),
-            ThriftProtocolError::InvalidFieldType(value) => {
-                general_err!("Unexpected struct field type {}", value)
-            }
+            ThriftProtocolError::InvalidFieldType(value) => match FieldType::try_from(value) {
+                Ok(fld_type) => general_err!("Unexpected struct field type {:?}", fld_type),
+                Err(_) => general_err!("Unexpected struct field type {}", value),
+            },
             ThriftProtocolError::InvalidElementType(value) => {
                 general_err!("Unexpected list/set element type {}", value)
             }
@@ -69,6 +72,9 @@ impl From<ThriftProtocolError> for ParquetError {
             } => general_err!("cannot add {} to {}", field_delta, last_field_id),
             ThriftProtocolError::InvalidBoolean(value) => {
                 general_err!("cannot convert {} into bool", value)
+            }
+            ThriftProtocolError::IntegerOverflow => {
+                general_err!("integer overflow decoding thrift value")
             }
             ThriftProtocolError::Utf8Error => general_err!("invalid utf8"),
             ThriftProtocolError::SkipDepth(field_type) => {
@@ -91,6 +97,13 @@ impl From<Utf8Error> for ThriftProtocolError {
 impl From<Error> for ThriftProtocolError {
     fn from(e: Error) -> Self {
         Self::IO(e)
+    }
+}
+
+impl From<TryFromIntError> for ThriftProtocolError {
+    fn from(_: TryFromIntError) -> Self {
+        // ignore error payload to reduce the size of ThriftProtocolError
+        Self::IntegerOverflow
     }
 }
 
@@ -144,6 +157,7 @@ pub(crate) enum FieldType {
     Set = 10,
     Map = 11,
     Struct = 12,
+    Uuid = 13,
 }
 
 impl TryFrom<u8> for FieldType {
@@ -163,25 +177,27 @@ impl TryFrom<u8> for FieldType {
             10 => Ok(Self::Set),
             11 => Ok(Self::Map),
             12 => Ok(Self::Struct),
+            13 => Ok(Self::Uuid),
             _ => Err(ThriftProtocolError::InvalidFieldType(value)),
         }
     }
 }
 
-impl TryFrom<ElementType> for FieldType {
-    type Error = ThriftProtocolError;
-    fn try_from(value: ElementType) -> std::result::Result<Self, Self::Error> {
+impl From<ElementType> for FieldType {
+    fn from(value: ElementType) -> Self {
         match value {
-            ElementType::Bool => Ok(Self::BooleanTrue),
-            ElementType::Byte => Ok(Self::Byte),
-            ElementType::I16 => Ok(Self::I16),
-            ElementType::I32 => Ok(Self::I32),
-            ElementType::I64 => Ok(Self::I64),
-            ElementType::Double => Ok(Self::Double),
-            ElementType::Binary => Ok(Self::Binary),
-            ElementType::List => Ok(Self::List),
-            ElementType::Struct => Ok(Self::Struct),
-            _ => Err(ThriftProtocolError::InvalidFieldType(value as u8)),
+            ElementType::Bool => Self::BooleanTrue,
+            ElementType::Byte => Self::Byte,
+            ElementType::I16 => Self::I16,
+            ElementType::I32 => Self::I32,
+            ElementType::I64 => Self::I64,
+            ElementType::Double => Self::Double,
+            ElementType::Binary => Self::Binary,
+            ElementType::List => Self::List,
+            ElementType::Set => Self::Set,
+            ElementType::Map => Self::Map,
+            ElementType::Struct => Self::Struct,
+            ElementType::Uuid => Self::Uuid,
         }
     }
 }
@@ -200,6 +216,7 @@ pub(crate) enum ElementType {
     Set = 10,
     Map = 11,
     Struct = 12,
+    Uuid = 13,
 }
 
 impl TryFrom<u8> for ElementType {
@@ -222,6 +239,7 @@ impl TryFrom<u8> for ElementType {
             10 => Ok(Self::Set),
             11 => Ok(Self::Map),
             12 => Ok(Self::Struct),
+            13 => Ok(Self::Uuid),
             _ => Err(ThriftProtocolError::InvalidElementType(value)),
         }
     }
@@ -235,11 +253,16 @@ pub(crate) struct FieldIdentifier {
     pub(crate) field_type: FieldType,
     /// The field's `id`. May be computed from delta or directly decoded.
     pub(crate) id: i16,
-    /// Stores the value for booleans.
-    ///
-    /// Boolean fields store no data, instead the field type is either boolean true, or
-    /// boolean false.
-    pub(crate) bool_val: Option<bool>,
+}
+
+impl FieldIdentifier {
+    pub(crate) fn bool_val(&self) -> ThriftProtocolResult<bool> {
+        match self.field_type {
+            FieldType::BooleanTrue => Ok(true),
+            FieldType::BooleanFalse => Ok(false),
+            _ => Err(ThriftProtocolError::InvalidFieldType(self.field_type as u8)),
+        }
+    }
 }
 
 /// Struct used to describe a [thrift list].
@@ -317,7 +340,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // high bits set high if count and type encoded separately
             possible_element_count as i32
         } else {
-            self.read_vlq()? as _
+            // The list size on the wire is an unsigned varint, but we represent
+            // it as `i32` (matching Java's `int` and the Thrift schema).
+            // A varint that decodes above `i32::MAX` is malformed input — reject
+            // it here at the protocol layer rather than letting the cast wrap
+            // into a negative size that downstream allocation code has to
+            // re-validate.
+            i32::try_from(self.read_vlq()?)?
         };
 
         Ok(ListIdentifier {
@@ -340,41 +369,28 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         // - the type
         // - the field delta and the type
         let field_type = self.read_byte()?;
-        let field_delta = (field_type & 0xf0) >> 4;
-        let field_type = FieldType::try_from(field_type & 0xf)?;
-        let mut bool_val: Option<bool> = None;
-
-        match field_type {
-            FieldType::Stop => Ok(FieldIdentifier {
+        if field_type & 0xf == 0 {
+            return Ok(FieldIdentifier {
                 field_type: FieldType::Stop,
                 id: 0,
-                bool_val,
-            }),
-            _ => {
-                // special handling for bools
-                if field_type == FieldType::BooleanFalse {
-                    bool_val = Some(false);
-                } else if field_type == FieldType::BooleanTrue {
-                    bool_val = Some(true);
-                }
-                let field_id = if field_delta != 0 {
-                    last_field_id.checked_add(field_delta as i16).ok_or(
-                        ThriftProtocolError::FieldDeltaOverflow {
-                            field_delta,
-                            last_field_id,
-                        },
-                    )?
-                } else {
-                    self.read_full_field_id()?
-                };
-
-                Ok(FieldIdentifier {
-                    field_type,
-                    id: field_id,
-                    bool_val,
-                })
-            }
+            });
         }
+
+        let field_delta = (field_type & 0xf0) >> 4;
+        let field_type = FieldType::try_from(field_type & 0xf)?;
+
+        let id = if field_delta != 0 {
+            last_field_id.checked_add(field_delta as i16).ok_or(
+                ThriftProtocolError::FieldDeltaOverflow {
+                    field_delta,
+                    last_field_id,
+                },
+            )?
+        } else {
+            self.read_full_field_id()?
+        };
+
+        Ok(FieldIdentifier { field_type, id })
     }
 
     /// This is a specialized version of [`Self::read_field_begin`], solely for use in parsing
@@ -488,27 +504,44 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             FieldType::I64 => self.skip_vlq().map(|_| ()),
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
             FieldType::Binary => self.skip_binary().map(|_| ()),
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
-                let mut last_field_id = 0i16;
                 loop {
-                    let field_ident = self.read_field_begin(last_field_id)?;
+                    // we don't need field id for skipping, so always pass 0 for last id
+                    let field_ident = self.read_field_begin(0)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
                     }
                     self.skip_till_depth(field_ident.field_type, depth - 1)?;
-                    last_field_id = field_ident.id;
                 }
                 Ok(())
             }
-            FieldType::List => {
+            // lists and sets are encoded the same
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
+            FieldType::List | FieldType::Set => {
                 let list_ident = self.read_list_begin()?;
+                let element_type = FieldType::from(list_ident.element_type);
                 for _ in 0..list_ident.size {
-                    let element_type = FieldType::try_from(list_ident.element_type)?;
                     self.skip_till_depth(element_type, depth - 1)?;
                 }
                 Ok(())
             }
-            // no list or map types in parquet format
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#map
+            FieldType::Map => {
+                let size = i32::try_from(self.read_vlq()?)?;
+                if size > 0 {
+                    let kv = self.read_byte()?;
+                    let key_type = FieldType::from(ElementType::try_from(kv >> 4)?);
+                    let val_type = FieldType::from(ElementType::try_from(kv & 0xf)?);
+                    for _ in 0..size {
+                        self.skip_till_depth(key_type, depth - 1)?;
+                        self.skip_till_depth(val_type, depth - 1)?;
+                    }
+                }
+                Ok(())
+            }
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
+            FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
             _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
@@ -684,15 +717,27 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a [u8] {
 pub(crate) fn read_thrift_vec<'a, T, R>(prot: &mut R) -> Result<Vec<T>>
 where
     R: ThriftCompactInputProtocol<'a>,
-    T: ReadThrift<'a, R>,
+    T: ReadThrift<'a, R> + WriteThrift,
 {
     let list_ident = prot.read_list_begin()?;
+    validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let mut res = Vec::with_capacity(list_ident.size as usize);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
     }
     Ok(res)
+}
+
+pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
+    if got.element_type != expected {
+        return Err(general_err!(
+            "Expected list element type of {:?} but got {:?}",
+            expected,
+            got.element_type
+        ));
+    }
+    Ok(())
 }
 
 /////////////////////////
@@ -708,12 +753,29 @@ where
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
+    write_path_in_schema: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
     pub(crate) fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            write_path_in_schema: true,
+        }
+    }
+
+    // TODO(ets): at some point there should probably be a properties object
+    // to control aspects of thrift output. But since this is the only option to date
+    // I'm choosing a simpler API.
+    /// Control the writing of the `path_in_schema` element of the `ColumnMetaData`
+    pub(crate) fn set_write_path_in_schema(&mut self, val: bool) {
+        self.write_path_in_schema = val;
+    }
+
+    /// Indicate whether or not to emit `path_in_schema`.
+    pub(crate) fn write_path_in_schema(&self) -> bool {
+        self.write_path_in_schema
     }
 
     /// Write a single byte to the output stream.
@@ -1105,5 +1167,35 @@ pub(crate) mod tests {
         let header = prot.read_list_begin().expect("error reading list header");
         assert_eq!(header.size, 0);
         assert_eq!(header.element_type, ElementType::Byte);
+    }
+
+    /// A Thrift list header whose `size` varint decodes above `i32::MAX`
+    /// must be rejected at the protocol layer rather than wrapping into a
+    /// negative `i32` and being smuggled into downstream allocation code.
+    #[test]
+    fn test_read_list_begin_size_above_i32_max_returns_err() {
+        // List header: element_type=8 (Binary), 0xF=follow-up varint.
+        // Varint 80 80 80 80 08 decodes to 0x8000_0000 = i32::MAX + 1.
+        let mut data: Vec<u8> = vec![0xF8];
+        data.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x08]);
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = prot.read_list_begin();
+        assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    #[test]
+    fn test_read_list_wrong_type() {
+        // list header: 4 elements of `Boolean`
+        let data = [0x42, 0x01];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        // try to read as list<i32>
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        println!("{result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Expected list element type of I32 but got Bool")
+        );
     }
 }

@@ -18,9 +18,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{Array, ArrayRef, StructArray};
-use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{ArrowError, DataType, Fields};
 
 use crate::reader::tape::{Tape, TapeElement};
@@ -126,9 +125,7 @@ impl ArrayDecoder for StructArrayDecoder {
         let row_count = pos.len();
         let field_count = fields.len();
         self.field_tape_positions.resize(field_count, row_count)?;
-        let mut nulls = self
-            .is_nullable
-            .then(|| BooleanBufferBuilder::new(pos.len()));
+        let mut nulls = self.is_nullable.then(|| NullBufferBuilder::new(pos.len()));
 
         {
             // We avoid having the match on self.struct_mode inside the hot loop for performance
@@ -139,15 +136,15 @@ impl ArrayDecoder for StructArrayDecoder {
                         let end_idx = match (tape.get(*p), nulls.as_mut()) {
                             (TapeElement::StartObject(end_idx), None) => end_idx,
                             (TapeElement::StartObject(end_idx), Some(nulls)) => {
-                                nulls.append(true);
+                                nulls.append_non_null();
                                 end_idx
                             }
                             (TapeElement::Null, Some(nulls)) => {
-                                nulls.append(false);
+                                nulls.append_null();
                                 continue;
                             }
                             (_, Some(nulls)) if self.ignore_type_conflicts => {
-                                nulls.append(false);
+                                nulls.append_null();
                                 continue;
                             }
                             (_, _) => return Err(tape.error(*p, "{")),
@@ -188,15 +185,15 @@ impl ArrayDecoder for StructArrayDecoder {
                         let end_idx = match (tape.get(*p), nulls.as_mut()) {
                             (TapeElement::StartList(end_idx), None) => end_idx,
                             (TapeElement::StartList(end_idx), Some(nulls)) => {
-                                nulls.append(true);
+                                nulls.append_non_null();
                                 end_idx
                             }
                             (TapeElement::Null, Some(nulls)) => {
-                                nulls.append(false);
+                                nulls.append_null();
                                 continue;
                             }
                             (_, Some(nulls)) if self.ignore_type_conflicts => {
-                                nulls.append(false);
+                                nulls.append_null();
                                 continue;
                             }
                             (_, _) => return Err(tape.error(*p, "[")),
@@ -245,7 +242,7 @@ impl ArrayDecoder for StructArrayDecoder {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        let nulls = nulls.as_mut().and_then(|x| x.finish());
 
         for (c, f) in child_arrays.iter().zip(fields) {
             // Sanity check

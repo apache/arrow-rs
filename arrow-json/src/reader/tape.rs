@@ -691,7 +691,7 @@ impl Iterator for BufIter<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let s = self.buf.len().checked_sub(self.pos).unwrap_or_default();
+        let s = self.buf.len().saturating_sub(self.pos);
         (s, Some(s))
     }
 }

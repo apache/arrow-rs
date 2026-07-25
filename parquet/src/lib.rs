@@ -166,31 +166,15 @@ macro_rules! experimental {
 
 #[cfg(all(
     feature = "flate2",
-    not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
+    not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backend"))
 ))]
 compile_error!(
-    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backend`."
 );
 
 #[macro_use]
 pub mod errors;
 pub mod basic;
-
-/// Automatically generated code from the Parquet thrift definition.
-///
-/// This module code generated from [parquet.thrift]. See [crate::file] for
-/// more information on reading Parquet encoded data.
-///
-/// [parquet.thrift]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
-// see parquet/CONTRIBUTING.md for instructions on regenerating
-// Don't try clippy and format auto generated code
-#[allow(clippy::all, missing_docs)]
-#[rustfmt::skip]
-#[deprecated(
-    since = "57.0.0",
-    note = "The `format` module is no longer maintained, and will be removed in `59.0.0`"
-)]
-pub mod format;
 
 #[macro_use]
 pub mod data_type;
@@ -222,7 +206,7 @@ pub mod schema;
 
 mod parquet_macros;
 mod parquet_thrift;
-pub mod thrift;
+
 /// What data is needed to read the next item from a decoder.
 ///
 /// This is used to communicate between the decoder and the caller

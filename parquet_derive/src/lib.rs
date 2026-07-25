@@ -32,9 +32,7 @@ extern crate syn;
 #[macro_use]
 extern crate quote;
 
-extern crate parquet;
-
-use ::syn::{Data, DataStruct, DeriveInput, parse_macro_input};
+use ::syn::{Data, DataStruct, DeriveInput, ext::IdentExt, parse_macro_input};
 
 mod parquet_field;
 
@@ -234,6 +232,18 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
     let field_names: Vec<_> = fields.iter().map(|f| f.ident.clone()).collect();
+    // unraw the identifiers, so raw identifiers like `r#type` are looked
+    // up by their column name `type` in the parquet file
+    let field_names_str: Vec<_> = fields
+        .iter()
+        .map(|f| {
+            f.ident
+                .as_ref()
+                .expect("Only structs with named fields are currently supported")
+                .unraw()
+                .to_string()
+        })
+        .collect();
     let reader_snippets: Vec<proc_macro2::TokenStream> =
         field_infos.iter().map(|x| x.reader_snippet()).collect();
 
@@ -270,10 +280,10 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         #(
           {
-              let idx: usize = match name_to_index.get(stringify!(#field_names)) {
+              let idx: usize = match name_to_index.get(#field_names_str) {
                 Some(&col_idx) => col_idx,
                 None => {
-                  let error_msg = format!("column name '{}' is not found in parquet file!", stringify!(#field_names));
+                  let error_msg = format!("column name '{}' is not found in parquet file!", #field_names_str);
                   return Err(::parquet::errors::ParquetError::General(error_msg));
                 }
               };

@@ -65,8 +65,9 @@ else
     tar=tar
 fi
 
-if ! git -C "${SOURCE_TOP_DIR}" rev-list --max-count=1 ${tag}; then
+if ! commit_sha=$(git -C "${SOURCE_TOP_DIR}" rev-list --max-count=1 "${tag}"); then
     echo "Cannot continue: unknown git tag: $tag"
+    exit 1
 fi
 
 
@@ -77,42 +78,6 @@ tarball=${distdir}/${tarname}
 url="https://dist.apache.org/repos/dist/dev/arrow/${release}-rc${rc}"
 
 echo "Attempting to create ${tarball} from tag ${tag}"
-
-
-echo "Draft email for dev@arrow.apache.org mailing list"
-echo ""
-echo "---------------------------------------------------------"
-cat <<MAIL
-To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow Rust ${version} RC${rc}
-
-Hi,
-
-I would like to propose a release of Apache Arrow Rust Implementation, version ${tag}.
-
-This release candidate is based on commit: ${tag} [1]
-
-The proposed release tarball and signatures are hosted at [2].
-
-The changelog is located at [3].
-
-Please download, verify checksums and signatures, run the unit tests,
-and vote on the release. There is a script [4] that automates some of
-the verification.
-
-The vote will be open for at least 72 hours.
-
-[ ] +1 Release this as Apache Arrow Rust ${version}
-[ ] +0
-[ ] -1 Do not release this as Apache Arrow Rust ${version} because...
-
-[1]: https://github.com/apache/arrow-rs/tree/${tag}
-[2]: ${url}
-[3]: https://github.com/apache/arrow-rs/blob/${tag}/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
-MAIL
-echo "---------------------------------------------------------"
-
 
 
 # create <tarball> containing the files in git at $tag
@@ -133,6 +98,45 @@ gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 #  shasum --check apache-arrow-rs-4.1.0-rc2.tar.gz.sha512
 (cd ${distdir} && shasum -a 256 ${tarname}) > ${tarball}.sha256
 (cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
+sha256=$(cut -d ' ' -f 1 "${tarball}.sha256")
+
+echo "Draft email for dev@arrow.apache.org mailing list"
+echo ""
+echo "---------------------------------------------------------"
+cat <<MAIL
+To: dev@arrow.apache.org
+Subject: [VOTE][RUST] Release Apache Arrow Rust ${version} RC${rc}
+
+Hi,
+
+I would like to propose a release of Apache Arrow Rust Implementation, version ${version}.
+
+This release candidate is based on commit: ${commit_sha} [1].
+The SHA256 of the release candidate is: ${sha256}
+
+The proposed release tarball and signatures are hosted at [2].
+
+The changelog is located at [3].
+
+The release tracking issue is: [4]
+
+Please download, verify checksums and signatures, run the unit tests,
+and vote on the release. There is a script [4] that automates some of
+the verification.
+
+The vote will be open for at least 72 hours.
+
+[ ] +1 Release this as Apache Arrow Rust ${version}
+[ ] +0
+[ ] -1 Do not release this as Apache Arrow Rust ${version} because...
+
+[1]: https://github.com/apache/arrow-rs/tree/${commit_sha}
+[2]: ${url}
+[3]: https://github.com/apache/arrow-rs/blob/${commit_sha}/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
+[5]: RELEASE_ISSUE
+MAIL
+echo "---------------------------------------------------------"
 
 echo "Uploading to apache dist/dev to ${url}"
 svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist

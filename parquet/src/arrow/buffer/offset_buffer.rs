@@ -151,14 +151,24 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
         Self::with_capacity(capacity)
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        self.offsets.reserve_exact(additional);
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
-        assert_eq!(self.offsets.len(), read_offset + values_read + 1);
+    ) -> Result<()> {
+        if self.offsets.len() != read_offset + values_read + 1 {
+            return Err(general_err!(
+                "found inconsistent offsets while padding nulls: expected {} offsets, got {}",
+                read_offset + values_read + 1,
+                self.offsets.len()
+            ));
+        }
         self.offsets
             .resize(read_offset + levels_read + 1, I::default());
 
@@ -173,8 +183,9 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
             .rev()
             .zip(iter_set_bits_rev(valid_mask))
         {
-            assert!(level_pos >= value_pos);
-            assert!(level_pos < last_pos);
+            if level_pos < value_pos || level_pos >= last_pos {
+                return Err(general_err!("found corrupt level data while padding nulls"));
+            }
 
             let end_offset = offsets[value_pos + 1];
             let start_offset = offsets[value_pos];
@@ -185,7 +196,7 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
             }
 
             if level_pos == value_pos {
-                return;
+                return Ok(());
             }
 
             offsets[level_pos] = start_offset;
@@ -197,6 +208,7 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
         for x in &mut offsets[values_range.start + 1..last_pos] {
             *x = last_start_offset
         }
+        Ok(())
     }
 }
 
@@ -268,7 +280,9 @@ mod tests {
         let valid_mask = Buffer::from_iter(valid.iter().copied());
 
         // Both trailing and leading nulls
-        buffer.pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice());
+        buffer
+            .pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice())
+            .unwrap();
 
         let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
@@ -331,10 +345,43 @@ mod tests {
     }
 
     #[test]
+    fn test_pad_nulls_corrupt_input_returns_err() {
+        // Corrupt input must produce a decode error rather than panicking.
+
+        // Offsets inconsistent with `values_read`: only one value was pushed,
+        // but three are claimed to have been read.
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer.try_push("a".as_bytes(), false).unwrap();
+        let valid_mask = Buffer::from_iter([true, false, false]);
+        let err = buffer
+            .pad_nulls(0, 3, 3, valid_mask.as_slice())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("inconsistent offsets"),
+            "unexpected error: {err}"
+        );
+
+        // Valid mask has fewer set bits than `values_read`, which previously
+        // tripped an assertion in the null-padding loop.
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        for v in ["a", "b", "c"] {
+            buffer.try_push(v.as_bytes(), false).unwrap();
+        }
+        let valid_mask = Buffer::from_iter([true, false, false]);
+        let err = buffer
+            .pad_nulls(0, 3, 3, valid_mask.as_slice())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("corrupt level data"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_pad_nulls_empty() {
         let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
         let valid_mask = Buffer::from_iter(std::iter::repeat_n(false, 9));
-        buffer.pad_nulls(0, 0, 9, valid_mask.as_slice());
+        buffer.pad_nulls(0, 0, 9, valid_mask.as_slice()).unwrap();
 
         let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();

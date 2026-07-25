@@ -362,7 +362,7 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
         0 => format!("{}.{}", base, 0),
         _ => {
             let micros_str = format!("{:06}", micros);
-            let micros_str_trimmed = micros_str.trim_matches('0');
+            let micros_str_trimmed = micros_str.trim_end_matches('0');
             format!("{}.{}", base, micros_str_trimmed)
         }
     }
@@ -508,6 +508,21 @@ mod tests {
         let variant = Variant::Time(naive_time);
         let json = variant.to_json_string()?;
         assert_eq!("\"03:25:45.12346\"", json);
+
+        let expected = [
+            (10, "00:00:00.00001"),
+            (10010, "00:00:00.01001"),
+            (100000, "00:00:00.1"),
+            (123450, "00:00:00.12345"),
+        ];
+
+        for (micros, expected_json) in expected {
+            let naive_time =
+                NaiveTime::from_num_seconds_from_midnight_opt(0, micros * 1000).unwrap();
+            let variant = Variant::Time(naive_time);
+            let json = variant.to_json_string()?;
+            assert_eq!(format!("\"{expected_json}\""), json);
+        }
 
         let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));

@@ -18,8 +18,10 @@
 //! Tests that reading invalid parquet files returns an error
 
 use arrow::util::test_util::parquet_test_data;
+use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::ParquetMetaDataReader;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -31,6 +33,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
     "ARROW-GH-45185.parquet",
+    "ARROW-GH-47662.parquet",
     "README.md",
 ];
 
@@ -97,7 +100,7 @@ fn test_arrow_gh_41317() {
     let err = read_file("ARROW-GH-41317.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: StructArrayReader out of sync in read_records, expected 5 read, got 2"
+        "Parquet error: Expected list element type of I32 but got I16"
     );
 }
 
@@ -130,6 +133,15 @@ fn test_arrow_rs_gh_45185_dict_levels() {
     );
 }
 
+#[test]
+fn test_arrow_gh_47662() {
+    let err = read_file("ARROW-GH-47662.parquet").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: insufficient values read from column - expected: 100, got: 91"
+    );
+}
+
 /// Reads the file and tries to return the total row count
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
@@ -147,12 +159,47 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
     Ok(num_rows)
 }
 
+#[test]
+fn non_standard_delta_blocks() {
+    let file = Bytes::from_static(include_bytes!("bigdelta.parquet"));
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+    let selectors = vec![RowSelector::skip(1000), RowSelector::select(5)];
+
+    let selection: RowSelection = selectors.into();
+    let reader = ArrowReaderBuilder::try_new(file)
+        .unwrap()
+        .with_row_selection(selection)
+        .build()
+        .unwrap();
+
+    if let Some(maybe_batch) = reader.into_iter().next() {
+        // TODO: uncomment if we ever allow skipping miniblocks > 64 elements
+        //let batch = maybe_batch.expect("skip should succeed");
+        //assert_eq!(batch.num_rows(), 5);
+        assert!(
+            maybe_batch
+                .unwrap_err()
+                .to_string()
+                .contains("cannot skip miniblock of size 128")
+        );
+    }
+}
+
+#[test]
+fn skip_unknown_types() {
+    // test file contains a FileMetaData with unknown fields with
+    // types not currently used by Parquet (uuid, set, map). The
+    // parser should be able to skip these unknown fields without
+    // erroring.
+    let file = Bytes::from_static(include_bytes!("new_types.bin"));
+    ParquetMetaDataReader::decode_metadata(&file).unwrap();
+}
+
 #[cfg(feature = "async")]
 #[tokio::test]
-#[allow(deprecated)]
 async fn bad_metadata_err() {
-    use bytes::Bytes;
-    use parquet::file::metadata::ParquetMetaDataReader;
+    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
@@ -161,13 +208,13 @@ async fn bad_metadata_err() {
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();
     loader.try_load(&mut reader, metadata_length).await.unwrap();
-    loader = loader.with_page_indexes(false);
+    loader = loader.with_page_index_policy(PageIndexPolicy::Skip);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_offset_indexes(true);
+    loader = loader.with_offset_index_policy(PageIndexPolicy::Required);
     loader.load_page_index(&mut reader).await.unwrap();
 
-    loader = loader.with_column_indexes(true);
+    loader = loader.with_column_index_policy(PageIndexPolicy::Required);
     let err = loader.load_page_index(&mut reader).await.unwrap_err();
 
     assert_eq!(

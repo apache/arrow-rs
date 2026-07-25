@@ -61,7 +61,7 @@ bitflags! {
 }
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
-/// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
+/// See <https://arrow.apache.org/docs/format/CDataInterface.html#the-arrowschema-structure>
 ///
 /// ```
 /// # use arrow_schema::DataType;
@@ -75,16 +75,25 @@ bitflags! {
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
-    format: *const c_char,
-    name: *const c_char,
-    metadata: *const c_char,
+    /// Null-terminated, UTF8-encoded string describing the data type
+    pub format: *const c_char,
+    /// Null-terminated, UTF8-encoded string of the field or array name
+    pub name: *const c_char,
+    /// Binary string describing the type’s metadata
+    pub metadata: *const c_char,
+    /// A bitfield of flags enriching the type description
     /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
-    flags: i64,
-    n_children: i64,
-    children: *mut *mut FFI_ArrowSchema,
-    dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    private_data: *mut c_void,
+    pub flags: i64,
+    /// The number of children this type has
+    pub n_children: i64,
+    /// C array of pointers to each child type of this type
+    pub children: *mut *mut FFI_ArrowSchema,
+    /// Pointer to the type of dictionary values
+    pub dictionary: *mut FFI_ArrowSchema,
+    /// Pointer to a producer-provided release callback
+    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    /// Opaque pointer to producer-provided private data
+    pub private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {
@@ -162,7 +171,14 @@ impl FFI_ArrowSchema {
 
     /// Set the name of the schema
     pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
-        self.name = CString::new(name).unwrap().into_raw();
+        self.name = CString::new(name)
+            .map_err(|e| {
+                ArrowError::CDataInterface(format!(
+                    "Null byte at position {} not allowed in name",
+                    e.nul_position()
+                ))
+            })?
+            .into_raw();
         Ok(self)
     }
 
@@ -941,13 +957,19 @@ mod tests {
 
     #[test]
     fn test_map_keys_sorted() {
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false);
+        let values = Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, false);
         let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
-        let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entry_struct,
+                false,
+            )),
+            true,
+        );
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());
@@ -991,6 +1013,12 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_name_with_null_byte() {
+        let schema = FFI_ArrowSchema::try_new("i", vec![], None).unwrap();
+        assert!(schema.with_name("ab\0cd").is_err());
     }
 
     #[test]

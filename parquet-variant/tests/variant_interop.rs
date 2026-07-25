@@ -466,11 +466,12 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             )
             .unwrap();
 
-            // timestamp w/o timezone
-            builder.append_value(data_time.naive_local());
-
-            // timestamp with timezone
-            builder.append_value(data_time.naive_utc().and_utc());
+            // randomly pick timestamp with or without timezone
+            if rng.random_bool(0.5) {
+                builder.append_value(data_time.naive_local());
+            } else {
+                builder.append_value(data_time.naive_utc().and_utc());
+            }
         }
         17 => {
             builder.append_value(Uuid::new_v4());

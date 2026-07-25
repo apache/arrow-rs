@@ -140,7 +140,11 @@ pub struct VariantMetadata<'m> {
 
 // We don't want this to grow because it increases the size of VariantList and VariantObject, which
 // could increase the size of Variant. All those size increases could hurt performance.
+#[cfg(target_pointer_width = "64")]
 const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
+
+#[cfg(target_pointer_width = "32")]
+const _: () = crate::utils::expect_size_of::<VariantMetadata>(20);
 
 /// The canonical byte slice corresponding to an empty metadata dictionary.
 ///
