@@ -262,6 +262,8 @@ dependencies = [
  "strum_macros 0.28.0",
  "tempfile",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "uuid",
  "zstd",
 ]
