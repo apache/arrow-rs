@@ -182,12 +182,11 @@ where
     selectors
 }
 
-/// Splits the first `row_count` rows off `selectors`, returning them and
-/// leaving the remainder in place.
+/// Splits `selectors` at the first `row_count` rows, returning `(head, tail)`.
 pub(super) fn split_off_selectors(
-    selectors: &mut Vec<RowSelector>,
+    mut selectors: Vec<RowSelector>,
     row_count: usize,
-) -> Vec<RowSelector> {
+) -> (Vec<RowSelector>, Vec<RowSelector>) {
     let mut total_count = 0;
 
     // Find the index where the selector exceeds the row count
@@ -198,13 +197,15 @@ pub(super) fn split_off_selectors(
 
     let split_idx = match find {
         Some(idx) => idx,
-        None => return std::mem::take(selectors),
+        None => return (selectors, Vec::new()),
     };
 
-    let mut remaining = selectors.split_off(split_idx);
+    // `selectors` keeps the head, `tail` takes the rest. The selector straddling
+    // the boundary is split between the two.
+    let mut tail = selectors.split_off(split_idx);
 
     // Always present as `split_idx < selectors.len`
-    let next = remaining.first_mut().unwrap();
+    let next = tail.first_mut().unwrap();
     let overflow = total_count - row_count;
 
     if next.row_count != overflow {
@@ -215,15 +216,7 @@ pub(super) fn split_off_selectors(
     }
     next.row_count = overflow;
 
-    std::mem::swap(&mut remaining, selectors);
-    remaining
-}
-
-/// Removes any trailing skips from `selectors`.
-pub(super) fn trim_selectors(selectors: &mut Vec<RowSelector>) {
-    while selectors.last().map(|x| x.skip).unwrap_or(false) {
-        selectors.pop();
-    }
+    (selectors, tail)
 }
 
 /// Skips the first `offset` selected rows of `selectors`.

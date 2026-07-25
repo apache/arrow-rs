@@ -57,7 +57,7 @@ use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selecto
 pub use selector::{RowSelectionIter, RowSelector};
 use selector::{
     combine_selectors, limit_selectors, offset_selectors, selectors_from_consecutive_ranges,
-    split_off_selectors, trim_selectors,
+    split_off_selectors,
 };
 
 /// [`RowSelection`] represents selecting a subset of rows
@@ -306,21 +306,6 @@ impl RowSelection {
         }
     }
 
-    /// Promote a mask-backed selection to selector backing in place.
-    fn selectors_mut(&mut self) -> &mut Vec<RowSelector> {
-        if let RowSelectionInner::Mask(_) = &self.inner {
-            let mask = match std::mem::take(&mut self.inner) {
-                RowSelectionInner::Mask(m) => m,
-                RowSelectionInner::Selectors(_) => unreachable!(),
-            };
-            self.inner = RowSelectionInner::Selectors(mask_to_selectors(mask.mask()));
-        }
-        match &mut self.inner {
-            RowSelectionInner::Selectors(s) => s,
-            RowSelectionInner::Mask(_) => unreachable!(),
-        }
-    }
-
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
     /// # Panic
@@ -396,35 +381,37 @@ impl RowSelection {
 
     /// Splits off the first `row_count` from this [`RowSelection`]
     pub fn split_off(&mut self, row_count: usize) -> Self {
-        if matches!(&self.inner, RowSelectionInner::Mask(_)) {
-            let mask = match std::mem::take(&mut self.inner) {
-                RowSelectionInner::Mask(m) => m,
-                RowSelectionInner::Selectors(_) => unreachable!(),
-            };
-            let total = mask.cached_count();
-            let (head, tail) = split_off_mask((*mask).into_mask(), row_count);
-            // Popcount only the head and derive the tail by subtraction, so
-            // repeated splits stay O(bitmap) overall.
-            let (head, tail) = match total {
-                Some(total) => {
-                    let head_count = if tail.is_empty() {
-                        total
-                    } else {
-                        head.count_set_bits()
-                    };
-                    (
-                        MaskSelection::with_count(head, head_count),
-                        MaskSelection::with_count(tail, total - head_count),
-                    )
-                }
-                None => (MaskSelection::new(head), MaskSelection::new(tail)),
-            };
-            self.inner = RowSelectionInner::Mask(Box::new(tail));
-            return Self::from_mask_selection(head);
+        match std::mem::take(&mut self.inner) {
+            RowSelectionInner::Mask(mask) => {
+                let total = mask.cached_count();
+                let (head, tail) = split_off_mask((*mask).into_mask(), row_count);
+                // Popcount only the head and derive the tail by subtraction, so
+                // repeated splits stay O(bitmap) overall.
+                let (head, tail) = match total {
+                    Some(total) => {
+                        let head_count = if tail.is_empty() {
+                            total
+                        } else {
+                            head.count_set_bits()
+                        };
+                        (
+                            MaskSelection::with_count(head, head_count),
+                            MaskSelection::with_count(tail, total - head_count),
+                        )
+                    }
+                    None => (MaskSelection::new(head), MaskSelection::new(tail)),
+                };
+                self.inner = RowSelectionInner::Mask(Box::new(tail));
+                Self::from_mask_selection(head)
+            }
+            RowSelectionInner::Selectors(selectors) => {
+                let (head, tail) = split_off_selectors(selectors, row_count);
+                self.inner = RowSelectionInner::Selectors(tail);
+                Self::from_selectors(head)
+            }
         }
-
-        Self::from_selectors(split_off_selectors(self.selectors_mut(), row_count))
     }
+
     /// returns a [`RowSelection`] representing rows that are selected in both
     /// input [`RowSelection`]s.
     ///
@@ -525,21 +512,32 @@ impl RowSelection {
     }
 
     /// Trims this [`RowSelection`] removing any trailing skips
-    pub(crate) fn trim(mut self) -> Self {
-        if let RowSelectionInner::Mask(m) = &self.inner {
-            if let Some(mask) = trim_mask(m.mask()) {
-                // Trimming only drops trailing unset bits; the count is unchanged.
-                return match m.cached_count() {
-                    Some(count) => {
-                        Self::from_mask_selection(MaskSelection::with_count(mask, count))
-                    }
-                    None => Self::from_boolean_buffer(mask),
-                };
+    pub(crate) fn trim(self) -> Self {
+        match self.inner {
+            RowSelectionInner::Mask(m) => {
+                let trimmed = trim_mask(m.mask());
+                let cached_count = m.cached_count();
+                match trimmed {
+                    // Trimming only drops trailing unset bits; the count is unchanged.
+                    Some(mask) => match cached_count {
+                        Some(count) => {
+                            Self::from_mask_selection(MaskSelection::with_count(mask, count))
+                        }
+                        None => Self::from_boolean_buffer(mask),
+                    },
+                    // Nothing to trim, hand the existing box back untouched.
+                    None => Self {
+                        inner: RowSelectionInner::Mask(m),
+                    },
+                }
             }
-            return self;
+            RowSelectionInner::Selectors(mut selectors) => {
+                while selectors.last().map(|x| x.skip).unwrap_or(false) {
+                    selectors.pop();
+                }
+                Self::from_selectors(selectors)
+            }
         }
-        trim_selectors(self.selectors_mut());
-        self
     }
 
     /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
