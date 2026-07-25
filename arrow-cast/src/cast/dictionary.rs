@@ -34,21 +34,124 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
         (_, Dictionary(to_index_type, to_value_type)) => {
             dictionary_to_dictionary_cast(array, to_index_type, to_value_type, cast_options)
         }
-        // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data
-        // copy of the value buffer. Fast path which avoids copying underlying values buffer.
-        // TODO: handle LargeUtf8/LargeBinary -> View (need to check offsets can fit)
-        // TODO: handle cross types (String -> BinaryView, Binary -> StringView)
-        //       (need to validate utf8?)
-        (Utf8, Utf8View) => view_from_dict_values::<K, Utf8Type, StringViewType>(
-            array.keys(),
-            array.values().as_string::<i32>(),
-        ),
-        (Binary, BinaryView) => view_from_dict_values::<K, BinaryType, BinaryViewType>(
+        // There are two ways to produce a view array from a dictionary, and neither of them
+        // copies the values buffer:
+        //
+        //  (a) `unpack_dictionary` builds one view per *dictionary value* and then uses `take`,
+        //      which gathers 16-byte views and passes the data buffers through untouched.
+        //  (b) `view_from_dict_values` builds one view per *row* directly against the values
+        //      buffer, skipping the intermediate array entirely.
+        //
+        // (a) is memory-bandwidth-bound -- the gather in `take` benchmarks at or below the cost
+        // of a hand-written `u128` gather -- so it wins comfortably whenever rows outnumber
+        // dictionary values. (b) reads the payload bytes of every row out of the values buffer
+        // to build each view, which is far more expensive per row, and only pays off when the
+        // dictionary is larger than the array is long: there (a) spends most of its time
+        // building views that no row ever references.
+        //
+        // So take (b) only when it actually wins. Everything else falls through to (a) below.
+        (Utf8, Utf8View) if prefer_direct_views(array) => {
+            view_from_dict_values::<K, Utf8Type, StringViewType>(
+                array.keys(),
+                array.values().as_string::<i32>(),
+            )
+        }
+        (Binary, BinaryView) if prefer_direct_views(array) => {
+            view_from_dict_values::<K, BinaryType, BinaryViewType>(
+                array.keys(),
+                array.values().as_binary::<i32>(),
+            )
+        }
+        // LargeUtf8/LargeBinary additionally require a values buffer small enough to be addressed
+        // by the u32 offset of a view.
+        (LargeUtf8, Utf8View)
+            if prefer_direct_views(array)
+                && values_buffer_fits_in_view(array.values().as_string::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeUtf8Type, StringViewType>(
+                array.keys(),
+                array.values().as_string::<i64>(),
+            )
+        }
+        (LargeBinary, BinaryView)
+            if prefer_direct_views(array)
+                && values_buffer_fits_in_view(array.values().as_binary::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeBinaryType, BinaryViewType>(
+                array.keys(),
+                array.values().as_binary::<i64>(),
+            )
+        }
+        // Cross casts to a binary view need no validation: valid UTF-8 is valid binary.
+        (Utf8, BinaryView) if prefer_direct_views(array) => {
+            view_from_dict_values::<K, Utf8Type, BinaryViewType>(
+                array.keys(),
+                array.values().as_string::<i32>(),
+            )
+        }
+        (LargeUtf8, BinaryView)
+            if prefer_direct_views(array)
+                && values_buffer_fits_in_view(array.values().as_string::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeUtf8Type, BinaryViewType>(
+                array.keys(),
+                array.values().as_string::<i64>(),
+            )
+        }
+        // Cross casts to a string view require UTF-8 validation of the dictionary values.
+        (Binary, Utf8View) if prefer_direct_views(array) => binary_dict_to_string_view::<K, i32>(
             array.keys(),
             array.values().as_binary::<i32>(),
+            cast_options,
         ),
+        (LargeBinary, Utf8View)
+            if prefer_direct_views(array)
+                && values_buffer_fits_in_view(array.values().as_binary::<i64>()) =>
+        {
+            binary_dict_to_string_view::<K, i64>(
+                array.keys(),
+                array.values().as_binary::<i64>(),
+                cast_options,
+            )
+        }
         _ => unpack_dictionary(array, to_type, cast_options),
     }
+}
+
+/// Whether building views per row beats `unpack_dictionary` for this array.
+///
+/// `unpack_dictionary` costs `O(values)` to build the intermediate view array plus `O(keys)` for
+/// a bandwidth-bound gather; building views directly costs `O(keys)` but with a much larger
+/// constant, since every row has to read its payload out of the values buffer. The direct path
+/// therefore only wins when the dictionary is substantially larger than the array is long.
+///
+/// The measured crossover sits near `keys ~= 0.6 * values`, so this deliberately switches at half
+/// that rather than at the crossover itself: at `keys * 2 == values` the direct path is still
+/// comfortably ahead, which leaves margin for the exact crossover moving with cache size or
+/// microarchitecture. Being wrong in this direction merely forgoes a win; being wrong the other
+/// way is a large regression on the common case.
+#[inline]
+fn prefer_direct_views<K: ArrowDictionaryKeyType>(array: &DictionaryArray<K>) -> bool {
+    array.keys().len() < array.values().len() / 2
+}
+
+/// Whether the values buffer can back a view array, i.e. it is smaller than 4GiB.
+///
+/// Required because views address their data with a `u32` offset, and
+/// [`GenericByteViewBuilder::append_block`] asserts the block it is handed is smaller than
+/// `u32::MAX`. Failing this check is therefore a panic in the direct path, not an error.
+///
+/// `unpack_dictionary` has no such limit: it reaches
+/// `impl From<&GenericByteArray> for GenericByteViewArray`, which makes the same test and falls
+/// back to copying via `from_iter` when the buffer is too large. So this guards the direct path
+/// only, and the fallback is strictly more capable rather than an equivalent failure.
+///
+/// This deliberately measures the whole buffer rather than the largest live offset: slicing a
+/// byte array slices its offsets but keeps `value_data` intact, so a slice can have small offsets
+/// and still carry an oversized buffer -- and it is the buffer that `append_block` rejects.
+#[inline]
+fn values_buffer_fits_in_view<T: ByteArrayType>(values: &GenericByteArray<T>) -> bool {
+    values.values().len() < u32::MAX as usize
 }
 
 fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
@@ -126,12 +229,81 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
     Ok(new_array)
 }
 
+/// Cast `Dict<K, Binary>` or `Dict<K, LargeBinary>` to `Utf8View`, validating UTF-8 for each
+/// dictionary value.
+///
+/// Fast path when all values are valid UTF-8: reuses the values buffer without copying.
+/// When some values are invalid and `cast_options.safe` is true, rows pointing to those
+/// values become null. When `cast_options.safe` is false, returns an error immediately.
+fn binary_dict_to_string_view<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
+    keys: &PrimitiveArray<K>,
+    values: &GenericByteArray<GenericBinaryType<O>>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    match GenericStringArray::<O>::try_from_binary(values.clone()) {
+        Ok(_) => {
+            // All dictionary values are valid UTF-8: reuse the buffer zero-copy.
+            view_from_dict_values::<K, GenericBinaryType<O>, StringViewType>(keys, values)
+        }
+        Err(e) => {
+            if !cast_options.safe {
+                return Err(e);
+            }
+            // safe=true: validate each dictionary value individually so we can nullify
+            // only the rows whose key points to an invalid UTF-8 value.
+            let valid: Vec<bool> = (0..values.len())
+                .map(|i| !values.is_null(i) && std::str::from_utf8(values.value(i)).is_ok())
+                .collect();
+
+            let value_buffer = values.values();
+            let value_offsets = values.value_offsets();
+            let mut builder = StringViewBuilder::with_capacity(keys.len());
+            builder.append_block(value_buffer.clone());
+
+            for key in keys.iter() {
+                match key {
+                    Some(v) => {
+                        let idx = v.to_usize().ok_or_else(|| {
+                            ArrowError::ComputeError("Invalid dictionary index".to_string())
+                        })?;
+                        let is_valid = *valid.get(idx).ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "Dictionary key {idx} out of bounds for dictionary values of length {}",
+                                valid.len()
+                            ))
+                        })?;
+                        if is_valid {
+                            // Safety:
+                            // (1) `idx` and `idx + 1` are in bounds, checked above
+                            // (2) offsets are monotonically increasing, so end >= offset
+                            // (3) the slice [offset..end] is within the buffer
+                            // (4) the bytes are valid UTF-8 (checked above for valid[idx])
+                            unsafe {
+                                let offset = value_offsets.get_unchecked(idx).as_usize();
+                                let end = value_offsets.get_unchecked(idx + 1).as_usize();
+                                let length = end - offset;
+                                builder.append_view_unchecked(0, offset as u32, length as u32);
+                            }
+                        } else {
+                            builder.append_null();
+                        }
+                    }
+                    None => builder.append_null(),
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+    }
+}
+
 fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteViewType>(
     keys: &PrimitiveArray<K>,
     values: &GenericByteArray<V>,
 ) -> Result<ArrayRef, ArrowError> {
     let value_buffer = values.values();
     let value_offsets = values.value_offsets();
+    // A null *value* must produce a null row, not the empty slice its offsets happen to span.
+    let values_have_nulls = values.null_count() != 0;
     let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
     builder.append_block(value_buffer.clone());
     for i in keys.iter() {
@@ -141,9 +313,22 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
                     ArrowError::ComputeError("Invalid dictionary index".to_string())
                 })?;
 
+                if idx >= values.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Dictionary key {idx} out of bounds for dictionary values of length {}",
+                        values.len()
+                    )));
+                }
+
+                if values_have_nulls && values.is_null(idx) {
+                    builder.append_null();
+                    continue;
+                }
+
                 // Safety
-                // (1) The index is within bounds as they are offsets
-                // (2) The append_view is safe
+                // (1) `idx` and `idx + 1` are in bounds, checked above
+                // (2) offsets are monotonic and within the values buffer, which was added
+                //     as block 0 via `append_block`, so `offset..end` is inside that block
                 unsafe {
                     let offset = value_offsets.get_unchecked(idx).as_usize();
                     let end = value_offsets.get_unchecked(idx + 1).as_usize();
