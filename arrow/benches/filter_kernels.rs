@@ -295,6 +295,105 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("filter run array low selectivity (kept 1/1024)", |b| {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
+
+    // List<Int32> with ~5 elements per row exercises the specialized list filter
+    let mut list_builder = ListBuilder::new(Int32Builder::new());
+    for i in 0..size {
+        for j in 0..5 {
+            list_builder.values().append_value((i + j) as i32);
+        }
+        list_builder.append(true);
+    }
+    let data_array = list_builder.finish();
+    c.bench_function("filter list i32 (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter list i32 high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter list i32 low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    // List<Utf8> exercises the specialized byte child kernel
+    let mut list_builder = ListBuilder::new(StringBuilder::new());
+    for i in 0..size {
+        for j in 0..5 {
+            list_builder.values().append_value(format!("{}", i + j));
+        }
+        list_builder.append(true);
+    }
+    let data_array = list_builder.finish();
+    c.bench_function("filter list utf8 (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter list utf8 high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter list utf8 low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    // List<Utf8View> exercises the specialized byte-view child kernel
+    // (Utf8View is DataFusion's default string type)
+    let mut list_builder = ListBuilder::new(StringViewBuilder::new());
+    for i in 0..size {
+        for j in 0..5 {
+            list_builder.values().append_value(format!("{}", i + j));
+        }
+        list_builder.append(true);
+    }
+    let data_array = list_builder.finish();
+    c.bench_function("filter list utf8view (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter list utf8view high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function("filter list utf8view low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    // FixedSizeList<Int32, 4> filtered directly (exercises filter_fixed_size_list)
+    let mut fsl = FixedSizeListBuilder::new(Int32Builder::new(), 4);
+    for i in 0..size {
+        for j in 0..4 {
+            fsl.values().append_value((i + j) as i32);
+        }
+        fsl.append(true);
+    }
+    let data_array = fsl.finish();
+    c.bench_function("filter fixedsizelist (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter fixedsizelist high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function("filter fixedsizelist low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    // Map<Utf8, Int32> filtered directly (exercises filter_map)
+    let mut mb = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+    for i in 0..size {
+        for j in 0..3 {
+            mb.keys().append_value(format!("k{j}"));
+            mb.values().append_value((i + j) as i32);
+        }
+        mb.append(true).unwrap();
+    }
+    let data_array = mb.finish();
+    c.bench_function("filter map (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter map high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter map low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
 }
 
 criterion_group!(benches, add_benchmark);
