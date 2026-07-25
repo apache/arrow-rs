@@ -24,7 +24,10 @@ use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRe
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 use selection::MaskCursor;
-pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
+pub use selection::{
+    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionIter, RowSelectionPolicy,
+    RowSelector,
+};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
