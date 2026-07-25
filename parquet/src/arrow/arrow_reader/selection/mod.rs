@@ -688,6 +688,10 @@ impl FromIterator<RowSelector> for RowSelection {
         }
 
         for s in filtered {
+            if s.row_count == 0 {
+                continue;
+            }
+
             // Combine consecutive selectors
             let last = selectors.last_mut().unwrap();
             if last.skip == s.skip {
