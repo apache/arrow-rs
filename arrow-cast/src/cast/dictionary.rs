@@ -43,11 +43,11 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
         //      buffer, skipping the intermediate array entirely.
         //
         // (a) is memory-bandwidth-bound -- the gather in `take` benchmarks at or below the cost
-        // of a hand-written `u128` gather -- so it wins comfortably whenever rows outnumber
-        // dictionary values. (b) reads the payload bytes of every row out of the values buffer
-        // to build each view, which is far more expensive per row, and only pays off when the
-        // dictionary is larger than the array is long: there (a) spends most of its time
-        // building views that no row ever references.
+        // of a hand-written `u128` gather -- so it wins once rows reach roughly 0.6x the
+        // dictionary size. (b) reads the payload bytes of every row out of the values buffer to
+        // build each view, which is far more expensive per row, and only pays off when the
+        // dictionary is substantially larger than the array is long: there (a) spends most of
+        // its time building views that no row ever references.
         //
         // So take (b) only when it actually wins. Everything else falls through to (a) below.
         (Utf8, Utf8View) if prefer_direct_views(array) => {
