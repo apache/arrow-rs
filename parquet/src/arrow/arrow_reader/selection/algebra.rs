@@ -23,7 +23,7 @@
 //! [`BooleanBuffer`] masks.
 
 use super::{MaskRunIter, RowSelection, RowSelectionInner, RowSelector};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util};
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
@@ -271,18 +271,7 @@ pub(super) fn intersect_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBu
     if l.len() == r.len() {
         return l & r;
     }
-    let common = l.len().min(r.len());
-    let head = &l.slice(0, common) & &r.slice(0, common);
-    let (longer, longer_len) = if l.len() > r.len() {
-        (l, l.len())
-    } else {
-        (r, r.len())
-    };
-    let tail = longer.slice(common, longer_len - common);
-    let mut builder = BooleanBufferBuilder::new(longer_len);
-    builder.append_buffer(&head);
-    builder.append_buffer(&tail);
-    builder.finish()
+    combine_uneven_masks(l, r, |a, b| a & b)
 }
 
 /// Bitwise OR of two mask-backed selections. Longer side's tail passes through.
@@ -290,18 +279,47 @@ pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer
     if l.len() == r.len() {
         return l | r;
     }
-    let common = l.len().min(r.len());
-    let head = &l.slice(0, common) | &r.slice(0, common);
-    let (longer, longer_len) = if l.len() > r.len() {
-        (l, l.len())
-    } else {
-        (r, r.len())
-    };
-    let tail = longer.slice(common, longer_len - common);
-    let mut builder = BooleanBufferBuilder::new(longer_len);
-    builder.append_buffer(&head);
-    builder.append_buffer(&tail);
-    builder.finish()
+    combine_uneven_masks(l, r, |a, b| a | b)
+}
+
+/// Combines two masks of differing lengths with the bitwise operation `op`,
+/// passing the longer side's tail through unchanged.
+///
+/// The longer mask is copied once into a [`MutableBuffer`] and `op` is then
+/// applied in place over the common prefix. This avoids materialising the
+/// prefix into its own buffer and copying both prefix and tail again through a
+/// [`BooleanBufferBuilder`].
+///
+/// Neither the mask offsets nor the prefix length are assumed to be byte
+/// aligned: the copy keeps the longer mask's sub-byte offset so it stays a
+/// plain byte copy, and the offset is carried over to the returned buffer.
+fn combine_uneven_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+where
+    F: FnMut(u64, u64) -> u64,
+{
+    let (longer, shorter) = if l.len() > r.len() { (l, r) } else { (r, l) };
+    let common = shorter.len();
+    if common == 0 {
+        return longer.clone();
+    }
+
+    let bit_offset = longer.offset() % 8;
+    let start = longer.offset() / 8;
+    let end = bit_util::ceil(longer.offset() + longer.len(), 8);
+    let bytes = &longer.values()[start..end];
+    let mut buffer = MutableBuffer::new(bytes.len());
+    buffer.extend_from_slice(bytes);
+
+    bit_util::apply_bitwise_binary_op(
+        buffer.as_slice_mut(),
+        bit_offset,
+        shorter.values(),
+        shorter.offset(),
+        common,
+        op,
+    );
+
+    BooleanBuffer::new(buffer.into(), bit_offset, longer.len())
 }
 
 /// Applies `other` to the selected rows of `mask`, preserving the original row domain.
@@ -824,5 +842,90 @@ mod tests {
         let r_mask = r.as_mask().unwrap();
         let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
         assert_eq!(bits, vec![true, true, false, false, true]);
+    }
+
+    /// Expected result of combining two masks of possibly differing lengths:
+    /// `op` over the common prefix, then the longer side's tail unchanged.
+    fn expected_uneven(l: &[bool], r: &[bool], op: fn(bool, bool) -> bool) -> Vec<bool> {
+        let common = l.len().min(r.len());
+        let longer = if l.len() > r.len() { l } else { r };
+        (0..common)
+            .map(|i| op(l[i], r[i]))
+            .chain(longer[common..].iter().copied())
+            .collect()
+    }
+
+    fn assert_mask_eq(actual: &BooleanBuffer, expected: &[bool], context: &str) {
+        assert_eq!(actual.len(), expected.len(), "{context}: length");
+        let actual: Vec<bool> = actual.iter().collect();
+        assert_eq!(actual, expected, "{context}");
+    }
+
+    #[test]
+    fn test_uneven_masks_with_offsets() {
+        // Cover offsets and prefix lengths that are not byte (or word) aligned
+        // on either side, including the case where the longer mask starts mid
+        // byte and the common prefix ends mid byte.
+        let base: Vec<bool> = (0..600).map(|i| i % 7 == 0 || i % 3 == 1).collect();
+        let other: Vec<bool> = (0..600).map(|i| i % 5 == 2 || i % 11 == 4).collect();
+        let base = BooleanBuffer::from(base);
+        let other = BooleanBuffer::from(other);
+
+        for l_offset in [0, 1, 5, 8, 13, 64, 67] {
+            for r_offset in [0, 1, 3, 8, 60, 64, 70] {
+                for (l_len, r_len) in [(0, 9), (9, 0), (1, 200), (200, 1), (63, 130), (321, 65)] {
+                    let l = base.slice(l_offset, l_len);
+                    let r = other.slice(r_offset, r_len);
+                    let l_bits: Vec<bool> = l.iter().collect();
+                    let r_bits: Vec<bool> = r.iter().collect();
+                    let context =
+                        format!("l_offset={l_offset} r_offset={r_offset} lens=({l_len},{r_len})");
+
+                    assert_mask_eq(
+                        &intersect_masks(&l, &r),
+                        &expected_uneven(&l_bits, &r_bits, |a, b| a && b),
+                        &format!("intersect {context}"),
+                    );
+                    assert_mask_eq(
+                        &union_masks(&l, &r),
+                        &expected_uneven(&l_bits, &r_bits, |a, b| a || b),
+                        &format!("union {context}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_uneven_masks_fuzz() {
+        let mut rng = rng();
+        for _ in 0..200 {
+            let l_offset = rng.random_range(0..70);
+            let r_offset = rng.random_range(0..70);
+            let l_len = rng.random_range(0..300);
+            let r_len = rng.random_range(0..300);
+
+            let l_bits: Vec<bool> = (0..l_offset + l_len)
+                .map(|_| rng.random_bool(0.5))
+                .collect();
+            let r_bits: Vec<bool> = (0..r_offset + r_len)
+                .map(|_| rng.random_bool(0.5))
+                .collect();
+            let l = BooleanBuffer::from(l_bits).slice(l_offset, l_len);
+            let r = BooleanBuffer::from(r_bits).slice(r_offset, r_len);
+            let l_bits: Vec<bool> = l.iter().collect();
+            let r_bits: Vec<bool> = r.iter().collect();
+
+            assert_mask_eq(
+                &intersect_masks(&l, &r),
+                &expected_uneven(&l_bits, &r_bits, |a, b| a && b),
+                "intersect",
+            );
+            assert_mask_eq(
+                &union_masks(&l, &r),
+                &expected_uneven(&l_bits, &r_bits, |a, b| a || b),
+                "union",
+            );
+        }
     }
 }
