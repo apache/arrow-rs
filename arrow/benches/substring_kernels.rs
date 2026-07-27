@@ -38,11 +38,31 @@ fn bench_substring_by_char<O: OffsetSizeTrait>(
     substring_by_char(hint::black_box(arr), start, length).unwrap();
 }
 
+/// A non-ASCII variant of [`create_string_array_with_len`]: every fourth char is a
+/// multi-byte codepoint, so `substring_by_char` has to decode UTF-8 to find a char index.
+fn create_utf8_array_with_len<O: OffsetSizeTrait>(
+    size: usize,
+    str_len: usize,
+) -> GenericStringArray<O> {
+    create_string_array_with_len::<O>(size, 0.0, str_len)
+        .iter()
+        .map(|val| {
+            val.map(|val| {
+                val.chars()
+                    .enumerate()
+                    .map(|(i, c)| if i % 4 == 0 { 'é' } else { c })
+                    .collect::<String>()
+            })
+        })
+        .collect()
+}
+
 fn add_benchmark(c: &mut Criterion) {
     let size = 65536;
     let val_len = 1000;
 
     let arr_string = create_string_array_with_len::<i32>(size, 0.0, val_len);
+    let arr_utf8 = create_utf8_array_with_len::<i32>(size, val_len);
     let arr_fsb = create_fsb_array(size, 0.0, val_len);
 
     c.bench_function("substring utf8 (start = 0, length = None)", |b| {
@@ -55,6 +75,22 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("substring utf8 by char", |b| {
         b.iter(|| bench_substring_by_char(&arr_string, 1, Some((val_len - 1) as u64)))
+    });
+
+    c.bench_function("substring by char (ascii, prefix)", |b| {
+        b.iter(|| bench_substring_by_char(&arr_string, 0, Some(10)))
+    });
+
+    c.bench_function("substring by char (ascii, tail)", |b| {
+        b.iter(|| bench_substring_by_char(&arr_string, -10, None))
+    });
+
+    c.bench_function("substring by char (non-ascii, prefix)", |b| {
+        b.iter(|| bench_substring_by_char(&arr_utf8, 0, Some(10)))
+    });
+
+    c.bench_function("substring by char (non-ascii, tail)", |b| {
+        b.iter(|| bench_substring_by_char(&arr_utf8, -10, None))
     });
 
     c.bench_function("substring fixed size binary array", |b| {

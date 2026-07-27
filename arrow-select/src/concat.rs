@@ -645,6 +645,56 @@ mod tests {
     use std::fmt::Debug;
 
     #[test]
+    fn test_dict_overflow_9366() {
+        use arrow_schema::DataType;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::UInt8),
+                Box::new(DataType::FixedSizeBinary(8)),
+            ),
+            false,
+        )]));
+        let make = |vals: std::ops::Range<u64>| {
+            let dict = FixedSizeBinaryArray::try_from_iter(vals.map(|i| i.to_le_bytes())).unwrap();
+            let keys = UInt8Array::from_iter_values(0..128);
+            let arr = DictionaryArray::try_new(keys, Arc::new(dict)).unwrap();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)]).unwrap()
+        };
+        // 256 distinct values fit in u8 keys (0..=255): concat must succeed.
+        let out = concat_batches(&schema, &[make(0..128), make(128..256)]).unwrap();
+        assert_eq!(out.num_rows(), 256);
+        let dict = out.column(0).as_dictionary::<UInt8Type>();
+        assert_eq!(dict.values().len(), 256);
+    }
+
+    #[test]
+    fn test_dict_overflow_i8_9366() {
+        use arrow_schema::DataType;
+
+        // Same boundary for a signed key type: i8 holds 128 keys (0..=127).
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::FixedSizeBinary(8)),
+            ),
+            false,
+        )]));
+        let make = |vals: std::ops::Range<u64>| {
+            let dict = FixedSizeBinaryArray::try_from_iter(vals.map(|i| i.to_le_bytes())).unwrap();
+            let keys = Int8Array::from_iter_values(0..64);
+            let arr = DictionaryArray::try_new(keys, Arc::new(dict)).unwrap();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)]).unwrap()
+        };
+        let out = concat_batches(&schema, &[make(0..64), make(64..128)]).unwrap();
+        assert_eq!(out.num_rows(), 128);
+        let dict = out.column(0).as_dictionary::<Int8Type>();
+        assert_eq!(dict.values().len(), 128);
+    }
+
+    #[test]
     fn test_concat_empty_vec() {
         let re = concat(&[]);
         assert!(re.is_err());

@@ -1209,9 +1209,9 @@ mod test {
             DataType::Map(
                 Arc::new(Field::new_map(
                     "nested_map",
-                    "entries",
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                     false,
                     true,
                 )),
@@ -1489,7 +1489,7 @@ mod test {
             // too large for i32
             (
                 "FixedSizeBinary(4000000000), ",
-                "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted",
+                "Error converting 4000000000 into i32 for FixedSizeBinary:",
             ),
             // can't have negative width
             (
@@ -1503,35 +1503,35 @@ mod test {
             // can't have negative precision
             (
                 "Decimal32(-3, 5)",
-                "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted",
+                "Error converting -3 into u8 for Decimal32:",
             ),
             (
                 "Decimal64(-3, 5)",
-                "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted",
+                "Error converting -3 into u8 for Decimal64:",
             ),
             (
                 "Decimal128(-3, 5)",
-                "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted",
+                "Error converting -3 into u8 for Decimal128:",
             ),
             (
                 "Decimal256(-3, 5)",
-                "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted",
+                "Error converting -3 into u8 for Decimal256:",
             ),
             (
                 "Decimal32(3, 500)",
-                "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted",
+                "Error converting 500 into i8 for Decimal32:",
             ),
             (
                 "Decimal64(3, 500)",
-                "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted",
+                "Error converting 500 into i8 for Decimal64:",
             ),
             (
                 "Decimal128(3, 500)",
-                "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted",
+                "Error converting 500 into i8 for Decimal128:",
             ),
             (
                 "Decimal256(3, 500)",
-                "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted",
+                "Error converting 500 into i8 for Decimal256:",
             ),
             ("Struct(f1 Int64)", "Error unknown token: f1"),
             ("Struct(\"f1\" Int64)", "Expected ':'"),

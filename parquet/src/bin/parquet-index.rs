@@ -25,14 +25,16 @@
 //! ```
 //! After this `parquet-index` should be available:
 //! ```
-//! parquet-index XYZ.parquet COLUMN_NAME
+//! parquet-index XYZ.parquet COLUMN_PATH
 //! ```
 //!
 //! The binary can also be built from the source code and run as follows:
 //! ```
-//! cargo run --features=cli --bin parquet-index XYZ.parquet COLUMN_NAME
+//! cargo run --features=cli --bin parquet-index XYZ.parquet COLUMN_PATH
 //!
 //! [page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+
+mod cli;
 
 use clap::Parser;
 use parquet::data_type::ByteArray;
@@ -51,7 +53,9 @@ struct Args {
     #[clap(help("Path to a parquet file"))]
     file: String,
 
-    #[clap(help("Column name to print"))]
+    #[clap(help(
+        "Dot-separated column path to get index for. Literal dots can be escaped as `\\.`"
+    ))]
     column: String,
 }
 
@@ -62,10 +66,11 @@ impl Args {
         let reader = SerializedFileReader::new_with_options(file, options)?;
 
         let schema = reader.metadata().file_metadata().schema_descr();
+        let column_path = cli::parse_column_path(&self.column).map_err(ParquetError::General)?;
         let column_idx = schema
             .columns()
             .iter()
-            .position(|x| x.name() == self.column.as_str())
+            .position(|x| x.path().parts() == column_path.as_slice())
             .ok_or_else(|| {
                 ParquetError::General(format!("Failed to find column {}", self.column))
             })?;
@@ -158,7 +163,7 @@ fn print_index<T: std::fmt::Display>(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {
@@ -197,7 +202,7 @@ fn print_bytes_index(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {

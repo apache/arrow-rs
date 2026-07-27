@@ -45,6 +45,11 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
+# Used by the ffi feature for platform-correct errno values. Excluded on
+# wasm32-unknown-unknown, which has no libc.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+libc = { version = "0.2", default-features = false, optional = true }
+
 [dependencies]
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
@@ -63,7 +68,7 @@ all-features = true
 
 [features]
 async = ["dep:futures"]
-ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
+ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
 force_validate = []
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
