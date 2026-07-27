@@ -471,7 +471,8 @@ fn take_bits<I: ArrowPrimitiveType>(
             let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
                 // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
-                if values.value(unsafe { indices.value_unchecked(idx).as_usize() }) {
+                // SAFETY: caller guarantees all valid indices are in-bounds
+                if unsafe { values.value_unchecked(indices.value_unchecked(idx).as_usize()) } {
                     // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
                     unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
@@ -480,8 +481,8 @@ fn take_bits<I: ArrowPrimitiveType>(
         }
         None => {
             BooleanBuffer::collect_bool(len, |idx: usize| {
-                // SAFETY: idx<indices.len()
-                values.value(unsafe { indices.value_unchecked(idx).as_usize() })
+                // SAFETY: idx<indices.len(), caller guarantees all indices are in-bounds
+                unsafe { values.value_unchecked(indices.value_unchecked(idx).as_usize()) }
             })
         }
     }
@@ -516,8 +517,13 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         None => {
             for index in indices.values() {
                 let index = index.as_usize();
-                let start = input_offsets[index].as_usize();
-                let end = input_offsets[index + 1].as_usize();
+                // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
+                let (start, end) = unsafe {
+                    (
+                        input_offsets.get_unchecked(index).as_usize(),
+                        input_offsets.get_unchecked(index + 1).as_usize(),
+                    )
+                };
                 capacity += end - start;
                 offsets.push(
                     T::Offset::from_usize(capacity)
@@ -568,9 +574,14 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 }
 
                 // SAFETY: `i` comes from a validity bitmap over `indices`, so it is in-bounds.
+                // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
                 let index = unsafe { indices.value_unchecked(i) }.as_usize();
-                let start = input_offsets[index].as_usize();
-                let end = input_offsets[index + 1].as_usize();
+                let (start, end) = unsafe {
+                    (
+                        input_offsets.get_unchecked(index).as_usize(),
+                        input_offsets.get_unchecked(index + 1).as_usize(),
+                    )
+                };
                 capacity += end - start;
                 offsets[i + 1] = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
@@ -911,7 +922,8 @@ fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize>(
         None => indices
             .values()
             .iter()
-            .map(|index| buffer[index.as_usize()])
+            // SAFETY: caller guarantees all indices are in-bounds (check_bounds or trusted source)
+            .map(|index| unsafe { *buffer.get_unchecked(index.as_usize()) })
             .collect::<Vec<_>>(),
     };
 
@@ -1122,25 +1134,12 @@ pub fn take_record_batch(
     record_batch: &RecordBatch,
     indices: &dyn Array,
 ) -> Result<RecordBatch, ArrowError> {
-    let mut columns = record_batch.columns().iter();
-
-    let mut taken = Vec::with_capacity(record_batch.num_columns());
-    if let Some(first) = columns.next() {
-        // the only call that actually validates. a bad index surfaces
-        // as an ArrowError here instead of panicking later
-        taken.push(take(first, indices, None)?);
-    }
-
-    // every column in a RecordBatch has the same length, so if the first
-    // column's indices were in bounds, so are everyone else's
-    let unchecked = Some(TakeOptions {
-        check_bounds: false,
-    });
-    for column in columns {
-        taken.push(take(column, indices, unchecked.clone())?);
-    }
-
-    RecordBatch::try_new(record_batch.schema(), taken)
+    let columns = record_batch
+        .columns()
+        .iter()
+        .map(|c| take(c, indices, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    RecordBatch::try_new(record_batch.schema(), columns)
 }
 
 #[cfg(test)]
