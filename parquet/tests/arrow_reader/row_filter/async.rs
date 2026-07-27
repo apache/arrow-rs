@@ -889,3 +889,70 @@ async fn test_multi_predicate_auto_mask_with_sparse_pages() {
     // Plus even-indexed rows in [200,250) with value<250 → rows 200,202,...,248 (25 rows)
     assert_eq!(batch.num_rows(), 75);
 }
+
+/// Regression test: a Mask cursor built directly from a `BooleanBuffer`
+/// (rather than from `Vec<RowSelector>`) must also stay within loaded row
+/// ranges when page pruning leaves sparse column data.
+///
+/// The buffer is a non-byte-aligned `BooleanBuffer::slice(...)` so the direct
+/// `BooleanBuffer -> MaskCursor` path is exercised with a bit offset. The
+/// selection keeps only the first and last of 12 rows (2 rows per page), so
+/// the four middle pages are never fetched. Without loaded-range propagation
+/// in `new_mask_from_buffer`, decoding would cross the unloaded pages and fail
+/// with an invalid sparse-page offset.
+#[tokio::test]
+async fn test_mask_from_boolean_buffer_slice_with_sparse_pages() {
+    use arrow_buffer::BooleanBuffer;
+
+    let num_rows = 12;
+    let values = (0..num_rows).collect::<Vec<i64>>();
+    let data = make_two_column_i64_file(&values, 2);
+
+    // 5 padding bits force the sliced mask to start mid-byte.
+    let mut bits = vec![true; 5];
+    bits.push(true); // row 0 selected
+    bits.extend(std::iter::repeat_n(false, 10)); // rows 1..=10 skipped
+    bits.push(true); // row 11 selected
+    bits.extend([false, true, false]); // trailing padding outside the slice
+    let mask = BooleanBuffer::from(bits).slice(5, num_rows as usize);
+
+    for policy in [
+        RowSelectionPolicy::Mask,
+        RowSelectionPolicy::Auto { threshold: 32 },
+    ] {
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .await
+        .unwrap()
+        .with_row_selection(RowSelection::from_boolean_buffer(mask.clone()))
+        .with_batch_size(num_rows as usize)
+        .with_row_selection_policy(policy)
+        .build()
+        .unwrap();
+
+        let schema = stream.schema().clone();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2],
+            "policy={policy:?}"
+        );
+
+        let batch = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[0, 11],
+            "policy={policy:?}"
+        );
+    }
+}

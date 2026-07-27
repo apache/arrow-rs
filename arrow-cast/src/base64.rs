@@ -154,6 +154,10 @@ mod tests {
             }
             Ok(len)
         }
+
+        fn padding(&self) -> base64::alphabet::Symbol {
+            base64::alphabet::Symbol::new(b'=').unwrap()
+        }
     }
 
     #[test]

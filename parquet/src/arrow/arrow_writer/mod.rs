@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_array::{PrimitiveArray, types::*};
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
 };
@@ -1751,19 +1751,19 @@ fn write_leaf(
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column.as_primitive::<Decimal32Type>();
-                    get_decimal_32_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column.as_primitive::<Decimal64Type>();
-                    get_decimal_64_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_128_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal256(_, _) => {
                     let array = column.as_primitive::<Decimal256Type>();
-                    get_decimal_256_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Float16 => {
                     let array = column.as_primitive::<Float16Type>();
@@ -1821,14 +1821,10 @@ fn get_interval_ym_array_slice(
     array: &arrow_array::IntervalYearMonthArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut value = array.value(i).to_le_bytes().to_vec();
-        let mut suffix = vec![0; 8];
-        value.append(&mut suffix);
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
-    }
-    values
+    chunk_array_slice(12, indices, move |i, chunk| {
+        let value = array.value(i);
+        chunk[0..4].copy_from_slice(&value.to_le_bytes());
+    })
 }
 
 /// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
@@ -1837,93 +1833,111 @@ fn get_interval_dt_array_slice(
     array: &arrow_array::IntervalDayTimeArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut out = [0; 12];
+    chunk_array_slice(12, indices, move |i, chunk| {
         let value = array.value(i);
-        out[4..8].copy_from_slice(&value.days.to_le_bytes());
-        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
-        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
-    }
-    values
+        chunk[4..8].copy_from_slice(&value.days.to_le_bytes());
+        chunk[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+    })
 }
 
-fn get_decimal_32_array_slice(
-    array: &arrow_array::Decimal32Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(4 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+trait NativeDecimalType: DecimalType {
+    type NativeBytes: AsRef<[u8]>;
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes;
+}
+impl NativeDecimalType for Decimal32Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
     }
-    values
+}
+impl NativeDecimalType for Decimal64Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
+}
+impl NativeDecimalType for Decimal128Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
+}
+impl NativeDecimalType for Decimal256Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
 }
 
-fn get_decimal_64_array_slice(
-    array: &arrow_array::Decimal64Array,
+fn get_decimal_array_slice<T: NativeDecimalType>(
+    array: &PrimitiveArray<T>,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(8 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
-}
+    let chunk_size = decimal_length_from_precision(array.precision());
+    assert!(chunk_size <= T::BYTE_LENGTH);
 
-fn get_decimal_128_array_slice(
-    array: &arrow_array::Decimal128Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(16 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    if chunk_size == T::BYTE_LENGTH {
+        // Special-case that allows inlining memcpy.
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
+            let as_be_bytes = T::to_be_bytes(array.value(i));
+            chunk.copy_from_slice(as_be_bytes.as_ref());
+        })
+    } else {
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
+            let as_be_bytes = T::to_be_bytes(array.value(i));
+            let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - chunk.len())..];
+            chunk.copy_from_slice(resized_value);
+        })
     }
-    values
-}
-
-fn get_decimal_256_array_slice(
-    array: &arrow_array::Decimal256Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(32 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
 }
 
 fn get_float_16_array_slice(
     array: &arrow_array::Float16Array,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(i).to_le_bytes().to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)));
-    }
-    values
+    chunk_array_slice(2, indices, move |i, chunk| {
+        let value = array.value(i).to_le_bytes();
+        chunk.copy_from_slice(&value);
+    })
 }
 
 fn get_fsb_array_slice(
     array: &arrow_array::FixedSizeBinaryArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(i).to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
+    chunk_array_slice(array.value_size(), indices, move |i, chunk| {
+        let value = array.value(i);
+        chunk.copy_from_slice(value);
+    })
+}
+
+#[inline]
+fn chunk_array_slice(
+    chunk_size: usize,
+    indices: impl ExactSizeIterator<Item = usize>,
+    writer: impl Fn(usize, &mut [u8]),
+) -> Vec<FixedLenByteArray> {
+    let capacity = indices.len() * chunk_size;
+    // TODO: This could be done with Vec::spare_capacity_mut,
+    //       but [MaybeUninit]::write_copy_of_slice is gated behind MSRV 1.93
+    let mut arena = vec![0; capacity];
+    for (i, chunk) in indices.zip(arena.chunks_exact_mut(chunk_size)) {
+        writer(i, chunk);
+    }
+    chunk_contiguous_vec(arena, chunk_size)
+}
+
+fn chunk_contiguous_vec(arena: Vec<u8>, chunk_size: usize) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(arena.len() / chunk_size);
+    let mut arena = Bytes::from(arena);
+    while arena.len() >= chunk_size {
+        let slice = arena.split_to(chunk_size);
+        values.push(FixedLenByteArray::from(ByteArray::from(slice)));
     }
     values
 }
