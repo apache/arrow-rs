@@ -218,9 +218,13 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
             RleEncoder::new_from_buf(1, buffer)
         });
 
-        for value in values {
-            let value = value.as_u64()?;
-            rle_encoder.put(value)
+        let mut buf = [0_u64; 64];
+        for chunk in values.chunks(buf.len()) {
+            let buf = &mut buf[..chunk.len()];
+            for (b, value) in buf.iter_mut().zip(chunk) {
+                *b = value.as_u64()?;
+            }
+            rle_encoder.put_batch(buf);
         }
         Ok(())
     }
