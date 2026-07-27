@@ -258,9 +258,7 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Decimal128(_, _), Decimal128(_, _)) => decimal_op::<Decimal128Type>(op, l, l_scalar, r, r_scalar),
         (Decimal256(_, _), Decimal256(_, _)) => decimal_op::<Decimal256Type>(op, l, l_scalar, r, r_scalar),
         (l_t, r_t) => match (l_t, r_t) {
-            (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _))
-                if matches!(op, Op::Add | Op::AddWrapping) =>
-            {
+            (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _)) if op.commutative() => {
                 arithmetic_op(op, rhs, lhs)
             }
             (Int64 | Float64, Interval(_)) if op.commutative() => {
