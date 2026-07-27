@@ -295,8 +295,8 @@ impl RleEncoder {
     pub fn flush(&mut self) {
         if !self.pending_values.is_empty() || self.repeat_count > 0 {
             let tail = self.pending_values.len() % BIT_PACK_GROUP_SIZE;
-            let all_repeat = self.pending_values.len() == tail
-                && (self.repeat_count == tail || tail == 0);
+            let all_repeat =
+                self.pending_values.len() == tail && (self.repeat_count == tail || tail == 0);
             if self.repeat_count > 0 && all_repeat {
                 self.flush_rle_run();
             } else {
