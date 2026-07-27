@@ -221,6 +221,7 @@ pub fn encode<T: FixedLengthEncoding>(
     nulls: &NullBuffer,
     opts: SortOptions,
 ) {
+    let null_sentinel = null_sentinel(opts);
     for (value_idx, is_valid) in nulls.iter().enumerate() {
         let offset = &mut offsets[value_idx + 1];
         let end_offset = *offset + T::ENCODED_LEN;
@@ -234,7 +235,7 @@ pub fn encode<T: FixedLengthEncoding>(
             }
             to_write[1..].copy_from_slice(encoded.as_ref())
         } else {
-            data[*offset] = null_sentinel(opts);
+            data[*offset] = null_sentinel;
         }
         *offset = end_offset;
     }
@@ -276,6 +277,7 @@ pub fn encode_boolean(
     nulls: &NullBuffer,
     opts: SortOptions,
 ) {
+    let null_sentinel = null_sentinel(opts);
     for (idx, is_valid) in nulls.iter().enumerate() {
         let offset = &mut offsets[idx + 1];
         let end_offset = *offset + bool::ENCODED_LEN;
@@ -289,7 +291,7 @@ pub fn encode_boolean(
             }
             to_write[1..].copy_from_slice(encoded.as_ref())
         } else {
-            data[*offset] = null_sentinel(opts);
+            data[*offset] = null_sentinel;
         }
         *offset = end_offset;
     }
@@ -327,6 +329,7 @@ pub fn encode_fixed_size_binary(
     opts: SortOptions,
 ) {
     let len = array.value_length() as usize;
+    let null_sentinel = null_sentinel(opts);
     for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(array.iter()) {
         let end_offset = *offset + len + 1;
         if let Some(val) = maybe_val {
@@ -338,7 +341,7 @@ pub fn encode_fixed_size_binary(
                 to_write[1..1 + len].iter_mut().for_each(|v| *v = !*v)
             }
         } else {
-            data[*offset] = null_sentinel(opts);
+            data[*offset] = null_sentinel;
         }
         *offset = end_offset;
     }

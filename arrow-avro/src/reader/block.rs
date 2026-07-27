@@ -80,7 +80,7 @@ impl BlockDecoder {
         while !buf.is_empty() {
             match self.state {
                 BlockDecoderState::Count => {
-                    if let Some(c) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(c) = self.vlq_decoder.long(&mut buf)? {
                         self.in_progress.count = c.try_into().map_err(|_| {
                             AvroError::ParseError(format!(
                                 "Block count cannot be negative, got {c}"
@@ -91,7 +91,7 @@ impl BlockDecoder {
                     }
                 }
                 BlockDecoderState::Size => {
-                    if let Some(c) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(c) = self.vlq_decoder.long(&mut buf)? {
                         self.bytes_remaining = c.try_into().map_err(|_| {
                             AvroError::ParseError(format!("Block size cannot be negative, got {c}"))
                         })?;

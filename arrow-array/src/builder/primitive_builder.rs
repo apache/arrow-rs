@@ -361,6 +361,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.null_buffer_builder.as_slice()
     }
 
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
+    }
+
     /// Returns the current null buffer as a mutable slice
     pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.null_buffer_builder.as_slice_mut()

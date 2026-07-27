@@ -1256,6 +1256,14 @@ impl RowConverter {
         RowParser::new(Arc::clone(&self.fields))
     }
 
+    /// Like [`Self::parser`] but skips UTF-8 validation on decode.
+    ///
+    /// # Safety
+    /// The caller must ensure all row bytes contain valid UTF-8 for string columns.
+    pub unsafe fn parser_skip_utf8_validation(&self) -> RowParser {
+        unsafe { RowParser::with_skip_utf8_validate(Arc::clone(&self.fields)) }
+    }
+
     /// Returns the size of this instance in bytes
     ///
     /// Includes the size of `Self`.
@@ -1279,6 +1287,18 @@ impl RowParser {
             config: RowConfig {
                 fields,
                 validate_utf8: true,
+            },
+        }
+    }
+    /// Like [`RowConverter::parser`] but skips UTF-8 validation on decode.
+    ///
+    /// # Safety
+    /// The caller must ensure all row bytes contain valid UTF-8 for string columns.
+    unsafe fn with_skip_utf8_validate(fields: Arc<[SortField]>) -> Self {
+        Self {
+            config: RowConfig {
+                fields,
+                validate_utf8: false,
             },
         }
     }
@@ -6149,6 +6169,61 @@ mod tests {
         assert_eq!(&list, &back[0]);
     }
 
+    /// Ensure dictionaries nested within FixedSizeLists are not flattened
+    #[test]
+    fn test_fixed_size_list_of_dictionaries_round_trips() {
+        // Build one row = ["a", "b"] as
+        // `FixedSizeList<Dictionary<Int32, Utf8>, 2>`.
+        let dict_dt = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let element_field = Arc::new(Field::new("item", dict_dt.clone(), true));
+        let fsl_dt = DataType::FixedSizeList(Arc::clone(&element_field), 2);
+
+        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let keys = Int32Array::from(vec![0, 1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let fsl: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&element_field),
+            2,
+            Arc::new(dict),
+            None,
+        ));
+
+        assert!(RowConverter::supports_fields(&[SortField::new(
+            fsl_dt.clone()
+        )]));
+
+        let converter = RowConverter::new(vec![SortField::new(fsl_dt.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&fsl)]).unwrap();
+
+        // Before the fix this panicked at the `.unwrap()` because
+        // `convert_rows` returned `Err(InvalidArgumentError(...))`.
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+
+        // The returned array is a `FixedSizeList` with a decoded
+        // (flattened) child — same self-consistent shape the other
+        // list-like decoders produce for dictionary children.
+        let out = back[0]
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("decoded array must be a FixedSizeListArray");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.value_length(), 2);
+        // Child data type is the flattened `Utf8`, not the declared
+        // `Dictionary`. Callers that want the dictionary back need to
+        // re-encode (see the module docs).
+        assert_eq!(out.values().data_type(), &DataType::Utf8);
+
+        // Sanity: values survived the round trip.
+        let values = out
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("child must be a StringArray after flattening");
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
+    }
+
     // Test List<Null> with various combinations of nulls and empty lists
     #[test]
     fn test_list_null_variations() {
@@ -6674,6 +6749,24 @@ mod tests {
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next_back(), None);
+    }
+
+    /// Round-trip through `with_skip_utf8_validate` confirms skipping validation preserves values.
+    #[test]
+    fn test_row_parser_skip_utf8_validation_roundtrip() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
+        let array = StringArray::from(vec!["arrow", "rust"]);
+        let rows = converter.convert_columns(&[Arc::new(array) as _]).unwrap();
+        let binary = rows.try_into_binary().expect("fits in i32 offsets");
+
+        // SAFETY: bytes come from this RowConverter and are known-valid UTF-8.
+        let parser = unsafe { RowParser::with_skip_utf8_validate(Arc::clone(&converter.fields)) };
+
+        let decoded = converter
+            .convert_rows(binary.iter().map(|b| parser.parse(b.unwrap())))
+            .unwrap();
+        let got: Vec<_> = decoded[0].as_string::<i32>().iter().flatten().collect();
+        assert_eq!(got, vec!["arrow", "rust"]);
     }
 
     #[test]

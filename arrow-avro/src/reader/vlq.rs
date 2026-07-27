@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::AvroError;
+
 /// Decoder for zig-zag encoded variable length (VLW) integers
 ///
 /// See also:
@@ -29,8 +31,18 @@ pub struct VLQDecoder {
 
 impl VLQDecoder {
     /// Decode a signed long from `buf`
-    pub fn long(&mut self, buf: &mut &[u8]) -> Option<i64> {
+    ///
+    /// Returns `Err` if more than 10 continuation bytes accumulate across calls without a
+    /// terminator, which would otherwise overflow the accumulated `i64`.
+    pub fn long(&mut self, buf: &mut &[u8]) -> Result<Option<i64>, AvroError> {
         while let Some(byte) = buf.first().copied() {
+            if self.shift == 63 && byte >= 0x02 {
+                self.in_progress = 0;
+                self.shift = 0;
+                return Err(AvroError::ParseError(
+                    "Malformed Avro varint: too many continuation bytes".to_string(),
+                ));
+            }
             *buf = &buf[1..];
             self.in_progress |= ((byte & 0x7F) as u64) << self.shift;
             self.shift += 7;
@@ -38,10 +50,10 @@ impl VLQDecoder {
                 let val = self.in_progress;
                 self.in_progress = 0;
                 self.shift = 0;
-                return Some((val >> 1) as i64 ^ -((val & 1) as i64));
+                return Ok(Some((val >> 1) as i64 ^ -((val & 1) as i64)));
             }
         }
-        None
+        Ok(None)
     }
 }
 
@@ -162,5 +174,49 @@ mod tests {
         for _ in 0..1000 {
             varint_test(rand::random());
         }
+    }
+
+    fn zigzag_encode(n: i64) -> u64 {
+        ((n << 1) ^ (n >> 63)) as u64
+    }
+
+    fn long_test(n: i64) {
+        let mut buf = [0_u8; 10];
+        let len = encode_var(zigzag_encode(n), &mut buf);
+        let mut decoder = VLQDecoder::default();
+        let mut slice = &buf[..len];
+        assert_eq!(decoder.long(&mut slice).unwrap(), Some(n));
+        assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn test_long_roundtrip() {
+        long_test(0);
+        long_test(1);
+        long_test(-1);
+        long_test(4395932);
+        long_test(-4395932);
+        long_test(i64::MAX);
+        long_test(i64::MIN);
+
+        for _ in 0..1000 {
+            long_test(rand::random());
+        }
+    }
+
+    #[test]
+    fn test_long_overlong_varint_returns_error() {
+        // The Avro file magic followed by 13 continuation bytes and a terminator, as
+        // reported against #10290: previously drove `self.shift` past 63 and panicked
+        // with "attempt to shift left with overflow" inside `<< self.shift`.
+        let overlong = [0xFFu8; 13];
+        let mut decoder = VLQDecoder::default();
+        let mut buf = &overlong[..];
+        assert!(decoder.long(&mut buf).is_err());
+
+        // The decoder's state must be reset after a malformed varint, so a subsequent
+        // call decodes a fresh varint cleanly rather than staying stuck mid-decode.
+        let mut fresh = &[0x02u8][..]; // zigzag-encoded 1
+        assert_eq!(decoder.long(&mut fresh).unwrap(), Some(1));
     }
 }

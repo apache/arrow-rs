@@ -801,6 +801,9 @@ fn parse(
                 DataType::UInt64 => {
                     build_primitive_array::<UInt64Type>(line_number, rows, i, null_regex)
                 }
+                DataType::Float16 => {
+                    build_primitive_array::<Float16Type>(line_number, rows, i, null_regex)
+                }
                 DataType::Float32 => {
                     build_primitive_array::<Float32Type>(line_number, rows, i, null_regex)
                 }
@@ -2987,5 +2990,66 @@ mod tests {
         assert!(!c2.is_null(2));
         assert_eq!(c2.value(1), "something_cannot_be_inlined");
         assert_eq!(c2.value(2), "bar");
+    }
+
+    #[test]
+    fn test_float_precision() {
+        let data = [
+            "f16,f32,f64",
+            "1.5,1.5,1.5",
+            "0.25,0.25,0.25",
+            "1.23456789,1.23456789,1.23456789",
+            "1.234567890123456,1.234567890123456,1.234567890123456",
+            "-2.5,-2.5,-2.5",
+            "0,0,0",
+            ",,",
+        ]
+        .join("\n");
+
+        let schema = Schema::new(vec![
+            Field::new("f16", DataType::Float16, true),
+            Field::new("f32", DataType::Float32, true),
+            Field::new("f64", DataType::Float64, true),
+        ]);
+
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .with_header(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 7);
+
+        let f16_col = batch.column(0).as_primitive::<Float16Type>();
+        let f32_col = batch.column(1).as_primitive::<Float32Type>();
+        let f64_col = batch.column(2).as_primitive::<Float64Type>();
+
+        assert_eq!(f16_col.value(0), half::f16::from_f32(1.5));
+        assert_eq!(f32_col.value(0), 1.5f32);
+        assert_eq!(f64_col.value(0), 1.5f64);
+
+        assert_eq!(f16_col.value(1), half::f16::from_f32(0.25));
+        assert_eq!(f32_col.value(1), 0.25f32);
+        assert_eq!(f64_col.value(1), 0.25f64);
+
+        assert_eq!(f16_col.value(2), half::f16::from_f32(1.234_567_9));
+        assert_eq!(f32_col.value(2), 1.234_567_9_f32);
+        assert_eq!(f64_col.value(2), 1.23456789f64);
+
+        assert_eq!(f16_col.value(3), half::f16::from_f64(1.234567890123456f64));
+        assert_eq!(f32_col.value(3), 1.234_567_9_f32);
+        assert_eq!(f64_col.value(3), 1.234567890123456f64);
+
+        assert_eq!(f16_col.value(4), half::f16::from_f32(-2.5));
+        assert_eq!(f32_col.value(4), -2.5f32);
+        assert_eq!(f64_col.value(4), -2.5f64);
+
+        assert_eq!(f16_col.value(5), half::f16::from_f32(0.0));
+        assert_eq!(f32_col.value(5), 0.0f32);
+        assert_eq!(f64_col.value(5), 0.0f64);
+
+        assert!(f16_col.is_null(6));
+        assert!(f32_col.is_null(6));
+        assert!(f64_col.is_null(6));
     }
 }
