@@ -214,7 +214,10 @@ impl std::fmt::Display for Op {
 
 impl Op {
     fn commutative(&self) -> bool {
-        matches!(self, Self::Add | Self::AddWrapping)
+        matches!(
+            self,
+            Self::Add | Self::AddWrapping | Self::Mul | Self::MulWrapping
+        )
     }
 }
 
@@ -245,21 +248,9 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Duration(Millisecond), Duration(Millisecond)) => duration_op::<DurationMillisecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Microsecond), Duration(Microsecond)) => duration_op::<DurationMicrosecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Nanosecond), Duration(Nanosecond)) => duration_op::<DurationNanosecondType>(op, l, l_scalar, r, r_scalar),
-        (Interval(YearMonth), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(l, l_scalar, r, r_scalar),
-        (Int64, Interval(YearMonth)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(r, r_scalar, l, l_scalar),
-        (Int64, Interval(DayTime)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(r, r_scalar, l, l_scalar),
-        (Int64, Interval(MonthDayNano)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(r, r_scalar, l, l_scalar),
-        (Interval(YearMonth), Float64) if matches!(op, Op::Mul | Op::Div) => interval_f64_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Float64) if matches!(op, Op::Mul | Op::Div) => interval_f64_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Float64) if matches!(op, Op::Mul | Op::Div) => interval_f64_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
-        (Float64, Interval(YearMonth)) if matches!(op, Op::Mul) => interval_f64_op::<IntervalYearMonthType>(op, r, r_scalar, l, l_scalar),
-        (Float64, Interval(DayTime)) if matches!(op, Op::Mul) => interval_f64_op::<IntervalDayTimeType>(op, r, r_scalar, l, l_scalar),
-        (Float64, Interval(MonthDayNano)) if matches!(op, Op::Mul) => interval_f64_op::<IntervalMonthDayNanoType>(op, r, r_scalar, l, l_scalar),
-        (Interval(YearMonth), Interval(YearMonth)) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Interval(DayTime)) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Interval(MonthDayNano)) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+        (Interval(YearMonth), Interval(YearMonth) | Int64 | Float64) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
+        (Interval(DayTime), Interval(DayTime) | Int64 | Float64) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Interval(MonthDayNano) | Int64 | Float64) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
         (Date32, _) => date_op::<Date32Type>(op, l, l_scalar, r, r_scalar),
         (Date64, _) => date_op::<Date64Type>(op, l, l_scalar, r, r_scalar),
         (Decimal32(_, _), Decimal32(_, _)) => decimal_op::<Decimal32Type>(op, l, l_scalar, r, r_scalar),
@@ -267,7 +258,12 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Decimal128(_, _), Decimal128(_, _)) => decimal_op::<Decimal128Type>(op, l, l_scalar, r, r_scalar),
         (Decimal256(_, _), Decimal256(_, _)) => decimal_op::<Decimal256Type>(op, l, l_scalar, r, r_scalar),
         (l_t, r_t) => match (l_t, r_t) {
-            (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _)) if op.commutative() => {
+            (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _))
+                if matches!(op, Op::Add | Op::AddWrapping) =>
+            {
+                arithmetic_op(op, rhs, lhs)
+            }
+            (Int64 | Float64, Interval(_)) if op.commutative() => {
                 arithmetic_op(op, rhs, lhs)
             }
             _ => Err(ArrowError::InvalidArgumentError(
@@ -748,8 +744,18 @@ fn interval_mul_op<T: IntervalOp>(
 /// Multiplies using `IntervalMonthDayNano` as the common interval representation,
 /// mirroring DuckDB's `interval_t` layout of months, days, and a sub-day component
 /// (nanoseconds in Arrow, microseconds in DuckDB).
-///
 /// <https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/include/duckdb/common/types/interval.hpp#L24-L27>
+///
+/// Algorithm:
+///
+/// 1. use checked integer multiplication when `factor` fits in `i64` (early return).
+/// 2. multiply months and days separately and truncate floating point.
+/// 3. cascade remainders: convert fractional months to days using 30
+///    days per month, then fractional days to a sub-day value using 24 hours
+///    per day.
+/// 4. combine the cascaded remainder with the scaled input nanoseconds and round ties-to-even at nanosecond precision.
+/// 5. return an overflow error if any output component is out of
+///    range.
 fn interval_mul_f64(
     interval: IntervalMonthDayNano,
     factor: f64,
@@ -765,8 +771,7 @@ fn interval_mul_f64(
         }
     }
 
-    // Based on DuckDB's INTERVAL * DOUBLE implementation, which it says was
-    // "Taken from Postgres src.backend/utils/adt/timestamp.c:interval_mul":
+    // Based on DuckDB's INTERVAL * DOUBLE implementation, which is referenced from PostgreSQL's interval_mul:
     // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/function/scalar/operator/multiply.cpp#L48-L123
     // PostgreSQL's interval_mul:
     // https://github.com/postgres/postgres/blob/78758d37306cd89ab060f00cb06f249018d5b8da/src/backend/utils/adt/timestamp.c#L3627-L3744
@@ -863,11 +868,19 @@ fn interval_op<T: IntervalOp>(
     r: &dyn Array,
     r_s: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    let l = l.as_primitive::<T>();
-    let r = r.as_primitive::<T>();
-    match op {
-        Op::Add | Op::AddWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::add(l, r))),
-        Op::Sub | Op::SubWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r))),
+    match (op, r.data_type()) {
+        (Op::Add | Op::AddWrapping, data_type) if data_type == l.data_type() => {
+            let l = l.as_primitive::<T>();
+            let r = r.as_primitive::<T>();
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::add(l, r)))
+        }
+        (Op::Sub | Op::SubWrapping, data_type) if data_type == l.data_type() => {
+            let l = l.as_primitive::<T>();
+            let r = r.as_primitive::<T>();
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r)))
+        }
+        (Op::Mul, DataType::Int64) => interval_mul_op::<T>(l, l_s, r, r_s),
+        (Op::Mul | Op::Div, DataType::Float64) => interval_f64_op::<T>(op, l, l_s, r, r_s),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid interval arithmetic operation: {} {op} {}",
             l.data_type(),
