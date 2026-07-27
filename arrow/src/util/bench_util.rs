@@ -947,3 +947,32 @@ where
     }
     builder.finish()
 }
+
+/// Creates a random array for the given [`DataType`], `size`, and `null_density`.
+///
+/// Useful for building arrays and record batches in benchmarks without
+/// repeating per-type construction logic. Panics on unsupported types.
+pub fn create_array_for_type(data_type: &DataType, size: usize, null_density: f32) -> ArrayRef {
+    match data_type {
+        DataType::Boolean => Arc::new(create_boolean_array(size, null_density, 0.5)),
+        DataType::Int8 => Arc::new(create_primitive_array::<Int8Type>(size, null_density)),
+        DataType::Int16 => Arc::new(create_primitive_array::<Int16Type>(size, null_density)),
+        DataType::Int32 => Arc::new(create_primitive_array::<Int32Type>(size, null_density)),
+        DataType::Int64 => Arc::new(create_primitive_array::<Int64Type>(size, null_density)),
+        DataType::UInt8 => Arc::new(create_primitive_array::<UInt8Type>(size, null_density)),
+        DataType::UInt16 => Arc::new(create_primitive_array::<UInt16Type>(size, null_density)),
+        DataType::UInt32 => Arc::new(create_primitive_array::<UInt32Type>(size, null_density)),
+        DataType::UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
+        DataType::Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),
+        DataType::Float64 => Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
+        DataType::Utf8 => Arc::new(create_string_array::<i32>(size, null_density)),
+        DataType::LargeUtf8 => Arc::new(create_string_array::<i64>(size, null_density)),
+        DataType::Utf8View => Arc::new(create_string_view_array(size, null_density)),
+        DataType::Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
+        DataType::LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
+        DataType::FixedSizeBinary(n) => {
+            Arc::new(create_fsb_array(size, null_density, *n as usize))
+        }
+        other => panic!("unsupported data type for create_array_for_type: {other}"),
+    }
+}
