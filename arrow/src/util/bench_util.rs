@@ -970,9 +970,7 @@ pub fn create_array_for_type(data_type: &DataType, size: usize, null_density: f3
         DataType::Utf8View => Arc::new(create_string_view_array(size, null_density)),
         DataType::Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         DataType::LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
-        DataType::FixedSizeBinary(n) => {
-            Arc::new(create_fsb_array(size, null_density, *n as usize))
-        }
+        DataType::FixedSizeBinary(n) => Arc::new(create_fsb_array(size, null_density, *n as usize)),
         other => panic!("unsupported data type for create_array_for_type: {other}"),
     }
 }
