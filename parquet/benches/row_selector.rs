@@ -24,7 +24,7 @@ use std::hint;
 
 /// Run lengths for the mask conversion benchmarks. Shorter runs mean more
 /// [`RowSelector`]s per row, so the RLE encoding dominates.
-const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 64];
+const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
 
 /// Generates a random RowSelection with a specified selection ratio.
 ///
