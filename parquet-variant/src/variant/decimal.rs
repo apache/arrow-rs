@@ -106,7 +106,8 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
     fn scale(&self) -> u8;
 
     /// Converts the decimal as an integer if possible,
-    /// Return Some(integer value) if scale is 0 or the unscaled integer is divisible by 10^scale.
+    ///
+    /// Return `Some(integer value)` if scale is 0 or the unscaled integer is divisible by 10^scale.
     /// None for other values.
     fn as_integer(&self) -> Option<Self::Native>;
 }
@@ -162,12 +163,18 @@ macro_rules! impl_variant_decimal {
                         "// or if the integer is divisible by 10^scale\n",
                         "let d2 = ", stringify!($struct_name), "::try_new(100, 2).unwrap();\n",
                         "assert_eq!(d2.as_integer(), Some(1));\n",
+                        "// or the integer is negative and divisible by 10^scale\n",
+                        "let d3 = ", stringify!($struct_name), "::try_new(-100, 2).unwrap();\n",
+                        "assert_eq!(d3.as_integer(), Some(-1));\n",
                         "// or if the integer is 0\n",
-                        "let d3 = ", stringify!($struct_name), "::try_new(0, 4).unwrap();\n",
-                        "assert_eq!(d3.as_integer(), Some(0));\n",
+                        "let d4 = ", stringify!($struct_name), "::try_new(0, 4).unwrap();\n",
+                        "assert_eq!(d4.as_integer(), Some(0));\n",
                         "// but not if the integer is not divisible by 10^scale\n",
-                        "let d4 = ", stringify!($struct_name), "::try_new(123, 2).unwrap();\n",
-                        "assert_eq!(d4.as_integer(), None);\n",
+                        "let d5 = ", stringify!($struct_name), "::try_new(123, 2).unwrap();\n",
+                        "assert_eq!(d5.as_integer(), None);\n",
+                        "// or the integer is negative and not divisible by 10^scale\n",
+                        "let d6 = ", stringify!($struct_name), "::try_new(-123, 2).unwrap();\n",
+                        "assert_eq!(d6.as_integer(), None);\n",
                         "```\n",
                     )]
             pub fn as_integer(&self) -> Option<$native> {

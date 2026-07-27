@@ -796,8 +796,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i8` if possible.
     ///
-    /// Returns `Some(i8)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    ///  that fits in `i8` range, `None` for other variants or values that would overflow.
+    /// Returns `Some(i8)` for int variants, decimal variants has no fractional part
+    /// (scale = 0, or unscaled integer is divisible by 10^scale) that fits in `i8` range.
+    /// `None` for other variants or values that would overflow.
     /// # Examples
     ///
     /// ```
@@ -841,8 +842,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i16` if possible.
     ///
-    /// Returns `Some(i16)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `i16` range, `None` for other variants or values that would overflow.
+    /// Returns `Some(i16)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `i16` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -887,9 +889,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i32` if possible.
     ///
-    /// Returns `Some(i32)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `i32` range, `None` for other variants or values that would overflow.
-    ///
+    /// Returns `Some(i32)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `i32` range.
+    /// `None` for other variants or values that would overflow.
     /// # Examples
     ///
     /// ```
@@ -937,8 +939,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i64` if possible.
     ///
-    /// Returns `Some(i64)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `i64` range, `None` for other variants or values that would overflow.
+    /// Returns `Some(i64)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `i64` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -965,8 +968,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v4.as_int64(), None);
     ///
     /// // or if the variant cannot be cast into an integer
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_int64(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_int64(), None);
     /// ```
     pub fn as_int64(&self) -> Option<i64> {
         match *self {
@@ -999,8 +1002,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `u8` if possible.
     ///
-    /// Returns `Some(u8)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `u8`, `None` for other variants or values that would overflow.
+    /// Returns `Some(u8)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `u8` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1036,8 +1040,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u16` if possible.
     ///
-    /// Returns `Some(u16)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `u16`, `None` for other variants or values that would overflow.
+    /// Returns `Some(u16)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `u16` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1073,8 +1078,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u32` if possible.
     ///
-    /// Returns `Some(u32)` for int variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `u32`, `None` for other variants or values that would overflow.
+    /// Returns `Some(u32)` for int variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `u32` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///
@@ -1110,8 +1116,9 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u64` if possible.
     ///
-    /// Returns `Some(u64)` for integer variant, decimal variant has no fractional part(scale=0 or unscaled integer is divisible by 10^scale)
-    /// that fits in `u64`, `None` for other variants or values that would overflow.
+    /// Returns `Some(u64)` for integer variant, decimal variant has no fractional part
+    /// (scale=0 or unscaled integer is divisible by 10^scale) that fits in `u64` range.
+    /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
     ///

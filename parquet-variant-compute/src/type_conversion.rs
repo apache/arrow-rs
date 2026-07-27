@@ -446,8 +446,8 @@ where
 
 /// Return the unscaled integer representation for Arrow decimal type `O` from a `Variant`.
 ///
-/// This function is unlike `variant_to_unscaled_decim`, it would never rescale the decimal value,
-/// and only return the unscaled integer representation for the specific decimal variants.
+/// Unlike `variant_to_unscaled_decim`, this function never rescales the decimal value.
+/// It only returns the unscaled integer representation for the specific decimal variants.
 pub(crate) fn shred_variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
     precision: u8,
