@@ -458,15 +458,22 @@ fn byte_aligned_bitwise_unary_op_helper<F>(
 /// * `op` - Unary operation to apply
 /// * `buffer` - The mutable buffer to modify
 /// * `offset_in_bits` - Starting bit offset (not byte-aligned)
-/// * `len_in_bits` - Total number of bits the caller wants to process. When this is
-///   smaller than the number of bits left in the byte, the trailing bits of the byte
-///   are left untouched.
-fn align_to_byte<F>(buffer: &mut [u8], op: &mut F, offset_in_bits: usize, len_in_bits: usize)
-where
+/// * `remaining_len_in_bits` - Number of bits still to process starting at `offset_in_bits`.
+///   When this is smaller than the number of bits left in the byte, the trailing bits of
+///   the byte are left untouched.
+fn align_to_byte<F>(
+    buffer: &mut [u8],
+    op: &mut F,
+    offset_in_bits: usize,
+    remaining_len_in_bits: usize,
+) where
     F: FnMut(u64) -> u64,
 {
     let byte_offset = offset_in_bits / 8;
     let bit_offset = offset_in_bits % 8;
+
+    // Byte aligned offsets must take the byte aligned path instead
+    debug_assert_ne!(bit_offset, 0, "offset_in_bits must not be byte aligned");
 
     // 1. read the first byte from the buffer
     let first_byte: u8 = buffer[byte_offset];
@@ -483,8 +490,11 @@ where
     // 5. Mask in only the bits the caller asked to process, i.e. the bits in
     //    `bit_offset..bit_offset + bits_in_this_byte`. The request may end before the
     //    byte boundary, in which case the trailing bits must be preserved as well.
-    let bits_in_this_byte = (8 - bit_offset).min(len_in_bits);
-    let write_mask = ((((1u16 << bits_in_this_byte) - 1) << bit_offset) & 0xFF) as u8;
+    //
+    //    `bits_in_this_byte + bit_offset <= 8`, so the mask always fits in a `u8`. The
+    //    shift is done in `u16` only so the expression stays correct for a full byte.
+    let bits_in_this_byte = (8 - bit_offset).min(remaining_len_in_bits);
+    let write_mask = (((1u16 << bits_in_this_byte) - 1) << bit_offset) as u8;
 
     let result_first_byte = (first_byte & !write_mask) | (result_first_byte & write_mask);
 
@@ -717,8 +727,6 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
         "start_remainder_mut_slice length must be equal to ceil(remainder_len, 8)"
     );
 
-    let remainder_bytes = self::ceil(remainder_len, 8);
-
     // Need to update the remainder bytes in the mutable buffer
     // but not override the bits outside the remainder
 
@@ -736,7 +744,7 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
 
         // Shift the boundary byte to the position it occupies within `rem`, otherwise
         // its bits would be compared against the wrong end of the mask below
-        let current = (*current as u64) << ((remainder_bytes - 1) * 8);
+        let current = (*current as u64) << ((start_remainder_mut_slice.len() - 1) * 8);
 
         // Mask where the bits that are inside the remainder are 1
         // and the bits outside the remainder are 0
@@ -757,6 +765,8 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
 
     // Write back the result to the mutable slice
     {
+        let remainder_bytes = start_remainder_mut_slice.len();
+
         // we are counting starting from the least significant bit, so to_le_bytes should be correct
         let rem = &rem.to_le_bytes()[0..remainder_bytes];
 
@@ -1169,7 +1179,9 @@ mod tests {
             assert_eq!(
                 get_bit(before, i),
                 get_bit(after, i),
-                "bit {i} outside the requested range was modified ({context})"
+                "bit {} outside the requested range was modified ({})",
+                i,
+                context
             );
         }
     }
@@ -1490,7 +1502,8 @@ mod tests {
     fn test_ops_ending_inside_the_first_partial_byte() {
         let (left, right) = create_test_data(32);
         for offset in 1..8 {
-            for len in 1..(8 - offset) {
+            // Inclusive so the range ending exactly on the byte boundary is covered too
+            for len in 1..=(8 - offset) {
                 test_all_binary_ops(&left, &right, offset, offset, len);
                 test_all_binary_ops(&left, &right, offset, (offset + 3) % 8, len);
                 test_mutable_buffer_unary_op_helper(&left, offset, len, |a| !a, |a| !a);
@@ -1513,6 +1526,34 @@ mod tests {
         // NOT two bits at bit offset 3: only bits 3 and 4 may be flipped
         apply_bitwise_unary_op(&mut buffer, 3, 2, |a| !a);
         assert_eq!(buffer, vec![0b00011000u8]);
+    }
+
+    /// When the remainder spans more than one byte, the byte holding the end of the
+    /// range is the *last* byte of the remainder, not the first. Its bits above the
+    /// remainder must survive.
+    #[test]
+    fn test_or_with_multi_byte_remainder_preserves_boundary_bits() {
+        let mut left = vec![0b00000000u8, 0b00000000u8, 0b11110000u8];
+        let right = vec![0b11111111u8, 0b11111111u8, 0b11111111u8];
+        // OR over 20 bits: bits 20..24 of `left` are outside the range and must stay set
+        apply_bitwise_binary_op(&mut left, 0, &right, 0, 20, |a, b| a | b);
+        assert_eq!(
+            left,
+            vec![0b11111111u8, 0b11111111u8, 0b11111111u8],
+            "the boundary byte lost its out-of-range bits"
+        );
+    }
+
+    #[test]
+    fn test_not_with_multi_byte_remainder_preserves_boundary_bits() {
+        let mut buffer = vec![0b00000000u8, 0b00000000u8, 0b11111111u8];
+        // NOT over 20 bits: only bits 16..20 of the last byte may be flipped
+        apply_bitwise_unary_op(&mut buffer, 0, 20, |a| !a);
+        assert_eq!(
+            buffer,
+            vec![0b11111111u8, 0b11111111u8, 0b11110000u8],
+            "the boundary byte lost its out-of-range bits"
+        );
     }
 
     #[test]
