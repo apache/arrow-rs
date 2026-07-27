@@ -2565,11 +2565,10 @@ mod tests {
 
             let result = shred_variant(&input, &$shred_type).unwrap();
 
-            assert!(result.value_column().is_some());
             assert!(result.typed_value_column().is_some());
             assert_eq!(result.len(), input.len());
 
-            let value = result.value_column().unwrap();
+            let value = result.value_column();
             let typed_value = result
                 .typed_value_column()
                 .unwrap()
