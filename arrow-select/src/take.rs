@@ -1122,12 +1122,25 @@ pub fn take_record_batch(
     record_batch: &RecordBatch,
     indices: &dyn Array,
 ) -> Result<RecordBatch, ArrowError> {
-    let columns = record_batch
-        .columns()
-        .iter()
-        .map(|c| take(c, indices, None))
-        .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(record_batch.schema(), columns)
+    let mut columns = record_batch.columns().iter();
+
+    let mut taken = Vec::with_capacity(record_batch.num_columns());
+    if let Some(first) = columns.next() {
+        // the only call that actually validates. a bad index surfaces
+        // as an ArrowError here instead of panicking later
+        taken.push(take(first, indices, None)?);
+    }
+
+    // every column in a RecordBatch has the same length, so if the first
+    // column's indices were in bounds, so are everyone else's
+    let unchecked = Some(TakeOptions {
+        check_bounds: false,
+    });
+    for column in columns {
+        taken.push(take(column, indices, unchecked.clone())?);
+    }
+
+    RecordBatch::try_new(record_batch.schema(), taken)
 }
 
 #[cfg(test)]
