@@ -472,6 +472,7 @@ fn test_misaligned_int32() {
         1,
     )
     .unwrap_err();
+
     assert!(
         err.to_string().contains(
             "Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
