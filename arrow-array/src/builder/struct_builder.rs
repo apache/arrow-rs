@@ -314,6 +314,11 @@ impl StructBuilder {
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
     }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
+    }
 }
 
 #[cfg(test)]

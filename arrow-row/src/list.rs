@@ -421,8 +421,17 @@ pub unsafe fn decode_fixed_size_list(
     let mut children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(children.len(), 1);
 
+    // Since RowConverter flattens certain data types (i.e. Dictionary),
+    // we need to use updated data type instead of original field
+    let corrected_element_field = Arc::new(
+        element_field
+            .as_ref()
+            .clone()
+            .with_data_type(children[0].data_type().clone()),
+    );
+
     FixedSizeListArray::try_new_with_length(
-        Arc::clone(element_field),
+        corrected_element_field,
         *size,
         children.pop().unwrap(),
         nulls,
@@ -547,9 +556,10 @@ pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
     }
     O::from_usize(child_count).expect("overflow");
 
+    let null_sentinel = null_sentinel(opts);
     let mut null_count = 0;
     let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
-        let valid = rows[x][0] != null_sentinel(opts);
+        let valid = rows[x][0] != null_sentinel;
         null_count += !valid as usize;
         valid
     });
