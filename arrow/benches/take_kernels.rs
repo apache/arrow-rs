@@ -23,11 +23,13 @@ use rand::Rng;
 
 extern crate arrow;
 
-use arrow::compute::{TakeOptions, take};
+use arrow::compute::{TakeOptions, take, take_record_batch};
 use arrow::datatypes::*;
+use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use std::hint;
+use std::sync::Arc;
 
 fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
     let mut rng = seedable_rng();
@@ -45,6 +47,26 @@ fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
 
 fn bench_take(values: &dyn Array, indices: &UInt32Array) {
     hint::black_box(take(values, indices, None).unwrap());
+}
+
+fn create_columns(types: &[DataType], size: usize, null_density: f32) -> Vec<ArrayRef> {
+    types
+        .iter()
+        .map(|dt| create_array_for_type(dt, size, null_density))
+        .collect()
+}
+
+fn make_record_batch(columns: Vec<ArrayRef>) -> RecordBatch {
+    let fields: Vec<_> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| Field::new(format!("c{i}"), col.data_type().clone(), true))
+        .collect();
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+}
+
+fn bench_take_record_batch(batch: &RecordBatch, indices: &UInt32Array) {
+    hint::black_box(take_record_batch(batch, indices).unwrap());
 }
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
@@ -276,6 +298,65 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function(
         "take fsb value optimized len: 16, null values, indices: 1024",
         |b| b.iter(|| bench_take(&values, &indices)),
+    );
+
+    let types = [
+        DataType::Int32,
+        DataType::Int64,
+        DataType::Float32,
+        DataType::Float64,
+        DataType::Boolean,
+    ];
+    let batch = make_record_batch(create_columns(&types, 1024, 0.0));
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take_record_batch 5 primitive cols no nulls 1024", |b| {
+        b.iter(|| bench_take_record_batch(&batch, &indices))
+    });
+
+    let types = [
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Binary,
+        DataType::LargeBinary,
+        DataType::FixedSizeBinary(16),
+    ];
+    let batch = make_record_batch(create_columns(&types, 1024, 0.0));
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take_record_batch 6 string/binary cols no nulls 1024",
+        |b| b.iter(|| bench_take_record_batch(&batch, &indices)),
+    );
+
+    let types = [
+        DataType::Int32,
+        DataType::Utf8,
+        DataType::Float64,
+        DataType::Boolean,
+        DataType::Utf8View,
+        DataType::Int64,
+        DataType::Binary,
+    ];
+    let batch = make_record_batch(create_columns(&types, 1024, 0.5));
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take_record_batch 7 mixed cols null values 1024", |b| {
+        b.iter(|| bench_take_record_batch(&batch, &indices))
+    });
+
+    let types = [
+        DataType::Int32,
+        DataType::Utf8,
+        DataType::Float64,
+        DataType::Boolean,
+        DataType::Utf8View,
+        DataType::Int64,
+        DataType::Binary,
+    ];
+    let batch = make_record_batch(create_columns(&types, 1024, 0.5));
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function(
+        "take_record_batch 7 mixed cols null values null indices 1024",
+        |b| b.iter(|| bench_take_record_batch(&batch, &indices)),
     );
 }
 

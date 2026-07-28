@@ -62,7 +62,7 @@ chrono = { workspace = true }
 num-bigint = { version = "0.5", default-features = false }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
-base64 = { version = "0.22", default-features = false, features = ["std", ], optional = true }
+base64 = { version = "0.23", default-features = false, features = ["std", ], optional = true }
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
@@ -77,7 +77,7 @@ simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
@@ -248,6 +248,11 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_row_selection_policy"
+required-features = ["arrow", "async"]
+harness = false
+
+[[bench]]
 name = "arrow_reader_clickbench"
 required-features = ["arrow", "async", "object_store"]
 harness = false
@@ -273,6 +278,11 @@ harness = false
 
 [[bench]]
 name = "row_selector"
+harness = false
+required-features = ["arrow"]
+
+[[bench]]
+name = "row_selector_boolean_buffer"
 harness = false
 required-features = ["arrow"]
 
