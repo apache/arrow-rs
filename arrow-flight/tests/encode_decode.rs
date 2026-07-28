@@ -419,7 +419,10 @@ async fn test_mismatched_schema_message() {
 
 /// Encode `batch` to IPC, shift its body buffer by `alignment_offset` bytes from a
 /// 64-byte-aligned base, then decode with alignment enforcement enabled.
-fn decode_misaligned(batch: RecordBatch, alignment_offset: usize) {
+fn decode_misaligned(
+    batch: RecordBatch,
+    alignment_offset: usize,
+) -> Result<RecordBatch, arrow_schema::ArrowError> {
     use arrow_buffer::{Buffer, MutableBuffer};
     use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator};
 
@@ -456,36 +459,43 @@ fn decode_misaligned(batch: RecordBatch, alignment_offset: usize) {
     .unwrap()
     .with_require_alignment(true)
     .read_record_batch()
-    .unwrap();
 }
 
 #[test]
-#[should_panic(
-    expected = "Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
-)]
 fn test_misaligned_int32() {
-    decode_misaligned(
+    let err = decode_misaligned(
         RecordBatch::try_from_iter(vec![(
             "i32",
             Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
         )])
         .unwrap(),
         1,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
+        ),
+        "unexpected error: {err}"
     );
 }
 
 #[test]
-#[should_panic(
-    expected = "Misaligned buffers[0] in array of type LargeUtf8, offset from expected alignment of 8 by 1"
-)]
 fn test_misaligned_large_string() {
-    decode_misaligned(
+    let err = decode_misaligned(
         RecordBatch::try_from_iter(vec![(
             "str",
             Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])) as ArrayRef,
         )])
         .unwrap(),
         1,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type LargeUtf8, offset from expected alignment of 8 by 1"
+        ),
+        "unexpected error: {err}"
     );
 }
 
@@ -518,7 +528,8 @@ fn test_misaligned_dense_union() {
         )
         .unwrap(),
         1,
-    );
+    )
+    .unwrap();
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
