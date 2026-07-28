@@ -677,7 +677,7 @@ impl<'a> GroupTypeBuilder<'a> {
 ///
 /// | Field          | Physical type | Logical type |
 /// |----------------|---------------|--------------|
-/// | `path`         | `BYTE_ARRAY`  | `STRING`     |
+/// | `uri`          | `BYTE_ARRAY`  | `STRING`     |
 /// | `offset`       | `INT64`       | —            |
 /// | `size`         | `INT64`       | —            |
 /// | `content_type` | `BYTE_ARRAY`  | `STRING`     |
@@ -688,7 +688,7 @@ impl<'a> GroupTypeBuilder<'a> {
 fn validate_file_type_fields(name: &str, fields: &[TypePtr]) -> Result<()> {
     // (name, expected physical type, expected logical type)
     const VALID_FIELDS: &[(&str, PhysicalType, Option<LogicalType>)] = &[
-        ("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+        ("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
         ("offset", PhysicalType::INT64, None),
         ("size", PhysicalType::INT64, None),
         (
@@ -711,7 +711,7 @@ fn validate_file_type_fields(name: &str, fields: &[TypePtr]) -> Result<()> {
         else {
             return Err(general_err!(
                 "FILE type group '{}' contains unrecognized field '{}'. \
-                 Valid fields are: path, offset, size, content_type, checksum, inline",
+                 Valid fields are: uri, offset, size, content_type, checksum, inline",
                 name,
                 field_name
             ));
@@ -2612,7 +2612,7 @@ mod tests {
     /// The full set of recognized `FILE` fields, all `OPTIONAL`, per the spec.
     fn all_file_fields() -> Vec<TypePtr> {
         vec![
-            file_field("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+            file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
             file_field("offset", PhysicalType::INT64, None),
             file_field("size", PhysicalType::INT64, None),
             file_field(
@@ -2665,13 +2665,13 @@ mod tests {
     }
 
     #[test]
-    fn test_file_logical_type_path_only() {
-        // Every field is optional, so a group may define just `path`.
+    fn test_file_logical_type_uri_only() {
+        // Every field is optional, so a group may define just `uri`.
         let result = Type::group_type_builder("file_field")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
             .with_fields(vec![file_field(
-                "path",
+                "uri",
                 PhysicalType::BYTE_ARRAY,
                 Some(LogicalType::String),
             )])
@@ -2712,14 +2712,14 @@ mod tests {
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
             .with_fields(vec![
-                file_field("path", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+                file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
                 unknown_field,
             ])
             .build();
         assert_eq!(
             result.unwrap_err().to_string(),
             "Parquet error: FILE type group 'bad_file' contains unrecognized field \
-             'unknown_field'. Valid fields are: path, offset, size, content_type, \
+             'unknown_field'. Valid fields are: uri, offset, size, content_type, \
              checksum, inline"
         );
     }
@@ -2727,21 +2727,21 @@ mod tests {
     #[test]
     fn test_file_logical_type_requires_optional_fields() {
         // A REQUIRED field is no longer valid: every field must be OPTIONAL.
-        let path_field = Arc::new(
-            Type::primitive_type_builder("path", PhysicalType::BYTE_ARRAY)
+        let uri_field = Arc::new(
+            Type::primitive_type_builder("uri", PhysicalType::BYTE_ARRAY)
                 .with_repetition(Repetition::REQUIRED)
                 .with_logical_type(Some(LogicalType::String))
                 .build()
                 .unwrap(),
         );
-        let result = Type::group_type_builder("required_path")
+        let result = Type::group_type_builder("required_uri")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![path_field])
+            .with_fields(vec![uri_field])
             .build();
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Parquet error: FILE type field 'path' must be OPTIONAL in group 'required_path'"
+            "Parquet error: FILE type field 'uri' must be OPTIONAL in group 'required_uri'"
         );
     }
 
@@ -2762,16 +2762,16 @@ mod tests {
 
     #[test]
     fn test_file_logical_type_rejects_wrong_logical_type() {
-        // `path` must carry the STRING logical type.
-        let bad_path = file_field("path", PhysicalType::BYTE_ARRAY, None);
-        let result = Type::group_type_builder("bad_path")
+        // `uri` must carry the STRING logical type.
+        let bad_uri = file_field("uri", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_uri")
             .with_repetition(Repetition::REQUIRED)
             .with_logical_type(Some(LogicalType::File))
-            .with_fields(vec![bad_path])
+            .with_fields(vec![bad_uri])
             .build();
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Parquet error: FILE type field 'path' in group 'bad_path' must have logical type \
+            "Parquet error: FILE type field 'uri' in group 'bad_uri' must have logical type \
              Some(String)"
         );
     }
