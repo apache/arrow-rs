@@ -101,9 +101,10 @@
 //! read and write [`RecordBatch`]es  asynchronously.
 //!
 //! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
-//! for reading. When the `object_store` feature is enabled, [`ParquetObjectReader`]
-//! provides efficient integration with object storage services such as S3 via the [object_store]
-//! crate, automatically optimizing IO based on any predicates or projections provided.
+//! for reading. When one of the versioned `object_store` features is enabled, e.g.
+//! `object_store_0_14`, [`ParquetObjectReader`] provides efficient integration with object
+//! storage services such as S3 via the [object_store] crate, automatically optimizing IO
+//! based on any predicates or projections provided.
 //!
 //! [`async_reader`]: arrow::async_reader
 //! [`async_writer`]: arrow::async_writer
@@ -189,6 +190,32 @@ pub use self::encodings::{decoding, encoding};
 experimental!(#[macro_use] mod util);
 
 pub use util::utf8;
+
+/// Re-export of the [`object_store`] version this crate is integrated with
+///
+/// New [`object_store`] releases are breaking changes, and are therefore gated behind
+/// versioned feature flags, e.g. `object_store_0_14`. This allows support for new versions
+/// to be added, and old versions removed, without a breaking change to this crate.
+///
+/// The [`object_store`] types appear in this crate's public API, so downstream crates must
+/// use the same version. Using this re-export guarantees they do:
+///
+/// ```
+/// use parquet::object_store::ObjectStore;
+/// ```
+///
+/// If more than one version is enabled the newest is used, as only one version of these
+/// types can be exposed at a time.
+///
+/// [`object_store`]: https://docs.rs/object_store/latest/object_store/
+#[cfg(feature = "object_store_0_14")]
+pub use object_store_0_14 as object_store;
+
+/// Re-export of the [`object_store`] version this crate is integrated with
+///
+/// [`object_store`]: https://docs.rs/object_store/latest/object_store/
+#[cfg(all(feature = "object_store", not(feature = "object_store_0_14")))]
+pub use object_store_0_13 as object_store;
 
 #[cfg(feature = "arrow")]
 pub mod arrow;

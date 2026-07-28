@@ -54,10 +54,12 @@
 //! ```
 //!
 //! [`object_store`] provides it's native implementation of [`AsyncFileWriter`] by [`ParquetObjectWriter`].
+//!
+//! [`object_store`]: crate::object_store
 
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 mod store;
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 pub use store::*;
 
 use crate::{

@@ -47,8 +47,12 @@ avro_custom_types = ["dep:arrow-select"]
 
 # Enable async APIs
 async = ["futures", "tokio"]
-# Enable object_store integration
-object_store = ["dep:object_store", "async"]
+# Enable integration with object_store 0.13
+#
+# Deprecated: prefer `object_store_0_14`, this will be removed in a future major release
+object_store = ["dep:object_store_0_13", "async"]
+# Enable integration with object_store 0.14
+object_store_0_14 = ["dep:object_store_0_14", "async"]
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -56,7 +60,11 @@ arrow-buffer = { workspace = true }
 arrow-array = { workspace = true }
 arrow-select = { workspace = true, optional = true }
 
-object_store = { workspace = true, optional = true }
+# Each supported object_store version is a separately renamed dependency, gated behind a
+# versioned feature flag. This allows adding support for new object_store releases, which
+# are themselves breaking changes, without a breaking change to this crate
+object_store_0_13 = { package = "object_store", version = "0.13.2", default-features = false, optional = true }
+object_store_0_14 = { package = "object_store", version = "0.14.1", default-features = false, optional = true }
 
 bytes = { version = "1.11.0", default-features = false, features = ["std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
@@ -93,7 +101,11 @@ futures = "0.3.31"
 async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.5"
-object_store = { workspace = true, features = ["fs"] }
+# Enable the store implementations used by tests for every supported object_store version.
+# Only the version selected by the enabled feature flag is used, tests access it via the
+# `arrow_avro::object_store` re-export rather than by name
+object_store_0_13 = { package = "object_store", version = "0.13.2", features = ["fs"] }
+object_store_0_14 = { package = "object_store", version = "0.14.1", features = ["fs"] }
 once_cell = "1.21.3"
 half = { version = "2.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }

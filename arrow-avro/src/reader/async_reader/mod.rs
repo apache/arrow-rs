@@ -39,11 +39,11 @@ mod builder;
 pub use async_file_reader::AsyncFileReader;
 pub use builder::{ReaderBuilder, read_header_info};
 
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 mod store;
 
 use crate::errors::AvroError;
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 pub use store::AvroObjectReader;
 
 enum FetchNextBehaviour {
@@ -543,10 +543,13 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
     }
 }
 
-#[cfg(all(test, feature = "object_store"))]
+#[cfg(all(test, any(feature = "object_store", feature = "object_store_0_14")))]
 mod tests {
     use super::*;
     use crate::codec::Tz;
+    use crate::object_store::local::LocalFileSystem;
+    use crate::object_store::path::Path;
+    use crate::object_store::{ObjectStore, ObjectStoreExt};
     use crate::schema::{
         AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
     };
@@ -555,9 +558,6 @@ mod tests {
     use arrow_array::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use futures::{StreamExt, TryStreamExt};
-    use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
-    use object_store::{ObjectStore, ObjectStoreExt};
     use std::collections::HashMap;
     use std::sync::Arc;
 

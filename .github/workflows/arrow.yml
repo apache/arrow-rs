@@ -85,6 +85,10 @@ jobs:
         run: cargo test -p arrow-json --all-features
       - name: Test arrow-avro
         run: cargo test -p arrow-avro --all-features
+        # --all-features selects the newest supported object_store version, so test the
+        # older versions, which are gated behind their own feature flags, explicitly
+      - name: Test arrow-avro --features object_store
+        run: cargo test -p arrow-avro --features object_store
       - name: Test arrow-string
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord
@@ -172,6 +176,10 @@ jobs:
         run: cargo check -p arrow --no-default-features --all-targets --features ffi
       - name: Check compilation --no-default-features --all-targets --features chrono-tz
         run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
+        # --all-features selects the newest supported object_store version, so check the
+        # older versions, which are gated behind their own feature flags, explicitly
+      - name: Check compilation arrow-avro --all-targets --features object_store
+        run: cargo check -p arrow-avro --all-targets --features object_store
 
 
   # test the arrow crate builds against wasm32 in nightly rust

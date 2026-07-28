@@ -30,10 +30,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. [`super::AvroObjectReader`], available when the `object_store` crate feature
-///    is enabled, implements this interface for [`ObjectStore`].
+/// 2. [`super::AvroObjectReader`], available when a versioned `object_store` crate feature
+///    is enabled, e.g. `object_store_0_14`, implements this interface for [`ObjectStore`].
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
+/// [`ObjectStore`]: crate::object_store::ObjectStore
 ///
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {

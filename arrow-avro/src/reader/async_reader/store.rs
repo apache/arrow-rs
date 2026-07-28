@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::errors::AvroError;
+use crate::object_store::ObjectStore;
+use crate::object_store::ObjectStoreExt;
+use crate::object_store::path::Path;
 use crate::reader::async_reader::AsyncFileReader;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
-use object_store::ObjectStore;
-use object_store::ObjectStoreExt;
-use object_store::path::Path;
 use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;

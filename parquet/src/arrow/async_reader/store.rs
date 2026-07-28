@@ -21,20 +21,20 @@ use crate::arrow::arrow_reader::ArrowReaderOptions;
 use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::object_store::ObjectStoreExt;
+use crate::object_store::{GetOptions, GetRange};
+use crate::object_store::{ObjectStore, path::Path};
 use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
-use object_store::ObjectStoreExt;
-use object_store::{GetOptions, GetRange};
-use object_store::{ObjectStore, path::Path};
 use tokio::runtime::Handle;
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
 /// ```no_run
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
-/// # use object_store::azure::MicrosoftAzureBuilder;
-/// # use object_store::{ObjectStore, ObjectStoreExt};
-/// # use object_store::path::Path;
+/// # use parquet::object_store::azure::MicrosoftAzureBuilder;
+/// # use parquet::object_store::{ObjectStore, ObjectStoreExt};
+/// # use parquet::object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
 /// # use parquet::schema::printer::print_parquet_metadata;
@@ -260,11 +260,11 @@ mod tests {
     use crate::arrow::ParquetRecordBatchStreamBuilder;
     use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::errors::ParquetError;
+    use crate::object_store::local::LocalFileSystem;
+    use crate::object_store::path::Path;
+    use crate::object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use arrow::util::test_util::parquet_test_data;
     use futures::FutureExt;
-    use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();

@@ -112,7 +112,8 @@ criterion = { version = "0.8.0", default-features = false }
 
 insta = { version = "1.46.3", default-features = false }
 
-object_store = { version = "0.13.2", default-features = false }
+# object_store is not a workspace dependency, as crates integrating with it depend on
+# multiple versions simultaneously, see e.g. parquet's `object_store_0_14` feature
 
 simdutf8 = { version = "0.1.5", default-features = false }
 

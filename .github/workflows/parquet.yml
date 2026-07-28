@@ -65,6 +65,10 @@ jobs:
         run: cargo test -p parquet
       - name: Test --all-features
         run: cargo test -p parquet --all-features
+        # --all-features selects the newest supported object_store version, so test the
+        # older versions, which are gated behind their own feature flags, explicitly
+      - name: Test --features object_store
+        run: cargo test -p parquet --features object_store
       - name: Run examples
         run: |
           # Test parquet examples
@@ -124,6 +128,12 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
         run: cargo check -p parquet --no-default-features --features variant_experimental
+        # --all-features selects the newest supported object_store version, so check the
+        # older versions, which are gated behind their own feature flags, explicitly
+      - name: Check compilation --no-default-features --features object_store
+        run: cargo check -p parquet --no-default-features --features object_store
+      - name: Check compilation --all-targets --no-default-features --features arrow --features object_store
+        run: cargo check -p parquet --all-targets --no-default-features --features arrow --features object_store
 
 
   # test the parquet crate builds against wasm32 in stable rust

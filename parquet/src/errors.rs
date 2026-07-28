@@ -133,9 +133,9 @@ impl From<ArrowError> for ParquetError {
     }
 }
 
-#[cfg(feature = "object_store")]
-impl From<object_store::Error> for ParquetError {
-    fn from(e: object_store::Error) -> ParquetError {
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
+impl From<crate::object_store::Error> for ParquetError {
+    fn from(e: crate::object_store::Error) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }

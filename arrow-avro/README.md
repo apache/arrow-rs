@@ -105,15 +105,15 @@ fn main() -> anyhow::Result<()> {
 
 See the crate docs for runnable SOE and Confluent round‑trip examples.
 
-### Async reading from object stores (`object_store` feature)
+### Async reading from object stores (`object_store_0_14` feature)
 
 ```rust,ignore
 use std::sync::Arc;
 use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
 use futures::TryStreamExt;
-use object_store::ObjectStore;
-use object_store::local::LocalFileSystem;
-use object_store::path::Path;
+use arrow_avro::object_store::ObjectStore;
+use arrow_avro::object_store::local::LocalFileSystem;
+use arrow_avro::object_store::path::Path;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
 | Feature        | Default | What it enables                                                             | When to use                                                                   |
 |----------------|--------:|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `async`        |       ⬜ | Async APIs for reading Avro via `futures` and `tokio`                       | Enable for non-blocking async Avro reading with `AsyncAvroFileReader`.        |
-| `object_store` |       ⬜ | Integration with `object_store` crate (implies `async`)                     | Enable for reading Avro from cloud storage (S3, GCS, Azure Blob, etc.).       |
+| `object_store_0_14` |       ⬜ | Integration with `object_store` 0.14 (implies `async`)                 | Enable for reading Avro from cloud storage (S3, GCS, Azure Blob, etc.). New `object_store` releases are breaking changes, so each supported version has its own feature. The unversioned `object_store` feature selects 0.13 and is deprecated. |
 
 ### Schema fingerprints & custom logical type helpers
 
@@ -196,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
 * Async reading from object stores (S3, GCS, etc.):
 
   ```toml
-  arrow-avro = { version = "58", features = ["object_store"] }
+  arrow-avro = { version = "58", features = ["object_store_0_14"] }
   ```
 * Fingerprint helpers:
 
