@@ -35,3 +35,9 @@ updates:
       interval: "daily"
     open-pull-requests-limit: 10
     labels: [auto-dependencies]
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+    labels: [auto-dependencies]
