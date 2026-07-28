@@ -40,4 +40,4 @@ updates:
     schedule:
       interval: "weekly"
       day: "friday"
-    labels: [auto-dependencies]
+    labels: [auto-dependencies, development-process]
