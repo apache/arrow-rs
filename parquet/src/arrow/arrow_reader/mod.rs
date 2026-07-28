@@ -5614,6 +5614,85 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    /// A file with *mixed* row-group ordinal metadata (spec-valid — the
+    /// `RowGroup.ordinal` thrift field is optional; Go parquet writers emit
+    /// such files) must read fine without row numbers, and must fail
+    /// deterministically with them — even when every *selected* row group
+    /// carries an ordinal. See #10381.
+    #[test]
+    fn test_mixed_row_group_ordinals() -> Result<()> {
+        use crate::file::metadata::{ParquetMetaDataReader, RowGroupMetaData};
+
+        // 100 rows split across 4 row groups of 25
+        let array = Int64Array::from_iter_values(5000..5100);
+        let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)])?;
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(25))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props))?;
+        for batch_chunk in (0..10).map(|i| batch.slice(i * 10, 10)) {
+            writer.write(&batch_chunk)?;
+        }
+        writer.close()?;
+        let buffer = Bytes::from(buffer);
+
+        // Strip the ordinal from row group 1 to simulate a mixed-ordinal
+        // writer (the builder starts with no ordinal; copy everything else).
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&buffer)?;
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+        let mut row_groups = metadata.row_groups().to_vec();
+        let stripped = row_groups[1].clone();
+        let mut builder = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(stripped.num_rows())
+            .set_total_byte_size(stripped.total_byte_size())
+            .set_sorting_columns(stripped.sorting_columns().cloned())
+            .set_column_metadata(stripped.columns().to_vec());
+        if let Some(offset) = stripped.file_offset() {
+            builder = builder.set_file_offset(offset);
+        }
+        row_groups[1] = builder.build()?;
+        assert_eq!(row_groups[1].ordinal(), None);
+        let metadata = Arc::new(metadata.into_builder().set_row_groups(row_groups).build());
+
+        // Plain read (no row numbers): succeeds and returns all values.
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(&metadata), ArrowReaderOptions::new())?;
+        let reader =
+            ParquetRecordBatchReaderBuilder::new_with_metadata(buffer.clone(), arrow_metadata)
+                .build()?;
+        let values: Vec<i64> = reader
+            .flat_map(|batch| {
+                let batch = batch.expect("could not read batch");
+                batch
+                    .column(0)
+                    .as_primitive::<types::Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, (5000..5100).collect::<Vec<_>>());
+
+        // Row-number read: fails deterministically, even when selecting only
+        // row groups that DO carry ordinals.
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field])?;
+        let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&metadata), options)?;
+        let result = ParquetRecordBatchReaderBuilder::new_with_metadata(buffer, arrow_metadata)
+            .with_row_groups(vec![0]) // row group 0 has an ordinal
+            .build()
+            .and_then(|mut reader| reader.next().transpose().map_err(|e| e.into()));
+        let err = result.expect_err("row numbers over mixed ordinals must fail");
+        assert!(
+            err.to_string().contains("inconsistent row-group ordinals"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
     #[derive(Debug, PartialEq)]
     struct ValuesAndRowNumbers {
         values: Vec<i64>,
