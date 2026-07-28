@@ -19,7 +19,9 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, Float64Array, Int32Array, LargeStringArray, RecordBatch, UnionArray,
+};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::FlightDescriptor;
 use arrow_flight::flight_descriptor::DescriptorType;
@@ -28,7 +30,8 @@ use arrow_flight::{
     encode::FlightDataEncoderBuilder,
     error::FlightError,
 };
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow_ipc::reader;
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, UnionFields};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 
@@ -412,6 +415,122 @@ async fn test_mismatched_schema_message() {
         "Error decoding ipc RecordBatch: Invalid argument error",
     )
     .await;
+}
+
+/// Encode `batch` to IPC, shift its body buffer by `alignment_offset` bytes from a
+/// 64-byte-aligned base, then decode with alignment enforcement enabled.
+fn decode_misaligned(
+    batch: RecordBatch,
+    alignment_offset: usize,
+) -> Result<RecordBatch, arrow_schema::ArrowError> {
+    use arrow_buffer::{Buffer, MutableBuffer};
+    use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator};
+
+    let ipc_gen = IpcDataGenerator {};
+    let mut dict_tracker = DictionaryTracker::new(false);
+    let (_, encoded) = ipc_gen
+        .encode(
+            &batch,
+            &mut dict_tracker,
+            &Default::default(),
+            &mut Default::default(),
+        )
+        .unwrap();
+
+    // MutableBuffer guarantees 64-byte alignment, so slicing at `alignment_offset`
+    // produces a pointer misaligned for types with stricter requirements.
+    let mut mis = MutableBuffer::with_capacity(encoded.arrow_data.len() + alignment_offset);
+    for _ in 0..alignment_offset {
+        mis.push(0_u8);
+    }
+    mis.extend_from_slice(&encoded.arrow_data);
+    let misaligned_buf = Buffer::from(mis).slice(alignment_offset);
+
+    let message = arrow_ipc::root_as_message(&encoded.ipc_message).unwrap();
+    let ipc_batch = message.header_as_record_batch().unwrap();
+
+    reader::RecordBatchDecoder::try_new(
+        &misaligned_buf,
+        ipc_batch,
+        batch.schema(),
+        &Default::default(),
+        &message.version(),
+    )
+    .unwrap()
+    .with_require_alignment(true)
+    .read_record_batch()
+}
+
+#[test]
+fn test_misaligned_int32() {
+    let err = decode_misaligned(
+        RecordBatch::try_from_iter(vec![(
+            "i32",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        )])
+        .unwrap(),
+        1,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_misaligned_large_string() {
+    let err = decode_misaligned(
+        RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])) as ArrayRef,
+        )])
+        .unwrap(),
+        1,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type LargeUtf8, offset from expected alignment of 8 by 1"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+fn test_misaligned_dense_union() {
+    let union_fields = UnionFields::try_new(
+        [0i8, 1],
+        [
+            Arc::new(arrow_schema::Field::new("a", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("b", DataType::Float64, false)),
+        ],
+    )
+    .unwrap();
+    let type_ids = arrow_buffer::ScalarBuffer::<i8>::from(vec![0i8, 1, 0]);
+    let offsets = arrow_buffer::ScalarBuffer::<i32>::from(vec![0i32, 0, 1]);
+    let children: Vec<ArrayRef> = vec![
+        Arc::new(Int32Array::from(vec![1, 2])),
+        Arc::new(Float64Array::from(vec![3.0])),
+    ];
+    let union_array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+    decode_misaligned(
+        RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+                "u",
+                union_array.data_type().clone(),
+                false,
+            )])),
+            vec![Arc::new(union_array)],
+        )
+        .unwrap(),
+        1,
+    )
+    .unwrap();
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using
