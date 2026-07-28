@@ -248,9 +248,10 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Duration(Millisecond), Duration(Millisecond)) => duration_op::<DurationMillisecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Microsecond), Duration(Microsecond)) => duration_op::<DurationMicrosecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Nanosecond), Duration(Nanosecond)) => duration_op::<DurationNanosecondType>(op, l, l_scalar, r, r_scalar),
-        (Interval(YearMonth), Interval(YearMonth) | Int64 | Float64) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Interval(DayTime) | Int64 | Float64) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Interval(MonthDayNano) | Int64 | Float64) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+        (Interval(YearMonth), Interval(YearMonth) | Int64) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
+        (Interval(DayTime), Interval(DayTime) | Int64) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Interval(MonthDayNano) | Int64) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Float64) => interval_f64_op(op, l, l_scalar, r, r_scalar),
         (Date32, _) => date_op::<Date32Type>(op, l, l_scalar, r, r_scalar),
         (Date64, _) => date_op::<Date64Type>(op, l, l_scalar, r, r_scalar),
         (Decimal32(_, _), Decimal32(_, _)) => decimal_op::<Decimal32Type>(op, l, l_scalar, r, r_scalar),
@@ -261,7 +262,9 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
             (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _)) if op.commutative() => {
                 arithmetic_op(op, rhs, lhs)
             }
-            (Int64 | Float64, Interval(_)) if op.commutative() => {
+            (Int64, Interval(_)) | (Float64, Interval(MonthDayNano))
+                if matches!(op, Op::Mul) =>
+            {
                 arithmetic_op(op, rhs, lhs)
             }
             _ => Err(ArrowError::InvalidArgumentError(
@@ -630,7 +633,6 @@ trait IntervalOp: ArrowPrimitiveType {
     fn add(left: Self::Native, right: Self::Native) -> Result<Self::Native, ArrowError>;
     fn sub(left: Self::Native, right: Self::Native) -> Result<Self::Native, ArrowError>;
     fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError>;
-    fn to_month_day_nano(value: Self::Native) -> IntervalMonthDayNano;
 }
 
 fn mul_i32_i64(left: i32, right: i64) -> Result<i32, ArrowError> {
@@ -651,10 +653,6 @@ impl IntervalOp for IntervalYearMonthType {
 
     fn mul_i64(left: Self::Native, right: i64) -> Result<Self::Native, ArrowError> {
         mul_i32_i64(left, right)
-    }
-
-    fn to_month_day_nano(value: Self::Native) -> IntervalMonthDayNano {
-        IntervalMonthDayNano::new(value, 0, 0)
     }
 }
 
@@ -681,10 +679,6 @@ impl IntervalOp for IntervalDayTimeType {
             mul_i32_i64(days, right)?,
             mul_i32_i64(ms, right)?,
         ))
-    }
-
-    fn to_month_day_nano(value: Self::Native) -> IntervalMonthDayNano {
-        IntervalMonthDayNano::new(0, value.days, i64::from(value.milliseconds) * 1_000_000)
     }
 }
 
@@ -714,10 +708,6 @@ impl IntervalOp for IntervalMonthDayNanoType {
             mul_i32_i64(days, right)?,
             nanos.mul_checked(right)?,
         ))
-    }
-
-    fn to_month_day_nano(value: Self::Native) -> IntervalMonthDayNano {
-        value
     }
 }
 
@@ -828,14 +818,14 @@ fn interval_mul_f64(
     Ok(IntervalMonthDayNano::new(months, days, nanoseconds))
 }
 
-fn interval_f64_op<T: IntervalOp>(
+fn interval_f64_op(
     op: Op,
     interval: &dyn Array,
     interval_scalar: bool,
     factor: &dyn Array,
     factor_scalar: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    let interval = interval.as_primitive::<T>();
+    let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
     let factor = factor.as_primitive::<Float64Type>();
     Ok(try_op_ref!(
         IntervalMonthDayNanoType,
@@ -844,8 +834,6 @@ fn interval_f64_op<T: IntervalOp>(
         factor,
         factor_scalar,
         {
-            // Float scaling can create components that narrower interval units cannot store.
-            let interval = T::to_month_day_nano(interval);
             match op {
                 Op::Mul => interval_mul_f64(interval, factor),
                 Op::Div if factor == 0. => Err(ArrowError::DivideByZero),
@@ -878,7 +866,6 @@ fn interval_op<T: IntervalOp>(
             Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r)))
         }
         (Op::Mul, DataType::Int64) => interval_mul_op::<T>(l, l_s, r, r_s),
-        (Op::Mul | Op::Div, DataType::Float64) => interval_f64_op::<T>(op, l, l_s, r, r_s),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid interval arithmetic operation: {} {op} {}",
             l.data_type(),
@@ -1799,43 +1786,6 @@ mod tests {
         const HOUR_NANOS: i64 = 3_600_000_000_000;
         const MINUTE_NANOS: i64 = 60_000_000_000;
 
-        let interval = IntervalYearMonthArray::from(vec![4, 1, -1, 2]);
-        let factor = Float64Array::from(vec![0.3, 0.5, 0.5, 2.]);
-        let expected = IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNano::new(1, 6, 0),
-            IntervalMonthDayNano::new(0, 15, 0),
-            IntervalMonthDayNano::new(0, -15, 0),
-            IntervalMonthDayNano::new(4, 0, 0),
-        ]);
-        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
-        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
-
-        let divisor = Float64Array::new_scalar(2.);
-        let expected = IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNano::new(2, 0, 0),
-            IntervalMonthDayNano::new(0, 15, 0),
-            IntervalMonthDayNano::new(0, -15, 0),
-            IntervalMonthDayNano::new(1, 0, 0),
-        ]);
-        assert_eq!(div(&interval, &divisor).unwrap().as_ref(), &expected);
-
-        let interval = IntervalDayTimeArray::from(vec![
-            IntervalDayTime::new(1, 1),
-            IntervalDayTime::new(0, 1),
-            IntervalDayTime::new(-1, -1),
-        ]);
-        let factor = Float64Array::new_scalar(0.5);
-        let expected = IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNano::new(0, 0, 43_200_000_500_000),
-            IntervalMonthDayNano::new(0, 0, 500_000),
-            IntervalMonthDayNano::new(0, 0, -43_200_000_500_000),
-        ]);
-        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
-        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
-
-        let divisor = Float64Array::new_scalar(2.);
-        assert_eq!(div(&interval, &divisor).unwrap().as_ref(), &expected);
-
         // Adapted from DuckDB's interval multiplication tests:
         // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/test/sql/function/interval/test_interval_muldiv.test#L1-L99
         // DuckDB's cases come from PostgreSQL's interval regression tests:
@@ -1916,6 +1866,15 @@ mod tests {
 
     #[test]
     fn test_interval_mul_div_f64_errors() {
+        let factor = Float64Array::new_scalar(2.);
+        let year_month = IntervalYearMonthArray::new_scalar(1);
+        let day_time = IntervalDayTimeArray::new_scalar(IntervalDayTime::new(1, 1));
+        for interval in [&year_month as &dyn Datum, &day_time] {
+            assert!(mul(interval, &factor).is_err());
+            assert!(mul(&factor, interval).is_err());
+            assert!(div(interval, &factor).is_err());
+        }
+
         let interval =
             IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(1, 1, 1));
 
@@ -1925,7 +1884,6 @@ mod tests {
             Err(ArrowError::DivideByZero)
         ));
 
-        let factor = Float64Array::new_scalar(2.);
         assert!(div(&factor, &interval).is_err());
 
         for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
