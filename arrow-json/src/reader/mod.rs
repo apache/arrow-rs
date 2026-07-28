@@ -2903,6 +2903,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_serialize_f32_into_string() {
+        // Coercing an f32 into a string column must render the value, not its raw bit pattern.
+        let field = Field::new("f", DataType::Utf8, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .with_coerce_primitive(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&[1.5_f32, -2.25_f32]).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        let values = batch.column(0).as_string::<i32>();
+        assert_eq!(values.value(0), "1.5");
+        assert_eq!(values.value(1), "-2.25");
+    }
+
     // Parse the given `row` in `struct_mode` as a type given by fields.
     //
     // If as_struct == true, wrap the fields in a Struct field with name "r".

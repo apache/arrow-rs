@@ -16,12 +16,10 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
-use crate::filter::{
-    FilterIndices, FilterPredicate, FilterSelection, FilterSlices, filter_null_mask,
-};
+use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{BooleanBuffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -140,13 +138,7 @@ fn append_filtered_nulls(
     source_nulls: Option<&NullBuffer>,
     filter: &FilterPredicate,
 ) {
-    if let Some((null_count, filtered_nulls)) = filter_null_mask(source_nulls, filter) {
-        let filtered_nulls = unsafe {
-            NullBuffer::new_unchecked(
-                BooleanBuffer::new(filtered_nulls, 0, filter.count()),
-                null_count,
-            )
-        };
+    if let Some(filtered_nulls) = filter.filter_nulls(source_nulls) {
         nulls.append_buffer(&filtered_nulls);
     } else {
         nulls.append_n_non_nulls(filter.count());
@@ -226,6 +218,14 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(array))
     }
+
+    fn size(&self) -> usize {
+        self.source
+            .as_ref()
+            .map_or(0, |source| source.get_array_memory_size())
+            + self.current.capacity() * std::mem::size_of::<T::Native>()
+            + self.nulls.allocated_size()
+    }
 }
 
 #[cfg(test)]
@@ -304,5 +304,74 @@ mod tests {
             None,
         ]);
         assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_size_empty() {
+        // A fresh in-progress array has allocated nothing yet
+        let in_progress = InProgressPrimitiveArray::<Int32Type>::new(64, DataType::Int32);
+        assert_eq!(in_progress.size(), 0);
+    }
+
+    #[test]
+    fn test_size_counts_source() {
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(64, DataType::Int32);
+        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        in_progress.set_source(Some(Arc::clone(&source)));
+        // Nothing copied yet, so size is exactly the source's memory
+        assert_eq!(in_progress.size(), source.get_array_memory_size());
+    }
+
+    #[test]
+    fn test_size_counts_values_buffer_and_resets_on_finish() {
+        const BATCH_SIZE: usize = 64;
+        let mut in_progress =
+            InProgressPrimitiveArray::<Int32Type>::new(BATCH_SIZE, DataType::Int32);
+        // Non-null source: the nulls builder stays empty (allocated_size == 0),
+        // so the only growth is the values buffer.
+        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        let source_size = source.get_array_memory_size();
+        in_progress.set_source(Some(Arc::clone(&source)));
+
+        in_progress.copy_rows(0, 50).unwrap();
+        assert!(
+            in_progress.size() >= source_size + 50 * size_of::<i32>(),
+            "values buffer under-counted: {} < {} + {} * {}",
+            in_progress.size(),
+            source_size,
+            50,
+            size_of::<i32>(),
+        );
+
+        // finish() takes the buffered values/nulls but keeps the source, so the
+        // reported size drops back to exactly the source.
+        in_progress.finish().unwrap();
+        assert_eq!(in_progress.size(), source_size);
+    }
+
+    #[test]
+    fn test_size_counts_null_buffer() {
+        const BATCH_SIZE: usize = 64;
+
+        let in_progress_bytes = |source: ArrayRef| {
+            let mut in_progress =
+                InProgressPrimitiveArray::<Int32Type>::new(BATCH_SIZE, DataType::Int32);
+            let source_len = source.len();
+            in_progress.set_source(Some(source));
+            in_progress.copy_rows(0, source_len / 2).unwrap();
+            in_progress.size()
+        };
+
+        // All values valid: the nulls builder never allocates.
+        let all_valid = in_progress_bytes(Arc::new(Int32Array::from_iter_values(0..100)));
+        // Some values null: copying materializes a null buffer that must count.
+        let with_nulls = in_progress_bytes(Arc::new(Int32Array::from_iter(
+            (0..100).map(|i| (i % 2 == 0).then_some(i)),
+        )));
+
+        assert!(
+            with_nulls > all_valid,
+            "null buffer must be included in size(): with_nulls={with_nulls} all_valid={all_valid}"
+        );
     }
 }
