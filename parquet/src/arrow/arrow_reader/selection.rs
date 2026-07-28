@@ -200,7 +200,9 @@ impl RowSelection {
     ///
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
-    /// e.g. `ObjectStore::get_ranges` in the `object_store` crate
+    /// e.g. `ObjectStore::get_ranges` in the [`object_store`] crate
+    ///
+    /// [`object_store`]: https://crates.io/crates/object_store
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;

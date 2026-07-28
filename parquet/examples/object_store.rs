@@ -40,15 +40,15 @@ use std::sync::Arc;
 /// 1. Writes a Parquet file to an [`ObjectStore`] by passing an
 ///    [`object_store::buffered::BufWriter`] directly to [`AsyncArrowWriter`],
 ///    via the blanket [`AsyncFileWriter`] implementation for types
-///    implementing [`AsyncWrite`] (replaces `ParquetObjectWriter`).
+///    implementing [`AsyncWrite`] (equivalent of `ParquetObjectWriter`).
 ///
 /// 2. Reads it back with [`ObjectStoreReader`], a minimal [`AsyncFileReader`]
-///    implementation on top of an [`ObjectStore`] (replaces
+///    implementation on top of an [`ObjectStore`] (equivalent of
 ///    `ParquetObjectReader`).
 ///
 /// 3. Reads it again with the reader wrapped in a [`SpawnedReader`], which
 ///    performs all I/O on a separate tokio runtime so that the runtime
-///    decoding Parquet is not also driving the I/O (replaces
+///    decoding Parquet is not also driving the I/O (equivalent of
 ///    `ParquetObjectReader::with_runtime`).
 ///
 /// [`AsyncFileWriter`]: parquet::arrow::async_writer::AsyncFileWriter
