@@ -45,19 +45,19 @@ arrow-avro:
 arrow-flight:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-flight/**/*"
+      - "arrow-flight/**/*"
 
 parquet:
   - changed-files:
     - any-glob-to-any-file:
-        - "parquet/**/*"
+      - "parquet/**/*"
 
 parquet-variant:
   - changed-files:
       - any-glob-to-any-file:
-          - "parquet-variant/**/*"
-          - "parquet-variant-compute/**/*"
-          - "parquet-variant-json/**/*"
+        - "parquet-variant/**/*"
+        - "parquet-variant-compute/**/*"
+        - "parquet-variant-json/**/*"
 
 parquet-derive:
   - changed-files:
@@ -66,87 +66,87 @@ parquet-derive:
 arrow-arith:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-arith/**/*"
+      - "arrow-arith/**/*"
 
 arrow-array:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-array/**/*"
+      - "arrow-array/**/*"
 
 arrow-buffer:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-buffer/**/*"
+      - "arrow-buffer/**/*"
 
 arrow-cast:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-cast/**/*"
+      - "arrow-cast/**/*"
 
 arrow-csv:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-csv/**/*"
+      - "arrow-csv/**/*"
 
 arrow-data:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-data/**/*"
+      - "arrow-data/**/*"
 
 arrow-integration-test:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-integration-test/**/*"
+      - "arrow-integration-test/**/*"
 
 arrow-integration-testing:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-integration-testing/**/*"
+      - "arrow-integration-testing/**/*"
 
 arrow-ipc:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-ipc/**/*"
+      - "arrow-ipc/**/*"
 
 arrow-json:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-json/**/*"
+      - "arrow-json/**/*"
 
 arrow-ord:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-ord/**/*"
+      - "arrow-ord/**/*"
 
 arrow-pyarrow:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-pyarrow/**/*"
+      - "arrow-pyarrow/**/*"
 
 arrow-pyarrow-integration-testing:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-pyarrow-integration-testing/**/*"
+      - "arrow-pyarrow-integration-testing/**/*"
 
 arrow-pyarrow-testing:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-pyarrow-testing/**/*"
+      - "arrow-pyarrow-testing/**/*"
 
 arrow-row:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-row/**/*"
+      - "arrow-row/**/*"
 
 arrow-schema:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-schema/**/*"
+      - "arrow-schema/**/*"
 
 arrow-select:
   - changed-files:
     - any-glob-to-any-file:
-        - "arrow-select/**/*"
+      - "arrow-select/**/*"
 
 arrow-string:
   - changed-files:
@@ -156,9 +156,9 @@ arrow-string:
 parquet-derive-test:
   - changed-files:
     - any-glob-to-any-file:
-        - "parquet_derive_test/**/*"
+      - "parquet_derive_test/**/*"
 
 parquet-geospatial:
   - changed-files:
     - any-glob-to-any-file:
-        - "parquet-geospatial/**/*"
+      - "parquet-geospatial/**/*"
