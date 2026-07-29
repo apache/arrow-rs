@@ -446,8 +446,6 @@ mod lz4_codec {
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
 
-    const LZ4_BUFFER_SIZE: usize = 4096;
-
     /// Codec for LZ4 compression algorithm.
     pub struct LZ4Codec {}
 
@@ -466,30 +464,13 @@ mod lz4_codec {
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
-            let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
-            let mut total_len = 0;
-            loop {
-                let len = decoder.read(&mut buffer)?;
-                if len == 0 {
-                    break;
-                }
-                total_len += len;
-                output_buf.write_all(&buffer[0..len])?;
-            }
+            let total_len = decoder.read_to_end(output_buf)?;
             Ok(total_len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let mut encoder = lz4_flex::frame::FrameEncoder::new(output_buf);
-            let mut from = 0;
-            loop {
-                let to = std::cmp::min(from + LZ4_BUFFER_SIZE, input_buf.len());
-                encoder.write_all(&input_buf[from..to])?;
-                from += LZ4_BUFFER_SIZE;
-                if from >= input_buf.len() {
-                    break;
-                }
-            }
+            encoder.write_all(input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(ParquetError::External(Box::new(e))),
