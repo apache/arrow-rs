@@ -37,22 +37,26 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
+    // Fields are private so safe code can't set them to values that break import
+    // or the release callback (e.g. a bad `buffers` pointer gets dereferenced on
+    // import). Read them with the getters; write the callback fields with the
+    // unsafe setters.
     /// Logical length of the array
-    pub length: i64,
+    length: i64,
     /// Number of null items in the array
-    pub null_count: i64,
+    null_count: i64,
     /// logical offset inside the array
-    pub offset: i64,
+    offset: i64,
     /// Number of physical buffers backing this array
-    pub n_buffers: i64,
+    n_buffers: i64,
     /// Number of children this array has
-    pub n_children: i64,
+    n_children: i64,
     /// C array of pointers to the start of each physical buffer backing this array
-    pub buffers: *mut *const c_void,
+    buffers: *mut *const c_void,
     /// C array of pointers to each child array of this array
-    pub children: *mut *mut FFI_ArrowArray,
+    children: *mut *mut FFI_ArrowArray,
     /// Pointer to the underlying array of dictionary values
-    pub dictionary: *mut FFI_ArrowArray,
+    dictionary: *mut FFI_ArrowArray,
     /// Producer-provided release callback.
     ///
     /// Private so safe code can't install a callback that [`Drop`] would invoke.

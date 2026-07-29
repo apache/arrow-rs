@@ -97,13 +97,14 @@ const ENOSYS: i32 = 38;
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
+    // Fields are private so safe code can't install a bogus callback that import
+    // or [`Drop`] would invoke. Write the release fields with the unsafe setters.
     /// C function to get schema from the stream
-    pub get_schema:
-        Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
+    get_schema: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
     /// C function to get next array from the stream
-    pub get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
+    get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
     /// C function to get the error from last operation on the stream
-    pub get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+    get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
     /// C function to release the stream
     ///
     /// Private so safe code can't install a callback that [`Drop`] would invoke.

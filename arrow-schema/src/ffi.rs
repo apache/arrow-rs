@@ -75,21 +75,25 @@ bitflags! {
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
+    // Fields are private so safe code can't set them to values that break the
+    // release callback (e.g. a `format`/`name` that isn't a `CString`, or a bad
+    // pointer). Read them with the getters; write the callback fields with the
+    // unsafe setters.
     /// Null-terminated, UTF8-encoded string describing the data type
-    pub format: *const c_char,
+    format: *const c_char,
     /// Null-terminated, UTF8-encoded string of the field or array name
-    pub name: *const c_char,
+    name: *const c_char,
     /// Binary string describing the type’s metadata
-    pub metadata: *const c_char,
+    metadata: *const c_char,
     /// A bitfield of flags enriching the type description
     /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
-    pub flags: i64,
+    flags: i64,
     /// The number of children this type has
-    pub n_children: i64,
+    n_children: i64,
     /// C array of pointers to each child type of this type
-    pub children: *mut *mut FFI_ArrowSchema,
+    children: *mut *mut FFI_ArrowSchema,
     /// Pointer to the type of dictionary values
-    pub dictionary: *mut FFI_ArrowSchema,
+    dictionary: *mut FFI_ArrowSchema,
     /// Producer-provided release callback.
     ///
     /// Private so safe code can't install a callback that [`Drop`] would invoke.
