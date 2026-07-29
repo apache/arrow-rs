@@ -1159,7 +1159,7 @@ impl IpcDataGenerator {
     ///
     /// `columns` yields the column data in IPC buffer order and `row_count` is the
     /// logical length recorded in the `RecordBatch` header. The caller is responsible
-    /// for wrapping the returned [`EncodedRecordBatch::record_batch`] in a `Message`
+    /// for wrapping the returned [`EncodedRecordBatchMeta::fb_offset`] in a `Message`
     /// and calling [`FlatBufferBuilder::finish`].
     fn encode_record_batch_data(
         &self,
