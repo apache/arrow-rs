@@ -1058,6 +1058,12 @@ pub struct SchemaDescriptor {
     /// -- -- -- -- d
     /// ```
     leaf_to_base: Vec<usize>,
+
+    /// For each root field index, the index of its first leaf column in
+    /// [`Self::leaves`]. This is the inverse of (the first occurrence in)
+    /// [`Self::leaf_to_base`] and is used to look up a leaf column from a
+    /// root field index in O(1) time.
+    root_to_first_leaf: Vec<usize>,
 }
 
 impl fmt::Debug for SchemaDescriptor {
@@ -1072,7 +1078,10 @@ impl fmt::Debug for SchemaDescriptor {
 // Need to implement HeapSize in this module as the fields are private
 impl HeapSize for SchemaDescriptor {
     fn heap_size(&self) -> usize {
-        self.schema.heap_size() + self.leaves.heap_size() + self.leaf_to_base.heap_size()
+        self.schema.heap_size()
+            + self.leaves.heap_size()
+            + self.leaf_to_base.heap_size()
+            + self.root_to_first_leaf.heap_size()
     }
 }
 
@@ -1100,11 +1109,34 @@ impl SchemaDescriptor {
             );
         }
 
+        // Build root_to_first_leaf inverse map: for each root field index,
+        // record the index of its first leaf column. Leaves are emitted in
+        // root order by build_tree, so the first occurrence of each root_idx
+        // in leaf_to_base is the first leaf for that root.
+        let n_roots = tp.get_fields().len();
+        let mut root_to_first_leaf = vec![usize::MAX; n_roots];
+        for (leaf_idx, &root_idx) in leaf_to_base.iter().enumerate() {
+            if root_to_first_leaf[root_idx] == usize::MAX {
+                root_to_first_leaf[root_idx] = leaf_idx;
+            }
+        }
+
         Self {
             schema: tp,
             leaves,
             leaf_to_base,
+            root_to_first_leaf,
         }
+    }
+
+    /// Returns the leaf column index of the first leaf descended from the
+    /// given root field. Returns `None` if `root_idx` is out of range or the
+    /// root has no leaves.
+    pub fn root_first_leaf_index(&self, root_idx: usize) -> Option<usize> {
+        self.root_to_first_leaf
+            .get(root_idx)
+            .copied()
+            .and_then(|i| if i == usize::MAX { None } else { Some(i) })
     }
 
     /// Returns [`ColumnDescriptor`] for a field position.

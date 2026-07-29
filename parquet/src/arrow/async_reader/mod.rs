@@ -110,6 +110,31 @@ pub trait AsyncFileReader: Send {
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
+
+    /// Return a future resolving to a fully-built [`ArrowReaderMetadata`].
+    ///
+    /// The default implementation calls [`Self::get_metadata`] and then
+    /// constructs the [`ArrowReaderMetadata`] via
+    /// [`ArrowReaderMetadata::try_new`], which walks every leaf in the
+    /// parquet schema to derive the matching arrow [`Schema`] and field
+    /// levels.
+    ///
+    /// Implementations that already cache the per-file metadata (e.g.
+    /// because the same file is opened many times across queries) can
+    /// override this method to also cache the derived arrow schema view.
+    /// For wide schemas this can dominate per-file CPU overhead, since the
+    /// per-leaf walk is `O(N_columns)` and is otherwise repeated on every
+    /// reader build for the same file.
+    fn get_arrow_reader_metadata<'a>(
+        &'a mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<ArrowReaderMetadata>> {
+        async move {
+            let metadata = self.get_metadata(Some(&options)).await?;
+            ArrowReaderMetadata::try_new(metadata, options)
+        }
+        .boxed()
+    }
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -127,6 +152,13 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         self.as_mut().get_metadata(options)
+    }
+
+    fn get_arrow_reader_metadata<'a>(
+        &'a mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<ArrowReaderMetadata>> {
+        self.as_mut().get_arrow_reader_metadata(options)
     }
 }
 
@@ -194,8 +226,11 @@ impl ArrowReaderMetadata {
         input: &mut T,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let metadata = input.get_metadata(Some(&options)).await?;
-        Self::try_new(metadata, options)
+        // Delegate to AsyncFileReader::get_arrow_reader_metadata so
+        // implementations that cache derived state (e.g. an arrow Schema
+        // and field-levels view) can short-circuit the per-leaf walk
+        // performed by Self::try_new.
+        input.get_arrow_reader_metadata(options).await
     }
 }
 

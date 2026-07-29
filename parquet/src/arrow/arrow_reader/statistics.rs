@@ -1566,12 +1566,36 @@ impl<'a> StatisticsConverter<'a> {
             None => None,
         };
 
-        Ok(Self {
-            parquet_column_index: parquet_index,
+        Ok(Self::from_arrow_field(
+            arrow_field,
+            parquet_schema,
+            parquet_index,
+        ))
+    }
+
+    /// Construct a [`StatisticsConverter`] from a precomputed
+    /// `(arrow_field, parquet_leaf_index)` pair.
+    ///
+    /// This is a low-overhead alternative to [`Self::try_new`] for callers
+    /// that need to build many converters against the same schemas — for
+    /// example when extracting per-column statistics for a wide schema.
+    /// [`Self::try_new`] performs O(N) name lookups against both the arrow
+    /// and parquet schemas; this constructor avoids those lookups by taking
+    /// the resolved field and column index directly.
+    ///
+    /// `parquet_leaf_index` should be `None` if the column does not exist in
+    /// the parquet file (schema evolution case).
+    pub fn from_arrow_field(
+        arrow_field: &'a Field,
+        parquet_schema: &'a SchemaDescriptor,
+        parquet_leaf_index: Option<usize>,
+    ) -> Self {
+        Self {
+            parquet_column_index: parquet_leaf_index,
             arrow_field,
             missing_null_counts_as_zero: true,
-            physical_type: parquet_index.map(|idx| parquet_schema.column(idx).physical_type()),
-        })
+            physical_type: parquet_leaf_index.map(|idx| parquet_schema.column(idx).physical_type()),
+        }
     }
 
     /// Create a new `StatisticsConverter` from a Parquet leaf column index directly.
