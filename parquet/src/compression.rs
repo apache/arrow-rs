@@ -525,10 +525,13 @@ mod zstd_codec {
         cctx.set_pledged_src_size(Some(input_buf.len() as u64))?;
 
         let mut input = zstd_safe::InBuffer::around(input_buf);
-        while input.pos < input.src.len() {
+        loop {
             let mut output = zstd_safe::OutBuffer::around_pos(output_buf, output_buf.len());
             let end_op = zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_continue;
             let to_flush = cctx.compress_stream2(&mut output, &mut input, end_op)?;
+            if input.pos == input.src.len() {
+                break; // let the end_stream loop below call reserve_exact with the finalized amount
+            }
             output_buf.reserve(to_flush);
         }
 
@@ -565,7 +568,8 @@ mod zstd_codec {
 
             // The default Read::read_to_end impl is acceptable;
             // it reads directly into the Vec most of the time.
-            // Using raw DCtx here would be more annoying than the compress path.
+            // Using raw DCtx here would be more annoying than the compress path,
+            // but could be done if better Vec reserve control is desired in the future.
             let len = decoder.read_to_end(output_buf)?;
             Ok(len)
         }
