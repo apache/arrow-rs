@@ -24,6 +24,10 @@ use regex::{Regex, RegexBuilder};
 use std::iter::zip;
 
 /// A string based predicate
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "x86_64"),
+    expect(clippy::large_enum_variant)
+)]
 pub(crate) enum Predicate<'a> {
     Eq(&'a str),
     Contains(Finder<'a>),
