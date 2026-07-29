@@ -591,8 +591,7 @@ struct EncodedRecordBatch {
     /// In-progress flatbuffer offset of the `RecordBatch` table.
     record_batch: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
     /// Total body length written to the sink (the sum of each buffer's encoded
-    /// length and its alignment padding). Each buffer is individually padded to the
-    /// alignment, so the body is already aligned and needs no trailing padding.
+    /// length and its alignment padding).
     body_len: usize,
 }
 
@@ -1049,8 +1048,7 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
         sink: &mut IpcBodySink<'_>,
     ) -> Result<usize, ArrowError> {
-        // Reuse the builder's internal buffer across messages; `reset` keeps the
-        // allocated capacity and only clears the in-progress state.
+        // Reset the fbb
         ipc_write_context.mut_fbb().reset();
 
         let EncodedRecordBatch {
@@ -1064,7 +1062,6 @@ impl IpcDataGenerator {
             sink,
         )?;
 
-        // create an crate::Message
         let fbb = ipc_write_context.mut_fbb();
         let mut message = crate::MessageBuilder::new(fbb);
         message.add_version(write_options.metadata_version);
@@ -1112,8 +1109,7 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
         sink: &mut IpcBodySink<'_>,
     ) -> Result<usize, ArrowError> {
-        // Reuse the builder's internal buffer across messages; `reset` keeps the
-        // allocated capacity and only clears the in-progress state.
+        // Reset fbb
         ipc_write_context.mut_fbb().reset();
 
         // A dictionary batch is a record batch (the single column of dictionary
@@ -1212,6 +1208,7 @@ impl IpcDataGenerator {
 
         // Each buffer is padded to the alignment as it is written, so `offset` is
         // already a multiple of the alignment -- the body needs no trailing padding.
+        debug_assert!(offset % write_options.alignment as i64 == 0);
         let body_len = offset as usize;
 
         let fbb = ipc_write_context.mut_fbb();
@@ -2074,9 +2071,7 @@ pub struct StreamWriter<W> {
 
     data_gen: IpcDataGenerator,
 
-    /// Holds reusable scratch state shared across all messages -- including the
-    /// [`FlatBufferBuilder`] whose internal buffer is reused to avoid reallocating
-    /// on every batch.
+    /// Reusable scratch state shared across all messages.
     ipc_write_context: IpcWriteContext,
 }
 
