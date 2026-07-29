@@ -1,0 +1,29 @@
+name: Check License Files
+on:
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+  push:
+    branches: [main]
+
+jobs:
+  check-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check LICENSE and NOTICE files
+        run: |
+          missing=0
+          for dir in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path' | xargs -I{} dirname {}); do
+            for file in LICENSE.txt NOTICE.txt; do
+              if [ ! -f "$dir/$file" ] && [ ! -L "$dir/$file" ]; then
+                echo "MISSING: $dir/$file"
+                missing=$((missing + 1))
+              fi
+            done
+          done
+          if [ $missing -gt 0 ]; then
+            echo "Found $missing missing license files"
+            exit 1
+          fi
+          echo "All crates have LICENSE.txt and NOTICE.txt"
