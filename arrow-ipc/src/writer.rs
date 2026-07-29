@@ -584,9 +584,9 @@ struct DictionaryToEncode {
 /// The `RecordBatch` table is left in-progress in the caller's [`FlatBufferBuilder`];
 /// the caller wraps `record_batch` in a `Message` (directly for a record batch
 /// message, or inside a `DictionaryBatch` for a dictionary message).
-struct EncodedRecordBatch {
+struct EncodedRecordBatchMeta {
     /// In-progress flatbuffer offset of the `RecordBatch` table.
-    record_batch: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
+    fb_offset: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
     /// Total body length written to the sink (the sum of each buffer's encoded
     /// length and its alignment padding).
     body_len: usize,
@@ -1048,8 +1048,8 @@ impl IpcDataGenerator {
         // Reset the fbb
         ipc_write_context.mut_fbb().reset();
 
-        let EncodedRecordBatch {
-            record_batch,
+        let EncodedRecordBatchMeta {
+            fb_offset: record_batch,
             body_len,
         } = self.encode_record_batch_data(
             batch.columns().iter().map(|array| array.to_data()),
@@ -1112,8 +1112,8 @@ impl IpcDataGenerator {
         // A dictionary batch is a record batch (the single column of dictionary
         // values) wrapped in a DictionaryBatch, so we share the record batch body
         // and table encoding and only differ in the message framing.
-        let EncodedRecordBatch {
-            record_batch,
+        let EncodedRecordBatchMeta {
+            fb_offset: record_batch,
             body_len,
         } = self.encode_record_batch_data(
             std::iter::once(dict.data.clone()),
@@ -1165,7 +1165,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
         ipc_write_context: &mut IpcWriteContext,
         sink: &mut IpcBodySink<'_>,
-    ) -> Result<EncodedRecordBatch, ArrowError> {
+    ) -> Result<EncodedRecordBatchMeta, ArrowError> {
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -1229,8 +1229,8 @@ impl IpcDataGenerator {
         }
         let record_batch = batch_builder.finish();
 
-        Ok(EncodedRecordBatch {
-            record_batch,
+        Ok(EncodedRecordBatchMeta {
+            fb_offset: record_batch,
             body_len,
         })
     }
