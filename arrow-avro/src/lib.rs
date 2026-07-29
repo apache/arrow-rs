@@ -129,17 +129,17 @@
 //! feature is enabled.
 //!
 //! [`AsyncAvroFileReader`] implements `Stream<Item = Result<RecordBatch, ArrowError>>`,
-//! allowing efficient async streaming of record batches. When the `object_store` feature
-//! is enabled, [`AvroObjectReader`] provides integration with object storage services
-//! such as S3 via the [object_store] crate.
+//! allowing efficient async streaming of record batches. When one of the versioned
+//! `object_store` features is enabled, e.g. `object_store_0_14`, [`AvroObjectReader`]
+//! provides integration with object storage services such as S3 via the [object_store] crate.
 //!
 //! ```ignore
 //! use std::sync::Arc;
 //! use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
 //! use futures::TryStreamExt;
-//! use object_store::ObjectStore;
-//! use object_store::local::LocalFileSystem;
-//! use object_store::path::Path;
+//! use arrow_avro::object_store::ObjectStore;
+//! use arrow_avro::object_store::local::LocalFileSystem;
+//! use arrow_avro::object_store::path::Path;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
@@ -164,7 +164,8 @@
 //!
 //! - [`reader`]: read Avro (OCF, SOE, Confluent) into Arrow `RecordBatch`es.
 //!   - With the `async` feature: [`AsyncAvroFileReader`] for async streaming reads.
-//!   - With the `object_store` feature: [`AvroObjectReader`] for reading from cloud storage.
+//!   - With a versioned `object_store` feature, e.g. `object_store_0_14`:
+//!     [`AvroObjectReader`] for reading from cloud storage.
 //! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent, Apicurio).
 //! - [`schema`]: Avro schema parsing / fingerprints / registries.
 //! - [`compression`]: codecs used for **OCF block compression** (i.e., Deflate, Snappy, Zstandard, BZip2, and XZ).
@@ -184,8 +185,12 @@
 //!
 //! **Async & Object Store (opt‑in)**
 //! - `async` — enable async APIs for reading Avro (`AsyncAvroFileReader`, `AsyncFileReader` trait).
-//! - `object_store` — enable integration with the [`object_store`] crate for reading Avro
-//!   from cloud storage (S3, GCS, Azure Blob, etc.) via `AvroObjectReader`. Implies `async`.
+//! - `object_store_0_14` — enable integration with the [`object_store`] crate for reading
+//!   Avro from cloud storage (S3, GCS, Azure Blob, etc.) via `AvroObjectReader`. Implies
+//!   `async`. New `object_store` releases are breaking changes, so each supported version
+//!   has its own feature, and the selected version is re-exported as
+//!   `arrow_avro::object_store`. The unversioned `object_store` feature selects
+//!   `object_store` 0.13 and is deprecated.
 //!
 //! **Schema fingerprints & helpers (opt‑in)**
 //! - `md5` — enable MD5 writer‑schema fingerprints.
@@ -214,6 +219,32 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
+
+/// Re-export of the [`object_store`] version this crate is integrated with
+///
+/// New [`object_store`] releases are breaking changes, and are therefore gated behind
+/// versioned feature flags, e.g. `object_store_0_14`. This allows support for new versions
+/// to be added, and old versions removed, without a breaking change to this crate.
+///
+/// The [`object_store`] types appear in this crate's public API, so downstream crates must
+/// use the same version. Using this re-export guarantees they do:
+///
+/// ```
+/// use arrow_avro::object_store::ObjectStore;
+/// ```
+///
+/// If more than one version is enabled the newest is used, as only one version of these
+/// types can be exposed at a time.
+///
+/// [`object_store`]: https://docs.rs/object_store/latest/object_store/
+#[cfg(feature = "object_store_0_14")]
+pub use object_store_0_14 as object_store;
+
+/// Re-export of the [`object_store`] version this crate is integrated with
+///
+/// [`object_store`]: https://docs.rs/object_store/latest/object_store/
+#[cfg(all(feature = "object_store", not(feature = "object_store_0_14")))]
+pub use object_store_0_13 as object_store;
 
 /// Core functionality for reading Avro data into Arrow arrays
 ///

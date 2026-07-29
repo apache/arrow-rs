@@ -504,7 +504,7 @@ pub mod async_reader;
 
 pub use header::{HeaderInfo, read_header_info};
 
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
 pub use async_reader::{AsyncAvroFileReader, AsyncFileReader};

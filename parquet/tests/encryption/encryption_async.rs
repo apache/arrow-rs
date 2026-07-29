@@ -420,14 +420,14 @@ async fn test_write_non_uniform_encryption() {
     .await;
 }
 
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 async fn get_encrypted_meta_store() -> (
-    object_store::ObjectMeta,
-    std::sync::Arc<dyn object_store::ObjectStore>,
+    parquet::object_store::ObjectMeta,
+    std::sync::Arc<dyn parquet::object_store::ObjectStore>,
 ) {
-    use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
-    use object_store::{ObjectStore, ObjectStoreExt};
+    use parquet::object_store::local::LocalFileSystem;
+    use parquet::object_store::path::Path;
+    use parquet::object_store::{ObjectStore, ObjectStoreExt};
 
     use std::sync::Arc;
     let test_data = arrow::util::test_util::parquet_test_data();
@@ -442,7 +442,7 @@ async fn get_encrypted_meta_store() -> (
 }
 
 #[tokio::test]
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 async fn test_read_encrypted_file_from_object_store() {
     use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     let (meta, store) = get_encrypted_meta_store().await;

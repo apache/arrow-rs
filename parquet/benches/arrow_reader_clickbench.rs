@@ -37,7 +37,6 @@ use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, St
 use arrow_schema::{ArrowError, DataType, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
-use object_store::local::LocalFileSystem;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
@@ -45,6 +44,7 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::PageIndexPolicy;
+use parquet::object_store::local::LocalFileSystem;
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -742,7 +742,7 @@ impl ReadTest {
         let parent = hits_path.parent().unwrap();
         let file_name = hits_path.file_name().unwrap().to_str().unwrap();
         let store = Arc::new(LocalFileSystem::new_with_prefix(parent).unwrap());
-        let location = object_store::path::Path::from(file_name);
+        let location = parquet::object_store::path::Path::from(file_name);
 
         let reader = ParquetObjectReader::new(store, location);
 

@@ -50,12 +50,12 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 mod metadata;
 pub use metadata::*;
 
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
-#[cfg(feature = "object_store")]
+#[cfg(any(feature = "object_store", feature = "object_store_0_14"))]
 pub use store::*;
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
@@ -65,10 +65,10 @@ pub use store::*;
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
-///    is enabled, implements this interface for [`ObjectStore`].
+/// 2. [`ParquetObjectReader`], available when a versioned `object_store` crate feature
+///    is enabled, e.g. `object_store_0_14`, implements this interface for [`ObjectStore`].
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
+/// [`ObjectStore`]: crate::object_store::ObjectStore
 ///
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
