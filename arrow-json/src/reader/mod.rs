@@ -1326,6 +1326,31 @@ mod tests {
     }
 
     #[test]
+    fn test_map_non_nullable_value() {
+        let map = Field::new_map(
+            "map",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            false,
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![map]));
+        let buf = r#"{"map": {"key": null}}"#;
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"value\""
+        );
+    }
+
+    #[test]
     fn test_not_coercing_primitive_into_string_without_flag() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
