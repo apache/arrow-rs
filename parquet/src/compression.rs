@@ -592,7 +592,7 @@ mod zstd_codec {
             });
             compress_to_vec(cctx, input_buf, output_buf).map_err(|code| {
                 let msg = zstd_safe::get_error_name(code);
-                std::io::Error::new(std::io::ErrorKind::Other, msg.to_string()).into()
+                std::io::Error::other(msg.to_string()).into()
             })
         }
     }
