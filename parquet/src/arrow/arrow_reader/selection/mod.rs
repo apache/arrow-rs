@@ -54,7 +54,7 @@ use boolean::{
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
 use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
-pub use selector::{RowSelectionIter, RowSelector};
+pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
 /// [`RowSelection`] represents selecting a subset of rows
@@ -598,7 +598,8 @@ impl RowSelection {
         }
     }
 
-    /// Returns a borrowed iterator yielding the [`RowSelector`]s for this selection.
+    /// Returns an iterator over the [`RowSelector`]s for this
+    /// [`RowSelection`].
     ///
     /// Mask-backed selections materialize a `Vec<RowSelector>` cache on first
     /// call (one allocation, `O(set_slices)` work) so the iterator can hand out
@@ -606,10 +607,10 @@ impl RowSelection {
     /// over mask-backed selections, prefer streaming directly via
     /// [`Self::as_mask`] + [`MaskRunIter::new`] — that path is allocation-free
     /// and avoids populating the cache.
-    pub fn iter(&self) -> RowSelectionIter<'_> {
+    pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
         match &self.inner {
-            RowSelectionInner::Selectors(s) => RowSelectionIter::new(s),
-            RowSelectionInner::Mask(m) => RowSelectionIter::new(m.selectors()),
+            RowSelectionInner::Selectors(s) => s.iter(),
+            RowSelectionInner::Mask(m) => m.selectors().iter(),
         }
     }
 

@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, BinaryViewArray, StringArray, StructArray};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
+use arrow::buffer::Buffer;
 use arrow::util::test_util::seedable_rng;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use criterion::{Criterion, criterion_group, criterion_main};
-use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
 };
@@ -31,6 +32,8 @@ use rand::rngs::StdRng;
 use serde_json::Value;
 use std::fmt::Write;
 use std::sync::Arc;
+
+const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
@@ -170,10 +173,23 @@ pub fn variant_get_shredded_utf8_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
+    let variant_array = create_unshredded_object_variant_array(VARIANT_GET_UNSHREDDED_OBJECT_ROWS);
+    let input = ArrayRef::from(variant_array);
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Int32, true));
+    let options = GetOptions::new_with_path(VariantPath::try_from("attr.140").unwrap())
+        .with_as_type(Some(field));
+
+    c.bench_function("variant_get_unshredded_object_path_262k_rows", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
     variant_get_shredded_utf8_bench,
+    variant_get_unshredded_object_path_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
@@ -221,6 +237,40 @@ fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
 
     VariantArray::try_new(struct_array_ref.as_ref())
         .expect("created struct should be a valid shredded variant")
+}
+
+fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
+    let field_names = (0..300)
+        .map(|index| format!("attr.{index:03}"))
+        .collect::<Vec<_>>();
+    let mut builder =
+        VariantBuilder::new().with_field_names(field_names.iter().map(String::as_str));
+    let mut object = builder.new_object();
+    for index in (0..300).step_by(20) {
+        object.insert(&format!("attr.{index:03}"), index);
+    }
+    object.finish();
+    let (metadata, value) = builder.finish();
+
+    let repeated_view = |value: Vec<u8>| {
+        let len = u32::try_from(value.len()).unwrap();
+        let mut builder = BinaryViewBuilder::with_capacity(size);
+        let block = builder.append_block(Buffer::from(value));
+        for _ in 0..size {
+            builder.try_append_view(block, 0, len).unwrap();
+        }
+        builder.finish()
+    };
+    let metadata: ArrayRef = Arc::new(repeated_view(metadata));
+    let value: ArrayRef = Arc::new(repeated_view(value));
+    let fields = Fields::from(vec![
+        Arc::new(Field::new("metadata", DataType::BinaryView, false)),
+        Arc::new(Field::new("value", DataType::BinaryView, false)),
+    ]);
+    let input: ArrayRef = Arc::new(StructArray::new(fields, vec![metadata, value], None));
+
+    VariantArray::try_new(input.as_ref())
+        .expect("created struct should be a valid unshredded variant")
 }
 
 /// Return an iterator off JSON strings, each representing a person
