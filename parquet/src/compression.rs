@@ -573,7 +573,7 @@ mod zstd_codec {
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             compress_to_vec(&mut self.cctx, input_buf, output_buf).map_err(|code| {
                 let msg = zstd_safe::get_error_name(code);
-                std::io::Error::new(std::io::ErrorKind::Other, msg.to_string()).into()
+                std::io::Error::other(msg.to_string()).into()
             })
         }
     }
