@@ -266,6 +266,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             row_selection_policy,
             max_predicate_cache_size,
+            bounded_streaming,
         } = self;
 
         // If no row groups were specified, read all of them
@@ -288,6 +289,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            bounded_streaming,
         );
 
         // Initialize the decoder with the configured options
@@ -331,6 +333,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         max_predicate_cache_size,
         metrics,
         row_selection_policy,
+        bounded_streaming,
         buffers,
     } = reader_builder;
 
@@ -352,6 +355,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         offset,
         metrics,
         max_predicate_cache_size,
+        bounded_streaming,
     }
     // Carry the decoder's already-fetched bytes across the rebuild so the new
     // decoder does not re-request them.
@@ -509,6 +513,12 @@ impl ParquetPushDecoder {
         self.state.buffered_bytes()
     }
 
+    /// Returns everything the active row group will still need, plus which
+    /// byte spans will be consumed incrementally. See [`UpcomingFetchPlan`].
+    pub fn upcoming_fetch_plan(&self) -> UpcomingFetchPlan {
+        self.state.upcoming_fetch_plan()
+    }
+
     /// Clear any staged byte ranges currently buffered for future decode work.
     ///
     /// This clears byte ranges still owned by the decoder's internal
@@ -615,6 +625,30 @@ impl ParquetPushDecoder {
     pub fn into_builder(self) -> Result<ParquetPushDecoderBuilder, ParquetError> {
         self.state.into_builder()
     }
+}
+
+/// The full remaining data need of a [`ParquetPushDecoder`], plus which byte
+/// spans are suitable for incremental (streamed) consumption.
+///
+/// Returned by [`ParquetPushDecoder::upcoming_fetch_plan`]. Unlike
+/// [`DecodeResult::NeedsData`], which reports only what the decoder needs to
+/// make progress *now*, `ranges` reports everything the active row group will
+/// still request, so callers can plan coalesced fetches up front.
+///
+/// `streamable` lists the full requested byte spans of column chunks that the
+/// decoder will consume incrementally (in windows) when bounded streaming is
+/// enabled (see
+/// [`BoundedStreamingOptions`](crate::arrow::arrow_reader::BoundedStreamingOptions)).
+/// Ranges inside a streamable span will be requested gradually, in increasing
+/// offset order, so a caller may satisfy them from a single incrementally
+/// consumed ranged request. When empty, all ranges will be needed at once to
+/// make progress.
+#[derive(Debug, Clone, Default)]
+pub struct UpcomingFetchPlan {
+    /// All byte ranges the active row group still needs
+    pub ranges: Vec<Range<u64>>,
+    /// Requested spans that will be consumed incrementally, in offset order
+    pub streamable: Vec<Range<u64>>,
 }
 
 /// Internal state machine for the [`ParquetPushDecoder`]
@@ -821,6 +855,20 @@ impl ParquetDecoderState {
                 remaining_row_groups,
             } => remaining_row_groups.buffered_bytes(),
             ParquetDecoderState::Finished => 0,
+        }
+    }
+
+    /// See [`ParquetPushDecoder::upcoming_fetch_plan`]
+    fn upcoming_fetch_plan(&self) -> UpcomingFetchPlan {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            } => remaining_row_groups.upcoming_fetch_plan(),
+            ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.upcoming_fetch_plan(),
+            ParquetDecoderState::Finished => UpcomingFetchPlan::default(),
         }
     }
 

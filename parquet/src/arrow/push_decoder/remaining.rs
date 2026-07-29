@@ -299,6 +299,13 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
+    /// See [`ParquetPushDecoder::upcoming_fetch_plan`]
+    ///
+    /// [`ParquetPushDecoder::upcoming_fetch_plan`]: crate::arrow::push_decoder::ParquetPushDecoder::upcoming_fetch_plan
+    pub fn upcoming_fetch_plan(&self) -> crate::arrow::push_decoder::UpcomingFetchPlan {
+        self.row_group_reader_builder.upcoming_fetch_plan()
+    }
+
     /// Clear any staged ranges currently buffered for future decode work
     pub fn clear_all_ranges(&mut self) {
         self.row_group_reader_builder.clear_all_ranges();
