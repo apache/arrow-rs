@@ -931,9 +931,9 @@ mod tests {
                     let mut actual = actual.clone();
                     let mut expected = expected.clone();
                     for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
+                        #[expect(clippy::iter_nth_zero)]
                         let actual_val = actual.nth(0);
-                        #[allow(clippy::iter_nth_zero)]
+                        #[expect(clippy::iter_nth_zero)]
                         let expected_val = expected.nth(0);
                         assert_eq!(actual_val, expected_val, "Failed on nth(0)");
                     }
@@ -971,7 +971,6 @@ mod tests {
                     let mut actual = actual.clone();
                     let mut expected = expected.clone();
                     for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
                         let actual_val = actual.nth_back(0);
                         let expected_val = expected.nth_back(0);
                         assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
