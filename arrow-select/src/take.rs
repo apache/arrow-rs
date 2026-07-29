@@ -97,7 +97,21 @@ pub fn take(
                 check_bounds(values.len(), indices)?;
             }
             let indices = indices.to_indices();
-            take_impl(values, &indices)
+            take_impl::<_,true>(values, &indices)
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
+    )
+}
+/// unsafe version of take that using unsafe accessor methods.
+/// Saftey : caller must gaurentee the indices are valid
+pub unsafe fn take_unchecked(
+    values: &dyn Array,
+    indices: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
+    downcast_integer_array!(
+        indices => {
+            let indices = indices.to_indices();
+            take_impl::<_,false>(values, &indices)
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -211,7 +225,7 @@ where
 }
 
 #[inline(never)]
-fn take_impl<IndexType: ArrowPrimitiveType>(
+fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE: bool>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
@@ -274,7 +288,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
             let arrays  = array
                 .columns()
                 .iter()
-                .map(|a| take_impl(a.as_ref(), indices))
+                .map(|a| take_impl::<_,VALIDATE>(a.as_ref(), indices))
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(FieldRef, ArrayRef)> =
                 fields.iter().cloned().zip(arrays).collect();
@@ -339,7 +353,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
             let type_ids = take_native(values.type_ids(), indices);
             for (type_id, _field) in fields.iter() {
                 let values = values.child(type_id);
-                let values = take_impl(values, indices)?;
+                let values = take_impl::<_,VALIDATE>(values, indices)?;
                 children.push(values);
             }
             let array = UnionArray::try_new(fields.clone(), type_ids, None, children)?;
@@ -359,7 +373,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
 
                     let values = values.child(field_type_id);
 
-                    take_impl(values, indices.as_primitive::<Int32Type>())
+                    take_impl::<_,VALIDATE>(values, indices.as_primitive::<Int32Type>())
                 })
                 .collect::<Result<_, _>>()?;
 
@@ -781,7 +795,7 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType>(
     length: <UInt32Type as ArrowPrimitiveType>::Native,
 ) -> Result<FixedSizeListArray, ArrowError> {
     let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-    let taken = take_impl::<UInt32Type>(values.values().as_ref(), &list_indices)?;
+    let taken = take_impl::<UInt32Type, true>(values.values().as_ref(), &list_indices)?;
 
     // determine null count and null buffer, which are a function of `values` and `indices`
     let num_bytes = bit_util::ceil(indices.len(), 8);
@@ -2912,7 +2926,8 @@ mod tests {
 
         let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
 
-        let result = take_impl(&run_array, &logical_indices).expect("take_run with empty indices");
+        let result = take_impl::<_, false>(&run_array, &logical_indices)
+            .expect("take_run with empty indices");
 
         // Verify the result is a valid empty RunArray
         assert_eq!(result.len(), 0);
