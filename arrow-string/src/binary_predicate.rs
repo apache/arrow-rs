@@ -21,7 +21,6 @@ use memchr::memmem::Finder;
 use std::iter::zip;
 
 /// A binary based predicate
-#[allow(clippy::large_enum_variant)]
 pub enum BinaryPredicate<'a> {
     Contains(Finder<'a>),
     StartsWith(&'a [u8]),
