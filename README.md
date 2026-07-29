@@ -157,6 +157,7 @@ There are several related crates in different repositories
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
+[`opendal`]: https://crates.io/crates/opendal
 [`parquet_opendal`]: https://crates.io/crates/parquet_opendal
 [parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
 [object_store-readme]: https://github.com/apache/arrow-rs-object-store/blob/main/README.md
