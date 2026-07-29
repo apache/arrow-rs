@@ -70,9 +70,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             let mut encoder = StreamEncoder::try_new(batch.schema().as_ref()).unwrap();
             let mut encoded_len = 0;
             for _ in 0..10 {
-                encoded_len += encoded_buffers_len(encoder.encode(&batch).unwrap());
+                let encoded = black_box(encoder.encode(&batch).unwrap());
+                encoded_len += encoded_buffers_len(encoded);
             }
-            encoded_len += encoded_buffers_len(encoder.finish().unwrap());
+            let encoded = black_box(encoder.finish().unwrap());
+            encoded_len += encoded_buffers_len(encoded);
             black_box(encoded_len);
         })
     });
@@ -87,9 +89,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 StreamEncoder::try_new_with_options(batch.schema().as_ref(), options).unwrap();
             let mut encoded_len = 0;
             for _ in 0..10 {
-                encoded_len += encoded_buffers_len(encoder.encode(&batch).unwrap());
+                let encoded = black_box(encoder.encode(&batch).unwrap());
+                encoded_len += encoded_buffers_len(encoded);
             }
-            encoded_len += encoded_buffers_len(encoder.finish().unwrap());
+            let encoded = black_box(encoder.finish().unwrap());
+            encoded_len += encoded_buffers_len(encoded);
             black_box(encoded_len);
         })
     });
@@ -128,9 +132,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             let mut encoder = StreamEncoder::try_new(schema.as_ref()).unwrap();
             let mut encoded_len = 0;
             for batch in &batches {
-                encoded_len += encoded_buffers_len(encoder.encode(batch).unwrap());
+                let encoded = black_box(encoder.encode(batch).unwrap());
+                encoded_len += encoded_buffers_len(encoded);
             }
-            encoded_len += encoded_buffers_len(encoder.finish().unwrap());
+            let encoded = black_box(encoder.finish().unwrap());
+            encoded_len += encoded_buffers_len(encoded);
             black_box(encoded_len);
         })
     });
@@ -168,9 +174,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 StreamEncoder::try_new_with_options(schema.as_ref(), options.clone()).unwrap();
             let mut encoded_len = 0;
             for batch in &batches {
-                encoded_len += encoded_buffers_len(encoder.encode(batch).unwrap());
+                let encoded = black_box(encoder.encode(batch).unwrap());
+                encoded_len += encoded_buffers_len(encoded);
             }
-            encoded_len += encoded_buffers_len(encoder.finish().unwrap());
+            let encoded = black_box(encoder.finish().unwrap());
+            encoded_len += encoded_buffers_len(encoded);
             black_box(encoded_len);
         })
     });
