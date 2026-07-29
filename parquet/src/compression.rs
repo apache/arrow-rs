@@ -281,8 +281,11 @@ mod gzip_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
             let mut decoder = read::MultiGzDecoder::new(input_buf);
             decoder.read_to_end(output_buf).map_err(|e| e.into())
         }
@@ -389,8 +392,10 @@ mod brotli_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let buffer_size = uncompress_size.unwrap_or(BROTLI_DEFAULT_BUFFER_SIZE);
-            brotli::Decompressor::new(input_buf, buffer_size)
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
+            brotli::Decompressor::new(input_buf, BROTLI_DEFAULT_BUFFER_SIZE)
                 .read_to_end(output_buf)
                 .map_err(|e| e.into())
         }
@@ -461,8 +466,11 @@ mod lz4_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
             let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
             let total_len = decoder.read_to_end(output_buf)?;
             Ok(total_len)
