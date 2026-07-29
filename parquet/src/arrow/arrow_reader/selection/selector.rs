@@ -55,59 +55,6 @@ impl RowSelector {
     }
 }
 
-/// Borrowed iterator over the [`RowSelector`]s of a
-/// [`RowSelection`](crate::arrow::arrow_reader::RowSelection).
-#[derive(Debug)]
-pub struct RowSelectionIter<'a>(std::slice::Iter<'a, RowSelector>);
-
-impl<'a> RowSelectionIter<'a> {
-    pub(super) fn new(selectors: &'a [RowSelector]) -> Self {
-        Self(selectors.iter())
-    }
-}
-
-impl<'a> Iterator for RowSelectionIter<'a> {
-    type Item = &'a RowSelector;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-
-    #[inline]
-    fn count(self) -> usize {
-        self.0.count()
-    }
-
-    #[inline]
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.0.nth(n)
-    }
-
-    #[inline]
-    fn last(self) -> Option<Self::Item> {
-        self.0.last()
-    }
-
-    #[inline]
-    fn fold<B, F>(self, init: B, f: F) -> B
-    where
-        F: FnMut(B, Self::Item) -> B,
-    {
-        self.0.fold(init, f)
-    }
-}
-
-impl ExactSizeIterator for RowSelectionIter<'_> {}
-
-// once it returns None, it will continue returning None
-impl std::iter::FusedIterator for RowSelectionIter<'_> {}
-
 /// Splits `selectors` at the first `row_count` rows, returning `(head, tail)`.
 pub(super) fn split_off_selectors(
     mut selectors: Vec<RowSelector>,

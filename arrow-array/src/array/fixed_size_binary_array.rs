@@ -118,6 +118,30 @@ impl FixedSizeBinaryArray {
         Self::try_new(value_length, values, nulls).unwrap()
     }
 
+    /// Create a new [`FixedSizeBinaryArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `value_length >= 0`
+    /// - `values.len() == len * value_length as usize`
+    /// - `nulls.len() == len` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(
+        value_length: i32,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::try_new_with_len(value_length, values, nulls, len).unwrap();
+        }
+        Self {
+            data_type: DataType::FixedSizeBinary(value_length),
+            value_data: values,
+            value_size: value_length as usize,
+            nulls,
+            len,
+        }
+    }
+
     /// Create a new [`Scalar`] from `value`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
