@@ -20,7 +20,6 @@ use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
-use arrow_buffer::Buffer;
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::{
     DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
@@ -68,14 +67,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         let batch = create_batch(8192, true);
         b.iter(move || {
             let mut encoder = StreamEncoder::try_new(batch.schema().as_ref()).unwrap();
-            let mut encoded_len = 0;
             for _ in 0..10 {
-                let encoded = black_box(encoder.encode(&batch).unwrap());
-                encoded_len += encoded_buffers_len(encoded);
+                black_box(encoder.encode(&batch).unwrap());
             }
-            let encoded = black_box(encoder.finish().unwrap());
-            encoded_len += encoded_buffers_len(encoded);
-            black_box(encoded_len);
+            black_box(encoder.finish().unwrap());
         })
     });
 
@@ -87,14 +82,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .unwrap();
             let mut encoder =
                 StreamEncoder::try_new_with_options(batch.schema().as_ref(), options).unwrap();
-            let mut encoded_len = 0;
             for _ in 0..10 {
-                let encoded = black_box(encoder.encode(&batch).unwrap());
-                encoded_len += encoded_buffers_len(encoded);
+                black_box(encoder.encode(&batch).unwrap());
             }
-            let encoded = black_box(encoder.finish().unwrap());
-            encoded_len += encoded_buffers_len(encoded);
-            black_box(encoded_len);
+            black_box(encoder.finish().unwrap());
         })
     });
 
@@ -130,14 +121,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         let schema = batches[0].schema();
         b.iter(move || {
             let mut encoder = StreamEncoder::try_new(schema.as_ref()).unwrap();
-            let mut encoded_len = 0;
             for batch in &batches {
-                let encoded = black_box(encoder.encode(batch).unwrap());
-                encoded_len += encoded_buffers_len(encoded);
+                black_box(encoder.encode(batch).unwrap());
             }
-            let encoded = black_box(encoder.finish().unwrap());
-            encoded_len += encoded_buffers_len(encoded);
-            black_box(encoded_len);
+            black_box(encoder.finish().unwrap());
         })
     });
 
@@ -172,14 +159,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || {
             let mut encoder =
                 StreamEncoder::try_new_with_options(schema.as_ref(), options.clone()).unwrap();
-            let mut encoded_len = 0;
             for batch in &batches {
-                let encoded = black_box(encoder.encode(batch).unwrap());
-                encoded_len += encoded_buffers_len(encoded);
+                black_box(encoder.encode(batch).unwrap());
             }
-            let encoded = black_box(encoder.finish().unwrap());
-            encoded_len += encoded_buffers_len(encoded);
-            black_box(encoded_len);
+            black_box(encoder.finish().unwrap());
         })
     });
 
@@ -206,10 +189,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             writer.finish().unwrap();
         })
     });
-}
-
-fn encoded_buffers_len(buffers: Vec<Buffer>) -> usize {
-    buffers.iter().map(Buffer::len).sum()
 }
 
 /// Build `n` record batches with a single dictionary column whose dictionary
