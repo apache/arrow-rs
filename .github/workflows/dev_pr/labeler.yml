@@ -61,7 +61,10 @@ parquet-variant:
 
 parquet-derive:
   - changed-files:
-    - any-glob-to-any-file: ["parquet_derive/**/*"]
+    - any-glob-to-any-file: 
+      - "parquet_derive/**/*"
+      - "parquet_derive_test/**/*"
+
 
 arrow-arith:
   - changed-files:
@@ -97,12 +100,8 @@ arrow-integration-test:
   - changed-files:
     - any-glob-to-any-file:
       - "arrow-integration-test/**/*"
-
-arrow-integration-testing:
-  - changed-files:
-    - any-glob-to-any-file:
       - "arrow-integration-testing/**/*"
-
+      
 arrow-ipc:
   - changed-files:
     - any-glob-to-any-file:
@@ -122,16 +121,8 @@ arrow-pyarrow:
   - changed-files:
     - any-glob-to-any-file:
       - "arrow-pyarrow/**/*"
-
-arrow-pyarrow-integration-testing:
-  - changed-files:
-    - any-glob-to-any-file:
-      - "arrow-pyarrow-integration-testing/**/*"
-
-arrow-pyarrow-testing:
-  - changed-files:
-    - any-glob-to-any-file:
       - "arrow-pyarrow-testing/**/*"
+      - "arrow-pyarrow-integration-testing/**/*"
 
 arrow-row:
   - changed-files:
@@ -152,11 +143,6 @@ arrow-string:
   - changed-files:
     - any-glob-to-any-file:
         - "arrow-string/**/*"
-
-parquet-derive-test:
-  - changed-files:
-    - any-glob-to-any-file:
-      - "parquet_derive_test/**/*"
 
 parquet-geospatial:
   - changed-files:
