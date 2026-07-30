@@ -2438,7 +2438,7 @@ mod test {
         let result_variant = VariantArray::try_new(&result).unwrap();
 
         assert_eq!(result_variant.inner().null_count(), result_variant.len());
-        let (_, value_field) = result_variant.inner().fields().find("value").unwrap();
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
         assert!(!value_field.is_nullable());
     }
 
@@ -2473,7 +2473,7 @@ mod test {
 
         assert!(result_variant.typed_value_column().is_none());
         assert!(result_variant.value_column().null_count() < result_variant.len());
-        let (_, value_field) = result_variant.inner().fields().find("value").unwrap();
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
         assert!(!value_field.is_nullable());
 
         let expected_json: ArrayRef = Arc::new(StringArray::from(vec![

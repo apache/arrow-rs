@@ -120,9 +120,8 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
 fn value_field_is_non_nullable(array: &VariantArray) -> bool {
     array
         .inner()
-        .fields()
-        .find("value")
-        .is_some_and(|(_, field)| !field.is_nullable())
+        .field_by_name("value")
+        .is_some_and(|field| !field.is_nullable())
 }
 
 /// Returns true if every null in `value` is masked by a parent null, i.e. the column may be
@@ -747,8 +746,7 @@ mod tests {
 
     /// Returns the nullability annotation of the `value` field
     fn value_field_is_nullable(array: &VariantArray) -> bool {
-        let (_, field) = array.inner().fields().find("value").unwrap();
-        field.is_nullable()
+        array.inner().field_by_name("value").unwrap().is_nullable()
     }
 
     #[test]
