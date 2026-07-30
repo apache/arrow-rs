@@ -102,8 +102,11 @@ pub fn take(
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
 }
-/// unsafe version of `take` that using unsafe accessor methods.
-/// Saftey : caller must gaurentee the indices are valid
+/// Unsafe version of `take` that uses unsafe accessor methods.
+///
+/// # Safety
+///
+/// Caller must guarantee that all `indices` are valid (in-bounds) for `values`.
 pub unsafe fn take_unchecked(
     values: &dyn Array,
     indices: &dyn Array,
@@ -503,6 +506,7 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE: bool>(
         }
         None => {
             BooleanBuffer::collect_bool(len, |idx: usize| {
+                // SAFETY: idx<indices.len()
                 let index = unsafe { indices.value_unchecked(idx).as_usize() };
 
                 if VALIDATE {
@@ -608,6 +612,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE: b
                 if last_filled < i {
                     offsets[last_filled + 1..=i].fill(current_offset);
                 }
+                // SAFETY: `i` comes from a validity bitmap over `indices`, so it is in-bounds.
                 let index = unsafe { indices.value_unchecked(i) }.as_usize();
 
                 let (start, end) = if VALIDATE {
@@ -1187,7 +1192,7 @@ pub fn take_record_batch(
     let columns = record_batch
         .columns()
         .iter()
-        .map(|c| take(c, indices, None))
+        .map(|c| unsafe { take_unchecked(c, indices) })
         .collect::<Result<Vec<_>, _>>()?;
     RecordBatch::try_new(record_batch.schema(), columns)
 }
