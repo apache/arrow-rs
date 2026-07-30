@@ -729,9 +729,9 @@ fn interval_mul_op<T: IntervalOp>(
     ))
 }
 
-/// Multiplies using `IntervalMonthDayNano` as the common interval representation,
-/// mirroring DuckDB's `interval_t` layout of months, days, and a sub-day component
-/// (nanoseconds in Arrow, microseconds in DuckDB).
+/// Multiplies an `IntervalMonthDayNano` by an `f64`, mirroring DuckDB's
+/// `interval_t` layout of months, days, and a sub-day component (nanoseconds in
+/// Arrow, microseconds in DuckDB).
 /// <https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/include/duckdb/common/types/interval.hpp#L24-L27>
 ///
 /// Algorithm:
@@ -786,7 +786,7 @@ fn interval_mul_f64(
     }
     let mut days = days_product.to_i32().ok_or_else(|| overflow("days"))?;
 
-    let month_remainder = timestamp_round((months_product - f64::from(months)) * DAYS_PER_MONTH);
+    let month_remainder = timestamp_round(months_product.fract() * DAYS_PER_MONTH);
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
@@ -840,7 +840,9 @@ fn interval_f64_op(
                 // DuckDB defines interval division as multiplication by the reciprocal:
                 // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/function/scalar/operator/arithmetic.cpp#L1102-L1110
                 Op::Div => interval_mul_f64(interval, 1. / factor),
-                _ => unreachable!(),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid interval arithmetic operation: Interval(MonthDayNano) {op} Float64"
+                ))),
             }
         }
     ))
@@ -1877,6 +1879,11 @@ mod tests {
 
         let interval =
             IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(1, 1, 1));
+
+        assert!(matches!(
+            add(&interval, &factor),
+            Err(ArrowError::InvalidArgumentError(_))
+        ));
 
         let zero = Float64Array::new_scalar(-0.);
         assert!(matches!(
