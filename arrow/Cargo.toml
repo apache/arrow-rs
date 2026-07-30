@@ -74,6 +74,9 @@ prettyprint = ["arrow-cast/prettyprint"]
 # target without assuming an environment containing JavaScript.
 test_utils = ["dep:rand", "dep:half"]
 pyarrow = ["ffi", "dep:arrow-pyarrow"]
+# Record the Python type of each pyarrow conversion in PyO3's introspection data, so that stub
+# generators emit e.g. `pyarrow.Array` rather than `_typeshed.Incomplete`. Implies `pyarrow`.
+experimental-inspect = ["pyarrow", "arrow-pyarrow/experimental-inspect"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks

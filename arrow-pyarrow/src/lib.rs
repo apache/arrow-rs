@@ -51,6 +51,16 @@
 //! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
 //! easier to create.)
 //!
+//! # Type stubs
+//!
+//! With the `experimental-inspect` feature enabled, each conversion records the pyarrow class it
+//! maps to in PyO3's introspection data, so a generated `.pyi` says `pyarrow.Array` where it would
+//! otherwise say `_typeshed.Incomplete`. The hints live on [`FromPyArrow::INPUT_TYPE`],
+//! [`ToPyArrow::OUTPUT_TYPE`] and [`IntoPyArrow::OUTPUT_TYPE`], and [`PyArrowType`] forwards them.
+//!
+//! Input hints name the pyarrow class only, and are therefore narrower than what is accepted: the
+//! PyCapsule interface is duck-typed and has no canonical Python type to name.
+//!
 //! (2) Although arrow-rs offers [Table], a convenience wrapper for [pyarrow.Table](https://arrow.apache.org/docs/python/generated/pyarrow.Table)
 //! that internally holds `Vec<RecordBatch>`, it is meant primarily for use cases where you already
 //! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
@@ -75,10 +85,14 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
+#[cfg(feature = "experimental-inspect")]
+use pyo3::inspect::PyStaticExpr;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyCapsule, PyDict, PyList, PyString, PyType};
 use pyo3::{CastError, import_exception, intern};
+#[cfg(feature = "experimental-inspect")]
+use pyo3::{type_hint_identifier, type_hint_subscript};
 
 import_exception!(pyarrow, ArrowException);
 /// Represents an exception raised by PyArrow.
@@ -90,6 +104,20 @@ fn to_py_err(err: ArrowError) -> PyErr {
 
 /// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
+    /// The Python type this conversion accepts, as a type hint.
+    ///
+    /// Used by [`FromPyObject::INPUT_TYPE`] on [`PyArrowType`] so that a stub generator can write
+    /// `pyarrow.Array` where it would otherwise write `_typeshed.Incomplete`.
+    ///
+    /// This names the pyarrow class only. Every conversion here *also* accepts any object
+    /// implementing the relevant [PyCapsule interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html)
+    /// method, which is duck-typed and has no canonical Python type to point at — neither pyarrow
+    /// nor typeshed defines one. The hint is therefore narrower than what is accepted at runtime.
+    /// A binding that wants to advertise the wider protocol can declare its own `Protocol` and
+    /// carry it on a newtype around the arrow-rs type.
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("_typeshed", "Incomplete");
+
     /// Convert a Python object to an arrow-rs type.
     ///
     /// Takes a GIL-bound value from Python and returns a result with the arrow-rs type.
@@ -98,17 +126,33 @@ pub trait FromPyArrow: Sized {
 
 /// Create a new PyArrow object from a arrow-rs type.
 pub trait ToPyArrow {
+    /// The Python type this conversion produces, as a type hint.
+    ///
+    /// Unlike [`FromPyArrow::INPUT_TYPE`] this is exact: the conversion always constructs an
+    /// instance of the named pyarrow class.
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("_typeshed", "Incomplete");
+
     /// Convert the implemented type into a Python object without consuming it.
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
 /// Convert an arrow-rs type into a PyArrow object.
 pub trait IntoPyArrow {
+    /// The Python type this conversion produces, as a type hint.
+    ///
+    /// See [`ToPyArrow::OUTPUT_TYPE`].
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("_typeshed", "Incomplete");
+
     /// Convert the implemented type into a Python object while consuming it.
     fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
 impl<T: ToPyArrow> IntoPyArrow for T {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = <T as ToPyArrow>::OUTPUT_TYPE;
+
     fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.to_pyarrow(py)
     }
@@ -126,6 +170,9 @@ fn validate_class(expected: &Bound<PyType>, value: &Bound<PyAny>) -> PyResult<()
 }
 
 impl FromPyArrow for DataType {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "DataType");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -153,6 +200,9 @@ impl FromPyArrow for DataType {
 }
 
 impl ToPyArrow for DataType {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "DataType");
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         data_type_class(py)?.call_method1(
@@ -163,6 +213,9 @@ impl ToPyArrow for DataType {
 }
 
 impl FromPyArrow for Field {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Field");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -190,6 +243,9 @@ impl FromPyArrow for Field {
 }
 
 impl ToPyArrow for Field {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Field");
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         field_class(py)?.call_method1(
@@ -200,6 +256,9 @@ impl ToPyArrow for Field {
 }
 
 impl FromPyArrow for Schema {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Schema");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -227,6 +286,9 @@ impl FromPyArrow for Schema {
 }
 
 impl ToPyArrow for Schema {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Schema");
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         schema_class(py)?.call_method1(
@@ -237,6 +299,9 @@ impl ToPyArrow for Schema {
 }
 
 impl FromPyArrow for ArrayData {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Array");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -271,6 +336,9 @@ impl FromPyArrow for ArrayData {
 }
 
 impl ToPyArrow for ArrayData {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Array");
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let array = FFI_ArrowArray::new(self);
         let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
@@ -285,6 +353,12 @@ impl ToPyArrow for ArrayData {
 }
 
 impl<T: FromPyArrow> FromPyArrow for Vec<T> {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_subscript!(
+        type_hint_identifier!("collections.abc", "Iterable"),
+        <T as FromPyArrow>::INPUT_TYPE
+    );
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         let mut v = Vec::with_capacity(value.len().unwrap_or(0));
         for item in value.try_iter()? {
@@ -295,6 +369,12 @@ impl<T: FromPyArrow> FromPyArrow for Vec<T> {
 }
 
 impl<T: ToPyArrow> ToPyArrow for Vec<T> {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_subscript!(
+        type_hint_identifier!("builtins", "list"),
+        <T as ToPyArrow>::OUTPUT_TYPE
+    );
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.iter()
             .map(|v| v.to_pyarrow(py))
@@ -304,6 +384,9 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 }
 
 impl FromPyArrow for RecordBatch {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatch");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -362,6 +445,9 @@ impl FromPyArrow for RecordBatch {
 }
 
 impl ToPyArrow for RecordBatch {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatch");
+
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         // Workaround apache/arrow#37669 by returning RecordBatchIterator
         let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema());
@@ -373,6 +459,9 @@ impl ToPyArrow for RecordBatch {
 
 /// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
 impl FromPyArrow for ArrowArrayStreamReader {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatchReader");
+
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
@@ -410,6 +499,9 @@ impl FromPyArrow for ArrowArrayStreamReader {
 
 /// Convert a [`RecordBatchReader`] into a `pyarrow.RecordBatchReader`.
 impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatchReader");
+
     // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
     // there is already a blanket implementation for `T: ToPyArrow`.
     fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -423,6 +515,9 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
 
 /// Convert a [`ArrowArrayStreamReader`] into a `pyarrow.RecordBatchReader`.
 impl IntoPyArrow for ArrowArrayStreamReader {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatchReader");
+
     fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let boxed: Box<dyn RecordBatchReader + Send> = Box::new(self);
         boxed.into_pyarrow(py)
@@ -498,6 +593,9 @@ impl TryFrom<Box<dyn RecordBatchReader>> for Table {
 
 /// Convert a `pyarrow.Table` (or any other ArrowArrayStream compliant object) into [`Table`]
 impl FromPyArrow for Table {
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Table");
+
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
         let reader: Box<dyn RecordBatchReader> =
             Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
@@ -507,6 +605,9 @@ impl FromPyArrow for Table {
 
 /// Convert a [`Table`] into `pyarrow.Table`.
 impl IntoPyArrow for Table {
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Table");
+
     fn into_pyarrow(self, py: Python) -> PyResult<Bound<PyAny>> {
         let py_batches = PyList::new(py, self.record_batches.into_iter().map(PyArrowType))?;
         let py_schema = PyArrowType(Arc::unwrap_or_clone(self.schema));
@@ -564,6 +665,9 @@ pub struct PyArrowType<T>(pub T);
 impl<T: FromPyArrow> FromPyObject<'_, '_> for PyArrowType<T> {
     type Error = PyErr;
 
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = <T as FromPyArrow>::INPUT_TYPE;
+
     fn extract(value: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         Ok(Self(T::from_pyarrow_bound(&value)?))
     }
@@ -575,6 +679,9 @@ impl<'py, T: IntoPyArrow> IntoPyObject<'py> for PyArrowType<T> {
     type Output = Bound<'py, Self::Target>;
 
     type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = <T as IntoPyArrow>::OUTPUT_TYPE;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         self.0.into_pyarrow(py)
@@ -644,4 +751,74 @@ fn wrapping_type_error(py: Python<'_>, error: PyErr, message: String) -> PyErr {
     let e = PyTypeError::new_err(message);
     e.set_cause(py, Some(error));
     e
+}
+
+#[cfg(all(test, feature = "experimental-inspect"))]
+mod introspection_tests {
+    use super::*;
+    use pyo3::{FromPyObject, IntoPyObject};
+
+    /// The type hint a `PyArrowType<T>` argument is described by.
+    fn input_type<T: FromPyArrow>() -> String {
+        <PyArrowType<T> as FromPyObject<'_, '_>>::INPUT_TYPE.to_string()
+    }
+
+    /// The type hint a `PyArrowType<T>` return value is described by.
+    fn output_type<T: IntoPyArrow>() -> String
+    where
+        PyArrowType<T>: for<'py> IntoPyObject<'py>,
+    {
+        <PyArrowType<T> as IntoPyObject<'_>>::OUTPUT_TYPE.to_string()
+    }
+
+    #[test]
+    fn scalar_types_map_to_their_pyarrow_class() {
+        assert_eq!(input_type::<DataType>(), "pyarrow.DataType");
+        assert_eq!(output_type::<DataType>(), "pyarrow.DataType");
+        assert_eq!(input_type::<Field>(), "pyarrow.Field");
+        assert_eq!(output_type::<Field>(), "pyarrow.Field");
+        assert_eq!(input_type::<Schema>(), "pyarrow.Schema");
+        assert_eq!(output_type::<Schema>(), "pyarrow.Schema");
+        assert_eq!(input_type::<RecordBatch>(), "pyarrow.RecordBatch");
+        assert_eq!(output_type::<RecordBatch>(), "pyarrow.RecordBatch");
+    }
+
+    /// `ArrayData` is the one case where the arrow-rs name and the pyarrow name differ.
+    #[test]
+    fn array_data_maps_to_pyarrow_array() {
+        assert_eq!(input_type::<ArrayData>(), "pyarrow.Array");
+        assert_eq!(output_type::<ArrayData>(), "pyarrow.Array");
+    }
+
+    /// Asymmetric on purpose: `Vec<T>` is built from anything iterable, but is handed back as a
+    /// list.
+    #[test]
+    fn vec_is_iterable_in_and_list_out() {
+        assert_eq!(
+            input_type::<Vec<RecordBatch>>(),
+            "collections.abc.Iterable[pyarrow.RecordBatch]"
+        );
+        assert_eq!(
+            output_type::<Vec<RecordBatch>>(),
+            "list[pyarrow.RecordBatch]"
+        );
+    }
+
+    #[test]
+    fn readers_and_tables_map_to_their_pyarrow_class() {
+        assert_eq!(
+            input_type::<ArrowArrayStreamReader>(),
+            "pyarrow.RecordBatchReader"
+        );
+        assert_eq!(
+            output_type::<ArrowArrayStreamReader>(),
+            "pyarrow.RecordBatchReader"
+        );
+        assert_eq!(
+            output_type::<Box<dyn RecordBatchReader + Send>>(),
+            "pyarrow.RecordBatchReader"
+        );
+        assert_eq!(input_type::<Table>(), "pyarrow.Table");
+        assert_eq!(output_type::<Table>(), "pyarrow.Table");
+    }
 }
