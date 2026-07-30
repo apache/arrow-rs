@@ -223,7 +223,7 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
             6 => split_streams_const::<6>(&self.buffer, encoded),
             7 => split_streams_const::<7>(&self.buffer, encoded),
             8 => split_streams_const::<8>(&self.buffer, encoded),
-            _ => split_streams_variable(&self.buffer, out, type_size),
+            _ => split_streams_variable(&self.buffer, encoded, type_size),
         }
 
         self.buffer.clear();
