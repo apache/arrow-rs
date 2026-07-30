@@ -845,9 +845,9 @@ fn make_decoder(
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::RunEndEncoded(ref r, _) => match r.data_type() {
-            DataType::Int16 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int16Type>::new(ctx, data_type, is_nullable)?)),
-            DataType::Int32 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int32Type>::new(ctx, data_type, is_nullable)?)),
-            DataType::Int64 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int64Type>::new(ctx, data_type, is_nullable)?)),
+            DataType::Int16 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int16Type>::new(ctx, data_type)?)),
+            DataType::Int32 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int32Type>::new(ctx, data_type)?)),
+            DataType::Int64 => Ok(Box::new(RunEndEncodedArrayDecoder::<Int64Type>::new(ctx, data_type)?)),
             d => unreachable!("unsupported run end index type: {d}"),
         },
         _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
@@ -3582,6 +3582,23 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values.value(0), "x");
         assert_eq!(values.value(1), "y");
+    }
+
+    #[test]
+    fn test_read_run_end_encoded_nulls_in_non_nullable_values() {
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, false)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+
+        for buf in [r#"{"a": null}"#, r#"{}"#] {
+            let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+            decoder.decode(buf.as_bytes()).unwrap();
+            decoder
+                .flush()
+                .expect_err("nullable REE parent must not make values nullable");
+        }
     }
 
     #[test]
