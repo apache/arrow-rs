@@ -458,19 +458,38 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType, const VALIDATE: bool>(
             .values()
             .iter()
             .enumerate()
-            .map(|(idx, index)| match values.get(index.as_usize()) {
-                Some(v) => *v,
-                // SAFETY: idx<indices.len()
-                None => match unsafe { n.inner().value_unchecked(idx) } {
-                    false => T::default(),
-                    true => panic!("Out-of-bounds index {index:?}"),
-                },
+            .map(|(idx, index)| {
+                if VALIDATE {
+                    match values.get(index.as_usize()) {
+                        Some(v) => *v,
+                        // SAFETY: idx<indices.len()
+                        None => match unsafe { n.inner().value_unchecked(idx) } {
+                            false => T::default(),
+                            true => panic!("Out-of-bounds index {index:?}"),
+                        },
+                    }
+                } else {
+                    // SAFETY: idx < indices.len()
+                    if unsafe { n.inner().value_unchecked(idx) } {
+                        // SAFETY: caller guarantees all valid (non-null) indices are in-bounds
+                        unsafe { *values.get_unchecked(index.as_usize()) }
+                    } else {
+                        T::default()
+                    }
+                }
             })
             .collect(),
         None => indices
             .values()
             .iter()
-            .map(|index| values[index.as_usize()])
+            .map(|index| {
+                if VALIDATE {
+                    values[index.as_usize()]
+                } else {
+                    // SAFETY: caller guarantees all indices are in-bounds
+                    unsafe { *values.get_unchecked(index.as_usize()) }
+                }
+            })
             .collect(),
     }
 }
@@ -734,8 +753,17 @@ where
         None => {
             for index in indices.values() {
                 let ix = index.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
+                let (start, end) = if VALIDATE {
+                    (list_offsets[ix].as_usize(), list_offsets[ix + 1].as_usize())
+                } else {
+                    // SAFETY: caller guarantees all indices are in-bounds; list_offsets has len values.len()+1
+                    unsafe {
+                        (
+                            list_offsets.get_unchecked(ix).as_usize(),
+                            list_offsets.get_unchecked(ix + 1).as_usize(),
+                        )
+                    }
+                };
                 array_data.try_extend(0, start, end)?;
                 new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
             }
@@ -753,8 +781,17 @@ where
 
                 // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
                 let ix = unsafe { indices.value_unchecked(i) }.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
+                let (start, end) = if VALIDATE {
+                    (list_offsets[ix].as_usize(), list_offsets[ix + 1].as_usize())
+                } else {
+                    // SAFETY: caller guarantees all valid indices are in-bounds; list_offsets has len values.len()+1
+                    unsafe {
+                        (
+                            list_offsets.get_unchecked(ix).as_usize(),
+                            list_offsets.get_unchecked(ix + 1).as_usize(),
+                        )
+                    }
+                };
                 array_data.try_extend(0, start, end)?;
                 new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
                 last_filled = i + 1;
