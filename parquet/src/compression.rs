@@ -496,7 +496,7 @@ mod zstd_codec {
 
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
-    use std::io::Read;
+    use std::io::Cursor;
 
     /// Codec for Zstandard compression algorithm.
     ///
@@ -522,6 +522,11 @@ mod zstd_codec {
         }
     }
 
+    fn map_error_code(code: zstd_safe::ErrorCode) -> crate::errors::ParquetError {
+        let msg = zstd_safe::get_error_name(code);
+        std::io::Error::other(msg.to_string()).into()
+    }
+
     /// Avoids zstd crate abstractions to minimize redundant copies;
     /// [zstd::stream::Encoder] uses a buffered writer which is pointless for Vec.
     fn compress_to_vec(
@@ -530,7 +535,10 @@ mod zstd_codec {
         output_buf: &mut Vec<u8>,
     ) -> std::result::Result<(), zstd_safe::ErrorCode> {
         cctx.reset(zstd_safe::ResetDirective::SessionOnly)?;
+        // causes frame header to include size
         cctx.set_pledged_src_size(Some(input_buf.len() as u64))?;
+        // zstd can avoid allocating and copying into an input window
+        cctx.set_parameter(zstd_safe::CParameter::StableInBuffer(true))?;
 
         let mut input = zstd_safe::InBuffer::around(input_buf);
         loop {
@@ -545,7 +553,8 @@ mod zstd_codec {
 
         loop {
             let mut output = zstd_safe::OutBuffer::around_pos(output_buf, output_buf.len());
-            let to_flush = cctx.end_stream(&mut output)?;
+            let end_op = zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_end;
+            let to_flush = cctx.compress_stream2(&mut output, &mut input, end_op)?;
             if to_flush == 0 {
                 break;
             }
@@ -561,31 +570,30 @@ mod zstd_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            if let Some(len) = uncompress_size.or_else(|| {
-                // Get the decompressed size from the zstd frame header
-                zstd::zstd_safe::get_frame_content_size(input_buf)
-                    .ok()
-                    .flatten()
-                    .map(|size| size as usize)
-            }) {
-                output_buf.reserve(len);
+            if let Some(len) = uncompress_size {
+                output_buf.reserve_exact(len);
+            } else if let Some(len) = zstd_safe::find_decompressed_size(input_buf)
+                .map_err(|err| std::io::Error::other(err.to_string()))?
+            {
+                output_buf.reserve_exact(len as usize);
+            } else {
+                let len = zstd_safe::decompress_bound(input_buf).map_err(map_error_code)?;
+                output_buf.reserve(len as usize);
             }
 
-            let mut decoder = zstd::stream::Decoder::with_context(input_buf, &mut self.dctx);
+            let offset = output_buf.len();
+            let mut cursor = Cursor::new(output_buf);
+            cursor.set_position(offset as u64);
 
-            // The default Read::read_to_end impl is acceptable;
-            // it reads directly into the Vec most of the time.
-            // Using raw DCtx here would be more annoying than the compress path,
-            // but could be done if better Vec reserve control is desired in the future.
-            let len = decoder.read_to_end(output_buf)?;
+            let len = self
+                .dctx
+                .decompress(&mut cursor, input_buf)
+                .map_err(map_error_code)?;
             Ok(len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            compress_to_vec(&mut self.cctx, input_buf, output_buf).map_err(|code| {
-                let msg = zstd_safe::get_error_name(code);
-                std::io::Error::other(msg.to_string()).into()
-            })
+            compress_to_vec(&mut self.cctx, input_buf, output_buf).map_err(map_error_code)
         }
     }
 }
