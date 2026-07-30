@@ -65,6 +65,10 @@ parquet-derive:
       - "parquet_derive/**/*"
       - "parquet_derive_test/**/*"
 
+parquet-geospatial:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "parquet-geospatial/**/*"
 
 arrow-arith:
   - changed-files:
@@ -101,7 +105,7 @@ arrow-integration-test:
     - any-glob-to-any-file:
       - "arrow-integration-test/**/*"
       - "arrow-integration-testing/**/*"
-      
+
 arrow-ipc:
   - changed-files:
     - any-glob-to-any-file:
@@ -143,8 +147,3 @@ arrow-string:
   - changed-files:
     - any-glob-to-any-file:
         - "arrow-string/**/*"
-
-parquet-geospatial:
-  - changed-files:
-    - any-glob-to-any-file:
-      - "parquet-geospatial/**/*"
