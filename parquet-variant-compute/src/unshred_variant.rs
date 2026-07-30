@@ -36,8 +36,8 @@ use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
-    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
-    VariantDecimal16, VariantDecimalType, VariantMetadata,
+    ListBuilder, ObjectBuilder, ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4,
+    VariantDecimal8, VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // Already unshredded: no data movement needed, but the output must annotate `value` as
     // non-nullable per the spec. Inputs whose value-nulls are not all masked by the parent null
     // buffer (spec-invalid "missing" rows) cannot be re-annotated and fall through to the row
-    // builder below, which materializes `Variant::Null` for such rows.
+    // loop below, whose top-level sink materializes `Variant::Null` for such rows.
     if typed_value_col.is_none() {
         if value_field_is_non_nullable(array) {
             return Ok(array.clone());
@@ -97,15 +97,8 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
                 )
             })?;
             let metadata = VariantMetadata::try_new(metadata_bytes)?;
-            let mut value_builder = value_builder.builder_ext(&metadata);
-            if value_col.is_null(i) && typed_value_col.is_none_or(|tv| tv.is_null(i)) {
-                // Missing top-level value (spec-invalid): emit `Variant::Null` rather than the
-                // physical null the row builder would produce, which the non-nullable output
-                // `value` field could not represent.
-                value_builder.append_value(Variant::Null);
-            } else {
-                row_builder.append_row(&mut value_builder, &metadata, i)?;
-            }
+            let mut row_sink = TopLevelRowSink(value_builder.builder_ext(&metadata));
+            row_builder.append_row(&mut row_sink, &metadata, i)?;
         }
     }
 
@@ -127,10 +120,41 @@ fn value_field_is_non_nullable(array: &VariantArray) -> bool {
 /// Returns true if every null in `value` is masked by a parent null, i.e. the column may be
 /// annotated non-nullable.
 fn value_nulls_are_masked(value: &ArrayRef, parent_nulls: Option<&NullBuffer>) -> bool {
-    match value.logical_nulls() {
-        None => true,
-        Some(value_nulls) if value_nulls.null_count() == 0 => true,
-        Some(value_nulls) => parent_nulls.is_some_and(|parent| parent.contains(&value_nulls)),
+    value.null_count() == 0
+        || parent_nulls
+            .zip(value.nulls())
+            .is_some_and(|(parent, value_nulls)| parent.contains(value_nulls))
+}
+
+/// Wraps the sink that every top-level row is appended into. The row builders signal a missing
+/// value (value and typed_value both NULL) by calling `append_null`, and this wrapper gives that
+/// signal its top-level meaning: `Variant::Null`, because the non-nullable output `value` column
+/// cannot hold a physical NULL. Array-level NULL rows are appended before the sink is built, so
+/// they never reach it. Nested builders created via `try_new_object`/`try_new_list` are returned
+/// unwrapped, so nested missing values keep their own semantics, e.g. [`ObjectFieldBuilder`]
+/// omits the field.
+struct TopLevelRowSink<B>(B);
+
+impl<B: VariantBuilderExt> VariantBuilderExt for TopLevelRowSink<B> {
+    type State<'a>
+        = B::State<'a>
+    where
+        Self: 'a;
+
+    fn append_null(&mut self) {
+        self.0.append_value(Variant::Null);
+    }
+
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.0.append_value(value);
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>> {
+        self.0.try_new_list()
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>> {
+        self.0.try_new_object()
     }
 }
 
@@ -740,8 +764,10 @@ mod tests {
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Int64Array, LargeBinaryArray,
         LargeStringArray, StringViewArray,
     };
-    use arrow::datatypes::DataType;
-    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant};
+    use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+    use parquet_variant::{
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8,
+    };
     use std::sync::Arc;
 
     /// Returns the nullability annotation of the `value` field
@@ -911,6 +937,81 @@ mod tests {
         assert_eq!(result.value(0), Variant::from(1i64));
         assert_eq!(result.value(1), Variant::Null);
         assert_eq!(result.value(2), Variant::from(3i64));
+    }
+
+    /// Shreds `original` to `as_type`, then drops the parent null buffer so the parent-null row
+    /// becomes a spec-invalid "missing" row (value and typed_value both NULL with a valid
+    /// parent), and asserts unshredding turns exactly that row into `Variant::Null`.
+    fn assert_missing_row_unshreds_to_variant_null(original: &VariantArray, as_type: &DataType) {
+        let shredded = shred_variant(original, as_type).unwrap();
+        // Row 0 must actually shred, so that its round trip below exercises the typed
+        // reconstruction path of this shape's row builder, not the value fallback.
+        assert!(shredded.typed_value_column().unwrap().is_valid(0));
+
+        // The parent-null row carries no metadata bytes, so give every row the metadata of row 0.
+        let metadata_bytes = shredded.metadata_column().as_binary_view().value(0);
+        let metadata: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            metadata_bytes,
+            original.len(),
+        )));
+
+        let input = VariantArray::from_parts(
+            metadata,
+            shredded.value_column().clone(),
+            shredded.typed_value_column().cloned(),
+            None,
+        );
+
+        let result = crate::unshred_variant(&input).unwrap();
+        assert!(!value_field_is_nullable(&result));
+        assert_eq!(result.inner().null_count(), 0);
+        assert_eq!(result.value(0), original.value(0));
+        assert_eq!(result.value(1), Variant::Null);
+    }
+
+    /// Missing rows must become `Variant::Null` through every row-builder shape, since each
+    /// shape has its own expansion of `handle_unshredded_case`.
+    #[test]
+    fn test_unshred_missing_row_for_decimal_timestamp_object_list() {
+        let mut builder = VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 2).unwrap()));
+        builder.append_null();
+        assert_missing_row_unshreds_to_variant_null(&builder.build(), &DataType::Decimal64(18, 2));
+
+        let mut builder = VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(chrono::DateTime::from_timestamp(1, 0).unwrap()));
+        builder.append_null();
+        assert_missing_row_unshreds_to_variant_null(
+            &builder.build(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        );
+
+        let mut variant_builder = VariantBuilder::new();
+        let mut object_builder = variant_builder.new_object();
+        object_builder.insert("a", 1i64);
+        object_builder.finish();
+        let (object_metadata, object_value) = variant_builder.finish();
+        let mut builder = VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::try_new(&object_metadata, &object_value).unwrap());
+        builder.append_null();
+        assert_missing_row_unshreds_to_variant_null(
+            &builder.build(),
+            &DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)])),
+        );
+
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(1i64);
+        list_builder.append_value(2i64);
+        list_builder.finish();
+        let (list_metadata, list_value) = variant_builder.finish();
+        let mut builder = VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::try_new(&list_metadata, &list_value).unwrap());
+        builder.append_null();
+        assert_missing_row_unshreds_to_variant_null(
+            &builder.build(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+        );
     }
 
     #[test]
