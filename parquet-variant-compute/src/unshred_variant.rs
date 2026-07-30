@@ -765,9 +765,7 @@ mod tests {
         LargeStringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
-    use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8,
-    };
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8};
     use std::sync::Arc;
 
     /// Returns the nullability annotation of the `value` field
@@ -979,7 +977,9 @@ mod tests {
         assert_missing_row_unshreds_to_variant_null(&builder.build(), &DataType::Decimal64(18, 2));
 
         let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(chrono::DateTime::from_timestamp(1, 0).unwrap()));
+        builder.append_variant(Variant::from(
+            chrono::DateTime::from_timestamp(1, 0).unwrap(),
+        ));
         builder.append_null();
         assert_missing_row_unshreds_to_variant_null(
             &builder.build(),
