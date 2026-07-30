@@ -130,6 +130,13 @@ impl From<ArrowError> for AvroError {
     }
 }
 
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for AvroError {
+    fn from(e: object_store::Error) -> AvroError {
+        AvroError::External(Box::new(e))
+    }
+}
+
 impl From<AvroError> for io::Error {
     fn from(e: AvroError) -> Self {
         io::Error::other(e)

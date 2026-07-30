@@ -23,7 +23,6 @@ use futures::{FutureExt, TryFutureExt};
 use object_store::ObjectStore;
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
-use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -66,7 +65,7 @@ impl AvroObjectReader {
             + Send
             + 'static,
         O: Send + 'static,
-        E: Error + Send + 'static,
+        E: Into<AvroError> + Send + 'static,
     {
         match &self.runtime {
             Some(handle) => {
@@ -79,13 +78,11 @@ impl AvroObjectReader {
                             Err(e) => Err(AvroError::External(Box::new(e))),
                             Ok(p) => std::panic::resume_unwind(p),
                         },
-                        |res| res.map_err(|e| AvroError::General(e.to_string())),
+                        |res| res.map_err(Into::into),
                     )
                     .boxed()
             }
-            None => f(&self.store, &self.path)
-                .map_err(|e| AvroError::General(e.to_string()))
-                .boxed(),
+            None => f(&self.store, &self.path).map_err(Into::into).boxed(),
         }
     }
 }
@@ -103,5 +100,51 @@ impl AsyncFileReader for AvroObjectReader {
         Self: Send,
     {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    fn find_object_store_error(err: &AvroError) -> Option<&object_store::Error> {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        while let Some(e) = source {
+            if let Some(os) = e.downcast_ref::<object_store::Error>() {
+                return Some(os);
+            }
+            source = e.source();
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"));
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_on_runtime_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"))
+            .with_runtime(Handle::current());
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
     }
 }
