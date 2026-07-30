@@ -130,15 +130,12 @@ impl ArrayDecoder for MapArrayDecoder {
         let key_array = self.keys.decode(tape, &key_pos)?;
         let value_array = self.values.decode(tape, &value_pos)?;
 
-        // SAFETY: fields/arrays match the schema, lengths are equal, no nulls
-        let entries = unsafe {
-            StructArray::new_unchecked_with_length(
-                self.key_value_fields.clone(),
-                vec![key_array, value_array],
-                None,
-                key_pos.len(),
-            )
-        };
+        let entries = StructArray::try_new_with_length(
+            self.key_value_fields.clone(),
+            vec![key_array, value_array],
+            None,
+            key_pos.len(),
+        )?;
 
         let nulls = nulls.as_mut().and_then(|x| x.finish());
         // SAFETY: offsets are built monotonically starting from 0
