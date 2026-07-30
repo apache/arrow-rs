@@ -583,8 +583,8 @@ mod zstd_codec {
             }
 
             let dctx = self.dctx.get_or_insert_with(zstd_safe::DCtx::create);
-            let mut decoder =
-                zstd::stream::Decoder::with_context(input_buf, dctx).single_frame();
+            let mut decoder = zstd::stream::Decoder::with_context(input_buf, dctx);
+
             // The default Read::read_to_end impl is acceptable;
             // it reads directly into the Vec most of the time.
             // Using raw DCtx here would be more annoying than the compress path,
