@@ -571,8 +571,7 @@ mod zstd_codec {
                 output_buf.reserve(len);
             }
 
-            let mut decoder =
-                zstd::stream::Decoder::with_context(input_buf, &mut self.dctx).single_frame();
+            let mut decoder = zstd::stream::Decoder::with_context(input_buf, &mut self.dctx);
 
             // The default Read::read_to_end impl is acceptable;
             // it reads directly into the Vec most of the time.
