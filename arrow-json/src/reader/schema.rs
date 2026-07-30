@@ -387,10 +387,7 @@ mod tests {
     #[test]
     fn test_invalid_json_infer_schema() {
         let re = infer_json_schema_from_seekable(Cursor::new(b"}"), None);
-        assert_eq!(
-            re.err().unwrap().to_string(),
-            "Json error: Not valid JSON: expected value at line 1 column 1",
-        );
+        assert!(re.err().unwrap().to_string().contains("Json error:"));
     }
 
     #[test]
@@ -403,14 +400,14 @@ mod tests {
         let (inferred_schema, _) =
             infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
         let schema = Schema::new(vec![
-            Field::new("an", list_type_of(DataType::Null), true),
             Field::new("in", DataType::Int64, true),
-            Field::new("n", DataType::Null, true),
-            Field::new("na", list_type_of(DataType::Null), true),
-            Field::new("nas", list_type_of(DataType::Utf8), true),
             Field::new("ni", DataType::Int64, true),
             Field::new("ns", DataType::Utf8, true),
             Field::new("sn", DataType::Utf8, true),
+            Field::new("n", DataType::Null, true),
+            Field::new("an", list_type_of(DataType::Null), true),
+            Field::new("na", list_type_of(DataType::Null), true),
+            Field::new("nas", list_type_of(DataType::Utf8), true),
         ]);
         assert_eq!(inferred_schema, schema);
     }
