@@ -490,6 +490,7 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE: bool>(
                     unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
             });
+
             BooleanBuffer::new(output_buffer.into(), 0, len)
         }
         None => {
