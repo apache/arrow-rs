@@ -484,19 +484,33 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE: bool>(
             let mut output_buffer = MutableBuffer::new_null(len);
             let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
-                // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
-                if unsafe { values.value_unchecked(indices.value_unchecked(idx).as_usize()) } {
+                // SAFETY: idx is a valid index in indices.nulls() --> idx < indices.len()
+                let index = unsafe { indices.value_unchecked(idx).as_usize() };
+
+                let value = if VALIDATE {
+                    values.value(index)
+                } else {
+                    // SAFETY: caller guarantees all valid indices are in-bounds
+                    unsafe { values.value_unchecked(index) }
+                };
+
+                if value {
                     // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
                     unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
             });
-
             BooleanBuffer::new(output_buffer.into(), 0, len)
         }
         None => {
             BooleanBuffer::collect_bool(len, |idx: usize| {
-                // SAFETY: idx<indices.len(), caller guarantees all indices are in-bounds
-                unsafe { values.value_unchecked(indices.value_unchecked(idx).as_usize()) }
+                let index = unsafe { indices.value_unchecked(idx).as_usize() };
+
+                if VALIDATE {
+                    values.value(index)
+                } else {
+                    // SAFETY: idx < indices.len(), caller guarantees all indices are in-bounds
+                    unsafe { values.value_unchecked(index) }
+                }
             })
         }
     }
@@ -531,12 +545,20 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE: b
         None => {
             for index in indices.values() {
                 let index = index.as_usize();
-                // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
-                let (start, end) = unsafe {
+
+                let (start, end) = if VALIDATE {
                     (
-                        input_offsets.get_unchecked(index).as_usize(),
-                        input_offsets.get_unchecked(index + 1).as_usize(),
+                        input_offsets[index].as_usize(),
+                        input_offsets[index + 1].as_usize(),
                     )
+                } else {
+                    // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
+                    unsafe {
+                        (
+                            input_offsets.get_unchecked(index).as_usize(),
+                            input_offsets.get_unchecked(index + 1).as_usize(),
+                        )
+                    }
                 };
                 capacity += end - start;
                 offsets.push(
@@ -586,15 +608,21 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE: b
                 if last_filled < i {
                     offsets[last_filled + 1..=i].fill(current_offset);
                 }
-
-                // SAFETY: `i` comes from a validity bitmap over `indices`, so it is in-bounds.
-                // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
                 let index = unsafe { indices.value_unchecked(i) }.as_usize();
-                let (start, end) = unsafe {
+
+                let (start, end) = if VALIDATE {
                     (
-                        input_offsets.get_unchecked(index).as_usize(),
-                        input_offsets.get_unchecked(index + 1).as_usize(),
+                        input_offsets[index].as_usize(),
+                        input_offsets[index + 1].as_usize(),
                     )
+                } else {
+                    // SAFETY: caller guarantees index < values.len(), and input_offsets has len values.len()+1
+                    unsafe {
+                        (
+                            input_offsets.get_unchecked(index).as_usize(),
+                            input_offsets.get_unchecked(index + 1).as_usize(),
+                        )
+                    }
                 };
                 capacity += end - start;
                 offsets[i + 1] = T::Offset::from_usize(capacity)
@@ -836,11 +864,11 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE: bool>(
     })?;
 
     let result_buffer = match size_usize {
-        1 => take_fixed_size::<IndexType, 1>(values.values(), indices),
-        2 => take_fixed_size::<IndexType, 2>(values.values(), indices),
-        4 => take_fixed_size::<IndexType, 4>(values.values(), indices),
-        8 => take_fixed_size::<IndexType, 8>(values.values(), indices),
-        16 => take_fixed_size::<IndexType, 16>(values.values(), indices),
+        1 => take_fixed_size::<IndexType, 1, VALIDATE>(values.values(), indices),
+        2 => take_fixed_size::<IndexType, 2, VALIDATE>(values.values(), indices),
+        4 => take_fixed_size::<IndexType, 4, VALIDATE>(values.values(), indices),
+        8 => take_fixed_size::<IndexType, 8, VALIDATE>(values.values(), indices),
+        16 => take_fixed_size::<IndexType, 16, VALIDATE>(values.values(), indices),
         _ => take_fixed_size_binary_buffer_dynamic_length(values, indices, size_usize),
     };
 
@@ -900,7 +928,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType, const VALIDATE: bool>(
 /// [feature(generic_const_exprs)](https://github.com/rust-lang/rust/issues/76560) for calling
 /// `take_fixed_size<I, { size_of::<T::Native> () } >(...)`. Once this feature has been stabilized,
 /// we can use this function also in the primitive kernels.
-fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize>(
+fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize, const VALIDATE: bool>(
     buffer: &Buffer,
     indices: &PrimitiveArray<IndexType>,
 ) -> Buffer {
@@ -937,7 +965,15 @@ fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize>(
             .values()
             .iter()
             // SAFETY: caller guarantees all indices are in-bounds (check_bounds or trusted source)
-            .map(|index| unsafe { *buffer.get_unchecked(index.as_usize()) })
+            .map(|index| {
+                let index = index.as_usize();
+                if VALIDATE {
+                    buffer[index]
+                } else {
+                    // SAFETY: caller guarantees all indices are in-bounds (check_bounds or trusted source)
+                    unsafe { *buffer.get_unchecked(index) }
+                }
+            })
             .collect::<Vec<_>>(),
     };
 
