@@ -67,37 +67,43 @@ where
 fn infer_scalar(scalar: ScalarTy, expected: InferTy) -> Result<InferTy, ArrowError> {
     use ScalarTy::*;
 
-    Ok(InferTy::Scalar(match expected {
-        InferTy::Any => scalar,
-        InferTy::Scalar(expect) => match (expect, &scalar) {
+    match expected {
+        InferTy::Any => Ok(InferTy::Scalar(scalar)),
+        InferTy::Scalar(expect) => Ok(InferTy::Scalar(match (expect, &scalar) {
             (Bool, Bool) => Bool,
             (Int64, Int64) => Int64,
             (Int64 | Float64, Int64 | Float64) => Float64,
             _ => String,
-        },
+        })),
+        // Coerce scalars to arrays
+        InferTy::Array(expect) => infer_array([scalar], (*expect).clone()),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found {scalar}"
         )))?,
-    }))
+    }
 }
 
 /// Infers the type of a JSON array, given an expected type.
-fn infer_array<'a, I>(mut elements: I, expected: InferTy) -> Result<InferTy, ArrowError>
+fn infer_array<'a, I>(elements: I, expected: InferTy) -> Result<InferTy, ArrowError>
 where
-    I: Iterator,
+    I: IntoIterator,
     I::Item: JsonValue<'a>,
 {
     let expected_elem = match expected {
         InferTy::Any => InferTy::Any.to_arc(),
+        // Coerce scalars to arrays
+        InferTy::Scalar(_) => expected.to_arc(),
         InferTy::Array(inner) => inner.clone(),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an array"
         )))?,
     };
 
-    let elem = elements.try_fold((*expected_elem).clone(), |expected, value| {
-        infer_json_type(value, expected)
-    })?;
+    let elem = elements
+        .into_iter()
+        .try_fold((*expected_elem).clone(), |expected, value| {
+            infer_json_type(value, expected)
+        })?;
 
     // If the inferred type is the same as the expected type,
     // reuse the expected type and thus any inner `Arc`s it contains,
@@ -280,5 +286,25 @@ impl Display for ScalarTy {
             ScalarTy::Float64 => write!(f, "a number"),
             ScalarTy::String => write!(f, "a string"),
         }
+    }
+}
+
+impl<'a> JsonValue<'a> for ScalarTy {
+    /// Gets the type of this JSON value.
+    fn get(&self) -> JsonType {
+        match self {
+            Self::Bool => JsonType::Bool,
+            Self::Int64 => JsonType::Int64,
+            Self::Float64 => JsonType::Float64,
+            ScalarTy::String => JsonType::String,
+        }
+    }
+
+    fn elements(&self) -> impl Iterator<Item = Self> {
+        std::iter::empty()
+    }
+
+    fn fields(&self) -> impl Iterator<Item = (&'a str, Self)> {
+        std::iter::empty()
     }
 }

@@ -25,12 +25,12 @@ pub trait JsonValue<'a> {
 
     /// Returns an iterator over the elements of this JSON array.
     ///
-    /// Panics if the JSON value is not an array.
+    /// May panic if the JSON value is not an array.
     fn elements(&self) -> impl Iterator<Item = Self>;
 
     /// Returns an iterator over the fields of this JSON object.
     ///
-    /// Panics if the JSON value is not an object.
+    /// May panic if the JSON value is not an object.
     fn fields(&self) -> impl Iterator<Item = (&'a str, Self)>;
 }
 
