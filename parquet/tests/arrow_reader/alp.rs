@@ -76,10 +76,8 @@ fn test_read_f32_alp() {
 ///
 /// This checks losslessness only, not compression: these are `f32` values whose
 /// encoded integers need 31 bits and which except 6.4% of the time, so ALP is
-/// larger than PLAIN here. The arrow-cpp implementation produces a byte-identical
-/// page from the same values (see `test_matches_cpp_reference_page`), so that is
-/// a property of the data, not of the encoder. ALP's win on arade in the paper is
-/// on the `f64` version of the dataset.
+/// larger than PLAIN here, a property of the data rather than the encoder.
+/// ALP's win on arade in the paper is on the `f64` version of the dataset.
 #[test]
 fn test_write_f32_alp_roundtrip() {
     let data_dir = PathBuf::from(parquet_test_data());

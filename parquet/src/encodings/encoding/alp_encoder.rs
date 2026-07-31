@@ -17,7 +17,7 @@
 
 //! ALP (Adaptive Lossless floating-Point) encoder.
 //!
-//! Based on the draft Parquet spec: <https://github.com/apache/parquet-format/pull/557>
+//! Spec: <https://github.com/apache/parquet-format/blob/master/Encodings.md#adaptive-lossless-floating-point-alp--10>
 //!
 //! Values are buffered until the page is flushed, then encoded a vector at a
 //! time into the page layout that [`AlpDecoder`] reads back:
@@ -83,8 +83,7 @@ struct Combination {
 ///
 /// The last two are tie-breaks taken from the ALP paper (Afroozeh et al., SIGMOD
 /// 2023, section 3.1.2), which prefers higher exponents and factors without
-/// justifying it further. They are kept so the candidate set matches the
-/// reference implementations.
+/// justifying it further.
 fn rank(c: &Combination) -> (u64, Reverse<u64>, u8, u8) {
     (
         c.num_appearances,
@@ -382,8 +381,7 @@ fn encode_vector<F: AlpFloat>(
 
     // PackedValues: FOR deltas, LSB-first, as the spec requires. A zero bit
     // width means every value equals the frame of reference, so nothing is
-    // stored. This is the stage a FastLanes-ordered `integer_encoding` would
-    // replace.
+    // stored.
     if bit_width > 0 {
         let mut writer = BitWriter::new_from_buf(std::mem::take(out));
         for &encoded_value in encoded.iter() {
@@ -905,7 +903,6 @@ mod tests {
 
     /// Streaming pages (every page after the first) must be byte-for-byte
     /// identical to encoding the same values in one pass with the same preset.
-    /// This is the guarantee that makes the streaming path a pure refactor.
     #[test]
     fn test_streaming_matches_buffered() {
         let page1: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01 + 1.23).collect();

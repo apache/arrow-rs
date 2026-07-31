@@ -17,7 +17,7 @@
 
 //! ALP (Adaptive Lossless floating-Point) Encoding
 //!
-//! Based on the draft Parquet spec: <https://github.com/apache/parquet-format/pull/557>
+//! Spec: <https://github.com/apache/parquet-format/blob/master/Encodings.md#adaptive-lossless-floating-point-alp--10>
 //!
 //! # Page layout
 //!
@@ -45,8 +45,7 @@ pub(crate) const ALP_COMPRESSION_MODE: u8 = 0;
 pub(crate) const ALP_INTEGER_ENCODING_FOR_BIT_PACK: u8 = 0;
 pub(crate) const ALP_MIN_LOG_VECTOR_SIZE: u8 = 3;
 pub(crate) const ALP_MAX_LOG_VECTOR_SIZE: u8 = 15;
-/// Spec-recommended default `log_vector_size`: 1024-value vectors, the canonical
-/// ALP/FastLanes vector size.
+/// Spec-recommended default `log_vector_size`: 1024-value vectors.
 pub(crate) const ALP_DEFAULT_LOG_VECTOR_SIZE: u8 = 10;
 pub(crate) const ALP_MAX_EXPONENT_F32: u8 = 10;
 pub(crate) const ALP_MAX_EXPONENT_F64: u8 = 18;
@@ -174,9 +173,7 @@ impl AlpHeader {
     }
 }
 
-/// Per-vector ALP metadata (4 bytes), equivalent to C++ `AlpEncodedVectorInfo`.
-///
-/// ##### AlpInfo (4 bytes, both types)
+/// Per-vector ALP metadata (4 bytes).
 ///
 /// ```text
 ///  Byte:    0           1          2       3
@@ -203,18 +200,13 @@ impl AlpInfo {
     }
 }
 
-/// Per-vector FOR metadata for exact integer type (`u32` for `f32`, `u64` for `f64`).
-///
-/// Frame of reference (FOR) encoding
-///
-/// ###### ForInfo for FLOAT (5 bytes) / DOUBLE (9 bytes)
+/// Per-vector FOR (frame of reference) metadata: 5 bytes for `f32`, 9 for `f64`.
 ///
 /// ```text
-/// Byte:    0    1    2    3       4
-/// +----+----+----+----+-----------+
+/// +--------------------+-----------+
 /// | frame_of_reference | bit_width |
-/// |    (int32 LE)      |  (uint8)  |
-/// +----+----+----+----+-----------+
+/// | (Exact::WIDTH, LE) |  (uint8)  |
+/// +--------------------+-----------+
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ForInfo<Exact: AlpExact> {
@@ -245,16 +237,13 @@ impl<Exact: AlpExact> ForInfo<Exact> {
     }
 }
 
-/// Exact integer type used by FOR reconstruction.
+/// Exact integer type used by FOR reconstruction: `u32` for `f32`, `u64` for
+/// `f64`.
 ///
-/// This mirrors C++:
-/// - `float`  -> `uint32_t`
-/// - `double` -> `uint64_t`
-///
-/// Why unsigned (not `i32`/`i64`)?
-/// - FOR stores non-negative deltas optimized for bitpacking.
-/// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
-/// - Signed interpretation is applied later during decimal reconstruction.
+/// Why unsigned (not `i32`/`i64`)? The spec computes and stores deltas in
+/// unsigned wrapping arithmetic: this avoids signed overflow when a vector's
+/// range exceeds the signed maximum, and unpacking needs no sign extension.
+/// Signed interpretation is applied later during decimal reconstruction.
 pub(crate) trait AlpExact:
     Copy + std::fmt::Debug + PartialEq + FromBitpacked + Default
 {
