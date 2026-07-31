@@ -46,7 +46,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
   {%- for commit in commits %}
-- {% if commit.remote.pr_title %}{{ commit.remote.pr_title | upper_first | trim }}{% else %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}{% endif %}\
+- {% if commit.remote.pr_title %}{{ commit.remote.pr_title | trim }}{% else %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}{% endif %}\
     {% if commit.remote.username %} by @{{ commit.remote.username }}{%- endif -%}
     {% if commit.remote.pr_number %} in \
       [#{{ commit.remote.pr_number }}]({{ self::remote_url() }}/pull/{{ commit.remote.pr_number }}) \
