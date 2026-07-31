@@ -50,11 +50,15 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 mod metadata;
 pub use metadata::*;
 
+mod spawn;
+pub use spawn::SpawnedReader;
+
 #[cfg(feature = "object_store")]
 mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
+#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -65,10 +69,94 @@ pub use store::*;
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
-///    is enabled, implements this interface for [`ObjectStore`].
+/// 2. Implementations for remote storage, such as the `object_store` crate,
+///    can implement this interface directly, typically by pairing a store
+///    handle with an object path and delegating [`Self::get_bytes`] and
+///    [`Self::get_byte_ranges`] to ranged reads. [`SpawnedReader`] can wrap
+///    such a reader to perform its I/O on a dedicated runtime, and
+///    [`ParquetMetaDataReader::with_arrow_reader_options`] simplifies
+///    implementing [`Self::get_metadata`].
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
+/// # Example: implementing `AsyncFileReader` for the `object_store` crate
+///
+/// ```no_run
+/// # use std::ops::Range;
+/// # use std::sync::Arc;
+/// use bytes::Bytes;
+/// use futures::future::BoxFuture;
+/// use futures::{FutureExt, TryFutureExt};
+/// use object_store::path::Path;
+/// use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
+/// use parquet::arrow::arrow_reader::ArrowReaderOptions;
+/// use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+/// use parquet::errors::{ParquetError, Result};
+/// use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+///
+/// fn to_parquet_err(e: object_store::Error) -> ParquetError {
+///     ParquetError::External(Box::new(e))
+/// }
+///
+/// #[derive(Clone)]
+/// struct ObjectStoreReader {
+///     store: Arc<dyn ObjectStore>,
+///     path: Path,
+/// }
+///
+/// impl AsyncFileReader for ObjectStoreReader {
+///     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+///         self.store
+///             .get_range(&self.path, range)
+///             .map_err(to_parquet_err)
+///             .boxed()
+///     }
+///
+///     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+///         async move {
+///             self.store
+///                 .get_ranges(&self.path, &ranges)
+///                 .await
+///                 .map_err(to_parquet_err)
+///         }
+///         .boxed()
+///     }
+///
+///     fn get_metadata<'a>(
+///         &'a mut self,
+///         options: Option<&'a ArrowReaderOptions>,
+///     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+///         async move {
+///             let metadata = ParquetMetaDataReader::new()
+///                 .with_arrow_reader_options(options)
+///                 .load_via_suffix_and_finish(self)
+///                 .await?;
+///             Ok(Arc::new(metadata))
+///         }
+///         .boxed()
+///     }
+/// }
+///
+/// /// Supports fetching the parquet footer without knowing the file size,
+/// /// via suffix range requests
+/// impl MetadataSuffixFetch for &mut ObjectStoreReader {
+///     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+///         let options = GetOptions {
+///             range: Some(GetRange::Suffix(suffix as u64)),
+///             ..Default::default()
+///         };
+///         async move {
+///             let resp = self
+///                 .store
+///                 .get_opts(&self.path, options)
+///                 .await
+///                 .map_err(to_parquet_err)?;
+///             resp.bytes().await.map_err(to_parquet_err)
+///         }
+///         .boxed()
+///     }
+/// }
+/// ```
+///
+/// [`ParquetMetaDataReader::with_arrow_reader_options`]: crate::file::metadata::ParquetMetaDataReader::with_arrow_reader_options
 ///
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
@@ -164,21 +252,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
-            let metadata_opts = options.map(|o| o.metadata_options().clone());
-            let mut metadata_reader =
-                ParquetMetaDataReader::new().with_metadata_options(metadata_opts);
-
-            if let Some(opts) = options {
-                metadata_reader = metadata_reader
-                    .with_column_index_policy(opts.column_index_policy())
-                    .with_offset_index_policy(opts.offset_index_policy());
-            }
-
-            #[cfg(feature = "encryption")]
-            let metadata_reader = metadata_reader.with_decryption_properties(
-                options.and_then(|o| o.file_decryption_properties.as_ref().map(Arc::clone)),
-            );
-
+            let metadata_reader = ParquetMetaDataReader::new().with_arrow_reader_options(options);
             let parquet_metadata = metadata_reader.load_via_suffix_and_finish(self).await?;
             Ok(Arc::new(parquet_metadata))
         }
@@ -922,12 +996,7 @@ mod tests {
             &'a mut self,
             options: Option<&'a ArrowReaderOptions>,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-            let mut metadata_reader = ParquetMetaDataReader::new();
-            if let Some(opts) = options {
-                metadata_reader = metadata_reader
-                    .with_column_index_policy(opts.column_index_policy())
-                    .with_offset_index_policy(opts.offset_index_policy());
-            }
+            let metadata_reader = ParquetMetaDataReader::new().with_arrow_reader_options(options);
             self.metadata = Some(Arc::new(
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
