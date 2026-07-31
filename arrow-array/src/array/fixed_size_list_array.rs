@@ -142,6 +142,32 @@ impl FixedSizeListArray {
         Self::try_new(field, size, values, nulls).unwrap()
     }
 
+    /// Create a new [`FixedSizeListArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `size >= 0`
+    /// - `values.len() == len * size as usize`
+    /// - `nulls.len() == len` if `nulls` is `Some`
+    /// - `field.data_type() == values.data_type()`
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        size: i32,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::try_new_with_length(field, size, values, nulls, len).unwrap();
+        }
+        Self {
+            data_type: DataType::FixedSizeList(field, size),
+            values,
+            value_length: size,
+            nulls,
+            len,
+        }
+    }
+
     /// Create a new [`FixedSizeListArray`] from the provided parts, returning an error on failure.
     ///
     /// Note that if `size == 0` and `nulls` is `None` (a degenerate, non-nullable
