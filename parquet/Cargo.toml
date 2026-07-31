@@ -85,7 +85,7 @@ insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"] }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.13", default-features = false, features = ["experimental"] }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
