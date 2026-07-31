@@ -445,9 +445,9 @@ pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = S
     fn encode_scale(exponent: u8, factor: u8) -> Self::Scale;
 
     /// Apply a scale as the same two separate multiplications the decode side
-    /// uses. The spec requires two steps rather than one multiplication by a
-    /// combined constant, so that every implementation produces bit-identical
-    /// results.
+    /// uses. Two steps rather than one multiplication by a combined constant:
+    /// the spec requires this on the normative decode path, and encoding with
+    /// the same arithmetic maximizes the values that round-trip.
     fn apply_scale(self, scale: Self::Scale) -> Self;
 
     /// True for values ALP cannot turn into an exact integer: NaN, the
@@ -455,11 +455,13 @@ pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = S
     /// (which would come back as `+0.0` and lose its sign).
     fn is_impossible_to_encode(self) -> bool;
 
-    /// Round to nearest by the "magic number" technique: `(x + magic) - magic`
-    /// lands `x` where the ULP is 1.0, dropping the fraction. The magic carries
-    /// the sign of `x` (`copysign`) so negatives round in their own binade -
-    /// byte-identical to branching on the sign but branchless, so the encode loop
-    /// vectorizes. The add/sub must not be cancelled: it *is* the rounding.
+    /// Round to nearest by the "magic number" technique. Adding `magic` pushes
+    /// `x` into the binade where floats are spaced exactly 1.0 apart, so the
+    /// add itself snaps to the nearest integer, and subtracting `magic` back
+    /// is exact. `magic = 1.5 * 2^mantissa_bits` keeps the sum in that binade
+    /// for negative `x` too. Values large enough to be mis-rounded just fail
+    /// the caller's round-trip check and become exceptions. The add/sub must
+    /// not be simplified away: it *is* the rounding.
     fn fast_round(self) -> <Self::Exact as AlpExact>::Signed;
 
     /// Encode one value with a precomputed [`AlpFloat::encode_scale`].
@@ -528,8 +530,7 @@ impl AlpFloat for f32 {
     }
 
     fn fast_round(self) -> i32 {
-        let magic = Self::MAGIC_NUMBER.copysign(self);
-        ((self + magic) - magic) as i32
+        ((self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER) as i32
     }
 }
 
@@ -585,7 +586,6 @@ impl AlpFloat for f64 {
     }
 
     fn fast_round(self) -> i64 {
-        let magic = Self::MAGIC_NUMBER.copysign(self);
-        ((self + magic) - magic) as i64
+        ((self + Self::MAGIC_NUMBER) - Self::MAGIC_NUMBER) as i64
     }
 }
