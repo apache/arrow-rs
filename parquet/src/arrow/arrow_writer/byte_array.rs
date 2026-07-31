@@ -484,6 +484,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn count_values_within_byte_budget_gather(
+        &self,
         values: &Self::Values,
         indices: &[usize],
         byte_budget: usize,
@@ -558,7 +559,23 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             // type can reach here.
             data_type => unreachable!("ByteArrayEncoder cannot be constructed for {data_type:?}"),
         };
-        Some(count)
+        if count == indices.len() || self.dict_encoder.is_some() {
+            return Some(count);
+        }
+
+        let last_value = match &self.fallback.encoder {
+            FallbackEncoderImpl::Delta { last_value, .. } => last_value.as_slice(),
+            _ => return Some(count),
+        };
+        let delta_count = downcast_op!(
+            values.data_type(),
+            values,
+            count_delta_byte_array_within_budget,
+            indices,
+            byte_budget,
+            last_value
+        );
+        Some(count.max(delta_count))
     }
 
     fn num_values(&self) -> usize {
@@ -770,6 +787,56 @@ fn count_within_budget_offsets<T: ByteArrayType>(
         }
     }
     n
+}
+
+/// Returns a larger mini-batch when an oversized first value can prefix-compress
+/// subsequent values without consuming more than one additional page budget.
+fn count_delta_byte_array_within_budget<T>(
+    values: T,
+    indices: &[usize],
+    byte_budget: usize,
+    last_value: &[u8],
+) -> usize
+where
+    T: ArrayAccessor + Copy,
+    T::Item: AsRef<[u8]>,
+{
+    let Some(&first_idx) = indices.first() else {
+        return 0;
+    };
+    if values.value(first_idx).as_ref().len() <= byte_budget {
+        return 0;
+    }
+
+    let mut additional_size = 0usize;
+    for (position, &idx) in indices.iter().enumerate() {
+        let value = values.value(idx);
+        let value = value.as_ref();
+        let previous_value;
+        let previous = if position == 0 {
+            last_value
+        } else {
+            previous_value = values.value(indices[position - 1]);
+            previous_value.as_ref()
+        };
+        let prefix_length = previous
+            .iter()
+            .zip(value)
+            .take_while(|(left, right)| left == right)
+            .count();
+
+        if position != 0 {
+            // Account conservatively for the two delta-encoded i32 lengths in
+            // addition to the suffix bytes written to the page.
+            let encoded_size =
+                (value.len() - prefix_length).saturating_add(2 * std::mem::size_of::<i32>());
+            additional_size = additional_size.saturating_add(encoded_size);
+            if additional_size > byte_budget {
+                return position;
+            }
+        }
+    }
+    indices.len()
 }
 
 /// Computes the min and max for the provided array and indices

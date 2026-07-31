@@ -28,7 +28,9 @@ use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderB
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{EnabledStatistics, ReaderProperties, WriterProperties};
+use parquet::file::properties::{
+    EnabledStatistics, ReaderProperties, WriterProperties, WriterVersion,
+};
 use parquet::file::reader::SerializedPageReader;
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
@@ -746,6 +748,47 @@ fn test_large_string() {
             }],
         },
     });
+}
+
+fn delta_byte_array_page_count(strings: Vec<String>) -> usize {
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let data = Bytes::from(buf);
+    let read_options =
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
+    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, read_options).unwrap();
+    let pages = &reader.metadata().offset_index().unwrap()[0][0].page_locations;
+
+    pages.len()
+}
+
+#[test]
+fn test_large_repeated_string_delta_encoding() {
+    let value_size = 64 * 1024;
+    let strings = (0..32).map(|_| "x".repeat(value_size)).collect();
+    assert_eq!(delta_byte_array_page_count(strings), 1);
+}
+
+#[test]
+fn test_large_distinct_string_delta_encoding() {
+    let value_size = 64 * 1024;
+    let strings = (0..32)
+        .map(|i| ((b'A' + i) as char).to_string().repeat(value_size))
+        .collect();
+    assert_eq!(delta_byte_array_page_count(strings), 32);
 }
 
 #[test]

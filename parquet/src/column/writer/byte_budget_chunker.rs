@@ -137,6 +137,7 @@ impl ByteBudgetChunker {
             self.page_byte_limit
         };
         self.byte_budget_sub_batch_size::<E>(
+            encoder,
             values,
             value_indices,
             chunk_def,
@@ -152,8 +153,10 @@ impl ByteBudgetChunker {
     /// `#[inline(never)]` keeps this slow path out of the hot
     /// `write_batch_internal` loop; numeric and bool columns never reach it.
     #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
     fn byte_budget_sub_batch_size<E: ColumnValueEncoder>(
         &self,
+        encoder: &E,
         values: &E::Values,
         value_indices: Option<&[usize]>,
         chunk_def: LevelDataRef<'_>,
@@ -177,11 +180,14 @@ impl ByteBudgetChunker {
             Some(idx) => {
                 let end = (values_offset + vals_in_chunk).min(idx.len());
                 let start = values_offset.min(end);
-                E::count_values_within_byte_budget_gather(values, &idx[start..end], budget)
+                encoder.count_values_within_byte_budget_gather(values, &idx[start..end], budget)
             }
-            None => {
-                E::count_values_within_byte_budget(values, values_offset, vals_in_chunk, budget)
-            }
+            None => encoder.count_values_within_byte_budget(
+                values,
+                values_offset,
+                vals_in_chunk,
+                budget,
+            ),
         };
         match fit {
             None => chunk_size,

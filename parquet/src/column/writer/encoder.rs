@@ -107,6 +107,7 @@ pub trait ColumnValueEncoder {
     /// case is "one wide value, return 1." The variable-width walk only
     /// needs to be precise when the chunk is genuinely near the budget.
     fn count_values_within_byte_budget(
+        &self,
         _values: &Self::Values,
         _offset: usize,
         _len: usize,
@@ -119,6 +120,7 @@ pub trait ColumnValueEncoder {
     /// `indices` rather than a contiguous range. Returns the number of
     /// `indices` that fit, not the maximum index value.
     fn count_values_within_byte_budget_gather(
+        &self,
         _values: &Self::Values,
         _indices: &[usize],
         _byte_budget: usize,
@@ -284,6 +286,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn count_values_within_byte_budget(
+        &self,
         values: &[T::T],
         offset: usize,
         len: usize,
@@ -302,6 +305,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn count_values_within_byte_budget_gather(
+        &self,
         values: &[T::T],
         indices: &[usize],
         byte_budget: usize,
