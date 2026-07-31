@@ -7,6 +7,16 @@
 
 set -e
 
+CRATES="
+    -p arrow-arith
+    -p arrow-array
+    -p arrow-buffer
+    -p arrow-data
+    -p arrow-ord
+    -p arrow-schema
+    -p arrow-select
+"
+
 setup_miri() {
     export MIRIFLAGS="-Zmiri-disable-isolation"
     cargo miri setup
@@ -20,9 +30,7 @@ case $# in
 
         echo "Starting Arrow MIRI run..."
         cargo miri nextest run \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     2)
@@ -34,9 +42,7 @@ case $# in
         echo "Starting Arrow MIRI run partition ${partition} out of ${total}..."
         cargo miri nextest run \
         --partition slice:"${partition}"/"${total}" \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     *)

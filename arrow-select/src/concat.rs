@@ -1732,6 +1732,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn concat_many_dictionary_list_arrays() {
         let number_of_unique_values = 8;
         let scalars = (0..80000)
