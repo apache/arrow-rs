@@ -25,6 +25,7 @@
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.1.0...59.2.0)
 
 ### Enhancements
+- arrow-avro: Deprecate object_store integration by @brancz in [#10484](https://github.com/apache/arrow-rs/pull/10484)
 - chore(arrow): add unchecked array builder methods by @Rich-T-kid in [#10440](https://github.com/apache/arrow-rs/pull/10440)
 - feat(arrow-ipc): add sans-IO stream encoder by @Phoenix500526 in [#10277](https://github.com/apache/arrow-rs/pull/10277)
 - chore(arrow-cast): support suffix white space in arrow-cast parse by @Rich-T-kid in [#10396](https://github.com/apache/arrow-rs/pull/10396)
@@ -36,6 +37,8 @@
 - feat(arrow-arith): Add interval multiplication by i64 by @peterxcli in [#10336](https://github.com/apache/arrow-rs/pull/10336)
 - fix: Make `parquet-index` work with column paths by @korowa in [#10330](https://github.com/apache/arrow-rs/pull/10330)
 - feat(arrow-csv): add support for parsing `Float16` by @Glatzel in [#10343](https://github.com/apache/arrow-rs/pull/10343)
+- Remove the unmaintained paste dependency from arrow by @Phoenix500526 in [#10303](https://github.com/apache/arrow-rs/pull/10303)
+- chore: formalize the default map field names to match default arrow spec by @rluvaton in [#10297](https://github.com/apache/arrow-rs/pull/10297)
 - feat(variant): Add `variant_to_arrow` `Map` type support by @sdf-jkl in [#10307](https://github.com/apache/arrow-rs/pull/10307)
 
 ### Bug fixes
@@ -80,12 +83,9 @@
 - Align parquet-geospatial crate docs with README by @paleolimbot in [#10302](https://github.com/apache/arrow-rs/pull/10302)
 
 ### Miscellaneous
-- arrow-avro: Deprecate object_store integration by @brancz in [#10484](https://github.com/apache/arrow-rs/pull/10484)
 - parquet: deprecate explicit `object_store` integration by @brancz in [#10354](https://github.com/apache/arrow-rs/pull/10354)
 - fix(parquet): restore opaque return type for `RowSelection::iter` by @haohuaijin in [#10450](https://github.com/apache/arrow-rs/pull/10450)
 - refactor(parquet): split `arrow_reader/selection` into smaller modules by @haohuaijin in [#10434](https://github.com/apache/arrow-rs/pull/10434)
 - chore: deduplicate filter nulls code in coalesce/filter kernel by @Jefffrey in [#10348](https://github.com/apache/arrow-rs/pull/10348)
 - chore: remove parquet dependency from parquet_derive by @ByteBaker in [#10327](https://github.com/apache/arrow-rs/pull/10327)
-- Remove the unmaintained paste dependency from arrow by @Phoenix500526 in [#10303](https://github.com/apache/arrow-rs/pull/10303)
-- chore: formalize the default map field names to match default arrow spec by @rluvaton in [#10297](https://github.com/apache/arrow-rs/pull/10297)
 
