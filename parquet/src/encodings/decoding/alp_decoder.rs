@@ -1306,9 +1306,27 @@ mod tests {
             exc_val: f64,
         }
         let specs = [
-            Spec { for_ref: 1000, bit_width: 4, len: 1024, exc_pos: 100, exc_val: f64::NAN },
-            Spec { for_ref: 5000, bit_width: 8, len: 1024, exc_pos: 300, exc_val: f64::INFINITY },
-            Spec { for_ref: 100, bit_width: 2, len: 552, exc_pos: 200, exc_val: -0.0 },
+            Spec {
+                for_ref: 1000,
+                bit_width: 4,
+                len: 1024,
+                exc_pos: 100,
+                exc_val: f64::NAN,
+            },
+            Spec {
+                for_ref: 5000,
+                bit_width: 8,
+                len: 1024,
+                exc_pos: 300,
+                exc_val: f64::INFINITY,
+            },
+            Spec {
+                for_ref: 100,
+                bit_width: 2,
+                len: 552,
+                exc_pos: 200,
+                exc_val: -0.0,
+            },
         ];
 
         let mut vectors = Vec::new();
@@ -1345,7 +1363,11 @@ mod tests {
         };
 
         // Sanity check: a straight sequential decode reproduces `expected`.
-        assert_bits(&decode_page::<DoubleType>(page.clone(), n), &expected, "sequential");
+        assert_bits(
+            &decode_page::<DoubleType>(page.clone(), n),
+            &expected,
+            "sequential",
+        );
 
         // Skip from the start: boundary-aligned (1024, 2048), mid-vector (1, 1025,
         // 2222), just before the end (2599), and exactly to the end (2600).

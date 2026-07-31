@@ -141,7 +141,8 @@ fn estimate_size_bits<F: AlpFloat>(
         return Some(num_values * exception_bits::<F>());
     };
 
-    let range = F::Exact::reinterpret_from_signed(max).wrapping_sub(F::Exact::reinterpret_from_signed(min));
+    let range =
+        F::Exact::reinterpret_from_signed(max).wrapping_sub(F::Exact::reinterpret_from_signed(min));
     let bit_width = u64::from(num_required_bits(range.to_u64()));
 
     Some(num_values * bit_width + num_exceptions * exception_bits::<F>())
@@ -386,8 +387,8 @@ fn encode_vector<F: AlpFloat>(
     if bit_width > 0 {
         let mut writer = BitWriter::new_from_buf(std::mem::take(out));
         for &encoded_value in encoded.iter() {
-            let delta = F::Exact::reinterpret_from_signed(encoded_value)
-                .wrapping_sub(frame_of_reference);
+            let delta =
+                F::Exact::reinterpret_from_signed(encoded_value).wrapping_sub(frame_of_reference);
             writer.put_value(delta.to_u64(), bit_width as usize);
         }
         // Pads to a byte boundary, giving exactly the ceil(n * bit_width / 8)

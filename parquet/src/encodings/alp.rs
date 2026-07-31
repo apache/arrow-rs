@@ -255,7 +255,9 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// - FOR stores non-negative deltas optimized for bitpacking.
 /// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
 /// - Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact: Copy + std::fmt::Debug + PartialEq + FromBitpacked + Default {
+pub(crate) trait AlpExact:
+    Copy + std::fmt::Debug + PartialEq + FromBitpacked + Default
+{
     const WIDTH: usize;
     type Signed: Copy + Ord + std::fmt::Debug + Send;
     fn from_le_slice(slice: &[u8]) -> Self;
@@ -407,7 +409,9 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
     0.000000000000000001,
 ];
 
-pub(crate) trait AlpFloat: Copy + Default + PartialEq + std::ops::Mul<Output = Self> {
+pub(crate) trait AlpFloat:
+    Copy + Default + PartialEq + std::ops::Mul<Output = Self>
+{
     type Exact: AlpExact + FromBytes;
     type Scale: Copy + Send;
 
