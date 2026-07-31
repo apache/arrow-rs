@@ -93,6 +93,17 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Create a new [`BooleanArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(values: BooleanBuffer, nulls: Option<NullBuffer>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self { values, nulls }
+    }
+
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
         Self {
