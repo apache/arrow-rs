@@ -32,6 +32,7 @@ use crate::reader::{ArrayDecoder, DecoderContext};
 
 pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
+    values_nullable: bool,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<R>,
 }
@@ -40,19 +41,17 @@ impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
     pub fn new(
         ctx: &DecoderContext,
         data_type: &DataType,
-        is_nullable: bool,
+        _is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let values_field = match data_type {
             DataType::RunEndEncoded(_, v) => v,
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(
-            values_field.data_type(),
-            values_field.is_nullable() || is_nullable,
-        )?;
+        let decoder = ctx.make_decoder(values_field.data_type(), values_field.is_nullable())?;
 
         Ok(Self {
             data_type: data_type.clone(),
+            values_nullable: values_field.is_nullable(),
             decoder,
             phantom: Default::default(),
         })
@@ -86,6 +85,12 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
 
         let indices = UInt32Array::from_iter_values(indices.into_iter().map(|i| i as u32));
         let values = take(flat_array.as_ref(), &indices, None)?;
+
+        if !self.values_nullable && values.nulls().is_some() {
+            return Err(ArrowError::JsonError(
+                "Non-nullable RunEndEncoded values cannot contain nulls".to_string(),
+            ));
+        }
 
         // SAFETY: run_ends are strictly increasing with the last value equal to len
         let run_ends = unsafe { RunEndBuffer::new_unchecked(ScalarBuffer::from(run_ends), 0, len) };

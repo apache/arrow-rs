@@ -3638,6 +3638,32 @@ mod tests {
     }
 
     #[test]
+    fn test_read_run_end_encoded_rejects_null_non_nullable_values() {
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, false)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+
+        for buf in [
+            r#"
+            {"a": "x"}
+            {"a": null}
+            {"a": "y"}
+            "#,
+            r#"
+            {"a": "x"}
+            {}
+            {"a": "y"}
+            "#,
+        ] {
+            let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+            let res = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
     fn test_read_run_end_encoded_consecutive_nulls() {
         let buf = r#"
         {"a": "x"}
