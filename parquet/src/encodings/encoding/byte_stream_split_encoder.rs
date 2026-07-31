@@ -209,7 +209,8 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
             Type::FIXED_LEN_BYTE_ARRAY => self.type_width,
             _ => T::get_type_size(),
         };
-        // split_streams_const() is faster up to type_width == 8
+        // split_streams_const() is faster up to type_width == 8.
+        // 12 and 16 are included since they auto-vectorize nicely.
         match type_size {
             2 => split_streams_const::<2>(src, dst),
             3 => split_streams_const::<3>(src, dst),
