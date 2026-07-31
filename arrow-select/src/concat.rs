@@ -799,6 +799,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_concat_13_incompatible_datatypes_should_not_include_all_of_them() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),

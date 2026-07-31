@@ -466,6 +466,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_comparison() {
         // is_eq
         assert!(8_i8.is_eq(8_i8));
@@ -529,6 +530,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_add() {
         // add_wrapping
         assert_eq!(8_i8.add_wrapping(2_i8), 10_i8);
@@ -576,6 +578,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_sub() {
         // sub_wrapping
         assert_eq!(8_i8.sub_wrapping(2_i8), 6_i8);
@@ -623,6 +626,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_mul() {
         // mul_wrapping
         assert_eq!(8_i8.mul_wrapping(2_i8), 16_i8);
@@ -670,6 +674,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_div() {
         // div_wrapping
         assert_eq!(8_i8.div_wrapping(2_i8), 4_i8);
@@ -717,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_mod() {
         // mod_wrapping
         assert_eq!(9_i8.mod_wrapping(2_i8), 1_i8);
@@ -764,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_neg() {
         // neg_wrapping
         assert_eq!(8_i8.neg_wrapping(), -8_i8);
@@ -803,6 +810,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_native_type_pow() {
         // pow_wrapping
         assert_eq!(8_i8.pow_wrapping(2_u32), 64_i8);

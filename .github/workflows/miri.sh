@@ -8,17 +8,26 @@
 set -e
 
 CRATES="
+    -p arrow
     -p arrow-arith
     -p arrow-array
+    -p arrow-avro
     -p arrow-buffer
+    -p arrow-cast
+    -p arrow-csv
     -p arrow-data
+    -p arrow-ipc
+    -p arrow-json
     -p arrow-ord
+    -p arrow-row
     -p arrow-schema
     -p arrow-select
+    -p arrow-string
 "
 
 setup_miri() {
     export MIRIFLAGS="-Zmiri-disable-isolation"
+    export INSTA_WORKSPACE_ROOT="$PWD"
     cargo miri setup
     cargo clean
 }

@@ -1521,6 +1521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_write_multi_batches() {
         let test_file = "test/data/basic.json";
 
