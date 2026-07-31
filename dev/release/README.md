@@ -61,7 +61,8 @@ git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v README.md`
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v CHANGELOG-old.md | grep -v README.md`
+cargo check # update Cargo.lock with new versions
 git commit -a -m 'Update version'
 
 # Assuming remote name is apache; if named differently ensure this is changed,
