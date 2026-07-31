@@ -32,8 +32,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// This example demonstrates reading and writing Parquet files on object
-/// storage via the [`object_store`] crate, without the deprecated
-/// `ParquetObjectReader` and `ParquetObjectWriter` types.
+/// storage via the [`object_store`] crate.
 ///
 /// # Example Overview
 ///
