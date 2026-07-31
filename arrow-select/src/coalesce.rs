@@ -583,6 +583,22 @@ impl BatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
+
+    /// Returns the number of bytes used by this data structure.
+    pub fn size(&self) -> usize {
+        self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
+            + self
+                .in_progress_arrays
+                .iter()
+                .map(|array| array.size())
+                .sum::<usize>()
+            + self.completed.capacity() * size_of::<RecordBatch>()
+            + self
+                .completed
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
+    }
 }
 
 impl BatchCoalescer {
@@ -742,6 +758,9 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+
+    /// Get the number of bytes this array is using
+    fn size(&self) -> usize;
 }
 
 #[cfg(test)]
@@ -2681,6 +2700,114 @@ mod tests {
         assert!(
             err.contains("Batch has 2 columns but BatchCoalescer expects 0"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_size_grows_with_buffering_and_shrinks_when_draining() {
+        let batch = uint32_batch(0..8);
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 21);
+        let baseline = coalescer.size();
+        assert!(baseline > 0, "size includes container capacities");
+
+        // Buffer rows without completing a batch
+        coalescer.push_batch(batch.clone()).unwrap();
+        assert!(coalescer.next_completed_batch().is_none());
+        let buffered = coalescer.size();
+        assert!(
+            buffered > baseline,
+            "buffering rows should grow size ({buffered} > {baseline})"
+        );
+
+        // Push enough to complete several batches
+        for _ in 0..10 {
+            coalescer.push_batch(batch.clone()).unwrap();
+        }
+        let peak = coalescer.size();
+        assert!(peak > buffered);
+
+        // Draining completed batches must never grow the reported size
+        let mut prev = peak;
+        let mut drained_any = false;
+        while coalescer.next_completed_batch().is_some() {
+            drained_any = true;
+            let now = coalescer.size();
+            assert!(now <= prev, "size grew while draining: {now} > {prev}");
+            prev = now;
+        }
+        assert!(drained_any);
+        assert!(
+            prev < peak,
+            "draining completed batches should release memory"
+        );
+    }
+
+    #[test]
+    fn test_size_string_view_buffers_released_after_drain() {
+        // Long strings spill into external data buffers, exercising the byte-view
+        // size accounting through the real coalescer path (including compaction).
+        let batch = stringview_batch_repeated(
+            1000,
+            [Some("this string is definitely longer than 12 bytes")],
+        );
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 4096);
+        let baseline = coalescer.size();
+
+        for _ in 0..20 {
+            coalescer.push_batch(batch.clone()).unwrap();
+        }
+        let peak = coalescer.size();
+        assert!(
+            peak > baseline,
+            "buffered string view data should grow size ({peak} > {baseline})"
+        );
+
+        coalescer.finish_buffered_batch().unwrap();
+        while coalescer.next_completed_batch().is_some() {}
+
+        // Once fully drained the in-progress byte-view buffers are released.
+        let drained = coalescer.size();
+        assert!(
+            drained < peak,
+            "draining should release buffered data ({drained} < {peak})"
+        );
+    }
+
+    /// Every byte added to the accounting must eventually be removed: running the
+    /// exact same push/finish/drain sequence twice must report identical sizes.
+    /// This catches accounting leaks and drift without hard-coding magic numbers.
+    #[test]
+    fn test_size_accounting_conserved_across_cycles() {
+        // Primitive column: internal capacities stabilize after the first cycle
+        // (unlike byte-view, whose buffer sizer keeps growing), so the readings
+        // are deterministic across cycles.
+        let batch = uint32_batch(0..8);
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 4096);
+
+        let run_cycle = |coalescer: &mut BatchCoalescer| {
+            for _ in 0..20 {
+                coalescer.push_batch(batch.clone()).unwrap();
+            }
+            coalescer.finish_buffered_batch().unwrap();
+            let peak = coalescer.size();
+            while coalescer.next_completed_batch().is_some() {}
+            (peak, coalescer.size())
+        };
+
+        let (peak1, drained1) = run_cycle(&mut coalescer);
+        let (peak2, drained2) = run_cycle(&mut coalescer);
+
+        assert_eq!(
+            peak1, peak2,
+            "identical work must report identical peak size"
+        );
+        assert_eq!(
+            drained1, drained2,
+            "fully-drained size must be stable across cycles (no accounting leak)"
+        );
+        assert!(
+            drained1 < peak1,
+            "draining must release the accounted memory"
         );
     }
 }

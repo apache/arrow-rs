@@ -1326,6 +1326,31 @@ mod tests {
     }
 
     #[test]
+    fn test_map_non_nullable_value() {
+        let map = Field::new_map(
+            "map",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            false,
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![map]));
+        let buf = r#"{"map": {"key": null}}"#;
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"value\""
+        );
+    }
+
+    #[test]
     fn test_not_coercing_primitive_into_string_without_flag() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
@@ -2317,6 +2342,34 @@ mod tests {
     }
 
     #[test]
+    fn test_read_list_view_rejects_null_non_nullable_child() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        for (data_type, array_type) in [
+            (DataType::ListView(field.clone()), "ListViewArray"),
+            (DataType::LargeListView(field.clone()), "LargeListViewArray"),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new("lv", data_type, true)]));
+            let buf = r#"
+            {"lv": [1, 2, 3]}
+            {"lv": [4, null]}
+            "#;
+
+            let error = ReaderBuilder::new(schema)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Invalid argument error: Non-nullable field of {array_type} \"item\" cannot contain nulls"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_fixed_size_list() {
         let buf = r#"
         {"a": [1, 2, 3]}
@@ -2901,6 +2954,21 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn test_serialize_f32_into_string() {
+        // Coercing an f32 into a string column must render the value, not its raw bit pattern.
+        let field = Field::new("f", DataType::Utf8, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .with_coerce_primitive(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&[1.5_f32, -2.25_f32]).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        let values = batch.column(0).as_string::<i32>();
+        assert_eq!(values.value(0), "1.5");
+        assert_eq!(values.value(1), "-2.25");
     }
 
     // Parse the given `row` in `struct_mode` as a type given by fields.
