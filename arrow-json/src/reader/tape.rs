@@ -333,26 +333,20 @@ pub struct TapeDecoder {
     stack: Vec<DecoderState>,
 }
 
+/// Configuration for a `TapeDecoder`.
 #[derive(Clone, Copy, Debug)]
 pub struct TapeDecoderOptions {
-    batch_size: usize,
-    num_fields: usize,
-    flatten_top_level_arrays: bool,
+    /// The batch size
+    pub batch_size: usize,
+    /// The estimated number of fields in each row
+    pub num_fields: usize,
+    /// Whether to flatten top-level arrays
+    pub flatten_top_level_arrays: bool,
 }
 
 impl TapeDecoder {
-    /// Create a new [`TapeDecoder`] with the provided batch size
-    /// and an estimated number of fields in each row
-    pub fn new(batch_size: usize, num_fields: usize) -> Self {
-        Self::new_with_options(TapeDecoderOptions {
-            batch_size,
-            num_fields,
-            flatten_top_level_arrays: false,
-        })
-    }
-
     /// Create a new [`TapeDecoder`] with the provided options
-    pub fn new_with_options(options: TapeDecoderOptions) -> Self {
+    pub fn new(options: TapeDecoderOptions) -> Self {
         let TapeDecoderOptions {
             batch_size,
             num_fields,
@@ -821,6 +815,15 @@ fn parse_hex(b: u8) -> Result<u8, ArrowError> {
 mod tests {
     use super::*;
 
+    /// Helper method to create a `TapeDecoder` with sensible defaults
+    fn tape_decoder() -> TapeDecoder {
+        TapeDecoder::new(TapeDecoderOptions {
+            batch_size: 16,
+            num_fields: 2,
+            flatten_top_level_arrays: false,
+        })
+    }
+
     #[test]
     fn test_sizes() {
         assert_eq!(std::mem::size_of::<DecoderState>(), 8);
@@ -844,7 +847,7 @@ mod tests {
 
         {"a": ["", "foo", ["bar", "c"]], "b": {"1": []}, "c": {"2": [1, 2, 3]} }
         "#;
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(a.as_bytes()).unwrap();
         assert!(!decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 7);
@@ -954,21 +957,21 @@ mod tests {
     #[test]
     fn test_invalid() {
         // Test invalid
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let err = decoder.decode(b"hello").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected 'h' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let err = decoder.decode(b"{\"hello\": }").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected '}' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let err = decoder
             .decode(b"{\"hello\": [ false, tru ]}")
             .unwrap_err()
@@ -978,7 +981,7 @@ mod tests {
             "Json error: Encountered unexpected ' ' whilst parsing literal"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let err = decoder
             .decode(b"{\"hello\": \"\\ud8\"}")
             .unwrap_err()
@@ -989,7 +992,7 @@ mod tests {
         );
 
         // Missing surrogate pair
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let err = decoder
             .decode(b"{\"hello\": \"\\ud83d\"}")
             .unwrap_err()
@@ -1000,40 +1003,40 @@ mod tests {
         );
 
         // Test truncation
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"he").unwrap();
         assert!(decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 1);
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading string");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"hello\" : ").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading value");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"hello\" : [").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading list");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"hello\" : tru").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading true");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"hello\" : nu").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading null");
 
         // Test invalid UTF-8
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered non-UTF-8 data");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
@@ -1041,11 +1044,11 @@ mod tests {
 
     #[test]
     fn test_invalid_surrogates() {
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let res = decoder.decode(b"{\"test\": \"\\ud800\\ud801\"}");
         assert!(res.is_err());
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
         assert!(res.is_err());
     }
@@ -1065,7 +1068,7 @@ mod tests {
         const TOTAL_ROWS: usize = 5;
 
         // Check that regular decoding returns two rows
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = tape_decoder();
         decoder.decode(input.as_bytes()).unwrap();
         assert!(!decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 2);
@@ -1128,7 +1131,7 @@ mod tests {
         for batch_size in [1, 2, 3, 4, 8] {
             dbg!(batch_size);
 
-            let mut decoder = TapeDecoder::new_with_options(TapeDecoderOptions {
+            let mut decoder = TapeDecoder::new(TapeDecoderOptions {
                 batch_size,
                 num_fields: 2,
                 flatten_top_level_arrays: true,
