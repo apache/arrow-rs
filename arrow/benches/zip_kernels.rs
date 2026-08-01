@@ -27,7 +27,6 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
-use arrow_select::interleave::interleave;
 use arrow_select::zip::zip;
 
 trait InputGenerator {
@@ -240,26 +239,6 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         &array_1_10pct_nulls,
         &array_2_10pct_nulls,
     );
-
-    for (mask_description, mask) in &masks {
-        let id = BenchmarkId::new("array_vs_array_interleave", mask_description);
-        group.bench_with_input(id, mask, |b, mask| {
-            b.iter(|| {
-                let indices: Vec<_> = mask
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, selected)| (usize::from(!selected.unwrap_or(false)), idx))
-                    .collect();
-                hint::black_box(
-                    interleave(
-                        &[array_1_10pct_nulls.as_ref(), array_2_10pct_nulls.as_ref()],
-                        &indices,
-                    )
-                    .unwrap(),
-                )
-            })
-        });
-    }
 
     group.finish();
 }
