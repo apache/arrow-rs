@@ -16,12 +16,10 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
-use crate::filter::{
-    FilterIndices, FilterPredicate, FilterSelection, FilterSlices, filter_null_mask,
-};
+use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{BooleanBuffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -140,13 +138,7 @@ fn append_filtered_nulls(
     source_nulls: Option<&NullBuffer>,
     filter: &FilterPredicate,
 ) {
-    if let Some((null_count, filtered_nulls)) = filter_null_mask(source_nulls, filter) {
-        let filtered_nulls = unsafe {
-            NullBuffer::new_unchecked(
-                BooleanBuffer::new(filtered_nulls, 0, filter.count()),
-                null_count,
-            )
-        };
+    if let Some(filtered_nulls) = filter.filter_nulls(source_nulls) {
         nulls.append_buffer(&filtered_nulls);
     } else {
         nulls.append_n_non_nulls(filter.count());
