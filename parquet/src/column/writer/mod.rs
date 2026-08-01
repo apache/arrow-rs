@@ -1064,6 +1064,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Only encodings that compress against the preceding value opt in, so
     /// `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` keep their tighter one-value page
     /// bound.
+    ///
+    /// Known limitation: the caller's trigger keys on a page-opening
+    /// mini-batch holding exactly one value. Nulls in a chunk make the
+    /// byte-budget chunker emit multi-level mini-batches, so on nullable
+    /// columns pages that open with a two-value mini-batch miss the
+    /// exemption and dedup is only partial; see
+    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup`.
     #[cold]
     fn set_page_size_floor(&mut self) {
         if !self.encoder.compresses_against_previous_value() {
@@ -3091,6 +3098,65 @@ mod tests {
                 pages.data_pages,
             );
         }
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup() {
+        // Documents the *current* behavior of the first-value exemption on a
+        // nullable column; this pins a known limitation, not an ideal.
+        //
+        // The exemption fires when a page's first mini-batch contains exactly
+        // one value. For a non-nullable column the byte-budget chunker gives
+        // an over-limit value a one-level mini-batch, so that always holds.
+        // One null in the chunk changes the level:value ratio to 17:16, the
+        // chunker rounds up to two-level mini-batches, and a page whose first
+        // mini-batch carries two values misses the exemption: it is cut after
+        // those two values, and its first value is stored in full.
+        //
+        // The one mini-batch that pairs the null with a value has a single
+        // value, so the page it opens does get the exemption and accumulates
+        // every remaining suffix. The result for 16 identical values with a
+        // null at index 8 is four two-value pages (each storing one value in
+        // full), then one exempt page holding the rest:
+        //
+        //   values per page: [2, 2, 2, 2, 9]  (counts include the null level)
+        //   total bytes:     ~5 full values, vs ~1 ideally and 16 for PLAIN
+        //
+        // If the exemption trigger is ever keyed on values written to the
+        // page (0 -> 1) instead of mini-batch shape, this test should fail
+        // with fewer, larger pages — update it to pin the improved layout.
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_values = 16;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|_| ByteArray::from(vec![b'a'; value_size]))
+            .collect();
+        // 17 levels: a null at index 8, values everywhere else.
+        let def_levels: Vec<i16> = (0..num_values as i16 + 1)
+            .map(|i| i16::from(i != 8))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+
+        let per_page_values: Vec<u32> = pages.data_pages.iter().map(|(_, n)| *n).collect();
+        assert_eq!(per_page_values, vec![2, 2, 2, 2, 9]);
+
+        let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
+        assert!(
+            total_bytes > 4 * value_size && total_bytes < 6 * value_size,
+            "expected ~5 full values' worth of bytes (partial dedup), \
+             got {total_bytes}B across pages {:?}",
+            pages.data_pages,
+        );
     }
 
     #[test]
