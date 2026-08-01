@@ -638,6 +638,40 @@ mod tests {
     }
 
     #[test]
+    fn unsorted_offsets_must_land_on_char_boundaries() {
+        // "é" is two bytes (0xC3 0xA9), so an offset of 1 splits it in half. The offsets are still
+        // non-decreasing and in-bounds, so only the UTF-8 boundary check can reject this.
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,           // dictionary_size (2 strings)
+            0x00,
+            0x01, // splits the two-byte "é"
+            0x02,
+            0xC3,
+            0xA9,
+        ];
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
+        );
+
+        // The same bytes are valid if the offsets keep the character intact.
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,           // dictionary_size (2 strings)
+            0x00,
+            0x02, // "é" is kept whole, second entry is empty
+            0x02,
+            0xC3,
+            0xA9,
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert_eq!(&metadata[0], "é");
+        assert_eq!(&metadata[1], "");
+    }
+
+    #[test]
     fn test_compare_sorted_dictionary_with_unsorted_dictionary() {
         // create a sorted object
         let mut b = VariantBuilder::new();
