@@ -55,6 +55,8 @@ macro_rules! variant_test_case {
 // Notes
 // - case 3 is empty in cases.json for some reason
 // - cases 40, 42, 87, 127 and 128 are expected to fail always (they include invalid variants)
+// - cases 41, 131 and 138 omit the spec-required `value` column. They are read leniently by
+//   synthesizing an all-null `value` (https://github.com/apache/arrow-rs/issues/10306)
 // - the remaining cases are expected to (eventually) pass
 
 variant_test_case!(1);
@@ -104,6 +106,8 @@ variant_test_case!(38);
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(40, "both value and typed_value are non-null");
+// Schema omits the spec-required `value` column. Read leniently by synthesizing an
+// all-null `value` (testArrayMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
 variant_test_case!(41);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(42, "both value and typed_value are non-null");
@@ -201,6 +205,8 @@ variant_test_case!(127, "Illegal shredded value type: UInt32");
 variant_test_case!(128, "Expected object in value field");
 variant_test_case!(129);
 variant_test_case!(130);
+// Schema omits the spec-required `value` column. Read leniently by synthesizing an
+// all-null `value` (testMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
 variant_test_case!(131);
 variant_test_case!(132);
 variant_test_case!(133);
@@ -209,6 +215,8 @@ variant_test_case!(135);
 variant_test_case!(136);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
+// Schema omits the spec-required `value` column. Read leniently by synthesizing an
+// all-null `value` (testShreddedObjectMissingValueColumn, https://github.com/apache/arrow-rs/issues/10306)
 variant_test_case!(138);
 
 /// Test case definition structure matching the format from
