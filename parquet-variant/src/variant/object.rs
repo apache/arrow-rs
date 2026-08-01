@@ -1045,7 +1045,7 @@ mod tests {
             0,
             1,
             2,           // field offsets
-            0b0000_1100, // true
+            0b0000_0100, // true
             0b0000_1000, // false
         ];
         let err = Variant::try_new(&metadata_bytes, &value_bytes).unwrap_err();
