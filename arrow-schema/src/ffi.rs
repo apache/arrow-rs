@@ -171,7 +171,14 @@ impl FFI_ArrowSchema {
 
     /// Set the name of the schema
     pub fn with_name(mut self, name: &str) -> Result<Self, ArrowError> {
-        self.name = CString::new(name).unwrap().into_raw();
+        self.name = CString::new(name)
+            .map_err(|e| {
+                ArrowError::CDataInterface(format!(
+                    "Null byte at position {} not allowed in name",
+                    e.nul_position()
+                ))
+            })?
+            .into_raw();
         Ok(self)
     }
 
@@ -950,13 +957,19 @@ mod tests {
 
     #[test]
     fn test_map_keys_sorted() {
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false);
+        let values = Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, false);
         let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
-        let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entry_struct,
+                false,
+            )),
+            true,
+        );
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());
@@ -1000,6 +1013,12 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_name_with_null_byte() {
+        let schema = FFI_ArrowSchema::try_new("i", vec![], None).unwrap();
+        assert!(schema.with_name("ab\0cd").is_err());
     }
 
     #[test]

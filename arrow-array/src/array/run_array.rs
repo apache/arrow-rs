@@ -1183,7 +1183,7 @@ mod tests {
 
             // create run array using input_array
             let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-            builder.extend(input_array.clone().into_iter());
+            builder.extend(input_array.clone());
 
             let run_array = builder.finish();
             let physical_values_array = run_array.values().as_primitive::<Int32Type>();

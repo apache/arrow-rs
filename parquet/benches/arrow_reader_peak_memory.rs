@@ -443,12 +443,20 @@ fn int32_list_wrapper(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     let child: Box<dyn ArrayReader> = Box::new(
-        PrimitiveArrayReader::<Int32Type>::new(pages, column_desc, None, DEFAULT_BATCH_SIZE)
-            .unwrap(),
+        PrimitiveArrayReader::<Int32Type>::new(
+            pages,
+            column_desc,
+            None,
+            DEFAULT_BATCH_SIZE,
+            Some(2),
+        )
+        .unwrap(),
     );
     let field = Field::new_list_field(DataType::Int32, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(child, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        child, data_type, 2, 1, true, None,
+    ))
 }
 
 fn double_list_wrapper(
@@ -456,12 +464,20 @@ fn double_list_wrapper(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     let child: Box<dyn ArrayReader> = Box::new(
-        PrimitiveArrayReader::<DoubleType>::new(pages, column_desc, None, DEFAULT_BATCH_SIZE)
-            .unwrap(),
+        PrimitiveArrayReader::<DoubleType>::new(
+            pages,
+            column_desc,
+            None,
+            DEFAULT_BATCH_SIZE,
+            Some(2),
+        )
+        .unwrap(),
     );
     let field = Field::new_list_field(DataType::Float64, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(child, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        child, data_type, 2, 1, true, None,
+    ))
 }
 
 fn fixed32_list_wrapper(
@@ -469,20 +485,26 @@ fn fixed32_list_wrapper(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     let child =
-        make_fixed_len_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE).unwrap();
+        make_fixed_len_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE, Some(2))
+            .unwrap();
     let field = Field::new_list_field(DataType::FixedSizeBinary(FIXED_BYTE_LEN as i32), true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(child, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        child, data_type, 2, 1, true, None,
+    ))
 }
 
 fn string_list_wrapper(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    let child = make_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE).unwrap();
+    let child =
+        make_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE, Some(2)).unwrap();
     let field = Field::new_list_field(DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
-    Box::new(ListArrayReader::<i32>::new(child, data_type, 2, 1, true))
+    Box::new(ListArrayReader::<i32>::new(
+        child, data_type, 2, 1, true, None,
+    ))
 }
 
 fn add_benches<M: Measurement>(c: &mut Criterion<M>, measurement_name: &str) {

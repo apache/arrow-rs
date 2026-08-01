@@ -150,6 +150,12 @@ fn add_benchmark(c: &mut Criterion) {
         )
     };
 
+    let fsl_i64 = create_primitive_fixed_size_list_array::<Int64Type>(8192, 0.0, 0.0, 5);
+    let fsl_i64_nulls = create_primitive_fixed_size_list_array::<Int64Type>(8192, 0.1, 0.1, 5);
+
+    let map_str_i64 = create_string_map_array::<Int64Type>(8192, 0.0, 5, 8);
+    let map_str_i64_nulls = create_string_map_array::<Int64Type>(8192, 0.1, 5, 8);
+
     let ree_run_ends = Int32Array::from_iter_values((1..=64).map(|i| i * 16));
     let ree_i64_values = create_primitive_array::<Int64Type>(64, 0.0);
     let ree_i64 = RunArray::<Int32Type>::try_new(&ree_run_ends, &ree_i64_values).unwrap();
@@ -183,6 +189,10 @@ fn add_benchmark(c: &mut Criterion) {
         ("list_view<i64>(0.1,0.1,20)", &list_view_i64),
         ("list_view<i64>(0.0,0.0,20)", &list_view_i64_no_nulls),
         ("list_view_overlapping<i64>(80x,20)", &list_view_overlapping),
+        ("fixed_size_list<i64,5>(0.0,0.0)", &fsl_i64),
+        ("fixed_size_list<i64,5>(0.1,0.1)", &fsl_i64_nulls),
+        ("map<utf8,i64>(0.0,5,8)", &map_str_i64),
+        ("map<utf8,i64>(0.1,5,8)", &map_str_i64_nulls),
         ("ree_i32<i64>(64 runs)", &ree_i64),
         ("ree_i32<dict<u32,utf8>>(64 runs)", &ree_dict),
     ];

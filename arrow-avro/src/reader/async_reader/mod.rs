@@ -35,14 +35,17 @@ use std::task::{Context, Poll};
 
 mod async_file_reader;
 mod builder;
+mod spawn;
 
 pub use async_file_reader::AsyncFileReader;
 pub use builder::{ReaderBuilder, read_header_info};
+pub use spawn::SpawnedReader;
 
 #[cfg(feature = "object_store")]
 mod store;
 
 use crate::errors::AvroError;
+#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
@@ -543,7 +546,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
     }
 }
 
-#[cfg(all(test, feature = "object_store"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::codec::Tz;
@@ -560,6 +563,45 @@ mod tests {
     use object_store::{ObjectStore, ObjectStoreExt};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    /// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+    /// example on the [`AsyncFileReader`] trait documentation
+    #[derive(Clone, Debug)]
+    struct ObjectStoreReader {
+        store: Arc<dyn ObjectStore>,
+        path: Path,
+    }
+
+    impl ObjectStoreReader {
+        fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
+            Self { store, path }
+        }
+    }
+
+    impl AsyncFileReader for ObjectStoreReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
+            async move {
+                self.store
+                    .get_range(&self.path, range)
+                    .await
+                    .map_err(|e| AvroError::General(e.to_string()))
+            }
+            .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>, AvroError>> {
+            async move {
+                self.store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(|e| AvroError::General(e.to_string()))
+            }
+            .boxed()
+        }
+    }
 
     fn arrow_test_data(file: &str) -> String {
         let base =
@@ -956,7 +998,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let mut builder = AsyncAvroFileReader::builder(file_reader, file_size, batch_size);
 
         if let Some(s) = schema {
@@ -1208,7 +1250,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
         let reader = AsyncAvroFileReader::builder(
@@ -1236,7 +1278,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1)
@@ -1299,7 +1341,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let mut file_reader = AvroObjectReader::new(store, location);
+        let mut file_reader = ObjectStoreReader::new(store, location);
 
         let header_info = read_header_info(&mut file_reader, file_size, None)
             .await
@@ -1392,7 +1434,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file_path).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
             .try_build()
             .await
@@ -1533,6 +1575,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_alltypes_with_empty_schema_large_batch() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = Arc::new(Schema::new(Vec::<Field>::new()));
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_with_empty_schema_small_batch() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = Arc::new(Schema::new(Vec::<Field>::new()));
+        let batches = read_async_file(&file, 5, None, Some(schema), None)
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 2);
+
+        assert_eq!(batches[0].num_rows(), 5);
+        assert_eq!(batches[0].num_columns(), 0);
+        assert_eq!(batches[1].num_rows(), 3);
+        assert_eq!(batches[1].num_columns(), 0);
+    }
+
+    #[tokio::test]
     async fn test_nested_no_schema_no_projection() {
         // No reader schema, no projection
         let file = arrow_test_data("avro/nested_records.avro");
@@ -1598,6 +1672,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_nested_with_empty_schema() {
+        // With an empty reader schema -- should count rows but produce no columns
+        let file = arrow_test_data("avro/nested_records.avro");
+        let schema = Arc::new(
+            Schema::new(Vec::<Field>::new()).with_metadata(HashMap::from([(
+                SCHEMA_METADATA_KEY.into(),
+                r#"{
+                    "type": "record",
+                    "namespace": "ns1",
+                    "name": "record1",
+                    "fields": []
+                }"#
+                .to_owned(),
+            )])),
+        );
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 0);
+    }
+
+    #[tokio::test]
     async fn test_projection_error_out_of_bounds() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         // Index 100 is out of bounds for the 11-field schema
@@ -1626,7 +1725,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let expected_schema = get_alltypes_schema()
             .as_ref()
             .clone()
@@ -1653,7 +1752,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema()
             .project(&[0, 1, 7])
             .unwrap()
@@ -1683,7 +1782,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // The schema produced by the reader should match the expected schema,
         // attaching Avro type name metadata to fields of record and list types.
@@ -1713,7 +1812,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1740,7 +1839,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1766,7 +1865,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema_with_tz("UTC");
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1803,7 +1902,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .with_utf8_view(true)
@@ -1834,7 +1933,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .with_utf8_view(false)
@@ -1865,7 +1964,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // Without strict mode, this should succeed
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1888,7 +1987,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // With strict mode, this should fail because of ['T', 'null'] unions
         let result = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1917,7 +2016,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // With strict mode, properly ordered unions should still work
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1939,7 +2038,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
             .with_header_size_hint(128)

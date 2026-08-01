@@ -273,6 +273,7 @@ impl InferredDataType {
 #[derive(Debug, Clone, Default)]
 pub struct Format {
     header: bool,
+    header_validation: bool,
     delimiter: Option<u8>,
     escape: Option<u8>,
     quote: Option<u8>,
@@ -288,6 +289,16 @@ impl Format {
     /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
         self.header = has_header;
+        self
+    }
+
+    /// Specify whether to validate the CSV header against the schema, defaults to `false`
+    ///
+    /// When `true`, the first row gets validated against the schema before any data is read
+    ///
+    /// Only applies when [`Self::with_header`] is set to `true`
+    pub fn with_header_validation(mut self, validate_header: bool) -> Self {
+        self.header_validation = validate_header;
         self
     }
 
@@ -610,6 +621,9 @@ pub struct Decoder {
     /// Rows to skip
     to_skip: usize,
 
+    /// Whether to validate the first skipped row against the schema
+    header_validation: bool,
+
     /// Current line number
     line_number: usize,
 
@@ -635,6 +649,20 @@ impl Decoder {
     /// network sources such as object storage
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         if self.to_skip != 0 {
+            if self.header_validation {
+                let (skipped, bytes) = self.record_decoder.decode(buf, 1)?;
+
+                if skipped == 0 {
+                    return Ok(bytes);
+                }
+
+                let rows = self.record_decoder.flush()?;
+                validate_header(&rows, self.schema.fields())?;
+                self.header_validation = false;
+                self.to_skip -= 1;
+                return Ok(bytes);
+            }
+
             // Skip in units of `to_read` to avoid over-allocating buffers
             let to_skip = self.to_skip.min(self.batch_size);
             let (skipped, bytes) = self.record_decoder.decode(buf, to_skip)?;
@@ -676,6 +704,24 @@ impl Decoder {
     pub fn capacity(&self) -> usize {
         self.batch_size - self.record_decoder.len()
     }
+}
+
+fn validate_header(rows: &StringRecords<'_>, fields: &Fields) -> Result<(), ArrowError> {
+    let header = rows.iter().next().ok_or_else(|| {
+        ArrowError::CsvError("CSV header validation failed: no header row found".to_string())
+    })?;
+
+    for (idx, field) in fields.iter().enumerate() {
+        let actual = header.get(idx);
+        let expected = field.name();
+        if actual != expected {
+            return Err(ArrowError::CsvError(format!(
+                "CSV header does not match schema at column {idx}: expected {expected:?} but found {actual:?}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
@@ -754,6 +800,9 @@ fn parse(
                 }
                 DataType::UInt64 => {
                     build_primitive_array::<UInt64Type>(line_number, rows, i, null_regex)
+                }
+                DataType::Float16 => {
+                    build_primitive_array::<Float16Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Float32 => {
                     build_primitive_array::<Float32Type>(line_number, rows, i, null_regex)
@@ -1154,6 +1203,14 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set whether to validate the CSV header against the schema
+    ///
+    /// This option only applies when [`Self::with_header`] is set to `true`, and defaults to `false`
+    pub fn with_header_validation(mut self, validate_header: bool) -> Self {
+        self.format.header_validation = validate_header;
+        self
+    }
+
     /// Overrides the [Format] of this [ReaderBuilder]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
@@ -1261,6 +1318,7 @@ impl ReaderBuilder {
         Decoder {
             schema: self.schema,
             to_skip: start,
+            header_validation: self.format.header && self.format.header_validation,
             record_decoder,
             line_number: start,
             end,
@@ -2352,6 +2410,86 @@ mod tests {
     }
 
     #[test]
+    fn test_header_validation() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let csv = "a,c\n1,2\n";
+        let err = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_header_validation(true)
+            .build_buffered(Cursor::new(csv.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Csv error: CSV header does not match schema at column 1: expected \"b\" but found \"c\""
+        );
+
+        let batch = ReaderBuilder::new(schema)
+            .with_header(true)
+            .with_header_validation(false)
+            .build_buffered(Cursor::new(csv.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(batch.num_rows(), 1);
+    }
+
+    #[test]
+    fn test_header_validation_with_buffered_reader() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let csv = "a,b\n1,2\n";
+        let buffered = std::io::BufReader::with_capacity(1, Cursor::new(csv.as_bytes()));
+        let batch = ReaderBuilder::new(schema)
+            .with_header(true)
+            .with_header_validation(true)
+            .build_buffered(buffered)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(batch.num_rows(), 1);
+        let a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(a.value(0), 1);
+    }
+
+    #[test]
+    fn test_header_validation_with_truncated_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let csv = "a\n1\n";
+        let err = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_header_validation(true)
+            .with_truncated_rows(true)
+            .build_buffered(Cursor::new(csv.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Csv error: CSV header does not match schema at column 1: expected \"b\" but found \"\"",
+        )
+    }
+
+    #[test]
     fn test_null_boolean() {
         let csv = "true,false\nFalse,True\n,True\nFalse,";
         let schema = Arc::new(Schema::new(vec![
@@ -2852,5 +2990,66 @@ mod tests {
         assert!(!c2.is_null(2));
         assert_eq!(c2.value(1), "something_cannot_be_inlined");
         assert_eq!(c2.value(2), "bar");
+    }
+
+    #[test]
+    fn test_float_precision() {
+        let data = [
+            "f16,f32,f64",
+            "1.5,1.5,1.5",
+            "0.25,0.25,0.25",
+            "1.23456789,1.23456789,1.23456789",
+            "1.234567890123456,1.234567890123456,1.234567890123456",
+            "-2.5,-2.5,-2.5",
+            "0,0,0",
+            ",,",
+        ]
+        .join("\n");
+
+        let schema = Schema::new(vec![
+            Field::new("f16", DataType::Float16, true),
+            Field::new("f32", DataType::Float32, true),
+            Field::new("f64", DataType::Float64, true),
+        ]);
+
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .with_header(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 7);
+
+        let f16_col = batch.column(0).as_primitive::<Float16Type>();
+        let f32_col = batch.column(1).as_primitive::<Float32Type>();
+        let f64_col = batch.column(2).as_primitive::<Float64Type>();
+
+        assert_eq!(f16_col.value(0), half::f16::from_f32(1.5));
+        assert_eq!(f32_col.value(0), 1.5f32);
+        assert_eq!(f64_col.value(0), 1.5f64);
+
+        assert_eq!(f16_col.value(1), half::f16::from_f32(0.25));
+        assert_eq!(f32_col.value(1), 0.25f32);
+        assert_eq!(f64_col.value(1), 0.25f64);
+
+        assert_eq!(f16_col.value(2), half::f16::from_f32(1.234_567_9));
+        assert_eq!(f32_col.value(2), 1.234_567_9_f32);
+        assert_eq!(f64_col.value(2), 1.23456789f64);
+
+        assert_eq!(f16_col.value(3), half::f16::from_f64(1.234567890123456f64));
+        assert_eq!(f32_col.value(3), 1.234_567_9_f32);
+        assert_eq!(f64_col.value(3), 1.234567890123456f64);
+
+        assert_eq!(f16_col.value(4), half::f16::from_f32(-2.5));
+        assert_eq!(f32_col.value(4), -2.5f32);
+        assert_eq!(f64_col.value(4), -2.5f64);
+
+        assert_eq!(f16_col.value(5), half::f16::from_f32(0.0));
+        assert_eq!(f32_col.value(5), 0.0f32);
+        assert_eq!(f64_col.value(5), 0.0f64);
+
+        assert!(f16_col.is_null(6));
+        assert!(f32_col.is_null(6));
+        assert!(f64_col.is_null(6));
     }
 }

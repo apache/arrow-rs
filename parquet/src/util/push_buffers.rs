@@ -99,7 +99,7 @@ impl PushBuffers {
             buffers.len(),
             "Number of ranges must match number of buffers"
         );
-        for (range, buffer) in ranges.into_iter().zip(buffers.into_iter()) {
+        for (range, buffer) in ranges.into_iter().zip(buffers) {
             self.push_range(range, buffer);
         }
     }

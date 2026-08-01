@@ -38,6 +38,7 @@ impl<OffsetSize: OffsetSizeTrait> ListViewArrayReader<OffsetSize> {
         def_level: i16,
         rep_level: i16,
         nullable: bool,
+        parent_threshold: Option<i16>,
     ) -> Self {
         // Create the underlying ListArrayReader with the corresponding List type
         let list_data_type = match &data_type {
@@ -46,8 +47,14 @@ impl<OffsetSize: OffsetSizeTrait> ListViewArrayReader<OffsetSize> {
             _ => unreachable!(),
         };
 
-        let inner =
-            ListArrayReader::new(item_reader, list_data_type, def_level, rep_level, nullable);
+        let inner = ListArrayReader::new(
+            item_reader,
+            list_data_type,
+            def_level,
+            rep_level,
+            nullable,
+            parent_threshold,
+        );
 
         Self { inner, data_type }
     }
@@ -101,6 +108,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListViewArrayReader<OffsetSize
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.inner.get_rep_levels()
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.inner.max_def_level()
+    }
 }
 
 #[cfg(test)]
@@ -130,6 +141,7 @@ mod tests {
             &[0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
             3,
             1,
+            Some(2),
         );
 
         let field = Arc::new(arrow_schema::Field::new_list_field(ArrowType::Int32, true));
@@ -140,7 +152,7 @@ mod tests {
         };
 
         let mut list_view_array_reader =
-            ListViewArrayReader::<OffsetSize>::new(item_array_reader, data_type, 2, 1, true);
+            ListViewArrayReader::<OffsetSize>::new(item_array_reader, data_type, 2, 1, true, None);
 
         let actual = list_view_array_reader.next_batch(1024).unwrap();
         let actual = actual
@@ -169,6 +181,7 @@ mod tests {
             &[0, 1, 1, 0, 0, 1, 0, 0, 0, 1],
             2,
             1,
+            Some(1),
         );
 
         let field = Arc::new(arrow_schema::Field::new_list_field(ArrowType::Int32, true));
@@ -179,7 +192,7 @@ mod tests {
         };
 
         let mut list_view_array_reader =
-            ListViewArrayReader::<OffsetSize>::new(item_array_reader, data_type, 1, 1, false);
+            ListViewArrayReader::<OffsetSize>::new(item_array_reader, data_type, 1, 1, false, None);
 
         let actual = list_view_array_reader.next_batch(1024).unwrap();
         let actual = actual

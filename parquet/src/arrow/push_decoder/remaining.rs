@@ -49,7 +49,7 @@ struct NextRowGroup {
     budget: RowBudget,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RowGroupFrontier {
     /// Metadata used to resolve row counts for queued row groups.
     parquet_metadata: Arc<ParquetMetaData>,
@@ -91,6 +91,23 @@ impl RowGroupFrontier {
 
     fn update_budget_after_row_group(&mut self, budget: RowBudget) {
         self.budget = budget;
+    }
+
+    /// Peek at the next row-group index [`Self::next_readable_row_group`]
+    /// would hand out, without mutating any state. Returns `None` if every
+    /// remaining row group would be skipped under the current
+    /// selection/budget, or if the queue is empty.
+    ///
+    /// Runs the real [`Self::next_readable_row_group`] advance logic on a
+    /// throwaway clone of the frontier, so peek can never drift from the
+    /// read path. The clone copies the queued row-group indices and optional
+    /// row-selection (a `Vec<RowSelector>`); see
+    /// [`RemainingRowGroups::peek_next_row_group`].
+    fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
+        Ok(self
+            .clone()
+            .next_readable_row_group()?
+            .map(|next_row_group| next_row_group.row_group_idx))
     }
 
     fn clear_remaining(&mut self) {
@@ -297,6 +314,28 @@ impl RemainingRowGroups {
     /// being decoded).
     pub fn row_groups_remaining(&self) -> usize {
         self.frontier.row_groups.len()
+    }
+
+    /// Peek at the file-level row-group index that the next call to
+    /// [`Self::try_next_reader`] will produce a reader for, after
+    /// simulating the same skip logic [`Self::try_next_reader`] applies
+    /// internally (row-selection emptiness + offset/limit budget). Does
+    /// not mutate state.
+    ///
+    /// Returns `None` when the active row group is still being decoded,
+    /// when no row groups remain, or when every remaining row group
+    /// would be skipped under the current selection/budget.
+    ///
+    /// Cost: one clone of the queued row-group indices and optional
+    /// row-selection per call (the frontier is cloned so the real advance
+    /// logic can run non-destructively). For callers that peek once per
+    /// row-group boundary this is O(remaining row groups + selectors) per
+    /// boundary.
+    pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
+        if self.row_group_reader_builder.has_active_row_group() {
+            return Ok(None);
+        }
+        self.frontier.peek_next_row_group()
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

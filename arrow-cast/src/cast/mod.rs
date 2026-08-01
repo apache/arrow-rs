@@ -938,7 +938,9 @@ pub fn cast_with_options(
         (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
         (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
-            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+            let values = cast_with_options(array, to.data_type(), cast_options)?;
+            let list = FixedSizeListArray::try_new(to.clone(), 1, values, None)?;
+            Ok(Arc::new(list))
         }
         // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
@@ -1710,17 +1712,33 @@ pub fn cast_with_options(
                 .as_primitive::<Date32Type>()
                 .unary::<_, Date64Type>(|x| x as i64 * MILLISECONDS_IN_DAY),
         )),
-        (Date64, Date32) => Ok(Arc::new(
-            array
-                .as_primitive::<Date64Type>()
-                .unary::<_, Date32Type>(|x| (x / MILLISECONDS_IN_DAY) as i32),
-        )),
+        (Date64, Date32) => {
+            let array = array.as_primitive::<Date64Type>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Date32Type>(|x| i32::try_from(x / MILLISECONDS_IN_DAY).ok())
+            } else {
+                array.try_unary::<_, Date32Type, _>(|x| {
+                    i32::try_from(x / MILLISECONDS_IN_DAY).map_err(|_| {
+                        ArrowError::CastError(format!(
+                            "Cannot cast Date64 value {x} to Date32 without overflow"
+                        ))
+                    })
+                })?
+            };
+            Ok(Arc::new(result))
+        }
 
-        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time32SecondType>()
-                .unary::<_, Time32MillisecondType>(|x| x * MILLISECONDS as i32),
-        )),
+        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => {
+            let array = array.as_primitive::<Time32SecondType>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Time32MillisecondType>(|x| x.checked_mul(MILLISECONDS as i32))
+            } else {
+                array.try_unary::<_, Time32MillisecondType, _>(|x| {
+                    x.mul_checked(MILLISECONDS as i32)
+                })?
+            };
+            Ok(Arc::new(result))
+        }
         (Time32(TimeUnit::Second), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time32SecondType>()
@@ -2137,18 +2155,30 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Microsecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampMicrosecondType>(|x| {
+                    (x as i64).checked_mul(MICROSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampMicrosecondType, _>(|x| {
+                    (x as i64).mul_checked(MICROSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Nanosecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampNanosecondType>(|x| {
+                    (x as i64).checked_mul(NANOSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampNanosecondType, _>(|x| {
+                    (x as i64).mul_checked(NANOSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
 
         (_, Duration(unit)) if from_type.is_numeric() => {
@@ -5228,6 +5258,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_date64_to_date32_overflow() {
+        let a = Date64Array::from(vec![i64::MAX]);
+        let array = Arc::new(a) as ArrayRef;
+
+        let b = cast(&array, &DataType::Date32).unwrap();
+        let c = b.as_primitive::<Date32Type>();
+        assert!(c.is_null(0));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let err = cast_with_options(&array, &DataType::Date32, &options).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot cast Date64 value"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn test_cast_string_to_integral_overflow() {
         let str = Arc::new(StringArray::from(vec![
             Some("123"),
@@ -6276,6 +6326,132 @@ mod tests {
         assert!(keys.is_null(3));
         assert_eq!(keys.value(0), keys.value(2));
         assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct() {
+        // Cast a StructArray into Dictionary<UInt32, Struct{…}>. The dictionary
+        // value type's child fields may differ from the source's (here:
+        // Utf8 source → Utf8View child for `name`), so the per-field cast
+        // must run before identity keys are emitted. This is the "as long as
+        // the struct can be cast to the dict value" contract.
+        let names = StringArray::from(vec![Some("alpha"), None, Some("gamma")]);
+        let ids = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let source = StructArray::from(vec![
+            (
+                Arc::new(Field::new("name", DataType::Utf8, true)),
+                Arc::new(names) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(ids) as ArrayRef,
+            ),
+        ]);
+
+        let target_value_type = DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8View, true),
+                Field::new("id", DataType::Int64, false),
+            ]
+            .into(),
+        );
+        let cast_type = DataType::Dictionary(
+            Box::new(DataType::UInt32),
+            Box::new(target_value_type.clone()),
+        );
+        assert!(can_cast_types(source.data_type(), &cast_type));
+
+        let cast_array = cast(&source, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 3);
+
+        let dict = cast_array.as_dictionary::<UInt32Type>();
+        assert_eq!(dict.values().data_type(), &target_value_type);
+        // No dedup is performed for struct values — one row, one key.
+        assert_eq!(dict.values().len(), 3);
+
+        // Source row 1 was a `Utf8`-null in the `name` field but the whole
+        // struct row was valid (StructArray::from above takes per-field
+        // nulls only). The dictionary's logical null mask therefore mirrors
+        // the source struct's row-level null mask — all rows valid here.
+        let keys = dict.keys();
+        assert_eq!(keys.values(), &[0u32, 1, 2]);
+        assert_eq!(keys.null_count(), 0);
+
+        let struct_values = dict.values().as_struct();
+        let names_out = struct_values
+            .column_by_name("name")
+            .unwrap()
+            .as_string_view();
+        assert_eq!(names_out.value(0), "alpha");
+        assert!(names_out.is_null(1));
+        assert_eq!(names_out.value(2), "gamma");
+        let ids_out = struct_values
+            .column_by_name("id")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert_eq!(ids_out.values(), &[1i64, 2, 3]);
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct_row_nulls() {
+        // Row-level nulls on the source struct must surface as null keys on
+        // the dictionary, since the dictionary's logical null mask is
+        // determined by the keys.
+        let names = StringArray::from(vec![Some("alpha"), Some("beta"), Some("gamma")]);
+        let ids = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let source = StructArray::try_new(
+            vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("id", DataType::Int32, false),
+            ]
+            .into(),
+            vec![Arc::new(names) as ArrayRef, Arc::new(ids) as ArrayRef],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )
+        .unwrap();
+
+        let target_value_type = DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("id", DataType::Int32, false),
+            ]
+            .into(),
+        );
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(target_value_type));
+
+        let cast_array = cast(&source, &cast_type).unwrap();
+        let dict = cast_array.as_dictionary::<UInt32Type>();
+        assert_eq!(dict.len(), 3);
+        let keys = dict.keys();
+        assert!(!keys.is_null(0));
+        assert!(keys.is_null(1));
+        assert!(!keys.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_struct_array_to_dict_struct_key_overflow() {
+        // Source has 300 rows but the dictionary key type is UInt8 (max 255).
+        // We must return a CastError instead of silently truncating.
+        let n = 300;
+        let names = StringArray::from((0..n).map(|i| Some(format!("v{i}"))).collect::<Vec<_>>());
+        let source = StructArray::from(vec![(
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(names) as ArrayRef,
+        )]);
+
+        let cast_type = DataType::Dictionary(
+            Box::new(DataType::UInt8),
+            Box::new(DataType::Struct(
+                vec![Field::new("name", DataType::Utf8, true)].into(),
+            )),
+        );
+        let err = cast(&source, &cast_type).unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot fit") && err.contains("dictionary keys"),
+            "expected key-overflow error, got: {err}"
+        );
     }
 
     #[test]
@@ -8757,6 +8933,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_nested_dictionary_to_dictionary_reuses_values() {
+        let inner = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        );
+        let nested = DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]),
+            Arc::new(inner),
+        );
+
+        let result = cast(&nested, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+        let result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(
+            result.keys(),
+            &Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)])
+        );
+        assert_eq!(
+            result.values().as_string::<i32>(),
+            &StringArray::from(vec!["x", "y"])
+        );
+        let logical: Vec<Option<&str>> = result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(logical, vec![Some("x"), None, Some("y"), None, Some("x")]);
+    }
+
+    #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
@@ -8932,10 +9138,10 @@ mod tests {
         // Cast null from and to map
         let data_type = DataType::Map(
             Arc::new(Field::new_struct(
-                "entry",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 ],
                 false,
             )),
@@ -9469,6 +9675,41 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_to_zero_size_fsl() {
+        let field = Arc::new(Field::new("a", DataType::Null, true));
+        let length = 2;
+        let expected = Arc::new(
+            FixedSizeListArray::try_new_with_length(
+                field.clone(),
+                0,
+                new_empty_array(&DataType::Null),
+                None,
+                2,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+
+        let list = Arc::new(ListArray::new(
+            field.clone(),
+            OffsetBuffer::from_repeated_length(0, length),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+
+        let list = Arc::new(ListViewArray::new(
+            field.clone(),
+            vec![0; length].into(),
+            vec![0; length].into(),
+            new_empty_array(&DataType::Null),
+            None,
+        ));
+        let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
+        assert_eq!(&expected, &fsl);
+    }
+
+    #[test]
     fn test_cast_list_to_fsl() {
         // There four noteworthy cases we should handle:
         // 1. No nulls
@@ -9901,15 +10142,7 @@ mod tests {
     fn test_cast_map_dont_allow_change_of_order() {
         let string_builder = StringBuilder::new();
         let value_builder = StringBuilder::new();
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value("test_val_1");
@@ -9924,11 +10157,11 @@ mod tests {
         let new_ordered = true;
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),
@@ -9952,15 +10185,7 @@ mod tests {
     fn test_cast_map_dont_allow_when_container_cant_cast() {
         let string_builder = StringBuilder::new();
         let value_builder = IntervalDayTimeArray::builder(2);
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(IntervalDayTime::new(1, 1));
@@ -9975,11 +10200,15 @@ mod tests {
         let new_ordered = true;
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Duration(TimeUnit::Second), false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(
+                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                            DataType::Duration(TimeUnit::Second),
+                            false,
+                        ),
                     ]
                     .into(),
                 ),
@@ -10005,9 +10234,10 @@ mod tests {
         let value_builder = StringBuilder::new();
         let mut builder = MapBuilder::new(
             Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
+                // Explicitly writing the name so it will be apparent from what names to what names are we converting to
+                entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+                key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+                value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
             }),
             string_builder,
             value_builder,
@@ -10077,15 +10307,7 @@ mod tests {
     fn test_cast_map_contained_values() {
         let string_builder = StringBuilder::new();
         let value_builder = Int8Builder::new();
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "key".to_string(),
-                value: "value".to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
+        let mut builder = MapBuilder::new(None, string_builder, value_builder);
 
         builder.keys().append_value("0");
         builder.values().append_value(44);
@@ -10098,11 +10320,11 @@ mod tests {
 
         let new_type = DataType::Map(
             Arc::new(Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(
                     vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     ]
                     .into(),
                 ),
@@ -11283,6 +11505,51 @@ mod tests {
             .unwrap();
         assert_eq!(1609459200000000000, c.value(0));
         assert_eq!(1640995200000000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_us_overflow() {
+        const MAX_DAYS_MICROS: i32 = (i64::MAX / MICROSECONDS_IN_DAY) as i32;
+        let a = Date32Array::from(vec![Some(MAX_DAYS_MICROS), Some(MAX_DAYS_MICROS + 1), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let c = b.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(MAX_DAYS_MICROS as i64 * MICROSECONDS_IN_DAY, c.value(0));
+        assert!(c.is_null(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_ns_overflow() {
+        // 2262-04-11, 2062-04-12
+        let upper_limit = 106_751;
+        let a = Date32Array::from(vec![Some(upper_limit), Some(upper_limit + 1), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(upper_limit as i64 * NANOSECONDS_IN_DAY, c.value(0));
+        assert!(c.is_null(1));
         assert!(c.is_null(2));
     }
 
@@ -13656,6 +13923,23 @@ mod tests {
         assert_eq!(c.value(1), 60_000_000);
         assert!(c.is_null(2));
         assert_eq!(c.value(3), 43_200_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time32_millisecond_overflow() {
+        let array = Time32SecondArray::from(vec![i32::MAX]);
+
+        let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
+        assert!(c.is_null(0));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let err = cast_with_options(&array, &DataType::Time32(TimeUnit::Millisecond), &options)
+            .unwrap_err();
+        assert!(err.to_string().contains("Overflow"), "{err}");
     }
 
     #[test]

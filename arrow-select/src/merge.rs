@@ -163,11 +163,11 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 
         // Extend mutable with either nulls or with values from the array.
         match array_ix.index() {
-            None => mutable.extend_nulls(slice_length),
+            None => mutable.try_extend_nulls(slice_length)?,
             Some(index) => {
                 let start_offset = take_offsets[index];
                 let end_offset = start_offset + slice_length;
-                mutable.extend(index, start_offset, end_offset);
+                mutable.try_extend(index, start_offset, end_offset)?;
                 take_offsets[index] = end_offset;
             }
         }
@@ -261,18 +261,18 @@ pub fn merge(
         _ => prep_null_mask_filter(mask).into_parts().0,
     };
 
-    SlicesIterator::from(&mask_buffer).for_each(|(start, end)| {
+    for (start, end) in SlicesIterator::from(&mask_buffer) {
         // the gap needs to be filled with falsy values
         if start > filled {
             if falsy_is_scalar {
                 for _ in filled..start {
                     // Copy the first item from the 'falsy' array into the output buffer.
-                    mutable.extend(1, 0, 1);
+                    mutable.try_extend(1, 0, 1)?;
                 }
             } else {
                 let falsy_length = start - filled;
                 let falsy_end = falsy_offset + falsy_length;
-                mutable.extend(1, falsy_offset, falsy_end);
+                mutable.try_extend(1, falsy_offset, falsy_end)?;
                 falsy_offset = falsy_end;
             }
         }
@@ -280,27 +280,27 @@ pub fn merge(
         if truthy_is_scalar {
             for _ in start..end {
                 // Copy the first item from the 'truthy' array into the output buffer.
-                mutable.extend(0, 0, 1);
+                mutable.try_extend(0, 0, 1)?;
             }
         } else {
             let truthy_length = end - start;
             let truthy_end = truthy_offset + truthy_length;
-            mutable.extend(0, truthy_offset, truthy_end);
+            mutable.try_extend(0, truthy_offset, truthy_end)?;
             truthy_offset = truthy_end;
         }
         filled = end;
-    });
+    }
     // the remaining part is falsy
     if filled < mask.len() {
         if falsy_is_scalar {
             for _ in filled..mask.len() {
                 // Copy the first item from the 'falsy' array into the output buffer.
-                mutable.extend(1, 0, 1);
+                mutable.try_extend(1, 0, 1)?;
             }
         } else {
             let falsy_length = mask.len() - filled;
             let falsy_end = falsy_offset + falsy_length;
-            mutable.extend(1, falsy_offset, falsy_end);
+            mutable.try_extend(1, falsy_offset, falsy_end)?;
         }
     }
 

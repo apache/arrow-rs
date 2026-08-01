@@ -257,9 +257,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a StringArray of length 3"
     )]
     fn test_string_array_get_value_index_out_of_bound() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
         let array_data = ArrayData::builder(DataType::Utf8)
             .len(3)

@@ -59,7 +59,7 @@ use uuid::Uuid;
 /// - If unsupported data types are encountered in typed_value columns
 pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // Check if already unshredded (optimization for common case)
-    if array.typed_value_field().is_none() && array.value_field().is_some() {
+    if array.typed_value_column().is_none() {
         return Ok(array.clone());
     }
 
@@ -69,7 +69,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.inner())?
         .unwrap_or_else(UnshredVariantRowBuilder::null);
 
-    let metadata = array.metadata_field();
+    let metadata = array.metadata_column();
     let mut value_builder = VariantValueArrayBuilder::new(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -89,7 +89,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let value = value_builder.build()?;
     Ok(VariantArray::from_parts(
         metadata.clone(),
-        Some(Arc::new(value)),
+        Arc::new(value),
         None,
         nulls.cloned(),
     ))
@@ -715,7 +715,7 @@ mod tests {
             Some("world"),
         ]));
 
-        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+        let variant_array = VariantArray::perfectly_shredded(metadata, typed_value, None);
 
         let result = crate::unshred_variant(&variant_array).unwrap();
 
@@ -737,7 +737,7 @@ mod tests {
             Some("world"),
         ]));
 
-        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+        let variant_array = VariantArray::perfectly_shredded(metadata, typed_value, None);
 
         let result = crate::unshred_variant(&variant_array).unwrap();
 
@@ -759,7 +759,7 @@ mod tests {
             &b"\xde\xad\xbe\xef"[..],
         ]));
 
-        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+        let variant_array = VariantArray::perfectly_shredded(metadata, typed_value, None);
 
         let result = crate::unshred_variant(&variant_array).unwrap();
 
@@ -781,7 +781,7 @@ mod tests {
             &b"\xde\xad\xbe\xef"[..],
         ]));
 
-        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+        let variant_array = VariantArray::perfectly_shredded(metadata, typed_value, None);
 
         let result = crate::unshred_variant(&variant_array).unwrap();
 
@@ -801,7 +801,7 @@ mod tests {
 
         let typed_value: ArrayRef = Arc::new(StringViewArray::from(vec![Some("hello")]));
 
-        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+        let variant_array = VariantArray::perfectly_shredded(metadata, typed_value, None);
 
         let result = crate::unshred_variant(&variant_array);
 

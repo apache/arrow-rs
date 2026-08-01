@@ -86,18 +86,22 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
             DataType::Map(child_field, sorted) => match child_field.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => {
                     let first_field = &fields[0];
-                    let key_field =
-                        Arc::new(Field::new("key", first_field.data_type().clone(), false));
+                    let key_field = Arc::new(Field::new(
+                        Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                        first_field.data_type().clone(),
+                        false,
+                    ));
                     let second_field = &fields[1];
                     let value_field = Arc::new(Field::new(
-                        "value",
+                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                         second_field.data_type().clone(),
                         second_field.is_nullable(),
                     ));
 
                     let fields = Fields::from([key_field, value_field]);
                     let struct_type = DataType::Struct(fields);
-                    let child_field = Field::new("entries", struct_type, false);
+                    let child_field =
+                        Field::new(Field::MAP_ENTRIES_FIELD_DEFAULT_NAME, struct_type, false);
 
                     Arc::new(Field::new(
                         field.name().as_str(),

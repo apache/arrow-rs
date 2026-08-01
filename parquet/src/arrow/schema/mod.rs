@@ -311,6 +311,15 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
     BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
+fn flatten_ree_field(field: &Field) -> Field {
+    match field.data_type() {
+        DataType::RunEndEncoded(_, value_field) => field
+            .clone()
+            .with_data_type(value_field.data_type().clone()),
+        _ => field.clone(),
+    }
+}
+
 /// Mutates writer metadata by storing the encoded Arrow schema hint in
 /// [`ARROW_SCHEMA_META_KEY`].
 ///
@@ -318,6 +327,22 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
 ///
 /// [`ARROW_SCHEMA_META_KEY`]: crate::arrow::ARROW_SCHEMA_META_KEY
 pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
+    let has_ree = schema
+        .fields()
+        .iter()
+        .any(|f| matches!(f.data_type(), DataType::RunEndEncoded(_, _)));
+    let flat_schema;
+    let schema = if has_ree {
+        let flat_fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .map(|f| flatten_ree_field(f))
+            .collect();
+        flat_schema = Schema::new_with_metadata(flat_fields, schema.metadata().clone());
+        &flat_schema
+    } else {
+        schema
+    };
     let encoded = encode_arrow_schema(schema);
 
     let schema_kv = KeyValue {
@@ -833,9 +858,12 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field, coerce_types)
         }
-        DataType::RunEndEncoded(_, _) => Err(arrow_err!(
-            "Converting RunEndEncodedType to parquet not supported",
-        )),
+        DataType::RunEndEncoded(_, value_field) => {
+            let ree_value_field = field
+                .clone()
+                .with_data_type(value_field.data_type().clone());
+            arrow_to_parquet_type(&ree_value_field, coerce_types)
+        }
     }
 }
 
@@ -1703,9 +1731,9 @@ mod tests {
             ),
             Field::new_map(
                 "my_map",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                "my_entries",
+                Field::new("my_keys", DataType::Utf8, false),
+                Field::new("my_values", DataType::Int32, true),
                 false,
                 true,
             ),
@@ -1748,9 +1776,9 @@ mod tests {
                 }
             }
             OPTIONAL GROUP my_map (MAP) {
-                REPEATED GROUP entries {
-                    REQUIRED BINARY keys (STRING);
-                    OPTIONAL INT32 values;
+                REPEATED GROUP my_entries {
+                    REQUIRED BINARY my_keys (STRING);
+                    OPTIONAL INT32 my_values;
                 }
             }
         }

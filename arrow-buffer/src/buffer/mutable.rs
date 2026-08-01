@@ -1669,4 +1669,20 @@ mod tests {
         let data_1000: Vec<i32> = (0..1000).collect();
         test_repeat_count(repeat_count, &data_1000);
     }
+
+    #[test]
+    #[should_panic(expected = "failed to round upto multiple of 64")]
+    fn test_mutable_new_capacity_overflow() {
+        // Tests overflow during initial allocation
+        let _ = MutableBuffer::new(usize::MAX - 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length overflow")]
+    fn test_mutable_reserve_overflow() {
+        // Tests overflow during growth (checked_add)
+        let mut buf = MutableBuffer::new(1);
+        buf.push(1u8);
+        buf.reserve(usize::MAX);
+    }
 }

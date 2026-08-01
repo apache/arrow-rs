@@ -44,12 +44,35 @@ use crate::column::chunker::CdcChunk;
 use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::types::RunEndIndexType;
+use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray, downcast_run_array};
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Expands a [`DataType::RunEndEncoded`] array into a flat (logical) array of its values type.
+///
+/// use `arrow_select::take` to materialize the  full-length flat array.
+/// This is intentionally simple (O(n)); efficiency can/should be improved
+fn expand_ree_array(array: &ArrayRef) -> Result<ArrayRef> {
+    downcast_run_array!(
+        array => expand_typed_ree(array),
+        _ => unreachable!("expand_ree_array called on non-REE array"),
+    )
+}
+
+fn expand_typed_ree<R: RunEndIndexType>(run_array: &RunArray<R>) -> Result<ArrayRef> {
+    let run_ends = run_array.run_ends();
+    let values = run_array.values();
+    let len = run_array.len();
+    let indices: Int32Array = (0..len)
+        .map(|i| run_ends.get_physical_index(i) as i32)
+        .collect();
+    arrow_select::take::take(values.as_ref(), &indices, None)
+        .map_err(|e| arrow_err!("Failed to expand REE array: {}", e))
+}
 
 /// Performs a depth-first scan of the children of `array`, constructing [`ArrayLevels`]
 /// for each leaf column encountered
@@ -118,6 +141,7 @@ enum LevelInfoBuilder {
         LevelContext,          // Context
         OffsetBuffer<i32>,     // Offsets
         Option<NullBuffer>,    // Nulls
+        bool,                  // is_last_level (child has no nested rep)
     ),
     /// A large list array
     LargeList(
@@ -125,6 +149,7 @@ enum LevelInfoBuilder {
         LevelContext,          // Context
         OffsetBuffer<i64>,     // Offsets
         Option<NullBuffer>,    // Nulls
+        bool,                  // is_last_level (child has no nested rep)
     ),
     /// A fixed size list array
     FixedSizeList(
@@ -183,6 +208,15 @@ impl LevelInfoBuilder {
                 let levels = ArrayLevels::new(parent_ctx, is_nullable, array.clone());
                 Ok(Self::Primitive(levels))
             }
+            DataType::RunEndEncoded(_, value_field) => {
+                let flat = expand_ree_array(array)?;
+                let flat_field = Field::new(
+                    field.name(),
+                    value_field.data_type().clone(),
+                    field.is_nullable(),
+                );
+                Self::try_new(&flat_field, parent_ctx, &flat)
+            }
             DataType::Struct(children) => {
                 let array = array.as_struct();
                 let def_level = match is_nullable {
@@ -223,22 +257,31 @@ impl LevelInfoBuilder {
                     DataType::List(_) => {
                         let list = array.as_list();
                         let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let is_last = child.child_has_no_nested_rep();
                         let offsets = list.offsets().clone();
-                        Self::List(Box::new(child), ctx, offsets, list.nulls().cloned())
+                        Self::List(
+                            Box::new(child),
+                            ctx,
+                            offsets,
+                            list.nulls().cloned(),
+                            is_last,
+                        )
                     }
                     DataType::LargeList(_) => {
                         let list = array.as_list();
                         let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let is_last = child.child_has_no_nested_rep();
                         let offsets = list.offsets().clone();
                         let nulls = list.nulls().cloned();
-                        Self::LargeList(Box::new(child), ctx, offsets, nulls)
+                        Self::LargeList(Box::new(child), ctx, offsets, nulls, is_last)
                     }
                     DataType::Map(_, _) => {
                         let map = array.as_map();
                         let entries = Arc::new(map.entries().clone()) as ArrayRef;
                         let child = Self::try_new(child.as_ref(), ctx, &entries)?;
+                        let is_last = child.child_has_no_nested_rep();
                         let offsets = map.offsets().clone();
-                        Self::List(Box::new(child), ctx, offsets, map.nulls().cloned())
+                        Self::List(Box::new(child), ctx, offsets, map.nulls().cloned(), is_last)
                     }
                     DataType::FixedSizeList(_, size) => {
                         let list = array.as_fixed_size_list();
@@ -274,8 +317,8 @@ impl LevelInfoBuilder {
     fn finish(self) -> Vec<ArrayLevels> {
         match self {
             LevelInfoBuilder::Primitive(v) => vec![v],
-            LevelInfoBuilder::List(v, _, _, _)
-            | LevelInfoBuilder::LargeList(v, _, _, _)
+            LevelInfoBuilder::List(v, _, _, _, _)
+            | LevelInfoBuilder::LargeList(v, _, _, _, _)
             | LevelInfoBuilder::FixedSizeList(v, _, _, _)
             | LevelInfoBuilder::ListView(v, _, _, _, _)
             | LevelInfoBuilder::LargeListView(v, _, _, _, _) => v.finish(),
@@ -287,11 +330,11 @@ impl LevelInfoBuilder {
     fn write(&mut self, range: Range<usize>) {
         match self {
             LevelInfoBuilder::Primitive(info) => Self::write_leaf(info, range),
-            LevelInfoBuilder::List(child, ctx, offsets, nulls) => {
-                Self::write_list(child, ctx, offsets, nulls.as_ref(), range)
+            LevelInfoBuilder::List(child, ctx, offsets, nulls, is_last) => {
+                Self::write_list(child, ctx, offsets, nulls.as_ref(), range, *is_last)
             }
-            LevelInfoBuilder::LargeList(child, ctx, offsets, nulls) => {
-                Self::write_list(child, ctx, offsets, nulls.as_ref(), range)
+            LevelInfoBuilder::LargeList(child, ctx, offsets, nulls, is_last) => {
+                Self::write_list(child, ctx, offsets, nulls.as_ref(), range, *is_last)
             }
             LevelInfoBuilder::FixedSizeList(child, ctx, size, nulls) => {
                 Self::write_fixed_size_list(child, ctx, *size, nulls.as_ref(), range)
@@ -308,6 +351,19 @@ impl LevelInfoBuilder {
         }
     }
 
+    /// Returns `true` if the child contains no nested repetition levels, meaning
+    /// each child element produces exactly one rep_level entry in the leaf.
+    /// This is true for `Primitive` children and `Struct` trees with no list descendants.
+    fn child_has_no_nested_rep(&self) -> bool {
+        match self {
+            LevelInfoBuilder::Primitive(_) => true,
+            LevelInfoBuilder::Struct(children, _, _) => {
+                children.iter().all(|c| c.child_has_no_nested_rep())
+            }
+            _ => false,
+        }
+    }
+
     /// Write `range` elements from ListArray `array`
     ///
     /// Note: MapArrays are `ListArray<i32>` under the hood and so are dispatched to this method
@@ -317,6 +373,7 @@ impl LevelInfoBuilder {
         offsets: &[O],
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
+        is_last_level: bool,
     ) {
         // Fast path: entire list array is null; emit bulk null rep/def levels
         if nulls.is_some_and(|nulls| nulls.null_count() == nulls.len()) {
@@ -327,102 +384,224 @@ impl LevelInfoBuilder {
             return;
         }
 
-        let offsets = &offsets[range.start..range.end + 1];
+        // Dispatch to separate functions so the compiler can optimize each
+        // hot loop independently (function body size affects codegen quality).
+        if is_last_level {
+            Self::write_list_direct(child, ctx, offsets, nulls, range);
+        } else {
+            Self::write_list_scan(child, ctx, offsets, nulls, range);
+        }
+    }
 
-        let write_non_null_slice =
-            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                child.write(start_idx..end_idx);
-                child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
-                    let mut rev = rep_levels.iter_mut().rev();
-                    let mut remaining = end_idx - start_idx;
+    /// Batch write for lists whose child has no nested repetition.
+    ///
+    /// "direct" means writing the child rep levels using offsets without scanning.
+    fn write_list_direct<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let list_start_rep = ctx.rep_level - 1;
 
-                    loop {
-                        let next = rev.next().unwrap();
-                        if *next > ctx.rep_level {
-                            // Nested element - ignore
-                            continue;
-                        }
+        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
+            let values_start = run_offsets[0].as_usize();
+            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
 
-                        remaining -= 1;
-                        if remaining == 0 {
-                            *next = ctx.rep_level - 1;
-                            break;
+            child.write(values_start..values_end);
+
+            // The first element of each list slot needs rep_level =
+            // list_start_rep to mark a new list boundary. Because there's a 1:1
+            // mapping between child elements and rep_level entries, the position
+            // of each slot's first element is directly computable from offsets.
+            child.visit_leaves(|leaf| {
+                debug_assert!(leaf.max_rep_level == ctx.rep_level);
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
+                let batch_len = values_end - values_start;
+                let batch_base = rep_levels.len() - batch_len;
+                for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                    let pos = batch_base + (slot_offset.as_usize() - values_start);
+                    rep_levels[pos] = list_start_rep;
+                }
+            });
+        };
+
+        Self::write_list_impl(child, ctx, offsets, nulls, range, emit_non_empty_run);
+    }
+
+    /// Batch write for lists whose child has nested repetition.
+    ///
+    /// After batch-writing child elements, scans backward through rep_levels
+    /// counting child-element starts to find and stamp slot boundaries.
+    ///
+    /// Scan backward because we don't know start offset before writing.
+    fn write_list_scan<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let list_start_rep = ctx.rep_level - 1;
+
+        let emit_non_empty_run = |child: &mut LevelInfoBuilder, run_offsets: &[O]| {
+            debug_assert!(run_offsets.len() >= 2);
+            let values_start = run_offsets[0].as_usize();
+            let values_end = run_offsets[run_offsets.len() - 1].as_usize();
+            debug_assert!(values_end > values_start);
+
+            child.write(values_start..values_end);
+
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
+
+                if leaf.max_rep_level == ctx.rep_level {
+                    // This algorithm is the same as write_list_direct.
+                    // Use a separate function because the branch code size would affect codegen
+                    // quality of the hot loop of write_list_direct.
+                    let batch_len = values_end - values_start;
+                    let batch_base = rep_levels.len() - batch_len;
+                    for slot_offset in run_offsets.iter().take(run_offsets.len() - 1) {
+                        let pos = batch_base + (slot_offset.as_usize() - values_start);
+                        rep_levels[pos] = list_start_rep;
+                    }
+                } else {
+                    // Backward scan: count child-element starts (rep <= ctx.rep_level)
+                    // and stamp list_start_rep at slot boundaries.
+                    let mut slot_bounds = run_offsets[..run_offsets.len() - 1].iter().rev();
+                    let mut next_stamp_at = values_end - slot_bounds.next().unwrap().as_usize();
+                    let mut seen = 0usize;
+
+                    for rep in rep_levels.iter_mut().rev() {
+                        // Asserting rep >= ctx.rep_level to ensure low level depth haven't
+                        // being written.
+                        debug_assert!(*rep >= ctx.rep_level);
+                        // Count element starts by skipping nested reps (rep > ctx.rep_level).
+                        //
+                        // `==` would also work here: the child is written before the
+                        // parent, so no entry within the batch has rep < ctx.rep_level.
+                        // Benchmarks show no difference, so keep the more defensive `<=`.
+                        if *rep <= ctx.rep_level {
+                            seen += 1;
+                            if seen == next_stamp_at {
+                                *rep = list_start_rep;
+                                match slot_bounds.next() {
+                                    Some(offset) => next_stamp_at = values_end - offset.as_usize(),
+                                    None => break,
+                                }
+                            }
                         }
                     }
-                })
+                }
+            });
+        };
+
+        Self::write_list_impl(child, ctx, offsets, nulls, range, emit_non_empty_run);
+    }
+
+    /// Shared run-classification loop for write_list_direct and write_list_scan.
+    /// Monomorphized per `emit_non_empty_run` closure type, giving the compiler
+    /// separate optimization contexts for each backfill strategy.
+    fn write_list_impl<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+        mut emit_non_empty_run: impl FnMut(&mut LevelInfoBuilder, &[O]),
+    ) {
+        let null_offset = range.start;
+        let offsets = &offsets[range.start..range.end + 1];
+        let list_start_rep = ctx.rep_level - 1;
+
+        let emit_nulls = |child: &mut LevelInfoBuilder, count: usize| {
+            child.visit_leaves(|leaf| {
+                leaf.append_rep_level_run(list_start_rep, count);
+                leaf.append_def_level_run(ctx.def_level - 2, count);
+            });
+        };
+
+        let emit_empties = |child: &mut LevelInfoBuilder, count: usize| {
+            child.visit_leaves(|leaf| {
+                leaf.append_rep_level_run(list_start_rep, count);
+                leaf.append_def_level_run(ctx.def_level - 1, count);
+            });
+        };
+
+        // Classify each slot, detect run boundaries, flush on transition.
+        #[derive(Clone, Copy, PartialEq)]
+        enum SlotKind {
+            Null,
+            Empty,
+            NonEmpty,
+        }
+
+        let num_slots = offsets.len() - 1;
+        if num_slots == 0 {
+            return;
+        }
+
+        macro_rules! classify {
+            ($i:expr, $nulls:expr) => {
+                if !$nulls.is_valid($i + null_offset) {
+                    SlotKind::Null
+                } else if offsets[$i] == offsets[$i + 1] {
+                    SlotKind::Empty
+                } else {
+                    SlotKind::NonEmpty
+                }
             };
+        }
 
-        // In a list column, each row falls into one of three categories:
-        // - "null": the list slot is absent (!is_valid), encoded at def_level - 2
-        // - "empty": the list slot is present but has zero elements
-        //   (offsets[i] == offsets[i+1]), encoded at def_level - 1
-        // - non-empty: the list slot has child values, which are recursed into
-        //
-        // Consecutive runs of null or empty rows are batched and written together.
-        let write_null_run = |child: &mut LevelInfoBuilder, count: usize| {
-            if count > 0 {
-                child.visit_leaves(|leaf| {
-                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
-                    leaf.append_def_level_run(ctx.def_level - 2, count);
-                });
-            }
-        };
-
-        let write_empty_run = |child: &mut LevelInfoBuilder, count: usize| {
-            if count > 0 {
-                child.visit_leaves(|leaf| {
-                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
-                    leaf.append_def_level_run(ctx.def_level - 1, count);
-                });
-            }
-        };
+        macro_rules! flush_run {
+            ($kind:expr, $start:expr, $end:expr) => {
+                match $kind {
+                    SlotKind::Null => emit_nulls(child, $end - $start),
+                    SlotKind::Empty => emit_empties(child, $end - $start),
+                    SlotKind::NonEmpty => emit_non_empty_run(child, &offsets[$start..$end + 1]),
+                }
+            };
+        }
 
         match nulls {
-            Some(nulls) => {
-                let null_offset = range.start;
-                let mut pending_nulls: usize = 0;
-                let mut pending_empties: usize = 0;
-
-                // TODO: Faster bitmask iteration (#1757)
-                for (idx, w) in offsets.windows(2).enumerate() {
-                    let is_valid = nulls.is_valid(idx + null_offset);
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
-
-                    if !is_valid {
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        pending_nulls += 1;
-                    } else if start_idx == end_idx {
-                        write_null_run(child, pending_nulls);
-                        pending_nulls = 0;
-                        pending_empties += 1;
-                    } else {
-                        write_null_run(child, pending_nulls);
-                        pending_nulls = 0;
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        write_non_null_slice(child, start_idx, end_idx);
+            // A null buffer without any null can skip the per-slot validity
+            // checks and use the null-free classification loop below.
+            Some(nulls) if nulls.null_count() > 0 => {
+                let mut run_kind = classify!(0, nulls);
+                let mut run_start: usize = 0;
+                for i in 1..num_slots {
+                    let kind = classify!(i, nulls);
+                    if kind != run_kind {
+                        flush_run!(run_kind, run_start, i);
+                        run_kind = kind;
+                        run_start = i;
                     }
                 }
-                write_null_run(child, pending_nulls);
-                write_empty_run(child, pending_empties);
+                flush_run!(run_kind, run_start, num_slots);
             }
-            None => {
-                let mut pending_empties: usize = 0;
-                for w in offsets.windows(2) {
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
-                    if start_idx == end_idx {
-                        pending_empties += 1;
+            _ => {
+                let mut run_kind = if offsets[0] == offsets[1] {
+                    SlotKind::Empty
+                } else {
+                    SlotKind::NonEmpty
+                };
+                let mut run_start: usize = 0;
+                for i in 1..num_slots {
+                    let kind = if offsets[i] == offsets[i + 1] {
+                        SlotKind::Empty
                     } else {
-                        write_empty_run(child, pending_empties);
-                        pending_empties = 0;
-                        write_non_null_slice(child, start_idx, end_idx);
+                        SlotKind::NonEmpty
+                    };
+                    if kind != run_kind {
+                        flush_run!(run_kind, run_start, i);
+                        run_kind = kind;
+                        run_start = i;
                     }
                 }
-                write_empty_run(child, pending_empties);
+                flush_run!(run_kind, run_start, num_slots);
             }
         }
     }
@@ -734,8 +913,8 @@ impl LevelInfoBuilder {
     fn visit_leaves(&mut self, visit: impl Fn(&mut ArrayLevels) + Copy) {
         match self {
             LevelInfoBuilder::Primitive(info) => visit(info),
-            LevelInfoBuilder::List(c, _, _, _)
-            | LevelInfoBuilder::LargeList(c, _, _, _)
+            LevelInfoBuilder::List(c, _, _, _, _)
+            | LevelInfoBuilder::LargeList(c, _, _, _, _)
             | LevelInfoBuilder::FixedSizeList(c, _, _, _)
             | LevelInfoBuilder::ListView(c, _, _, _, _)
             | LevelInfoBuilder::LargeListView(c, _, _, _, _) => c.visit_leaves(visit),
@@ -1729,13 +1908,17 @@ mod tests {
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
         let entries_struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Arc::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    entries_struct_type,
+                    false,
+                )),
                 false,
             ),
             // not nullable, so the keys have max level = 1

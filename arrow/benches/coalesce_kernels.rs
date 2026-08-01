@@ -51,11 +51,25 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         true,
     )]));
 
+    // Single BinaryViewArray
+    let single_binaryview_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::BinaryView,
+        true,
+    )]));
+
     // Mixed primitive, StringViewArray
     let mixed_utf8view_schema = SchemaRef::new(Schema::new(vec![
         Field::new("int32_val", DataType::Int32, true),
         Field::new("float_val", DataType::Float64, true),
         Field::new("utf8view_val", DataType::Utf8View, true),
+    ]));
+
+    // Mixed primitive, BinaryViewArray
+    let mixed_binaryview_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("binaryview_val", DataType::BinaryView, true),
     ]));
 
     // Mixed primitive, StringArray
@@ -106,6 +120,42 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
             }
             .build();
 
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_utf8view (max_string_len=8)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 8,
+                schema: &single_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binaryview",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binaryview (max_string_len=8)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 8,
+                schema: &single_binaryview_schema,
+            }
+            .build();
+
             // Model mostly short strings, but some longer ones
             FilterBenchmarkBuilder {
                 c,
@@ -115,6 +165,18 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 null_density,
                 selectivity,
                 max_string_len: 20,
+                schema: &mixed_utf8view_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_utf8view (max_string_len=8)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 8,
                 schema: &mixed_utf8view_schema,
             }
             .build();
@@ -129,6 +191,42 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 selectivity,
                 max_string_len: 128,
                 schema: &mixed_utf8view_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=20)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 20,
+                schema: &mixed_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=8)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 8,
+                schema: &mixed_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=128)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 128,
+                schema: &mixed_binaryview_schema,
             }
             .build();
 

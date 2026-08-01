@@ -188,14 +188,14 @@ fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl Inpu
         &mut group,
         &masks,
         &array_1_10pct_nulls,
-        &non_null_scalar_1,
+        &Scalar::new(non_null_scalar_1.clone()),
     );
 
     bench_merge_input_on_all_masks(
         "non_null_scalar_vs_array",
         &mut group,
         &masks,
-        &non_null_scalar_1,
+        &Scalar::new(non_null_scalar_1.clone()),
         &array_1_10pct_nulls,
     );
 

@@ -400,13 +400,10 @@ impl RleDecoder {
         }
 
         let value = if self.rle_left > 0 {
-            let rle_value = T::try_from_le_slice(
-                &self
-                    .current_value
-                    .as_mut()
-                    .ok_or_else(|| general_err!("current_value should be Some"))?
-                    .to_ne_bytes(),
-            )?;
+            let current_value = self
+                .current_value
+                .ok_or_else(|| general_err!("current_value should be Some"))?;
+            let rle_value = T::from_u64(current_value);
             self.rle_left -= 1;
             rle_value
         } else {
@@ -433,8 +430,7 @@ impl RleDecoder {
         while values_read < buffer.len() {
             if self.rle_left > 0 {
                 let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
-                let repeated_value =
-                    T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
+                let repeated_value = T::from_u64(self.current_value.unwrap());
                 buffer[values_read..values_read + num_values].fill(repeated_value);
                 self.rle_left -= num_values as u32;
                 values_read += num_values;

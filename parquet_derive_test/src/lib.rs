@@ -109,6 +109,15 @@ struct APrunedRecord {
     pub isize: isize,
 }
 
+// This struct has a field declared with a raw identifier,
+// which maps to a parquet column named without the `r#` prefix
+// (e.g. a column named `type`, as written by other tools)
+#[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
+struct ARecordWithRawIdentifiers {
+    pub r#type: i32,
+    pub count: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +363,46 @@ mod tests {
         assert_eq!(drs[0].i32, out[0].i32);
         assert_eq!(drs[0].u64, out[0].u64);
         assert_eq!(drs[0].isize, out[0].isize);
+    }
+
+    #[test]
+    fn test_parquet_derive_raw_identifiers() {
+        let file = get_temp_file("test_parquet_derive_raw_identifiers", &[]);
+        let drs = vec![ARecordWithRawIdentifiers {
+            r#type: 456,
+            count: 123,
+        }];
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        // raw identifiers are written without the `r#` prefix,
+        // while normal identifiers are unchanged
+        assert_eq!(
+            vec!["type", "count"],
+            generated_schema
+                .get_fields()
+                .iter()
+                .map(|field| field.name())
+                .collect::<Vec<_>>()
+        );
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out: Vec<ARecordWithRawIdentifiers> = Vec::new();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        assert_eq!(drs, out);
     }
 
     #[test]

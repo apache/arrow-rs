@@ -159,7 +159,12 @@ pub fn create_random_array(
         )),
         Binary => Arc::new(create_binary_array::<i32>(size, null_density)),
         LargeBinary => Arc::new(create_binary_array::<i64>(size, null_density)),
-        FixedSizeBinary(len) => Arc::new(create_fsb_array(size, null_density, *len as usize)),
+        FixedSizeBinary(len) => {
+            let len = TryInto::<usize>::try_into(*len).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!("cannot use FixedSizeBinary({len})"))
+            })?;
+            Arc::new(create_fsb_array(size, null_density, len))
+        }
         BinaryView => Arc::new(
             create_string_view_array_with_len(size, null_density, 4, false).to_binary_view(),
         ),
@@ -176,6 +181,8 @@ pub fn create_random_array(
             crate::compute::cast(&v, d)?
         }
         Map(_, _) => create_random_map_array(field, size, null_density, true_density)?,
+        Decimal32(_, _) => create_random_decimal_array(field, size, null_density)?,
+        Decimal64(_, _) => create_random_decimal_array(field, size, null_density)?,
         Decimal128(_, _) => create_random_decimal_array(field, size, null_density)?,
         Decimal256(_, _) => create_random_decimal_array(field, size, null_density)?,
         RunEndEncoded(index, value) => {
@@ -200,6 +207,34 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
     let mut rng = seedable_rng();
 
     match field.data_type() {
+        DataType::Decimal32(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random::<i32>())
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal32Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random::<i64>())
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal64Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
         DataType::Decimal128(precision, scale) => {
             let values = (0..size)
                 .map(|_| {
@@ -814,9 +849,9 @@ mod tests {
     fn test_create_map_array() {
         let map_field = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             false,
             false,
         );

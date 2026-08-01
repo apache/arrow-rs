@@ -298,7 +298,9 @@ pub enum Variant<'m, 'v> {
 }
 
 // We don't want this to grow because it could hurt performance of a frequently-created type.
-#[cfg(target_pointer_width = "64")]
+#[cfg(all(target_pointer_width = "64", target_arch = "s390x"))]
+const _: () = crate::utils::expect_size_of::<Variant>(72);
+#[cfg(all(target_pointer_width = "64", not(target_arch = "s390x")))]
 const _: () = crate::utils::expect_size_of::<Variant>(80);
 #[cfg(target_pointer_width = "32")]
 const _: () = crate::utils::expect_size_of::<Variant>(48);

@@ -33,6 +33,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
     "ARROW-GH-45185.parquet",
+    "ARROW-GH-47662.parquet",
     "README.md",
 ];
 
@@ -129,6 +130,15 @@ fn test_arrow_rs_gh_45185_dict_levels() {
     assert_eq!(
         err.to_string(),
         "External: Parquet argument error: Parquet error: first repetition level of batch must be 0"
+    );
+}
+
+#[test]
+fn test_arrow_gh_47662() {
+    let err = read_file("ARROW-GH-47662.parquet").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: insufficient values read from column - expected: 100, got: 91"
     );
 }
 

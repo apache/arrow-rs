@@ -2628,7 +2628,7 @@ mod test {
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
         ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
-        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        Int32Array, Int64Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
         new_empty_array,
     };
     use arrow_schema::{DataType, SchemaRef, TimeUnit};
@@ -2897,6 +2897,183 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn struct_leaf_statistics_from_column_index() {
+        let leaf_field = Arc::new(Field::new("leaf", DataType::Int32, true));
+        let leaf_array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(1),
+            None,
+            Some(9),
+            Some(4),
+            Some(6),
+        ]));
+
+        let amount_array = decimal128_array(
+            [
+                Some(i128::from(100)),
+                Some(i128::from(-500)),
+                None,
+                Some(i128::from(2000)),
+                Some(i128::from(600)),
+                Some(i128::from(50)),
+            ],
+            20,
+            2,
+        );
+        let amount_field = Arc::new(Field::new("amount", amount_array.data_type().clone(), true));
+
+        let struct_array = StructArray::from(vec![
+            (leaf_field.clone(), leaf_array),
+            (amount_field.clone(), amount_array),
+        ]);
+        let struct_array: ArrayRef = Arc::new(struct_array);
+        let input_batch = RecordBatch::try_from_iter([("c1", struct_array)]).unwrap();
+
+        let reader = build_parquet_file(
+            ROWS_PER_ROW_GROUP * 2,
+            Some(EnabledStatistics::Page),
+            Some(ROWS_PER_ROW_GROUP),
+            vec![input_batch],
+        );
+
+        let schema = reader.schema();
+        let metadata = reader.metadata();
+        let parquet_schema = reader.parquet_schema();
+        let row_groups = metadata.row_groups();
+        let row_group_indices = [0];
+        let column_page_index = metadata
+            .column_index()
+            .expect("file should have column page indices");
+        let column_offset_index = metadata
+            .offset_index()
+            .expect("file should have column offset indices");
+
+        let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
+            unreachable!("c1 must be a struct field")
+        };
+        let leaf_arrow_field = fields[0].as_ref();
+        let amount_arrow_field = fields[1].as_ref();
+
+        assert_eq!(parquet_column(parquet_schema, schema, "c1"), None);
+
+        let leaf_converter =
+            StatisticsConverter::from_column_index(0, leaf_arrow_field, parquet_schema).unwrap();
+
+        assert_eq!(leaf_converter.parquet_column_index(), Some(0));
+        assert_eq!(leaf_converter.arrow_field(), leaf_arrow_field);
+
+        let leaf_mins = leaf_converter.row_group_mins(row_groups.iter()).unwrap();
+        assert_eq!(&leaf_mins, &i32_array([Some(1)]));
+
+        let leaf_maxes = leaf_converter.row_group_maxes(row_groups.iter()).unwrap();
+        assert_eq!(&leaf_maxes, &i32_array([Some(9)]));
+
+        let leaf_null_counts = leaf_converter
+            .row_group_null_counts(row_groups.iter())
+            .unwrap();
+        assert_eq!(leaf_null_counts, UInt64Array::from(vec![1]));
+
+        let leaf_row_counts = leaf_converter
+            .row_group_row_counts(row_groups.iter())
+            .unwrap();
+        assert_eq!(leaf_row_counts, Some(UInt64Array::from(vec![6])));
+
+        let leaf_page_mins = leaf_converter
+            .data_page_mins(
+                column_page_index,
+                column_offset_index,
+                row_group_indices.iter(),
+            )
+            .unwrap();
+        assert_eq!(&leaf_page_mins, &i32_array([Some(1), Some(4)]));
+
+        let leaf_page_maxes = leaf_converter
+            .data_page_maxes(
+                column_page_index,
+                column_offset_index,
+                row_group_indices.iter(),
+            )
+            .unwrap();
+        assert_eq!(&leaf_page_maxes, &i32_array([Some(3), Some(9)]));
+
+        let leaf_page_null_counts = leaf_converter
+            .data_page_null_counts(
+                column_page_index,
+                column_offset_index,
+                row_group_indices.iter(),
+            )
+            .unwrap();
+        assert_eq!(leaf_page_null_counts, UInt64Array::from(vec![1, 0]));
+
+        let leaf_page_row_counts = leaf_converter
+            .data_page_row_counts(column_offset_index, row_groups, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(leaf_page_row_counts, Some(UInt64Array::from(vec![3, 3])));
+
+        let amount_converter =
+            StatisticsConverter::from_column_index(1, amount_arrow_field, parquet_schema).unwrap();
+
+        let amount_mins = amount_converter.row_group_mins(row_groups.iter()).unwrap();
+        assert_eq!(
+            &amount_mins,
+            &decimal128_array([Some(i128::from(-500))], 20, 2)
+        );
+
+        let amount_maxes = amount_converter.row_group_maxes(row_groups.iter()).unwrap();
+        assert_eq!(
+            &amount_maxes,
+            &decimal128_array([Some(i128::from(2000))], 20, 2)
+        );
+
+        let amount_page_mins = amount_converter
+            .data_page_mins(
+                column_page_index,
+                column_offset_index,
+                row_group_indices.iter(),
+            )
+            .unwrap();
+        assert_eq!(
+            &amount_page_mins,
+            &decimal128_array([Some(i128::from(-500)), Some(i128::from(50))], 20, 2)
+        );
+
+        let amount_page_maxes = amount_converter
+            .data_page_maxes(
+                column_page_index,
+                column_offset_index,
+                row_group_indices.iter(),
+            )
+            .unwrap();
+        assert_eq!(
+            &amount_page_maxes,
+            &decimal128_array([Some(i128::from(100)), Some(i128::from(2000))], 20, 2)
+        );
+
+        let column_count = parquet_schema.columns().len();
+        let err =
+            StatisticsConverter::from_column_index(column_count, leaf_arrow_field, parquet_schema)
+                .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Arrow: Parquet column index {column_count} out of bounds, column count {column_count}"
+            )
+        );
+    }
+
+    fn decimal128_array(
+        input: impl IntoIterator<Item = Option<i128>>,
+        precision: u8,
+        scale: i8,
+    ) -> ArrayRef {
+        Arc::new(
+            Decimal128Array::from_iter(input)
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
+        )
     }
 
     /// Write the specified batches out as parquet and return the metadata
