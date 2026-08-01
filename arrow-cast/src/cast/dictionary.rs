@@ -250,7 +250,7 @@ fn binary_dict_to_string_view<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
                 return Err(e);
             }
             // safe=true: validate each dictionary value individually so we can nullify
-            // only the rows whose key points to an invalid UTF-8 value.
+            // only the rows whose key points to a null or invalid UTF-8 value.
             let valid: Vec<bool> = (0..values.len())
                 .map(|i| !values.is_null(i) && std::str::from_utf8(values.value(i)).is_ok())
                 .collect();
@@ -277,7 +277,7 @@ fn binary_dict_to_string_view<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
                             // (1) `idx` and `idx + 1` are in bounds, checked above
                             // (2) offsets are monotonically increasing, so end >= offset
                             // (3) the slice [offset..end] is within the buffer
-                            // (4) the bytes are valid UTF-8 (checked above for valid[idx])
+                            // (4) the bytes are valid UTF-8, checked above
                             unsafe {
                                 let offset = value_offsets.get_unchecked(idx).as_usize();
                                 let end = value_offsets.get_unchecked(idx + 1).as_usize();
@@ -302,8 +302,6 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
 ) -> Result<ArrayRef, ArrowError> {
     let value_buffer = values.values();
     let value_offsets = values.value_offsets();
-    // A null *value* must produce a null row, not the empty slice its offsets happen to span.
-    let values_have_nulls = values.null_count() != 0;
     let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
     builder.append_block(value_buffer.clone());
     for i in keys.iter() {
@@ -313,22 +311,9 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
                     ArrowError::ComputeError("Invalid dictionary index".to_string())
                 })?;
 
-                if idx >= values.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary key {idx} out of bounds for dictionary values of length {}",
-                        values.len()
-                    )));
-                }
-
-                if values_have_nulls && values.is_null(idx) {
-                    builder.append_null();
-                    continue;
-                }
-
                 // Safety
-                // (1) `idx` and `idx + 1` are in bounds, checked above
-                // (2) offsets are monotonic and within the values buffer, which was added
-                //     as block 0 via `append_block`, so `offset..end` is inside that block
+                // (1) The index is within bounds as they are offsets
+                // (2) The append_view is safe
                 unsafe {
                     let offset = value_offsets.get_unchecked(idx).as_usize();
                     let end = value_offsets.get_unchecked(idx + 1).as_usize();

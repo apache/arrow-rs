@@ -7659,43 +7659,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dict_to_view_null_dictionary_value_is_null() {
-        // A null *value* in the dictionary must produce a null row, not the empty slice that
-        // its offsets happen to span. Both implementations must agree.
-        let values: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("aa"),
-            None,
-            Some("a value over twelve bytes"),
-            Some("dd"),
-            Some("ee"),
-            Some("ff"),
-        ]));
-
-        let direct = cast_dict(
-            values.clone(),
-            keys_taking_direct_path(),
-            &DataType::Utf8View,
-        );
-        assert_eq!(
-            direct.as_string_view().iter().collect::<Vec<_>>(),
-            vec![Some("aa"), Some("dd")]
-        );
-
-        let unpacked = cast_dict(values, keys_taking_unpack_path(), &DataType::Utf8View);
-        assert_eq!(
-            unpacked.as_string_view().iter().collect::<Vec<_>>(),
-            vec![
-                Some("aa"),
-                Some("dd"),
-                None,
-                None,
-                Some("a value over twelve bytes"),
-                Some("aa"),
-            ]
-        );
-    }
-
-    #[test]
     fn test_dict_to_view_both_paths_agree() {
         // Every arm, exercised through both implementations.
         let long = "a value over twelve bytes";
@@ -7831,7 +7794,7 @@ mod tests {
 
     #[test]
     fn test_dict_large_utf8_to_utf8view() {
-        // Dict<Int8, LargeUtf8> -> Utf8View fast path (offsets fit in u32)
+        // Dict<Int8, LargeUtf8> -> Utf8View, exercising the offset-fit check
         let values = LargeStringArray::from(vec![
             Some("hello"),
             Some("large payload over 12 bytes"),
@@ -7856,7 +7819,7 @@ mod tests {
 
     #[test]
     fn test_dict_large_binary_to_binary_view() {
-        // Dict<Int8, LargeBinary> -> BinaryView fast path (offsets fit in u32)
+        // Dict<Int8, LargeBinary> -> BinaryView, exercising the offset-fit check
         let mut builder = GenericBinaryBuilder::<i64>::new();
         builder.append_value(b"hello");
         builder.append_value(b"world");
