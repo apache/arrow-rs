@@ -186,8 +186,8 @@ use arrow_array::timezone::Tz;
 static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$",                   //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
+        r"^[+-]?(\d+)$",                   //INTEGER
+        r"^[+-]?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -356,7 +356,8 @@ impl Format {
     /// This currently infers whether the first record is a header. Up to
     /// `max_records` records after the first record are inspected; if `None`, all
     /// records are read. Detection is conservative and returns no header when the
-    /// sampled records do not provide type evidence.
+    /// sampled records do not provide type evidence. Returns the updated format
+    /// and the number of records read, including the first header candidate.
     ///
     /// # Example
     ///
@@ -365,10 +366,12 @@ impl Format {
     /// use std::io::Cursor;
     ///
     /// let csv = "name,count\nalice,1\nbob,2\n";
-    /// let format = Format::default().infer_format(Cursor::new(csv), Some(10))?;
+    /// let (format, format_records_read) =
+    ///     Format::default().infer_format(Cursor::new(csv), Some(10))?;
     /// let (schema, records_read) = format.infer_schema(Cursor::new(csv), None)?;
     ///
     /// assert_eq!(schema.field(0).name(), "name");
+    /// assert_eq!(format_records_read, 3);
     /// assert_eq!(records_read, 2);
     /// # Ok::<_, arrow_schema::ArrowError>(())
     /// ```
@@ -376,9 +379,10 @@ impl Format {
         mut self,
         reader: R,
         max_records: Option<usize>,
-    ) -> Result<Self, ArrowError> {
-        self.header = self.infer_header(reader, max_records)?;
-        Ok(self)
+    ) -> Result<(Self, usize), ArrowError> {
+        let (header, records_read) = self.infer_header(reader, max_records)?;
+        self.header = header;
+        Ok((self, records_read))
     }
 
     /// Infer whether the first CSV record is a header
@@ -390,7 +394,7 @@ impl Format {
         &self,
         reader: R,
         max_records: Option<usize>,
-    ) -> Result<bool, ArrowError> {
+    ) -> Result<(bool, usize), ArrowError> {
         let mut format = self.clone();
         format.header = false;
         let mut csv_reader = format.build_reader(reader);
@@ -400,7 +404,7 @@ impl Format {
             .read_record(&mut first_record)
             .map_err(map_csv_error)?
         {
-            return Ok(false);
+            return Ok((false, 0));
         }
 
         let mut first_types = vec![InferredDataType::default(); first_record.len()];
@@ -425,9 +429,10 @@ impl Format {
             }
         }
 
-        Ok(first_types.iter().zip(&column_types).any(|(first, rest)| {
+        let has_header = first_types.iter().zip(&column_types).any(|(first, rest)| {
             first.get() == DataType::Utf8 && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
-        }))
+        });
+        Ok((has_header, records_count + 1))
     }
 
     /// Infer schema of CSV records from the provided `reader`
@@ -1588,7 +1593,7 @@ mod tests {
     fn test_infer_format_with_typed_columns() {
         let csv = "name,count,active\nalice,1,true\nbob,2,false\n";
 
-        let format = Format::default()
+        let (format, format_records_read) = Format::default()
             .infer_format(Cursor::new(csv), None)
             .unwrap();
         let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
@@ -1596,6 +1601,7 @@ mod tests {
         assert_eq!(schema.field(0).name(), "name");
         assert_eq!(schema.field(1).name(), "count");
         assert_eq!(schema.field(2).name(), "active");
+        assert_eq!(format_records_read, 3);
         assert_eq!(records_read, 2);
     }
 
@@ -1603,38 +1609,40 @@ mod tests {
     fn test_infer_format_without_header() {
         let csv = "1,true\n2,false\n";
 
-        let format = Format::default()
+        let (format, format_records_read) = Format::default()
             .infer_format(Cursor::new(csv), None)
             .unwrap();
         let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
 
         assert_eq!(schema.field(0).name(), "column_1");
         assert_eq!(schema.field(1).name(), "column_2");
+        assert_eq!(format_records_read, 2);
         assert_eq!(records_read, 2);
     }
 
     #[test]
     fn test_infer_format_returns_no_header_when_ambiguous() {
         for csv in ["name,count\n", "alice,london\nbob,paris\n"] {
-            let format = Format::default()
+            let (format, _) = Format::default()
                 .infer_format(Cursor::new(csv), None)
                 .unwrap();
             let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
             assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
         }
 
-        let format = Format::default()
+        let (format, format_records_read) = Format::default()
             .infer_format(Cursor::new(""), None)
             .unwrap();
         let (schema, records_read) = format.infer_schema(Cursor::new(""), None).unwrap();
         assert!(schema.fields().is_empty());
+        assert_eq!(format_records_read, 0);
         assert_eq!(records_read, 0);
     }
 
     #[test]
     fn test_infer_format_honors_format_options() {
         let csv = "name;count\nalice;1\nbob;2\n";
-        let format = Format::default()
+        let (format, _) = Format::default()
             .with_delimiter(b';')
             .infer_format(Cursor::new(csv), None)
             .unwrap();
@@ -1648,17 +1656,34 @@ mod tests {
     #[test]
     fn test_infer_format_respects_max_records() {
         let csv = "name,count\nalice,1\nbob,unknown\n";
-        let infer_first_name = |max_records| {
-            let format = Format::default()
+        let infer = |max_records| {
+            let (format, records_read) = Format::default()
                 .infer_format(Cursor::new(csv), max_records)
                 .unwrap();
             let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
-            schema.field(0).name().to_string()
+            (schema.field(0).name().to_string(), records_read)
         };
 
-        assert_eq!(infer_first_name(Some(1)), "name");
-        assert_eq!(infer_first_name(None), "column_1");
-        assert_eq!(infer_first_name(Some(0)), "column_1");
+        assert_eq!(infer(Some(1)), ("name".to_string(), 2));
+        assert_eq!(infer(None), ("column_1".to_string(), 3));
+        assert_eq!(infer(Some(0)), ("column_1".to_string(), 1));
+    }
+
+    #[test]
+    fn test_infer_format_leading_plus_is_not_header() {
+        for (csv, expected_type) in [
+            ("+1\n2\n3\n", DataType::Int64),
+            ("+1.5\n2.5\n3.5\n", DataType::Float64),
+        ] {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+            assert_eq!(schema.field(0).data_type(), &expected_type, "CSV: {csv:?}");
+            assert_eq!(records_read, 3);
+        }
     }
 
     #[test]
