@@ -649,7 +649,9 @@ impl TryFrom<&FFI_ArrowSchema> for Field {
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
         let dtype = DataType::try_from(c_schema)?;
-        let mut field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable());
+        let mut field =
+            Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable())
+                .with_dict_is_ordered(c_schema.dictionary_ordered());
         field.set_metadata(c_schema.metadata()?);
         Ok(field)
     }
@@ -988,6 +990,40 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(schema).unwrap();
         assert!(arrow_schema.child(0).dictionary_ordered());
+    }
+
+    #[test]
+    fn test_dictionary_ordered_roundtrip() {
+        #[allow(deprecated)]
+        let field = Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+            0,
+            true,
+        );
+
+        // Export to FFI schema
+        let ffi = FFI_ArrowSchema::try_from(&field).unwrap();
+        assert!(ffi.dictionary_ordered());
+
+        // Import back — the ordered flag must survive the round trip
+        let roundtripped = Field::try_from(&ffi).unwrap();
+        assert_eq!(roundtripped.dict_is_ordered(), Some(true));
+
+        // Also check that an unordered dictionary round-trips as unordered
+        #[allow(deprecated)]
+        let unordered = Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+            0,
+            false,
+        );
+        let ffi_unordered = FFI_ArrowSchema::try_from(&unordered).unwrap();
+        assert!(!ffi_unordered.dictionary_ordered());
+        let roundtripped_unordered = Field::try_from(&ffi_unordered).unwrap();
+        assert_eq!(roundtripped_unordered.dict_is_ordered(), Some(false));
     }
 
     #[test]
