@@ -20,7 +20,7 @@
 # Changelog
 
 
-## [59.2.0](https://github.com/apache/arrow-rs/tree/59.2.0) - (2026-07-31)
+## [59.2.0](https://github.com/apache/arrow-rs/tree/59.2.0) - (2026-08-02)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.1.0...59.2.0)
 
@@ -42,6 +42,7 @@
 - feat(variant): Add `variant_to_arrow` `Map` type support by @sdf-jkl in [#10307](https://github.com/apache/arrow-rs/pull/10307)
 
 ### Bug fixes
+- fix(arrow-schema): Persist dictionary ordered flag on FFI schema import by @borchero in [#10514](https://github.com/apache/arrow-rs/pull/10514)
 - fix(arrow-json): validate ListView child nullability by @dk3yyyy in [#10486](https://github.com/apache/arrow-rs/pull/10486)
 - fix(arrow-json): validate map value nullability by @subotac in [#10475](https://github.com/apache/arrow-rs/pull/10475)
 - avro: bound VLQDecoder::long against overlong varints by @STiFLeR7 in [#10407](https://github.com/apache/arrow-rs/pull/10407)
@@ -77,12 +78,15 @@
 - Validate short view strings in separate buffer in arrow-row by @Jefffrey in [#10250](https://github.com/apache/arrow-rs/pull/10250)
 
 ### Documentation updates
+- chore(parquet): add link to ticket in object_store deprecation message by @alamb in [#10502](https://github.com/apache/arrow-rs/pull/10502)
+- chore(avro): add link to ticket in object_store deprecation message by @alamb in [#10503](https://github.com/apache/arrow-rs/pull/10503)
 - docs: clarify decimal negative scale behavior by @ByteBaker in [#10304](https://github.com/apache/arrow-rs/pull/10304)
 - Docs: fix mutableArrayData comments by @Rich-T-kid in [#10326](https://github.com/apache/arrow-rs/pull/10326)
 - docs: trim release schedule for released versions by @alamb in [#10280](https://github.com/apache/arrow-rs/pull/10280)
 - Align parquet-geospatial crate docs with README by @paleolimbot in [#10302](https://github.com/apache/arrow-rs/pull/10302)
 
 ### Miscellaneous
+- Revert "chore: formalize the default map field names to match default arrow spec (#10297)" by @alamb in [#10506](https://github.com/apache/arrow-rs/pull/10506)
 - parquet: deprecate explicit `object_store` integration by @brancz in [#10354](https://github.com/apache/arrow-rs/pull/10354)
 - fix(parquet): restore opaque return type for `RowSelection::iter` by @haohuaijin in [#10450](https://github.com/apache/arrow-rs/pull/10450)
 - refactor(parquet): split `arrow_reader/selection` into smaller modules by @haohuaijin in [#10434](https://github.com/apache/arrow-rs/pull/10434)
