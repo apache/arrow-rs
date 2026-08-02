@@ -7636,10 +7636,7 @@ mod tests {
 
     #[test]
     fn test_dict_to_view_null_dictionary_value_is_null() {
-        // A null *value* in the dictionary must produce a null row, not the empty slice that
-        // its offsets happen to span. `unpack_dictionary`, which serves every other target
-        // type, and `impl From<&GenericByteArray> for GenericByteViewArray` both produce null
-        // here, so the view output previously disagreed with every other path.
+        // Ensure we preserve nulls in the values
         let keys = Int32Array::from_iter([Some(0), Some(1), Some(2), None, Some(1)]);
 
         let values = StringArray::from(vec![Some("aa"), None, Some("a value over twelve bytes")]);
