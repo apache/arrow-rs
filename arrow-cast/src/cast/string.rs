@@ -258,6 +258,17 @@ pub(crate) fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
     )
 }
 
+pub(crate) fn cast_string_to_duration<Offset, T>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    Offset: OffsetSizeTrait,
+    T: ArrowTemporalType<Native = i64>,
+{
+    cast_string_to_interval::<Offset, _, T>(array, cast_options, parse_duration::<T>)
+}
+
 pub(crate) fn cast_view_to_interval<F, ArrowType>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -302,6 +313,16 @@ pub(crate) fn cast_view_to_month_day_nano_interval(
         cast_options,
         parse_interval_month_day_nano,
     )
+}
+
+pub(crate) fn cast_view_to_duration<T>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowTemporalType<Native = i64>,
+{
+    cast_view_to_interval::<_, T>(array, cast_options, parse_duration::<T>)
 }
 
 fn cast_string_to_interval_impl<'a, I, ArrowType, F>(
