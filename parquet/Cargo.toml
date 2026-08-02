@@ -116,9 +116,8 @@ experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
-# Deprecated: implement `AsyncFileReader` directly instead, see the example on
-# the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`.
 # This feature will be removed in a future release.
+# See https://github.com/apache/arrow-rs/issues/10308
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd"]

@@ -77,7 +77,7 @@ use tokio::io::AsyncWriteExt;
 /// [`AsyncArrowWriter`]: crate::arrow::async_writer::AsyncArrowWriter
 #[deprecated(
     since = "59.2.0",
-    note = "Pass an `object_store::buffered::BufWriter` to `AsyncArrowWriter` directly instead; see `parquet/examples/object_store.rs`"
+    note = "Pass an `object_store::buffered::BufWriter` to `AsyncArrowWriter` directly instead; see https://github.com/apache/arrow-rs/issues/10308 and `parquet/examples/object_store.rs`."
 )]
 #[derive(Debug)]
 pub struct ParquetObjectWriter {
