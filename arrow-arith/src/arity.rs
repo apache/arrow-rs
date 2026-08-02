@@ -376,8 +376,6 @@ fn create_union_null_buffer(
     }
 }
 
-/// This intentional inline(never) attribute helps LLVM optimize the loop.
-#[inline(never)]
 fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     len: usize,
     a: A,
