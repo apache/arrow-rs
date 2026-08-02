@@ -77,6 +77,11 @@ pub use decimal::{
 };
 pub use string::cast_single_string_to_boolean_default;
 
+/// Integers below 2^53 convert to an `f64` exactly.
+const F64_EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0;
+/// Integers below 2^24 convert to an `f32` exactly.
+const F32_EXACT_INT_LIMIT: f64 = 16_777_216.0;
+
 /// Lossy conversion from decimal to float.
 ///
 /// Returns the `f64` nearest to the decimal's exact value, rounding once.
@@ -84,7 +89,7 @@ pub use string::cast_single_string_to_boolean_default;
 /// Conversion is lossy and follows standard floating point semantics. Values
 /// that exceed the representable range become `INFINITY` or `-INFINITY` without
 /// returning an error.
-#[inline]
+#[inline(always)]
 pub fn single_decimal_to_float_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f64
 where
     D: DecimalType,
@@ -95,18 +100,27 @@ where
     // is exactly representable up to 22, so this rounds exactly once and gives the
     // double nearest to the decimal value. A negative scale has to multiply:
     // `10^scale` is inexact there, while `10^-scale` is the exact power of ten.
-    if (-22..=22).contains(&scale) && unscaled.abs() < 9_007_199_254_740_992.0 {
+    if (-22..=22).contains(&scale) && unscaled.abs() < F64_EXACT_INT_LIMIT {
         return if scale >= 0 {
             unscaled / 10_f64.powi(scale)
         } else {
             unscaled * 10_f64.powi(-scale)
         };
     }
-    // Slow path: `unscaled` and/or the power of ten are inexact, so combining them
-    // rounds twice and can land on the wrong double. Round once instead, via a
-    // correctly rounded decimal-string parse. The precision passed to
-    // `format_decimal` only bounds how many digits are kept, and values are not
-    // guaranteed to fit the declared precision, so it must not truncate here.
+    decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
+}
+
+/// The out-of-line half of [`single_decimal_to_float_lossy`], kept out of the hot
+/// loop so the common case stays a comparison and a division.
+///
+/// `unscaled` and/or the power of ten are inexact here, so combining them rounds
+/// twice and can land on the wrong double. Round once instead, via a correctly
+/// rounded decimal-string parse. The precision passed to `format_decimal` only
+/// bounds how many digits are kept, and values are not guaranteed to fit the
+/// declared precision, so it must not truncate here.
+#[cold]
+#[inline(never)]
+fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscaled: f64) -> f64 {
     D::format_decimal(x, u8::MAX, scale as i8)
         .parse::<f64>()
         .unwrap_or_else(|_| unscaled / 10_f64.powi(scale))
@@ -121,7 +135,7 @@ where
 /// above an `f32` midpoint can collapse onto that midpoint in `f64`, and
 /// round-half-even then sends it the wrong way. So this narrows directly rather
 /// than reusing the `f64` conversion.
-#[inline]
+#[inline(always)]
 pub fn single_decimal_to_f32_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f32
 where
     D: DecimalType,
@@ -131,16 +145,146 @@ where
     // `10^k = 2^k * 5^k`, and `5^10` is the largest power of five that fits the
     // 24-bit significand, so the exactly representable powers of ten stop at
     // `k = 10` -- much earlier than the `k = 22` that `f64` allows.
-    if (-10..=10).contains(&scale) && unscaled.abs() < 16_777_216.0 {
+    if (-10..=10).contains(&scale) && unscaled.abs() < F32_EXACT_INT_LIMIT {
         return if scale >= 0 {
             unscaled as f32 / 10_f32.powi(scale)
         } else {
             unscaled as f32 * 10_f32.powi(-scale)
         };
     }
+    decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
+}
+
+/// The out-of-line half of [`single_decimal_to_f32_lossy`]; see
+/// [`decimal_to_f64_rounded_once`].
+#[cold]
+#[inline(never)]
+fn decimal_to_f32_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscaled: f64) -> f32 {
     D::format_decimal(x, u8::MAX, scale as i8)
         .parse::<f32>()
-        .unwrap_or_else(|_| single_decimal_to_float_lossy::<D, F>(f, x, scale) as f32)
+        .unwrap_or_else(|_| decimal_to_f64_rounded_once::<D>(x, scale, unscaled) as f32)
+}
+
+/// Casts a whole decimal array to `Float64`, rounding each value once.
+///
+/// The scale and the declared precision are fixed for the whole array, so the
+/// power of ten and the shape of the loop are chosen once here rather than per
+/// value: a test inside the loop costs more than the conversion it guards.
+/// `cast_floating_point_to_decimal` hoists the same multiplier in the other
+/// direction.
+fn cast_decimal_array_to_f64<D, F>(
+    array: &dyn Array,
+    as_float: &F,
+    scale: i32,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    F: Fn(D::Native) -> f64,
+{
+    // Outside this range no power of ten is exactly representable, so every value
+    // has to go through the string path.
+    if !(-22..=22).contains(&scale) {
+        return cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
+            single_decimal_to_float_lossy::<D, F>(as_float, x, scale)
+        });
+    }
+    // `10^15` is below 2^53, so at precision <= 15 every value that fits its
+    // declared precision converts exactly and the per-value test can be dropped.
+    // A value that does not fit its declared precision keeps the doubly rounded
+    // result it has today. `make_upscaler` trusts the declared precision the same
+    // way, to decide when a decimal to decimal cast cannot overflow.
+    let exact = array.as_primitive::<D>().precision() <= 15;
+    let pow = 10_f64.powi(scale.abs());
+    // A negative scale multiplies: `10^scale` is inexact there, while `10^-scale`
+    // is the exact power of ten.
+    if scale >= 0 {
+        cast_decimal_to_f64_rescaled::<D, F, _>(array, as_float, scale, exact, |x| x / pow)
+    } else {
+        cast_decimal_to_f64_rescaled::<D, F, _>(array, as_float, scale, exact, |x| x * pow)
+    }
+}
+
+/// The loop behind [`cast_decimal_array_to_f64`]. `rescale` already carries the
+/// power of ten, so all that is left per value is the exactness test -- and
+/// `exact` drops even that.
+#[inline(always)]
+fn cast_decimal_to_f64_rescaled<D, F, R>(
+    array: &dyn Array,
+    as_float: &F,
+    scale: i32,
+    exact: bool,
+    rescale: R,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    F: Fn(D::Native) -> f64,
+    R: Fn(f64) -> f64,
+{
+    if exact {
+        return cast_decimal_to_float::<D, Float64Type, _>(array, |x| rescale(as_float(x)));
+    }
+    cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
+        let unscaled = as_float(x);
+        if unscaled.abs() < F64_EXACT_INT_LIMIT {
+            rescale(unscaled)
+        } else {
+            decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
+        }
+    })
+}
+
+/// Casts a whole decimal array to `Float32`, rounding each value once. Same shape
+/// as [`cast_decimal_array_to_f64`], with the smaller bounds an `f32` allows.
+fn cast_decimal_array_to_f32<D, F>(
+    array: &dyn Array,
+    as_float: &F,
+    scale: i32,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    F: Fn(D::Native) -> f64,
+{
+    if !(-10..=10).contains(&scale) {
+        return cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
+            single_decimal_to_f32_lossy::<D, F>(as_float, x, scale)
+        });
+    }
+    // `10^7` is below 2^24.
+    let exact = array.as_primitive::<D>().precision() <= 7;
+    let pow = 10_f32.powi(scale.abs());
+    if scale >= 0 {
+        cast_decimal_to_f32_rescaled::<D, F, _>(array, as_float, scale, exact, |x| x as f32 / pow)
+    } else {
+        cast_decimal_to_f32_rescaled::<D, F, _>(array, as_float, scale, exact, |x| x as f32 * pow)
+    }
+}
+
+/// The loop behind [`cast_decimal_array_to_f32`]; see
+/// [`cast_decimal_to_f64_rescaled`].
+#[inline(always)]
+fn cast_decimal_to_f32_rescaled<D, F, R>(
+    array: &dyn Array,
+    as_float: &F,
+    scale: i32,
+    exact: bool,
+    rescale: R,
+) -> Result<ArrayRef, ArrowError>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    F: Fn(D::Native) -> f64,
+    R: Fn(f64) -> f32,
+{
+    if exact {
+        return cast_decimal_to_float::<D, Float32Type, _>(array, |x| rescale(as_float(x)));
+    }
+    cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
+        let unscaled = as_float(x);
+        if unscaled.abs() < F32_EXACT_INT_LIMIT {
+            rescale(unscaled)
+        } else {
+            decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
+        }
+    })
 }
 
 /// CastOptions provides a way to override the default cast behaviors
@@ -2418,12 +2562,12 @@ where
                 <i32 as From<i8>>::from(*scale),
             ))
         }),
-        Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            single_decimal_to_f32_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
-        }),
-        Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
-        }),
+        Float32 => {
+            cast_decimal_array_to_f32::<D, F>(array, &as_float, <i32 as From<i8>>::from(*scale))
+        }
+        Float64 => {
+            cast_decimal_array_to_f64::<D, F>(array, &as_float, <i32 as From<i8>>::from(*scale))
+        }
         Utf8View => value_to_string_view(array, cast_options),
         Utf8 => value_to_string::<i32>(array, cast_options),
         LargeUtf8 => value_to_string::<i64>(array, cast_options),
@@ -14271,6 +14415,43 @@ mod tests {
                 as_f32.as_primitive::<Float32Type>().value(0),
                 text.parse::<f32>().unwrap(),
                 "Decimal128({unscaled}, scale={scale}) -> Float32 disagrees with parsing {text:?}"
+            );
+        }
+    }
+
+    /// At precision <= 15 -- <= 7 for `f32` -- every value that fits its declared
+    /// precision is exactly representable, so the cast drops the per-value test
+    /// and runs a plain multiply or divide. That path needs its own coverage:
+    /// every other test here declares precision 38 or 76.
+    #[test]
+    fn test_cast_narrow_decimal_to_float_is_correctly_rounded() {
+        let cases: [(i128, u8, i8); 6] = [
+            (999999999999999, 15, 3), // widest value a precision of 15 allows
+            (-999999999999999, 15, 15),
+            (9999999, 7, 3), // widest value a precision of 7 allows
+            (-9999999, 7, 7),
+            (12345, 15, -10), // negative scale multiplies instead of dividing
+            (1, 1, 0),
+        ];
+
+        for (unscaled, precision, scale) in cases {
+            let text = Decimal128Type::format_decimal(unscaled, u8::MAX, scale);
+            let array = Decimal128Array::from(vec![unscaled])
+                .with_precision_and_scale(precision, scale)
+                .unwrap();
+
+            let as_f64 = cast(&array, &DataType::Float64).unwrap();
+            assert_eq!(
+                as_f64.as_primitive::<Float64Type>().value(0),
+                text.parse::<f64>().unwrap(),
+                "Decimal128({unscaled}, precision={precision}, scale={scale}) -> Float64"
+            );
+
+            let as_f32 = cast(&array, &DataType::Float32).unwrap();
+            assert_eq!(
+                as_f32.as_primitive::<Float32Type>().value(0),
+                text.parse::<f32>().unwrap(),
+                "Decimal128({unscaled}, precision={precision}, scale={scale}) -> Float32"
             );
         }
     }
