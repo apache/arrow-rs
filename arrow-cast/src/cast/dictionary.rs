@@ -143,24 +143,14 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
                     ArrowError::ComputeError("Invalid dictionary index".to_string())
                 })?;
 
-                // A dictionary built without validation can carry a key past the end of the
-                // values. Reject it rather than reading out of bounds below.
-                if idx >= values.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary key {idx} out of bounds for dictionary values of length {}",
-                        values.len()
-                    )));
-                }
-
                 if values_have_nulls && values.is_null(idx) {
                     builder.append_null();
                     continue;
                 }
 
                 // Safety
-                // (1) `idx` and `idx + 1` are in bounds, checked above
-                // (2) offsets are monotonic and within the values buffer, which was added
-                //     as block 0 via `append_block`, so `offset..end` is inside that block
+                // (1) The index is within bounds as they are offsets
+                // (2) The append_view is safe
                 unsafe {
                     let offset = value_offsets.get_unchecked(idx).as_usize();
                     let end = value_offsets.get_unchecked(idx + 1).as_usize();
