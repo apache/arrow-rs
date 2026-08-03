@@ -191,7 +191,7 @@ fn test_row_filter_full_page_skip_is_handled() {
         .unwrap();
 
     // Predicate pruning used to panic once mask-backed plans removed whole pages.
-    // Collecting into batches validates the plan now downgrades to selectors instead.
+    // Collecting into batches validates that Mask can read around unloaded pages.
     let schema = reader.schema().clone();
     let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
     let result = concat_batches(&schema, &batches).unwrap();

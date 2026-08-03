@@ -506,15 +506,11 @@ impl Decoder {
                 Self::Record(arrow_fields.into(), encodings, field_defaults, projector)
             }
             (Codec::Map(child), _) => {
-                let val_field = child.field_with_name(ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME);
+                let val_field = child.field_with_name("value");
                 let map_field = Arc::new(ArrowField::new(
-                    ArrowField::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    "entries",
                     DataType::Struct(Fields::from(vec![
-                        ArrowField::new(
-                            ArrowField::MAP_KEY_FIELD_DEFAULT_NAME,
-                            DataType::Utf8,
-                            false,
-                        ),
+                        ArrowField::new("key", DataType::Utf8, false),
                         val_field,
                     ])),
                     false,

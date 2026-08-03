@@ -649,8 +649,9 @@ impl TryFrom<&FFI_ArrowSchema> for Field {
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
         let dtype = DataType::try_from(c_schema)?;
-        let mut field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable());
-        field.set_metadata(c_schema.metadata()?);
+        let field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable())
+            .with_dict_is_ordered(c_schema.dictionary_ordered())
+            .with_metadata(c_schema.metadata()?);
         Ok(field)
     }
 }
@@ -957,19 +958,13 @@ mod tests {
 
     #[test]
     fn test_map_keys_sorted() {
-        let keys = Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false);
-        let values = Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, false);
+        let keys = Field::new("keys", DataType::Int32, false);
+        let values = Field::new("values", DataType::UInt32, false);
         let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
-        let map_data_type = DataType::Map(
-            Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                entry_struct,
-                false,
-            )),
-            true,
-        );
+        let map_data_type =
+            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());
@@ -988,6 +983,10 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(schema).unwrap();
         assert!(arrow_schema.child(0).dictionary_ordered());
+
+        // Round-trip: the ordered flag must be preserved when converting back to a Field.
+        let field = Field::try_from(arrow_schema.child(0)).unwrap();
+        assert_eq!(field.dict_is_ordered(), Some(true));
     }
 
     #[test]
