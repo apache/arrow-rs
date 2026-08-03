@@ -275,9 +275,7 @@ where
 
                     if levels_read != levels_to_read {
                         return Err(general_err!(
-                            "insufficient definition levels read from column - expected {}, got {}",
-                            levels_to_read,
-                            levels_read
+                            "insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"
                         ));
                     }
 
