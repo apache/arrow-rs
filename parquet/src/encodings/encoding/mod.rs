@@ -26,6 +26,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
+use crate::util::prefix::common_prefix_length;
 
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
@@ -698,13 +699,8 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
 
         for byte_array in values {
             let current = byte_array.data();
-            // Maximum prefix length that is shared between previous value and current
-            // value
-            let prefix_len = cmp::min(self.previous.len(), current.len());
-            let mut match_len = 0;
-            while match_len < prefix_len && self.previous[match_len] == current[match_len] {
-                match_len += 1;
-            }
+            // Number of leading bytes shared with the previous value
+            let match_len = common_prefix_length(&self.previous, current);
             prefix_lengths.push(match_len as i32);
             suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
             // Update previous for the next prefix
