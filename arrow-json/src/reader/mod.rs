@@ -1287,13 +1287,9 @@ mod tests {
         "#;
         let map = Field::new_map(
             "map",
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-            Field::new_list(
-                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-                Field::new("element", DataType::Utf8, true),
-                true,
-            ),
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
             false,
             true,
         );
@@ -1323,6 +1319,31 @@ mod tests {
         assert_eq!(formatter.value(0).to_string(), "{a: [foo, null]}");
         assert_eq!(formatter.value(1).to_string(), "{a: [null], b: []}");
         assert_eq!(formatter.value(2).to_string(), "{c: null, a: [baz]}");
+    }
+
+    #[test]
+    fn test_map_non_nullable_value() {
+        let map = Field::new_map(
+            "map",
+            "entries",
+            Field::new("keys", DataType::Utf8, false),
+            Field::new("values", DataType::Utf8, false),
+            false,
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![map]));
+        let buf = r#"{"map": {"key": null}}"#;
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"values\""
+        );
     }
 
     #[test]
@@ -2317,6 +2338,34 @@ mod tests {
     }
 
     #[test]
+    fn test_read_list_view_rejects_null_non_nullable_child() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        for (data_type, array_type) in [
+            (DataType::ListView(field.clone()), "ListViewArray"),
+            (DataType::LargeListView(field.clone()), "LargeListViewArray"),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new("lv", data_type, true)]));
+            let buf = r#"
+            {"lv": [1, 2, 3]}
+            {"lv": [4, null]}
+            "#;
+
+            let error = ReaderBuilder::new(schema)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Invalid argument error: Non-nullable field of {array_type} \"item\" cannot contain nulls"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_fixed_size_list() {
         let buf = r#"
         {"a": [1, 2, 3]}
@@ -3012,9 +3061,9 @@ mod tests {
             Field::new("b", DataType::new_list(DataType::Int32, true), true),
             Field::new_map(
                 "c",
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+                "entries",
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
                 false,
                 false,
             ),
@@ -3202,10 +3251,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                        "entries",
                         DataType::Struct(Fields::from(vec![
-                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3460,10 +3509,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                        "entries",
                         DataType::Struct(Fields::from(vec![
-                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3521,10 +3570,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                        "entries",
                         DataType::Struct(Fields::from(vec![
-                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),

@@ -781,7 +781,7 @@ async fn test_float_16() {
         expected_min: Arc::new(Float16Array::from(vec![
             f16::from_f32(-5.),
             f16::from_f32(-4.),
-            f16::from_f32(-0.),
+            f16::from_f32(0.),
             f16::from_f32(5.),
         ])),
         // maxes are [-1, 0, 4, 9]
@@ -817,7 +817,7 @@ async fn test_float_32() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Float32Array::from(vec![-5., -4., -0., 5.0])),
+        expected_min: Arc::new(Float32Array::from(vec![-5., -4., 0., 5.0])),
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Float32Array::from(vec![-1., 0., 4., 9.])),
         // nulls are [0, 0, 0, 0]
@@ -846,7 +846,7 @@ async fn test_float_64() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Float64Array::from(vec![-5., -4., -0., 5.0])),
+        expected_min: Arc::new(Float64Array::from(vec![-5., -4., 0., 5.0])),
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Float64Array::from(vec![-1., 0., 4., 9.])),
         // nulls are [0, 0, 0, 0]
@@ -1897,7 +1897,7 @@ async fn test_float64() {
 
     Test {
         reader: &reader,
-        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
+        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, 0.0, 5.0])),
         expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
@@ -1925,7 +1925,7 @@ async fn test_float16() {
     Test {
         reader: &reader,
         expected_min: Arc::new(Float16Array::from(
-            vec![-5.0, -4.0, -0.0, 5.0]
+            vec![-5.0, -4.0, 0.0, 5.0]
                 .into_iter()
                 .map(f16::from_f32)
                 .collect::<Vec<_>>(),

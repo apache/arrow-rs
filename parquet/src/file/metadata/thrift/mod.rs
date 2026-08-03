@@ -113,6 +113,7 @@ struct Statistics<'a> {
    6: optional binary<'a> min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -207,6 +208,19 @@ fn convert_stats(
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Generic nan count for floating point types
+            let nan_count = stats
+                .nan_count
+                .map(|nan_count| {
+                    if nan_count < 0 {
+                        return Err(general_err!(
+                            "Statistics NaN count is negative {}",
+                            nan_count
+                        ));
+                    }
+                    Ok(nan_count as u64)
+                })
+                .transpose()?;
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -291,19 +305,25 @@ fn convert_stats(
                     };
                     FStatistics::int96(min, max, distinct_count, null_count, old_format)
                 }
-                Type::FLOAT => FStatistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FLOAT => FStatistics::Float(
+                    ValueStatistics::new(
+                        min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
-                Type::DOUBLE => FStatistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::DOUBLE => FStatistics::Double(
+                    ValueStatistics::new(
+                        min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
                 Type::BYTE_ARRAY => FStatistics::ByteArray(
                     ValueStatistics::new(
@@ -324,6 +344,7 @@ fn convert_stats(
                         null_count,
                         old_format,
                     )
+                    .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
@@ -691,7 +712,7 @@ fn read_row_group(
             }
             // 6: we don't expose total_compressed_size
             7 => {
-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)?);
+                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -817,11 +838,6 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // Read row groups and handle ordinal assignment
                 let mut assigner = OrdinalAssigner::new();
                 for ordinal in 0..list_ident.size {
-                    let ordinal: i16 = ordinal.try_into().map_err(|_| {
-                        ParquetError::General(format!(
-                            "Row group ordinal {ordinal} exceeds i16 max value",
-                        ))
-                    })?;
                     let rg = read_row_group(&mut prot, schema_descr, options)?;
                     rg_vec.push(assigner.ensure(ordinal, rg)?);
                 }
@@ -884,6 +900,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                     column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
+                    true,
                 );
                 cos[i] = ColumnOrder::TYPE_DEFINED_ORDER(sort_order);
             }
@@ -940,7 +957,7 @@ impl OrdinalAssigner {
     ///    groups must also not have ordinals.
     fn ensure(
         &mut self,
-        actual_ordinal: i16,
+        actual_ordinal: i32,
         mut rg: RowGroupMetaData,
     ) -> Result<RowGroupMetaData> {
         let rg_has_ordinal = rg.ordinal.is_some();
@@ -1001,6 +1018,7 @@ pub(crate) struct PageStatistics {
    6: optional binary min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -1438,6 +1456,8 @@ impl<'a> WriteThrift for FileMeta<'a> {
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
+        // only write ordinal if all values will fit in an i16
+        writer.set_write_row_group_ordinal(self.row_groups.len() <= i16::MAX as usize);
 
         self.file_metadata
             .version
@@ -1598,8 +1618,14 @@ impl WriteThrift for RowGroupMetaData {
         last_field_id = self
             .compressed_size()
             .write_thrift_field(writer, 6, last_field_id)?;
-        if let Some(ordinal) = self.ordinal() {
-            ordinal.write_thrift_field(writer, 7, last_field_id)?;
+
+        // write ordinal if it will fit in an i16
+        if writer.write_row_group_ordinal() {
+            if let Some(ordinal) = self.ordinal() {
+                if let Ok(ordinal) = i16::try_from(ordinal) {
+                    ordinal.write_thrift_field(writer, 7, last_field_id)?;
+                }
+            }
         }
         writer.write_struct_end()
     }
@@ -1898,6 +1924,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
             .unwrap()
@@ -1913,6 +1940,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
             .unwrap()
@@ -1943,6 +1971,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
 
         let err = super::convert_stats(&column_descr, Some(make_stats(Some(&invalid), None)))

@@ -1608,7 +1608,7 @@ pub struct FileWriter<W> {
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
     /// User level customized metadata
-    custom_metadata: HashMap<String, String>,
+    custom_metadata: Metadata,
 
     data_gen: IpcDataGenerator,
 
@@ -1674,7 +1674,7 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker,
-            custom_metadata: HashMap::new(),
+            custom_metadata: Default::default(),
             data_gen,
             ipc_write_context: IpcWriteContext::default(),
         })
@@ -4091,24 +4091,9 @@ mod tests {
 
     #[test]
     fn encode_map_array() {
-        let keys = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            false,
-        ));
-        let values = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            true,
-        ));
-        let map_field = Field::new_map(
-            "map",
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-            keys,
-            values,
-            false,
-            true,
-        );
+        let keys = Arc::new(Field::new("keys", DataType::UInt32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, true));
+        let map_field = Field::new_map("map", "entries", keys, values, false, true);
         let schema = Arc::new(Schema::new(vec![map_field]));
 
         let values = Arc::new(generate_map_array_data());
@@ -4440,17 +4425,17 @@ mod tests {
 
         #[allow(deprecated)]
         let entries_field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            "entries",
             DataType::Struct(
                 vec![
                     Field::new_dict(
-                        Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                        "key",
                         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         false,
                         1,
                         false,
                     ),
-                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+                    Field::new("value", DataType::Int32, true),
                 ]
                 .into(),
             ),
@@ -4460,18 +4445,14 @@ mod tests {
         let entries = StructArray::from(vec![
             (
                 Arc::new(Field::new(
-                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    "key",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     false,
                 )),
                 Arc::new(dict_keys) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(
-                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-                    DataType::Int32,
-                    true,
-                )),
+                Arc::new(Field::new("value", DataType::Int32, true)),
                 Arc::new(values) as ArrayRef,
             ),
         ]);
@@ -4512,12 +4493,12 @@ mod tests {
 
         #[allow(deprecated)]
         let entries_field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            "entries",
             DataType::Struct(
                 vec![
-                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new("key", DataType::Utf8, false),
                     Field::new_dict(
-                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                        "value",
                         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         true,
                         2,
@@ -4531,16 +4512,12 @@ mod tests {
 
         let entries = StructArray::from(vec![
             (
-                Arc::new(Field::new(
-                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
-                    DataType::Utf8,
-                    false,
-                )),
+                Arc::new(Field::new("key", DataType::Utf8, false)),
                 Arc::new(keys) as ArrayRef,
             ),
             (
                 Arc::new(Field::new(
-                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                    "value",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                 )),

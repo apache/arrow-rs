@@ -20,7 +20,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy, mask_to_selectors,
+    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -335,7 +335,7 @@ fn build_cursor(
             RowSelectionCursor::new_selectors(selectors)
         }
         (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors(mask_to_selectors(mask.mask()))
+            RowSelectionCursor::new_selectors((*mask).into_selectors())
         }
     }
 }
