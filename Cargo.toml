@@ -116,6 +116,30 @@ object_store = { version = "0.13.2", default-features = false }
 
 simdutf8 = { version = "0.1.5", default-features = false }
 
+# Lints that are shared by every crate in the workspace.
+#
+# Each member crate opts in with:
+#
+#   [lints]
+#   workspace = true
+#
+# Only lints that are `allow` by default are worth listing here; the lints that clippy
+# enables by default are already enforced by CI (`cargo clippy ... -- -D warnings`).
+#
+# Keep the lists sorted.
+[workspace.lints.rust]
+unused_import_braces = "warn"
+
+[workspace.lints.clippy]
+debug_assert_with_mut_call = "warn"
+invalid_upcast_comparisons = "warn"
+match_wild_err_arm = "warn"
+mutex_integer = "warn"
+path_buf_push_overwrite = "warn"
+rc_mutex = "warn"
+same_length_and_capacity = "warn"
+trailing_empty_array = "warn"
+
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling
 [profile.profiling]

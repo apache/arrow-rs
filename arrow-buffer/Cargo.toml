@@ -65,3 +65,5 @@ harness = false
 name = "mutable_buffer_repeat_slice"
 harness = false
 
+[lints]
+workspace = true
