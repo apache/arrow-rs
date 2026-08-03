@@ -89,7 +89,7 @@ zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
-tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
@@ -116,6 +116,8 @@ experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
+# This feature will be removed in a future release.
+# See https://github.com/apache/arrow-rs/issues/10308
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd"]
@@ -156,6 +158,11 @@ path = "./examples/write_parquet.rs"
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
+
+[[example]]
+name = "object_store"
+required-features = ["arrow", "async"]
+path = "./examples/object_store.rs"
 
 [[test]]
 name = "arrow_writer_layout"
@@ -254,7 +261,7 @@ harness = false
 
 [[bench]]
 name = "arrow_reader_clickbench"
-required-features = ["arrow", "async", "object_store"]
+required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
