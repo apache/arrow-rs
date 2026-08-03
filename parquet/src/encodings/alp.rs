@@ -415,7 +415,8 @@ pub(crate) trait AlpFloat:
     /// Largest `exponent` this type admits: 10 for `f32`, 18 for `f64`.
     const MAX_EXPONENT: u8;
 
-    /// Rounding magic number: `2^22 + 2^23` (`f32`) or `2^51 + 2^52` (`f64`).
+    /// Rounding magic number: `2^22 + 2^23` (`f32`) or `2^51 + 2^52` (`f64`),
+    /// i.e. `1.5 * 2^mantissa_bits`. See [`AlpFloat::fast_round`].
     const MAGIC_NUMBER: Self;
 
     /// Bounds outside which the scaled value cannot reach the exact integer
@@ -456,13 +457,20 @@ pub(crate) trait AlpFloat:
     /// (which would come back as `+0.0` and lose its sign).
     fn is_impossible_to_encode(self) -> bool;
 
-    /// Round to nearest by the "magic number" technique. Adding `magic` pushes
-    /// `x` into the binade where floats are spaced exactly 1.0 apart, so the
-    /// add itself snaps to the nearest integer, and subtracting `magic` back
-    /// is exact. `magic = 1.5 * 2^mantissa_bits` keeps the sum in that binade
-    /// for negative `x` too. Values large enough to be mis-rounded just fail
-    /// the caller's round-trip check and become exceptions. The add/sub must
-    /// not be simplified away: it *is* the rounding.
+    /// Round to nearest by the "magic number" technique: an add and a subtract
+    /// in plain floating-point math, cheaper than a `round()` call and free to
+    /// autovectorize. How the scaled value is rounded decides whether decoding
+    /// reproduces the input, so rounding to nearest maximizes the values that
+    /// pass the caller's round-trip check instead of becoming exceptions. This
+    /// single-form variant is the one the ALP reference implementation uses.
+    ///
+    /// Mechanics: adding `magic` pushes `x` into the binade where floats are
+    /// spaced exactly 1.0 apart, so the add itself snaps to the nearest
+    /// integer, and subtracting `magic` back is exact. The 1.5 coefficient in
+    /// `magic = 1.5 * 2^mantissa_bits` is what keeps the sum in that binade for
+    /// negative `x` too, without a signed fix-up. Values large enough to be
+    /// mis-rounded just fail the round-trip check and become exceptions. The
+    /// add/sub must not be simplified away: it *is* the rounding.
     fn fast_round(self) -> <Self::Exact as AlpExact>::Signed;
 
     /// Encode one value with a precomputed [`AlpFloat::encode_scale`].
