@@ -615,23 +615,6 @@ impl ArrowReaderOptions {
         }
     }
 
-    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
-    /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
-    ///
-    /// The `PageIndex` can be used to push down predicates to the parquet scan,
-    /// potentially eliminating unnecessary IO, by some query engines.
-    ///
-    /// If this is enabled, [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
-    /// information is present in the file.
-    ///
-    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
-    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
-    pub fn with_page_index(self, page_index: bool) -> Self {
-        self.with_page_index_policy(PageIndexPolicy::from(page_index))
-    }
-
     /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
     /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
@@ -798,20 +781,6 @@ impl ArrowReaderOptions {
             virtual_columns,
             ..self
         })
-    }
-
-    #[deprecated(
-        since = "57.2.0",
-        note = "Use `column_index_policy` or `offset_index_policy` instead"
-    )]
-    /// Returns whether page index reading is enabled.
-    ///
-    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
-    ///
-    /// This can be set via [`with_page_index`][Self::with_page_index] or
-    /// [`with_page_index_policy`][Self::with_page_index_policy].
-    pub fn page_index(&self) -> bool {
-        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
     }
 
     /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
