@@ -2616,7 +2616,7 @@ where
 
 fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowPrimitiveType + ArrowPrimitiveType,
+    T: ArrowPrimitiveType,
 {
     let mut b = BooleanBuilder::with_capacity(from.len());
 

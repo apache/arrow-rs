@@ -41,7 +41,7 @@
 //! # Options
 //!
 //! ```text
-#![doc = include_str!("./parquet-fromcsv-help.txt")] // Update for this file : Run test test_command_help
+#![cfg_attr(doc, doc = include_str!("./parquet-fromcsv-help.txt"))] // Update for this file : Run test test_command_help
 //! ```
 //!
 //! ## Parquet file options
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "CommandLineParseError")]
     fn test_parse_arg_format_error() {
         parse_args(vec!["--input-format", "excel"]).unwrap();
     }

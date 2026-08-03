@@ -730,7 +730,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
         if src_length as u64 != write_length {
             return Err(general_err!(
-                "Failed to splice column data, expected {src_length} got {write_length}"
+                "Failed to splice column data, expected {} got {}",
+                src_length,
+                write_length
             ));
         }
 
@@ -769,7 +771,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
         if src_length as u64 != write_length {
             return Err(general_err!(
-                "Failed to splice column data, expected {src_length} got {write_length}"
+                "Failed to splice column data, expected {} got {}",
+                src_length,
+                write_length
             ));
         }
 

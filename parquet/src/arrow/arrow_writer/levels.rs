@@ -615,8 +615,8 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
-        let offsets = &offsets[range.start..range.end];
-        let sizes = &sizes[range.start..range.end];
+        let offsets = &offsets[range.clone()];
+        let sizes = &sizes[range.clone()];
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {

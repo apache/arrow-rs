@@ -1773,7 +1773,7 @@ mod tests {
     /// Encode `batches` through a [`FlightDataEncoderBuilder`] using `options`, decode them
     /// again, and assert the decoded batches match the originals.
     async fn verify_flight_round_trip_with_options(
-        mut batches: Vec<RecordBatch>,
+        batches: Vec<RecordBatch>,
         options: IpcWriteOptions,
     ) {
         let expected_schema = batches.first().unwrap().schema();
@@ -1783,7 +1783,7 @@ mod tests {
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
-        let mut expected_batches = batches.drain(..);
+        let mut expected_batches = batches.into_iter();
 
         let mut decoder = FlightDataDecoder::new(encoder);
         while let Some(decoded) = decoder.next().await {

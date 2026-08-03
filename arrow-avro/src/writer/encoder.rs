@@ -100,7 +100,7 @@ fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<()
 
 #[inline]
 fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<(), AvroError> {
-    out.write_all(&[if v { 1 } else { 0 }])
+    out.write_all(&[u8::from(v)])
         .map_err(|e| AvroError::IoError(format!("write bool: {e}"), e))
 }
 

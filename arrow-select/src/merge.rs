@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Index out of bounds")]
     fn test_merge_n_invalid_indices() {
         let a1 = StringArray::from(vec![Some("A")]);
 
