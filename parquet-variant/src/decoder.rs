@@ -278,8 +278,14 @@ pub(crate) fn decode_double(data: &[u8]) -> Result<f64, ArrowError> {
 /// Decodes a Date from the value section of a variant.
 pub(crate) fn decode_date(data: &[u8]) -> Result<NaiveDate, ArrowError> {
     let days_since_epoch = i32::from_le_bytes(array_from_slice(data, 0)?);
-    let value = DateTime::UNIX_EPOCH + Duration::days(i64::from(days_since_epoch));
-    Ok(value.date_naive())
+    DateTime::UNIX_EPOCH
+        .checked_add_signed(Duration::days(i64::from(days_since_epoch)))
+        .map(|value| value.date_naive())
+        .ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Could not cast `{days_since_epoch}` days into a NaiveDate"
+            ))
+        })
 }
 
 /// Decodes a TimestampMicros from the value section of a variant.
@@ -338,8 +344,8 @@ pub(crate) fn decode_timestampntz_nanos(data: &[u8]) -> Result<NaiveDateTime, Ar
 
 /// Decodes a UUID from the value section of a variant.
 pub(crate) fn decode_uuid(data: &[u8]) -> Result<Uuid, ArrowError> {
-    Uuid::from_slice(&data[0..16])
-        .map_err(|_| ArrowError::CastError(format!("Cant decode uuid from {:?}", &data[0..16])))
+    let bytes: [u8; 16] = array_from_slice(data, 0)?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Decodes a Binary from the value section of a variant.
@@ -467,6 +473,15 @@ mod tests {
             NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()
         );
 
+        #[test]
+        fn test_date_out_of_range() {
+            // A day count that overflows chrono's supported date range must error, not panic
+            for days in [i32::MAX, i32::MIN] {
+                let result = decode_date(&days.to_le_bytes());
+                assert!(matches!(result, Err(ArrowError::CastError(_))));
+            }
+        }
+
         test_decoder_bounds!(
             test_timestamp_micros,
             [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00],
@@ -531,18 +546,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_uuid() {
-        let data = [
+    test_decoder_bounds!(
+        test_uuid,
+        [
             0xf2, 0x4f, 0x9b, 0x64, 0x81, 0xfa, 0x49, 0xd1, 0xb7, 0x4e, 0x8c, 0x09, 0xa6, 0xe3,
             0x1c, 0x56,
-        ];
-        let result = decode_uuid(&data).unwrap();
-        assert_eq!(
-            Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap(),
-            result
-        );
-    }
+        ],
+        decode_uuid,
+        Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap()
+    );
 
     mod time {
         use super::*;

@@ -47,6 +47,7 @@ name = "parquet_variant"
 bench = false
 
 [dev-dependencies]
+proptest = { version = "1.0", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = [
     "std",
