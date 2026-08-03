@@ -491,10 +491,10 @@ fn align_to_byte<F>(
     //    `bit_offset..bit_offset + bits_in_this_byte`. The request may end before the
     //    byte boundary, in which case the trailing bits must be preserved as well.
     //
-    //    `bits_in_this_byte + bit_offset <= 8`, so the mask always fits in a `u8`. The
-    //    shift is done in `u16` only so the expression stays correct for a full byte.
+    //    `bit_offset` is in `1..=7` per the assert above, so `bits_in_this_byte` is at
+    //    most 7 and `bits_in_this_byte + bit_offset <= 8`, keeping the mask within a `u8`.
     let bits_in_this_byte = (8 - bit_offset).min(remaining_len_in_bits);
-    let write_mask = (((1u16 << bits_in_this_byte) - 1) << bit_offset) as u8;
+    let write_mask = ((1u8 << bits_in_this_byte) - 1) << bit_offset;
 
     let result_first_byte = (first_byte & !write_mask) | (result_first_byte & write_mask);
 
