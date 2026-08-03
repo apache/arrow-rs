@@ -372,13 +372,9 @@ impl MapArray {
         let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
         let keys_data = StringArray::from_iter_values(keys);
 
-        let keys_field = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::Utf8,
-            false,
-        ));
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
         let values_field = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            "values",
             values.data_type().clone(),
             values.null_count() > 0,
         ));
@@ -390,7 +386,7 @@ impl MapArray {
 
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                "entries",
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -635,16 +631,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
-        let keys = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::Int32,
-            false,
-        ));
-        let values = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            false,
-        ));
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -653,7 +641,7 @@ mod tests {
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                "entries",
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -689,16 +677,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
-        let keys_field = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::Int32,
-            false,
-        ));
-        let values_field = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            true,
-        ));
+        let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
         let entry_struct = StructArray::from(vec![
             (keys_field.clone(), make_array(key_data)),
             (values_field.clone(), make_array(value_data.clone())),
@@ -707,7 +687,7 @@ mod tests {
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                "entries",
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -818,16 +798,8 @@ mod tests {
         //  [[3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from([0, 3, 5].to_byte_slice());
 
-        let keys = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::Int32,
-            false,
-        ));
-        let values = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            false,
-        ));
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -836,7 +808,7 @@ mod tests {
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
             Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                "entries",
                 entry_struct.data_type().clone(),
                 false,
             )),
@@ -867,8 +839,8 @@ mod tests {
         // A DictionaryArray has similar buffer layout to a MapArray
         // but the meaning of the values differs
         let struct_t = DataType::Struct(Fields::from(vec![
-            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
-            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, true),
+            Field::new("keys", DataType::Int32, true),
+            Field::new("values", DataType::UInt32, true),
         ]));
         let dict_t = DataType::Dictionary(Box::new(DataType::Int32), Box::new(struct_t));
         let _ = MapArray::from(ArrayData::new_empty(&dict_t));
@@ -899,16 +871,8 @@ mod tests {
 
         let key_array = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
-        let keys_field = Arc::new(Field::new(
-            Field::MAP_KEY_FIELD_DEFAULT_NAME,
-            DataType::Utf8,
-            false,
-        ));
-        let values_field = Arc::new(Field::new(
-            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-            DataType::UInt32,
-            false,
-        ));
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, false));
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
@@ -932,8 +896,8 @@ mod tests {
     fn test_try_new() {
         let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
         let fields = Fields::from(vec![
-            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
-            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new("key", DataType::Int32, false),
+            Field::new("values", DataType::Int32, false),
         ]);
         let columns = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
@@ -941,11 +905,7 @@ mod tests {
         ];
 
         let entries = StructArray::new(fields.clone(), columns, None);
-        let field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-            DataType::Struct(fields),
-            false,
-        ));
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
 
         MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
 
@@ -998,11 +958,7 @@ mod tests {
         ];
 
         let s = StructArray::new(fields.clone(), columns, None);
-        let field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-            DataType::Struct(fields),
-            false,
-        ));
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
         let err = MapArray::try_new(field, offsets, s, None, false).unwrap_err();
 
         assert_eq!(
@@ -1017,16 +973,12 @@ mod tests {
         let keys = Int32Array::from(vec![Some(1), None]);
         let values = Int32Array::from(vec![None, Some(2)]);
         let fields = Fields::from(vec![
-            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
-            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            Field::new("keys", DataType::Int32, true),
+            Field::new("values", DataType::Int32, true),
         ]);
         let entries =
             StructArray::new(fields.clone(), vec![Arc::new(keys), Arc::new(values)], None);
-        let field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-            DataType::Struct(fields),
-            false,
-        ));
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
 
         let err = MapArray::try_new(field, OffsetBuffer::from_lengths([2]), entries, None, false)
             .unwrap_err();
