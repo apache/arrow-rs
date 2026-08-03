@@ -177,7 +177,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - Trailing `.` (e.g., `"foo."`)
 /// - Unclosed '[' (e.g., `"foo[1"`)
 /// - Unexpected ']' (e.g., `"foo]"`)
-/// - Trailing '`' inside bracket (treated as unclosed bracket)
+/// - Trailing `\` inside bracket (treated as unclosed bracket)
 #[inline]
 pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
     let scan_field = |start: usize| {
