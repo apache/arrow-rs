@@ -737,7 +737,7 @@ fn interval_mul_op<T: IntervalOp>(
 /// Algorithm:
 ///
 /// 1. use checked integer multiplication when `factor` fits in `i64` (early return).
-/// 2. multiply months and days separately and truncate floating point.
+/// 2. multiply months and days separately
 /// 3. cascade remainders: convert fractional months to days using 30
 ///    days per month, then fractional days to a sub-day value using 24 hours
 ///    per day.
