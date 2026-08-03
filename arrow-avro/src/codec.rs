@@ -931,12 +931,12 @@ impl Codec {
             }
             Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
             Self::Map(value_type) => {
-                let val_field = value_type.field_with_name(Field::MAP_VALUE_FIELD_DEFAULT_NAME);
+                let val_field = value_type.field_with_name("value");
                 DataType::Map(
                     Arc::new(Field::new(
-                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                        "entries",
                         DataType::Struct(Fields::from(vec![
-                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new("key", DataType::Utf8, false),
                             val_field,
                         ])),
                         false,
