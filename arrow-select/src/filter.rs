@@ -1790,7 +1790,7 @@ mod tests {
             .skip(offset)
             .take(truncated_length)
             .enumerate()
-            .flat_map(|(idx, v)| v.then(|| idx))
+            .filter_map(|(idx, v)| v.then_some(idx))
             .collect();
 
         assert_eq!(slice_bits, expected_bits);

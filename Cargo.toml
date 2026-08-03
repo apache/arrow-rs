@@ -148,14 +148,23 @@ broken_intra_doc_links = "warn"
 missing_crate_level_docs = "warn"
 
 [workspace.lints.clippy]
+dbg_macro = "warn"
 debug_assert_with_mut_call = "warn"
+flat_map_option = "warn"
 invalid_upcast_comparisons = "warn"
+iter_filter_is_some = "warn"
+manual_instant_elapsed = "warn"
 match_wild_err_arm = "warn"
+mut_mut = "warn"
 mutex_integer = "warn"
 path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
 rc_mutex = "warn"
 same_length_and_capacity = "warn"
 trailing_empty_array = "warn"
+unnecessary_self_imports = "warn"
+unused_peekable = "warn"
+zero_sized_map_values = "warn"
 
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling

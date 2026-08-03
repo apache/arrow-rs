@@ -1209,7 +1209,6 @@ mod async_tests {
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
 
-        dbg!("test");
         // Metadata hint too large
         fetch_count.store(0, Ordering::SeqCst);
         suffix_fetch_count.store(0, Ordering::SeqCst);

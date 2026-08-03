@@ -234,7 +234,7 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     let start = i + 1; // skip '['
 
     let mut unescaped = String::new();
-    let mut chars = s[start..].char_indices().peekable();
+    let mut chars = s[start..].char_indices();
     let mut end = None;
 
     while let Some((offset, c)) = chars.next() {
