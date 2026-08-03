@@ -463,7 +463,7 @@ impl Stream for FlightDataEncoder {
 ///
 /// For clients which may not support `DictionaryEncoding`, the `DictionaryHandling::Hydrate` method will bypass the process defined above
 /// and "hydrate" any `DictionaryArray` in the batch to their underlying value type (e.g. `TypedDictionaryArray<'_, UInt32Type, Utf8Type>` will
-/// be sent as a `StringArray`). With this method all data will be sent in ``MessageHeader::RecordBatch` messages and the batch schema
+/// be sent as a `StringArray`). With this method all data will be sent in `MessageHeader::RecordBatch` messages and the batch schema
 /// will be adjusted so that all dictionary encoded fields are changed to fields of the dictionary value type.
 #[derive(Debug, PartialEq)]
 pub enum DictionaryHandling {

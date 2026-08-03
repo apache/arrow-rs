@@ -1024,7 +1024,7 @@ impl WriteThrift for String {
 /// ```
 ///
 /// which becomes in Rust
-/// ```no_run
+/// ```ignore
 /// # struct OtherStruct {}
 /// struct MyStruct {
 ///   field1: i32,

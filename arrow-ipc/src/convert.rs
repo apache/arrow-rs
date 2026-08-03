@@ -190,7 +190,7 @@ impl From<crate::Field<'_>> for Field {
     }
 }
 
-/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema].
+/// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
