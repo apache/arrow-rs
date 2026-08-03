@@ -232,31 +232,6 @@ If you need to add new benchmarks to cover your change, make a separate PR first
 
 [#9729]: https://github.com/apache/arrow-rs/pull/9729
 
-## Git Pre-Commit Hook
-
-We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
-
-Suppose you are in the root directory of the project.
-
-First check if the file already exists:
-
-```bash
-ls -l .git/hooks/pre-commit
-```
-
-If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
-the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
-
-```bash
-ln -s  ../../pre-commit.sh .git/hooks/pre-commit
-```
-
-If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
-
-```bash
-git commit --no-verify -m "... commit message ..."
-```
-
 ## AI Generated Submissions
 
 This project follows the guidance for AI generated submissions used by the
