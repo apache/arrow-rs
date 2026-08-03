@@ -131,14 +131,12 @@ impl<'a> IpcSchemaEncoder<'a> {
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
 ) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
-    let mut ordered_keys = metadata.keys().collect::<Vec<_>>();
-    ordered_keys.sort();
-    let custom_metadata = ordered_keys
-        .into_iter()
-        .map(|k| {
-            let v = metadata.get(k).unwrap();
+    // `Metadata` iterates in deterministic (sorted) key order
+    let custom_metadata = metadata
+        .iter()
+        .map(|(k, v)| {
             let fb_key_name = fbb.create_string(k);
             let fb_val_name = fbb.create_string(v);
 

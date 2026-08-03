@@ -1371,6 +1371,11 @@ impl<R: BufRead> Reader<R> {
                 self.reader.consume(consumed);
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
+                    if block.sync != self.header.sync() {
+                        return Err(AvroError::ParseError(
+                            "Avro block sync marker does not match file header".to_string(),
+                        ));
+                    }
                     self.block_data = if let Some(ref codec) = self.header.compression()? {
                         let decompressed: Vec<u8> = codec.decompress(&block.data)?;
                         decompressed
@@ -1490,6 +1495,23 @@ mod test {
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    #[test]
+    fn test_block_sync_marker_mismatch_errors() {
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let mut bytes = std::fs::read(&path).unwrap();
+        // The file ends with the final block's 16-byte sync marker.
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+        let err = reader
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("corrupted block sync marker should fail the read");
+        assert!(err.to_string().contains("sync marker"), "{err}");
     }
 
     fn read_file_strict(
@@ -5483,34 +5505,14 @@ mod test {
             #[cfg(not(feature = "avro_custom_types"))]
             {
                 let schema = Arc::new(Schema::new(vec![
-                    Field::new("duration_time_nanos", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-nanos".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_micros", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-micros".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_millis", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-millis".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_seconds", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-seconds".to_string(),
-                        )]
-                        .into(),
-                    ),
+                    Field::new("duration_time_nanos", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-nanos")]),
+                    Field::new("duration_time_micros", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-micros")]),
+                    Field::new("duration_time_millis", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-millis")]),
+                    Field::new("duration_time_seconds", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-seconds")]),
                 ]));
 
                 let nanos =
@@ -8425,7 +8427,7 @@ mod test {
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
         const UUID_LOGICAL_KEY: &str = "logicalType";
 
-        let uuid_md_top: Option<HashMap<String, String>> = batch
+        let uuid_md_top: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("uuid_str")
             .ok()
@@ -8443,7 +8445,7 @@ mod test {
                 }
             });
 
-        let uuid_md_union: Option<HashMap<String, String>> = batch
+        let uuid_md_union: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("union_uuid_or_fixed10")
             .ok()
