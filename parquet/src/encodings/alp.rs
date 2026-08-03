@@ -238,7 +238,8 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 }
 
 /// Exact integer type used by FOR reconstruction: `u32` for `f32`, `u64` for
-/// `f64`.
+/// `f64`. Integer-side counterpart of [`AlpFloat`], which selects its partner
+/// via [`AlpFloat::Exact`].
 ///
 /// Why unsigned (not `i32`/`i64`)? The spec computes and stores deltas in
 /// unsigned wrapping arithmetic: this avoids signed overflow when a vector's
@@ -398,6 +399,13 @@ pub(crate) const ALP_NEG_POW10_F64: [f64; 19] = [
     0.000000000000000001,
 ];
 
+/// Floating-point type being ALP encoded or decoded: `f32` or `f64`.
+///
+/// Each implementation pairs with an [`AlpExact`] integer of the same width
+/// ([`AlpFloat::Exact`]: `u32` for `f32`, `u64` for `f64`). `AlpFloat` owns the
+/// float side of the codec, the decimal scaling and rounding that turn floats
+/// into exact integers and back, while [`AlpExact`] owns the integer side, the
+/// FOR and bit-packing arithmetic on those encoded values.
 pub(crate) trait AlpFloat:
     Copy + Default + PartialEq + std::ops::Mul<Output = Self>
 {
