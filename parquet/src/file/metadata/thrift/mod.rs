@@ -1620,12 +1620,11 @@ impl WriteThrift for RowGroupMetaData {
             .write_thrift_field(writer, 6, last_field_id)?;
 
         // write ordinal if it will fit in an i16
-        if writer.write_row_group_ordinal() {
-            if let Some(ordinal) = self.ordinal() {
-                if let Ok(ordinal) = i16::try_from(ordinal) {
-                    ordinal.write_thrift_field(writer, 7, last_field_id)?;
-                }
-            }
+        if writer.write_row_group_ordinal()
+            && let Some(ordinal) = self.ordinal()
+            && let Ok(ordinal) = i16::try_from(ordinal)
+        {
+            ordinal.write_thrift_field(writer, 7, last_field_id)?;
         }
         writer.write_struct_end()
     }
