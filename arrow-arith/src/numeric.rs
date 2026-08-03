@@ -790,10 +790,8 @@ fn interval_mul_f64(
     let month_remainder_days = month_remainder
         .to_i32()
         .ok_or_else(|| overflow("month remainder"))?;
-    let mut seconds_remainder = timestamp_round(
-        (days_product - f64::from(days) + month_remainder - f64::from(month_remainder_days))
-            * SECONDS_PER_DAY,
-    );
+    let mut seconds_remainder =
+        timestamp_round((days_product.fract() + month_remainder.fract()) * SECONDS_PER_DAY);
 
     if seconds_remainder.abs() >= SECONDS_PER_DAY {
         let remainder_days = (seconds_remainder / SECONDS_PER_DAY)
