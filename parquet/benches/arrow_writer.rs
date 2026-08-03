@@ -676,22 +676,19 @@ fn bench_all_writers(c: &mut Criterion) {
     }
 }
 
-/// Large-value BYTE_ARRAY columns under `DELTA_BYTE_ARRAY`, which the
-/// property matrix above never exercises (it only varies writer version,
-/// compression, bloom filters, and CDC — all on the default encoding).
+/// Writes BYTE_ARRAY columns of large (multi-MiB) string values with
+/// `DELTA_BYTE_ARRAY`, with `PLAIN` on the same data as a baseline.
 ///
-/// Values are sized so a single value exceeds the default 1 MiB data page
-/// limit, putting the writer in the byte-budget sub-batching regime of
-/// `write_batch_internal`. That budget measures raw payload bytes, so under
-/// `DELTA_BYTE_ARRAY` it sub-batches by the values' *pre-dedup* size however
-/// well they compress; benchmarking against `PLAIN` on the same data bounds
-/// what an encoded-size-aware budget could recover. The shared-prefix and
-/// distinct batches bracket the encoding's best and worst case.
+/// Two data shapes bracket the encoding's best and worst case:
+/// * `large_string_shared_prefix`: values like `xxx…x00000000`,
+///   `xxx…x00000001`, … share a long common prefix and differ only in a
+///   short suffix — the case `DELTA_BYTE_ARRAY` is designed to handle well,
+///   encoding each value as a prefix length plus a few suffix bytes.
+/// * `large_string_distinct`: values like `00000000x…xxx`, `00000001x…xxx`, …
+///   differ in their leading bytes, so prefix deduplication saves nothing and
+///   the encoding stores each value in full.
 fn bench_delta_byte_array_writers(c: &mut Criterion) {
-    // 128 rows × 2 MiB: the same total bytes as `large_string_non_null`
-    // above, but with each value alone exceeding the default 1 MiB page
-    // limit (the regime of #10489, where the byte budget resolves to
-    // one-value mini-batches).
+    // Each 2 MiB value alone exceeds the default 1 MiB data page size limit.
     let shared = create_large_string_shared_prefix_bench_batch(128, 2 * 1024 * 1024).unwrap();
     let distinct = create_large_string_distinct_bench_batch(128, 2 * 1024 * 1024).unwrap();
 
