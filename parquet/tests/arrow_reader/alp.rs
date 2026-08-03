@@ -17,9 +17,7 @@
 
 use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
-use arrow_array::cast::as_primitive_array;
-use arrow_array::types::{Float32Type, Float64Type};
-use arrow_array::{Array, Float32Array, Float64Array, RecordBatch};
+use arrow_array::{Float32Array, Float64Array, RecordBatch};
 use arrow_csv::ReaderBuilder as CsvReaderBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -40,35 +38,7 @@ fn test_read_f32_alp() {
     let expected = read_expected_csv_batch(&expected_csv_path);
     let actual = read_parquet_batch(&parquet_path);
 
-    assert_eq!(actual.schema(), expected.schema(), "schema mismatch");
-    assert_eq!(
-        actual.num_columns(),
-        expected.num_columns(),
-        "column mismatch"
-    );
-    assert_eq!(actual.num_rows(), expected.num_rows(), "row count mismatch");
-
-    for col_idx in 0..actual.num_columns() {
-        let col_name = actual.schema().field(col_idx).name().clone();
-        let actual_col = as_primitive_array::<Float32Type>(actual.column(col_idx).as_ref());
-        let expected_col = as_primitive_array::<Float32Type>(expected.column(col_idx).as_ref());
-
-        for row_idx in 0..actual.num_rows() {
-            assert_eq!(
-                actual_col.is_valid(row_idx),
-                expected_col.is_valid(row_idx),
-                "null mismatch at column {col_name} row {row_idx}"
-            );
-            if actual_col.is_valid(row_idx) {
-                let actual_value = actual_col.value(row_idx);
-                let expected_value = expected_col.value(row_idx);
-                assert!(
-                    actual_value.to_bits() == expected_value.to_bits(),
-                    "bit mismatch at column {col_name} row {row_idx}: expected={expected_value} actual={actual_value}"
-                );
-            }
-        }
-    }
+    assert_eq!(actual, expected);
 }
 
 /// Write the arade values with the ALP encoder and read them back, over real
@@ -85,29 +55,7 @@ fn test_write_f32_alp_roundtrip() {
 
     let alp_bytes = write_batch(&expected, Encoding::ALP);
     let actual = read_parquet_bytes(alp_bytes);
-    assert_eq!(actual.num_rows(), expected.num_rows(), "row count mismatch");
-
-    for col_idx in 0..expected.num_columns() {
-        let col_name = expected.schema().field(col_idx).name().clone();
-        let actual_col = as_primitive_array::<Float32Type>(actual.column(col_idx).as_ref());
-        let expected_col = as_primitive_array::<Float32Type>(expected.column(col_idx).as_ref());
-
-        for row_idx in 0..expected.num_rows() {
-            assert_eq!(
-                actual_col.is_valid(row_idx),
-                expected_col.is_valid(row_idx),
-                "null mismatch at column {col_name} row {row_idx}"
-            );
-            if expected_col.is_valid(row_idx) {
-                // Bitwise, so that NaN and -0.0 are held to the same standard.
-                assert_eq!(
-                    actual_col.value(row_idx).to_bits(),
-                    expected_col.value(row_idx).to_bits(),
-                    "bit mismatch at column {col_name} row {row_idx}"
-                );
-            }
-        }
-    }
+    assert_eq!(actual, expected);
 }
 
 /// Round-trip a nullable column under both data page versions.
@@ -147,8 +95,8 @@ fn test_alp_roundtrip_page_versions_with_nulls() {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(Float32Array::from(f32_values.clone())),
-            Arc::new(Float64Array::from(f64_values.clone())),
+            Arc::new(Float32Array::from(f32_values)),
+            Arc::new(Float64Array::from(f64_values)),
         ],
     )
     .unwrap();
@@ -166,42 +114,9 @@ fn test_alp_roundtrip_page_versions_with_nulls() {
         writer.close().unwrap();
 
         let actual = read_parquet_bytes(buf.into());
-        assert_eq!(
-            actual.num_rows(),
-            batch.num_rows(),
-            "{version:?}: row count"
-        );
-
-        let actual_f32 = as_primitive_array::<Float32Type>(actual.column(0).as_ref());
-        for (row, expected) in f32_values.iter().enumerate() {
-            match expected {
-                None => assert!(
-                    actual_f32.is_null(row),
-                    "{version:?}: f32 row {row} not null"
-                ),
-                // Bitwise, so NaN and -0.0 are held to the same standard.
-                Some(value) => assert_eq!(
-                    actual_f32.value(row).to_bits(),
-                    value.to_bits(),
-                    "{version:?}: f32 row {row}"
-                ),
-            }
-        }
-
-        let actual_f64 = as_primitive_array::<Float64Type>(actual.column(1).as_ref());
-        for (row, expected) in f64_values.iter().enumerate() {
-            match expected {
-                None => assert!(
-                    actual_f64.is_null(row),
-                    "{version:?}: f64 row {row} not null"
-                ),
-                Some(value) => assert_eq!(
-                    actual_f64.value(row).to_bits(),
-                    value.to_bits(),
-                    "{version:?}: f64 row {row}"
-                ),
-            }
-        }
+        // Batch equality compares primitive values byte-wise, so the NaN and
+        // -0.0 rows are held to exact bit equality rather than float `==`.
+        assert_eq!(actual, batch, "{version:?}");
     }
 }
 
