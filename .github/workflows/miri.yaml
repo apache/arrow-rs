@@ -43,6 +43,9 @@ on:
       - arrow-string/**
       - arrow/**
 
+permissions:
+  contents: read
+
 jobs:
   miri-checks:
     name: MIRI

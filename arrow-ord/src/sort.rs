@@ -1212,7 +1212,7 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{Rng, RngExt, SeedableRng};
 
     fn create_decimal_array<T: DecimalType>(
         data: Vec<Option<usize>>,

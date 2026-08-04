@@ -48,8 +48,10 @@ on:
       - arrow-string/**
       - arrow/**
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   # test the crate
   linux-test:
     name: Test
