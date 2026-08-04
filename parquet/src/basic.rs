@@ -987,9 +987,10 @@ pub enum SortOrder {
     UNDEFINED,
     /// Use IEEE 754 total order.
     TOTAL_ORDER,
-    /// Use INT96 timestamp order (see [parquet-format/#584]).
+    /// Use INT96 timestamp order (see [parquet-format/#584] and the [Thrift spec]).
     ///
     /// [parquet-format/#584]: https://github.com/apache/parquet-format/pull/584
+    /// [Thrift spec]: https://github.com/apache/parquet-format/blob/2076361bb64e2de9ca6a8d06eda025a6fa4e9df6/src/main/thrift/parquet.thrift#L1230-L1233
     INT96_TIMESTAMP,
 }
 
