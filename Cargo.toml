@@ -144,6 +144,7 @@ broken_intra_doc_links = "warn"
 missing_crate_level_docs = "warn"
 
 [workspace.lints.clippy]
+as_ptr_cast_mut = "warn"
 assigning_clones = "warn"
 bool_to_int_with_if = "warn"
 clear_with_drain = "warn"

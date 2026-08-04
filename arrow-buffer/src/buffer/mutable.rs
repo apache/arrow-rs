@@ -963,10 +963,10 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
 }
 
 impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
-    fn from(value: Vec<T>) -> Self {
+    fn from(mut value: Vec<T>) -> Self {
         // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        // Vec::as_mut_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_mut_ptr().cast()) };
         let len = value.len() * mem::size_of::<T>();
         // Safety
         // Vec guaranteed to have a valid layout matching that of `Layout::array`
