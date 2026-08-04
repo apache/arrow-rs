@@ -1631,7 +1631,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
@@ -1643,7 +1643,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,
@@ -1801,7 +1801,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// An [`Err`] may be returned if an error occurs while finishing the StreamWriter
     /// or while flushing the writer.
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
@@ -2043,7 +2043,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
@@ -2053,7 +2053,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,
@@ -2143,7 +2143,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// An [`Err`] may be returned if an error occurs while finishing the StreamWriter
     /// or while flushing the writer.
     ///
     /// # Example
