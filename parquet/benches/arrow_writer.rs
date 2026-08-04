@@ -18,9 +18,11 @@
 #[macro_use]
 extern crate criterion;
 
+use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
+use rand::{Rng, distr::Alphanumeric};
 
 extern crate arrow;
 extern crate parquet;
@@ -97,6 +99,38 @@ fn create_string_bench_batch(
         size,
         null_density,
         true_density,
+    )?)
+}
+// Creates a DictionaryArray with target cardinality
+fn create_low_card_dictionary_bench_batch(size: usize, cardinality: usize) -> Result<RecordBatch> {
+    let mut rng = rand::rng();
+
+    // Generate `cardinality` unique random strings.
+    let categories: Vec<String> = (0..cardinality)
+        .map(|_| {
+            let len = rng.random_range(10..25);
+
+            (0..len).map(|_| rng.sample(Alphanumeric) as char).collect()
+        })
+        .collect();
+
+    let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+
+    for i in 0..size {
+        builder.append_value(&categories[i % cardinality]);
+    }
+
+    let dict = builder.finish();
+
+    let schema = Schema::new(vec![Field::new(
+        "_1",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(dict)],
     )?)
 }
 
@@ -554,6 +588,15 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_string_dictionary_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_dictionary", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 20).unwrap();
+    batches.push(("string_dictionary_low_cardinality_20", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 100).unwrap();
+    batches.push(("string_dictionary_low_cardinality_100", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 400).unwrap();
+    batches.push(("string_dictionary_low_cardinality_400", batch));
 
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
