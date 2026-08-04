@@ -20,6 +20,7 @@
 
 mod reader_builder;
 mod remaining;
+mod scan_plan;
 
 use crate::DecodeResult;
 use crate::arrow::arrow_reader::{
@@ -32,6 +33,7 @@ use arrow_array::RecordBatch;
 use bytes::Bytes;
 use reader_builder::{RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
+pub use scan_plan::{PlannedRange, ScanPlan, plan_scan_ranges};
 use std::ops::Range;
 use std::sync::Arc;
 
