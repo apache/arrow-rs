@@ -1055,7 +1055,7 @@ impl ColumnOrder {
     /// `is_type_defined` indicates whether the column order for this type is
     /// [`ColumnOrder::TYPE_DEFINED_ORDER`].
     ///
-    /// It is now prefered to obtain this via [`Self::sort_order`].
+    /// It is now preferred to obtain this via [`Self::sort_order`].
     #[deprecated(since = "60.0.0", note = "use `ColumnOrder::sort_order` instead")]
     pub fn sort_order_for_type(
         logical_type: Option<&LogicalType>,
