@@ -3693,9 +3693,7 @@ pub(crate) mod tests {
     }
 
     fn get_test_file(file_name: &str) -> File {
-        let mut path = PathBuf::new();
-        path.push(arrow::util::test_util::arrow_test_data());
-        path.push(file_name);
+        let path = PathBuf::from(arrow::util::test_util::arrow_test_data()).join(file_name);
 
         File::open(path.as_path()).expect("File not found!")
     }

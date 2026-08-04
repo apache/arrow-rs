@@ -644,7 +644,7 @@ impl RecordBatch {
     ///
     /// # Panics
     ///
-    /// Panics if `index`` out of bounds.
+    /// Panics if `index` is out of bounds.
     ///
     /// # Example
     ///
