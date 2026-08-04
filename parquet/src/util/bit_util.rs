@@ -93,6 +93,8 @@ macro_rules! from_bitpacked {
                 const BATCH_SIZE: usize = std::mem::size_of::<$ty>() * 8;
 
                 #[inline]
+                // The cast is a no-op when `$ty` is `u64`.
+                #[allow(trivial_numeric_casts)]
                 fn from_u64(v: u64) -> Self {
                     v as _
                 }

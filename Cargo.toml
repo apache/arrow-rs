@@ -129,6 +129,7 @@ nonstandard_style = { level = "warn", priority = -1 }
 rust_2018_idioms = { level = "warn", priority = -1 }
 rust_2021_prelude_collisions = "warn"
 semicolon_in_expressions_from_macros = "warn"
+trivial_numeric_casts = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_import_braces = "warn"
 
