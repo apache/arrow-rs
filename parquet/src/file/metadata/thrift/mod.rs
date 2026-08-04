@@ -1450,7 +1450,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
-        writer.set_write_row_group_ordinal(self.row_groups.len() <= i16::MAX as usize);
+        writer.set_write_row_group_ordinal(i16::try_from(self.row_groups.len()).is_ok());
 
         self.file_metadata
             .version

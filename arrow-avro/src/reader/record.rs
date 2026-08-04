@@ -2330,7 +2330,10 @@ fn process_block_items(
     total: usize,
     on_item: &mut impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
 ) -> Result<usize, AvroError> {
-    let Some(new_total) = total.checked_add(count).filter(|&t| t <= i32::MAX as usize) else {
+    let Some(new_total) = total
+        .checked_add(count)
+        .filter(|&t| i32::try_from(t).is_ok())
+    else {
         return Err(AvroError::ParseError(
             "Capacity overflow when decoding array/map item blocks".to_string(),
         ));
