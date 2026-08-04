@@ -237,7 +237,7 @@ trait IpcMessageSinkExt: IpcMessageSink {
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let arrow_data_len = encoded.arrow_data.len();
-        if arrow_data_len % usize::from(write_options.alignment) != 0 {
+        if !arrow_data_len.is_multiple_of(usize::from(write_options.alignment)) {
             return Err(ArrowError::MemoryError(
                 "Arrow data not aligned".to_string(),
             ));
@@ -1608,7 +1608,7 @@ pub struct FileWriter<W> {
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
     /// User level customized metadata
-    custom_metadata: HashMap<String, String>,
+    custom_metadata: Metadata,
 
     data_gen: IpcDataGenerator,
 
@@ -1674,7 +1674,7 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker,
-            custom_metadata: HashMap::new(),
+            custom_metadata: Default::default(),
             data_gen,
             ipc_write_context: IpcWriteContext::default(),
         })

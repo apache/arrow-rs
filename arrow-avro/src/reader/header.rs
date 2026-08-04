@@ -314,8 +314,9 @@ impl HeaderDecoder {
                 }
                 HeaderDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.sync_marker[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    // Fill from the front: the marker may arrive split across decode() calls.
+                    let offset = 16 - self.bytes_remaining;
+                    self.sync_marker[offset..offset + to_decode].copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {

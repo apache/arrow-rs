@@ -263,7 +263,7 @@ impl UnionBuilder {
             }
             // Sparse Union
             None => {
-                for (_, fd) in self.fields.iter_mut() {
+                for fd in self.fields.values_mut() {
                     // Append to all bar the FieldData currently being appended to
                     fd.append_null();
                 }
