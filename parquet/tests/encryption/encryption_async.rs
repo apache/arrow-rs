@@ -111,7 +111,7 @@ async fn test_misspecified_encryption_keys() {
         let decryption_properties = builder.build().unwrap();
 
         match verify_encryption_test_file_read_async(&mut file, decryption_properties).await {
-            Ok(_) => {
+            Ok(()) => {
                 panic!("did not get expected error")
             }
             Err(e) => {

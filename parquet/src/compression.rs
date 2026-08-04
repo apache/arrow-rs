@@ -350,7 +350,7 @@ impl GzipLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`flate2::Compression`]).
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -432,7 +432,7 @@ impl BrotliLevel {
     ///
     /// Compression levels must be valid.
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -588,7 +588,7 @@ impl ZstdLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`zstd::compression_level_range`]).
     pub fn try_new(level: i32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.

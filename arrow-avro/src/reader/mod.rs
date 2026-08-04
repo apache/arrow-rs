@@ -4771,7 +4771,7 @@ mod test {
         {
             let idx = schema.index_of("array_of_union").unwrap();
             let dt = schema.field(idx).data_type().clone();
-            let (item_field, _) = match &dt {
+            let (item_field, ()) = match &dt {
                 DataType::List(f) => (f.clone(), ()),
                 other => panic!("array_of_union must be List, got {other:?}"),
             };
