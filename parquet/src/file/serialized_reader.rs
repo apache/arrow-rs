@@ -2332,7 +2332,7 @@ mod tests {
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
         assert!(!&column_index[0][10].is_sorted());
-        if let ColumnIndexMetaData::NONE = &column_index[0][10] {
+        if matches!(&column_index[0][10], ColumnIndexMetaData::NONE) {
             assert_eq!(row_group_offset_indexes[10].page_locations.len(), 974);
         } else {
             unreachable!()

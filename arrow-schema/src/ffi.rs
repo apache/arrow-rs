@@ -813,7 +813,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             Flags::empty()
         };
 
-        if let Some(true) = field.dict_is_ordered() {
+        if field.dict_is_ordered() == Some(true) {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
