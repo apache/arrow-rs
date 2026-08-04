@@ -773,7 +773,7 @@ fn spawn_rg_join_and_finalize_task(
     tokio::task::spawn(async move {
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
-        for task in column_writer_tasks.into_iter() {
+        for task in column_writer_tasks {
             let writer = task
                 .await
                 .map_err(|e| ParquetError::General(e.to_string()))??;
@@ -865,7 +865,7 @@ fn spawn_column_parallel_row_group_writer(
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut col_writer in col_writers.into_iter() {
+    for mut col_writer in col_writers {
         let (send_array, mut receive_array) =
             tokio::sync::mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
@@ -1135,7 +1135,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
 
     // Wait for all column writers to finish writing
     let mut finalized_rg = Vec::with_capacity(num_columns);
-    for task in col_writer_tasks.into_iter() {
+    for task in col_writer_tasks {
         finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
     }
 

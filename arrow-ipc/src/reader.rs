@@ -1260,7 +1260,7 @@ impl FileReaderBuilder {
 
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
-            for kv in fb_custom_metadata.into_iter() {
+            for kv in fb_custom_metadata {
                 custom_metadata.insert(
                     kv.key().unwrap().to_string(),
                     kv.value().unwrap().to_string(),

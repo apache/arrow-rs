@@ -293,7 +293,7 @@ impl Schema {
             let Schema { metadata, fields } = schema;
 
             // merge metadata
-            for (key, value) in metadata.into_iter() {
+            for (key, value) in metadata {
                 if let Some(old_val) = out_meta.get(&key)
                     && old_val != &value
                 {

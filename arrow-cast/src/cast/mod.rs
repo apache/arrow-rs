@@ -7606,7 +7606,7 @@ mod tests {
 
         let string_view_array = {
             let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for v in typed_dict.into_iter() {
+            for v in typed_dict {
                 builder.append_option(v);
             }
             builder.finish()
@@ -7623,7 +7623,7 @@ mod tests {
 
         let binary_view_array = {
             let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for v in typed_binary_dict.into_iter() {
+            for v in typed_binary_dict {
                 builder.append_option(v);
             }
             builder.finish()

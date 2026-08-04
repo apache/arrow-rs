@@ -1541,7 +1541,7 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         let mut builder = UInt64Array::builder(10);
-        for metadata in metadatas.into_iter() {
+        for metadata in metadatas {
             let row_count = metadata.num_rows();
             let row_count: u64 = row_count.try_into().map_err(|e| {
                 arrow_err!(format!(

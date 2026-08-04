@@ -4430,7 +4430,7 @@ mod tests {
     ) -> AvroDataType {
         let mut avro_children: Vec<AvroDataType> = Vec::with_capacity(children.len());
         let mut fields: Vec<arrow_schema::Field> = Vec::with_capacity(children.len());
-        for (codec, name, dt) in children.into_iter() {
+        for (codec, name, dt) in children {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));
         }
