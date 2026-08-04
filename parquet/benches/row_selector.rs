@@ -26,6 +26,21 @@ use std::hint;
 /// [`RowSelector`]s per row, so the RLE encoding dominates.
 const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
 
+const MASK_ALGEBRA_ROWS: usize = 3_000_000;
+
+/// Operand length pairs. Unequal lengths pass the longer side's tail through unchanged,
+/// so the ratio decides how much of the work is the bitwise combine versus the tail.
+const MASK_ALGEBRA_LENGTHS: &[(&str, usize, usize)] = &[
+    ("equal", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS),
+    ("tail1", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS - 1),
+    ("tail1of3", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS * 2 / 3),
+    ("tail_most", MASK_ALGEBRA_ROWS, 1_000),
+];
+
+/// Bit offsets applied to both operands. Masks come from [`BooleanBuffer::slice`], so a
+/// non-zero offset is normal, and one that is not byte aligned is the expensive case.
+const MASK_ALGEBRA_OFFSETS: &[(&str, usize)] = &[("aligned", 0), ("unaligned", 3)];
+
 /// Generates a random RowSelection with a specified selection ratio.
 ///
 /// # Arguments
@@ -47,6 +62,40 @@ fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> Boo
 /// Generates a mask alternating between selected and skipped runs of `run_len` rows.
 fn generate_run_length_mask(total_rows: usize, run_len: usize) -> BooleanBuffer {
     BooleanBuffer::from_iter((0..total_rows).map(|row| (row / run_len).is_multiple_of(2)))
+}
+
+/// Builds a mask-backed [`RowSelection`] carrying `offset` as its bit offset.
+fn mask_algebra_operand(len: usize, offset: usize, selection_ratio: f64) -> RowSelection {
+    let mut rng = rand::rng();
+    let bits: Vec<bool> = (0..len + offset)
+        .map(|_| rng.random_bool(selection_ratio))
+        .collect();
+    RowSelection::from_boolean_buffer(BooleanBuffer::from(bits).slice(offset, len))
+}
+
+/// Benchmarks the bitwise `intersection`/`union` path, taken when both operands are
+/// mask-backed. The `intersection`/`union` benchmarks above are selector-backed and take
+/// the [`RowSelector`] merge path instead.
+fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
+    for (offset_label, offset) in MASK_ALGEBRA_OFFSETS {
+        for (length_label, left_len, right_len) in MASK_ALGEBRA_LENGTHS {
+            let left = mask_algebra_operand(*left_len, *offset, selection_ratio);
+            let right = mask_algebra_operand(*right_len, *offset, selection_ratio);
+            let label = format!("{length_label}/{offset_label}");
+
+            c.bench_with_input(
+                BenchmarkId::new("mask_intersection", &label),
+                &(&left, &right),
+                |b, (left, right)| b.iter(|| hint::black_box(left.intersection(right))),
+            );
+
+            c.bench_with_input(
+                BenchmarkId::new("mask_union", &label),
+                &(&left, &right),
+                |b, (left, right)| b.iter(|| hint::black_box(left.union(right))),
+            );
+        }
+    }
 }
 
 /// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.
@@ -147,6 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    bench_mask_backed_algebra(c, selection_ratio);
     bench_mask_backed_conversion(c, total_rows, selection_ratio);
 }
 
