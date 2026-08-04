@@ -2154,7 +2154,7 @@ pub(crate) mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "time_micros",
@@ -2163,7 +2163,7 @@ pub(crate) mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
         ]));
 

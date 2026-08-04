@@ -2162,8 +2162,8 @@ mod tests {
         let list_field = Field::new("col", list_type, true);
 
         let expected = vec![
-            r#""#.to_string(),
-            r#""#.to_string(),
+            String::new(),
+            String::new(),
             r#"[]"#.to_string(),
             r#"[{list: [3, ], integers: }]"#.to_string(),
             r#"[, {list: , integers: 5}]"#.to_string(),

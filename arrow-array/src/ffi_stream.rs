@@ -544,7 +544,7 @@ mod tests {
     fn test_error_import() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
+        let iter = Box::new(vec![Err(ArrowError::MemoryError(String::new()))].into_iter());
 
         let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 

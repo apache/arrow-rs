@@ -1001,9 +1001,9 @@ mod tests {
             [].into(),
             [("key".to_string(), "value".to_string())].into(),
             [
-                ("key".to_string(), "".to_string()),
+                ("key".to_string(), String::new()),
                 ("ascii123".to_string(), "你好".to_string()),
-                ("".to_string(), "value".to_string()),
+                (String::new(), "value".to_string()),
             ]
             .into(),
         ];

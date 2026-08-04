@@ -1497,7 +1497,7 @@ mod test {
     #[test]
     fn test_field_with_nonempty_metadata_serde() {
         let mut metadata = HashMap::new();
-        metadata.insert("hi".to_owned(), "".to_owned());
+        metadata.insert("hi".to_owned(), String::new());
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)
