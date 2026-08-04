@@ -587,10 +587,9 @@ where
                 .await?
                 .message()
                 .await?
+                && let Some(handle) = self.unpack_prepared_statement_handle(&result)?
             {
-                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
-                    self.handle = handle;
-                }
+                self.handle = handle;
             }
         }
         Ok(())

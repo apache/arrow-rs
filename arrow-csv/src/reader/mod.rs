@@ -393,10 +393,10 @@ impl Format {
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
             for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
-                if let Some(string) = record.get(i) {
-                    if !self.null_regex.is_null(string) {
-                        column_type.update(string)
-                    }
+                if let Some(string) = record.get(i)
+                    && !self.null_regex.is_null(string)
+                {
+                    column_type.update(string)
                 }
             }
         }

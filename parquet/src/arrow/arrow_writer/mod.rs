@@ -368,45 +368,45 @@ impl<W: Write + Send> ArrowWriter<W> {
             ),
         };
 
-        if let Some(max_rows) = self.max_row_group_row_count {
-            if in_progress.buffered_rows + batch.num_rows() > max_rows {
-                let to_write = max_rows - in_progress.buffered_rows;
-                let a = batch.slice(0, to_write);
-                let b = batch.slice(to_write, batch.num_rows() - to_write);
-                self.write(&a)?;
-                return self.write(&b);
-            }
+        if let Some(max_rows) = self.max_row_group_row_count
+            && in_progress.buffered_rows + batch.num_rows() > max_rows
+        {
+            let to_write = max_rows - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
         }
 
         // Check byte limit: if we have buffered data, use measured average row size
         // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes {
-            if in_progress.buffered_rows > 0 {
-                let current_bytes = in_progress.get_estimated_total_bytes();
+        if let Some(max_bytes) = self.max_row_group_bytes
+            && in_progress.buffered_rows > 0
+        {
+            let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if current_bytes >= max_bytes {
-                    self.flush()?;
-                    return self.write(batch);
-                }
+            if current_bytes >= max_bytes {
+                self.flush()?;
+                return self.write(batch);
+            }
 
-                if let Some(avg_row_bytes) = current_bytes
-                    .checked_div(in_progress.buffered_rows)
-                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
-                {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+            if let Some(avg_row_bytes) = current_bytes
+                .checked_div(in_progress.buffered_rows)
+                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            {
+                // At this point, `current_bytes < max_bytes` (checked above)
+                let remaining_bytes = max_bytes - current_bytes;
+                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
-                    if batch.num_rows() > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            let a = batch.slice(0, rows_that_fit);
-                            let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                            self.write(&a)?;
-                            return self.write(&b);
-                        } else {
-                            self.flush()?;
-                            return self.write(batch);
-                        }
+                if batch.num_rows() > rows_that_fit {
+                    if rows_that_fit > 0 {
+                        let a = batch.slice(0, rows_that_fit);
+                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
+                        self.write(&a)?;
+                        return self.write(&b);
+                    } else {
+                        self.flush()?;
+                        return self.write(batch);
                     }
                 }
             }

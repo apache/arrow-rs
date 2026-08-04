@@ -237,7 +237,7 @@ trait IpcMessageSinkExt: IpcMessageSink {
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let arrow_data_len = encoded.arrow_data.len();
-        if arrow_data_len % usize::from(write_options.alignment) != 0 {
+        if !arrow_data_len.is_multiple_of(usize::from(write_options.alignment)) {
             return Err(ArrowError::MemoryError(
                 "Arrow data not aligned".to_string(),
             ));

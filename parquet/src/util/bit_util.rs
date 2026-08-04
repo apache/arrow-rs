@@ -1371,7 +1371,7 @@ mod tests {
         StandardUniform: Distribution<T>,
     {
         assert!(num_bits <= 32);
-        assert!(total % 2 == 0);
+        assert!(total.is_multiple_of(2));
 
         let aligned_value_byte_width = std::mem::size_of::<T>();
         let value_byte_width = ceil(num_bits, 8);

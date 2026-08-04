@@ -343,14 +343,14 @@ where
         self,
         null_buffer: Option<NullBuffer>,
     ) -> Result<GenericByteViewArray<T>, ArrowError> {
-        if let Some(ref nulls) = null_buffer {
-            if nulls.len() != self.views.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "Null buffer length ({}) must match row count ({})",
-                    nulls.len(),
-                    self.views.len()
-                )));
-            }
+        if let Some(ref nulls) = null_buffer
+            && nulls.len() != self.views.len()
+        {
+            return Err(ArrowError::ComputeError(format!(
+                "Null buffer length ({}) must match row count ({})",
+                nulls.len(),
+                self.views.len()
+            )));
         }
 
         let buffers = if self.data.is_empty() {
