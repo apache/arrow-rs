@@ -3410,7 +3410,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_float16_to_decimals() {
         let array = Float16Array::from(vec![
             Some(f16::from_f32(1.25)),
@@ -3784,7 +3784,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_decimal32_to_numeric() {
         let value_array: Vec<Option<i32>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal32_array(value_array, 8, 2).unwrap();
@@ -3793,7 +3793,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_decimal64_to_numeric() {
         let value_array: Vec<Option<i64>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal64_array(value_array, 8, 2).unwrap();
@@ -3802,7 +3802,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_decimal128_to_numeric() {
         let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal128_array(value_array, 38, 2).unwrap();
@@ -3920,7 +3920,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_decimal256_to_numeric() {
         let value_array: Vec<Option<i256>> = vec![
             Some(i256::from_i128(125)),
@@ -4110,7 +4110,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_decimal128_to_float16_overflow() {
         let array = create_decimal128_array(
             vec![
@@ -4138,7 +4138,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_decimal256_to_float16_overflow() {
         let array = create_decimal256_array(
             vec![
@@ -4166,7 +4166,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_decimal_to_numeric_negative_scale() {
         let value_array: Vec<Option<i256>> = vec![
             Some(i256::from_i128(125)),
@@ -4809,7 +4809,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_float_to_utf8view() {
         let inputs = vec![
             Arc::new(Float16Array::from(vec![
@@ -4867,7 +4867,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_string_to_f16() {
         let arrays = [
             Arc::new(StringViewArray::from(vec!["3", "4.56", "seven", "8.9"])) as ArrayRef,
@@ -5078,7 +5078,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_floating_to_timestamp() {
         let array = Int64Array::from(vec![Some(2), Some(10), None]);
         let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
@@ -5104,7 +5104,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_timestamp_to_floating() {
         let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
             .with_timezone("UTC".to_string());
@@ -7775,7 +7775,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_f64() {
         let f64_values: Vec<f64> = vec![
             i64::MIN as f64,
@@ -7945,7 +7945,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_f32() {
         let f32_values: Vec<f32> = vec![
             i32::MIN as f32,
@@ -8090,7 +8090,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_uint64() {
         let u64_values: Vec<u64> = vec![
             0,
@@ -8184,7 +8184,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_uint32() {
         let u32_values: Vec<u32> = vec![0, u8::MAX as u32, u16::MAX as u32, u32::MAX];
         let u32_array: ArrayRef = Arc::new(UInt32Array::from(u32_values));
@@ -8257,7 +8257,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_uint16() {
         let u16_values: Vec<u16> = vec![0, u8::MAX as u16, u16::MAX];
         let u16_array: ArrayRef = Arc::new(UInt16Array::from(u16_values));
@@ -8330,7 +8330,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_uint8() {
         let u8_values: Vec<u8> = vec![0, u8::MAX];
         let u8_array: ArrayRef = Arc::new(UInt8Array::from(u8_values));
@@ -8403,7 +8403,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_int64() {
         let i64_values: Vec<i64> = vec![
             i64::MIN,
@@ -8578,7 +8578,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_int32() {
         let i32_values: Vec<i32> = vec![
             i32::MIN,
@@ -8689,7 +8689,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_int16() {
         let i16_values: Vec<i16> = vec![i16::MIN, i8::MIN as i16, 0, i8::MAX as i16, i16::MAX];
         let i16_array: ArrayRef = Arc::new(Int16Array::from(i16_values));
@@ -8799,7 +8799,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_from_int8() {
         let i8_values: Vec<i8> = vec![i8::MIN, 0, i8::MAX];
         let i8_array = Int8Array::from(i8_values);
@@ -9333,7 +9333,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_can_cast_fsl_to_fsl() {
         let from_array = Arc::new(
             FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
@@ -10510,7 +10510,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cast_f64_to_decimal128() {
         // to reproduce https://github.com/apache/arrow-rs/issues/2997
 
@@ -10639,7 +10639,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_float16_to_decimal128_precision_overflow() {
         let array = Float16Array::from(vec![f16::from_f32(1.1)]);
         let array = Arc::new(array) as ArrayRef;
@@ -10668,7 +10668,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_float16_to_decimal256_precision_overflow() {
         let array = Float16Array::from(vec![f16::from_f32(1.1)]);
         let array = Arc::new(array) as ArrayRef;
@@ -10697,7 +10697,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_cast_float16_to_decimal128_non_finite() {
         let array = Float16Array::from(vec![f16::NAN, f16::INFINITY, f16::NEG_INFINITY]);
         let array = Arc::new(array) as ArrayRef;

@@ -3005,7 +3005,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float_precision() {
         let data = [
             "f16,f32,f64",

@@ -826,6 +826,7 @@ mod tests {
             // TODO: avoid requiring snappy for this file
             #[cfg(feature = "snappy")]
             "avro/alltypes_plain.avro",
+            // Compression codecs are unsupported by Miri
             #[cfg(all(feature = "snappy", not(miri)))]
             "avro/alltypes_plain.snappy.avro",
             #[cfg(all(feature = "zstd", not(miri)))]
@@ -3522,7 +3523,7 @@ mod tests {
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_roundtrip_float16_no_custom_widens_to_float32() {
         assert_round_trip_widened(
             Arc::new(Float16Array::from(vec![
@@ -3787,7 +3788,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn e2e_types_and_schema_alignment() -> Result<(), AvroError> {
         // Values are chosen to:
         // - exercise full UInt64 range when `avro_custom_types` is enabled

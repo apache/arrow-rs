@@ -1098,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_boolean_array_builder() {
         // Test building a boolean array with ArrayData builder and offset
         // 000011011
@@ -1350,7 +1350,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_not() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1359,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_preserves_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1372,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_unshared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1383,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_shared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1397,7 +1397,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_with_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let result = arr.bitwise_unary_mut(|x| !x).unwrap();
@@ -1579,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_sliced() {
         // Slicing creates a non-zero offset into the underlying buffer.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);
@@ -1593,7 +1593,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_sliced() {
         // Slicing shares the buffer, so _mut must return Err.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);

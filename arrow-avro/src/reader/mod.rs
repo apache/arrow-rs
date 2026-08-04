@@ -1473,6 +1473,7 @@ mod test {
             // TODO: avoid requiring snappy for this file
             #[cfg(feature = "snappy")]
             "avro/alltypes_plain.avro",
+            // Compression codecs are unsupported by Miri
             #[cfg(all(feature = "snappy", not(miri)))]
             "avro/alltypes_plain.snappy.avro",
             #[cfg(all(feature = "zstd", not(miri)))]

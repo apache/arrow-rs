@@ -1028,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float16_display() {
         let values = vec![
             Some(f16::from_f32(f32::NAN)),

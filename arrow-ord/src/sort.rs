@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_to_indices_primitives() {
         test_sort_to_indices_primitive_arrays::<Int8Type>(
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
@@ -2733,7 +2733,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_primitives() {
         // default case
         test_sort_primitive_arrays::<UInt8Type>(
@@ -3630,7 +3630,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_list() {
         test_sort_list_arrays::<Int8Type>(
             vec![
