@@ -183,7 +183,7 @@ where
                 .map_err(|_| ArrowError::ParseError("Can't read auth header".to_string()))?;
             let bearer = "Bearer ";
             if !auth.starts_with(bearer) {
-                return Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
+                Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
             }
             let auth = auth[bearer.len()..].to_string();
             self.token = Some(auth);
