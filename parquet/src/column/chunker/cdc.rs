@@ -742,6 +742,7 @@ mod tests {
 #[cfg(all(test, feature = "arrow"))]
 mod arrow_tests {
     use std::borrow::Borrow;
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use arrow::util::data_gen::create_random_batch;
@@ -1261,22 +1262,24 @@ mod arrow_tests {
         for (left, right) in &diffs {
             let left_sum: i64 = left.iter().sum();
             let right_sum: i64 = right.iter().sum();
-            if left_sum == right_sum {
-                eq += 1;
-            } else if left_sum < right_sum {
-                larger += 1;
-                assert_eq!(
-                    left_sum + edit_length,
-                    right_sum,
-                    "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
-                );
-            } else {
-                smaller += 1;
-                assert_eq!(
-                    left_sum,
-                    right_sum + edit_length,
-                    "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
-                );
+            match left_sum.cmp(&right_sum) {
+                Ordering::Equal => eq += 1,
+                Ordering::Less => {
+                    larger += 1;
+                    assert_eq!(
+                        left_sum + edit_length,
+                        right_sum,
+                        "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
+                    );
+                }
+                Ordering::Greater => {
+                    smaller += 1;
+                    assert_eq!(
+                        left_sum,
+                        right_sum + edit_length,
+                        "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
+                    );
+                }
             }
         }
 
