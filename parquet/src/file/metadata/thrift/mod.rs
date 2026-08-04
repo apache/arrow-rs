@@ -146,43 +146,34 @@ struct SizeStatistics {
 );
 
 fn convert_geo_stats(
-    stats: Option<GeospatialStatistics>,
-) -> Option<Box<crate::geospatial::statistics::GeospatialStatistics>> {
-    stats.map(|st| {
-        let bbox = convert_bounding_box(st.bbox);
-        let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
-        Box::new(crate::geospatial::statistics::GeospatialStatistics::new(
-            bbox,
-            geospatial_types,
-        ))
-    })
+    st: GeospatialStatistics,
+) -> crate::geospatial::statistics::GeospatialStatistics {
+    let bbox = st.bbox.map(convert_bounding_box);
+    let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
+    crate::geospatial::statistics::GeospatialStatistics::new(bbox, geospatial_types)
 }
 
-fn convert_bounding_box(
-    bbox: Option<BoundingBox>,
-) -> Option<crate::geospatial::bounding_box::BoundingBox> {
-    bbox.map(|bb| {
-        let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
-            bb.xmin.into(),
-            bb.xmax.into(),
-            bb.ymin.into(),
-            bb.ymax.into(),
-        );
+fn convert_bounding_box(bb: BoundingBox) -> crate::geospatial::bounding_box::BoundingBox {
+    let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
+        bb.xmin.into(),
+        bb.xmax.into(),
+        bb.ymin.into(),
+        bb.ymax.into(),
+    );
 
-        newbb = match (bb.zmin, bb.zmax) {
-            (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.zmin, bb.zmax) {
+        (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb = match (bb.mmin, bb.mmax) {
-            (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.mmin, bb.mmax) {
+        (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb
-    })
+    newbb
 }
 
 /// Create a [`crate::file::statistics::Statistics`] from a thrift [`Statistics`] object.
@@ -544,7 +535,7 @@ fn read_column_metadata<'a>(
             }
             17 => {
                 let val = GeospatialStatistics::read_thrift(&mut *prot)?;
-                column.geo_statistics = convert_geo_stats(Some(val));
+                column.geo_statistics = Some(Box::new(convert_geo_stats(val)));
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
