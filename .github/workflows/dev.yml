@@ -28,8 +28,10 @@ on:
       - main
   pull_request:
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   rat:
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
