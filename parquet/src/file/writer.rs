@@ -1160,7 +1160,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
-    use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -2689,26 +2689,28 @@ mod tests {
             ColumnOrder::INT96_TIMESTAMP_ORDER
         );
 
-        // save read stats for later
-        let stats = reader
-            .metadata()
-            .row_group(0)
-            .column(0)
-            .statistics()
-            .expect("statistics missing");
-        let exp_min = stats.min_bytes_opt().expect("min stats missing");
-        let exp_max = stats.max_bytes_opt().expect("max stats missing");
+        fn retrieve_stats(metadata: &ParquetMetaData) -> (&[u8], &[u8], &Int96, &Int96) {
+            let stats = metadata
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .expect("statistics missing");
+            let exp_min = stats.min_bytes_opt().expect("min stats missing");
+            let exp_max = stats.max_bytes_opt().expect("max stats missing");
 
-        let col_idx = reader
-            .metadata()
-            .column_index()
-            .expect("column index not present");
-        let col0 = match &col_idx[0][0] {
-            ColumnIndexMetaData::INT96(index) => index,
-            _ => panic!("expected INT96 stats"),
-        };
-        let exp_col_min = col0.min_value(0).expect("ColumnIndex min not present");
-        let exp_col_max = col0.max_value(0).expect("ColumnIndex max not present");
+            let col_idx = metadata.column_index().expect("column index not present");
+            let col0 = match &col_idx[0][0] {
+                ColumnIndexMetaData::INT96(index) => index,
+                _ => panic!("expected INT96 stats"),
+            };
+            let exp_col_min = col0.min_value(0).expect("ColumnIndex min not present");
+            let exp_col_max = col0.max_value(0).expect("ColumnIndex max not present");
+
+            (exp_min, exp_max, exp_col_min, exp_col_max)
+        }
+
+        // save read stats for later
+        let (exp_min, exp_max, exp_col_min, exp_col_max) = retrieve_stats(reader.metadata());
 
         // write file back out again
         let props = Arc::new(WriterProperties::builder().build());
@@ -2741,29 +2743,9 @@ mod tests {
         assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
 
         // check that new stats match the original stats
-        let stats = new_metadata
-            .row_group(0)
-            .column(0)
-            .statistics()
-            .expect("new stats missing");
-        assert_eq!(
-            stats.min_bytes_opt().expect("new min stats missing"),
-            exp_min
-        );
-        assert_eq!(
-            stats.max_bytes_opt().expect("new max stats missing"),
-            exp_max
-        );
-
-        let new_col_idx = new_metadata
-            .column_index()
-            .expect("new column index missing");
-        let new_col0 = match &new_col_idx[0][0] {
-            ColumnIndexMetaData::INT96(index) => index,
-            _ => panic!("expected INT96 stats"),
-        };
-        let new_col_min = new_col0.min_value(0).expect("ColumnIndex min not present");
-        let new_col_max = new_col0.max_value(0).expect("ColumnIndex max not present");
+        let (new_min, new_max, new_col_min, new_col_max) = retrieve_stats(&new_metadata);
+        assert_eq!(new_min, exp_min);
+        assert_eq!(new_max, exp_max);
         assert_eq!(new_col_min, exp_col_min);
         assert_eq!(new_col_max, exp_col_max);
     }
