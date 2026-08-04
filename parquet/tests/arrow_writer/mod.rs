@@ -36,6 +36,8 @@ use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 
+mod roundtrip;
+
 #[test]
 #[should_panic(
     expected = "DeltaBitPackDecoder only supports Int32Type, UInt32Type, Int64Type, and UInt64Type"
