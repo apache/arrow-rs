@@ -895,7 +895,7 @@ mod tests {
                 let mut items = Vec::with_capacity(iter.len());
 
                 let cb = |acc, item| {
-                    items.push(CallArgs { item, acc });
+                    items.push(CallArgs { acc, item });
 
                     item.map(|val| val + 100)
                 };

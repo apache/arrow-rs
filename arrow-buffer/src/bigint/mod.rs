@@ -768,7 +768,7 @@ impl i256 {
             .wrapping_add(rhs.high as u128)
             .wrapping_add(carry as u128) as i128;
 
-        let result = Self { high, low };
+        let result = Self { low, high };
 
         // Signed overflow occurs when:
         // - both operands have the same sign, and
@@ -792,7 +792,7 @@ impl i256 {
             .wrapping_sub(rhs.high as u128)
             .wrapping_sub(borrow as u128) as i128;
 
-        let result = Self { high, low };
+        let result = Self { low, high };
 
         // Signed overflow occurs when:
         // - operands have opposite signs, and
