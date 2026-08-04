@@ -1812,7 +1812,7 @@ mod tests {
         assert_eq!(v.to_f64().unwrap(), 42.0);
 
         let v = i256::from_i128(-123456789012345678i128);
-        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+        assert_eq!(v.to_f64().unwrap(), -123_456_789_012_345_680.0);
 
         let v = i256::from_string("0").unwrap();
         assert_eq!(v.to_f64().unwrap(), 0.0);
