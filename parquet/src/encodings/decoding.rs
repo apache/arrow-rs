@@ -703,14 +703,14 @@ where
         self.first_value =
             Some(T::T::from_i64(first_value).ok_or_else(|| general_err!("first value too large"))?);
 
-        if self.block_size % 128 != 0 {
+        if !self.block_size.is_multiple_of(128) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 128, got {}",
                 self.block_size
             ));
         }
 
-        if self.block_size % self.mini_blocks_per_block != 0 {
+        if !self.block_size.is_multiple_of(self.mini_blocks_per_block) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 'mini_blocks_per_block' got {} and {}",
                 self.block_size,
@@ -724,7 +724,7 @@ where
         self.mini_block_remaining = 0;
         self.mini_block_bit_widths.clear();
 
-        if self.values_per_mini_block % 32 != 0 {
+        if !self.values_per_mini_block.is_multiple_of(32) {
             return Err(general_err!(
                 "'values_per_mini_block' must be a multiple of 32 got {}",
                 self.values_per_mini_block

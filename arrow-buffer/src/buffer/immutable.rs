@@ -209,19 +209,19 @@ impl Buffer {
             // For realloc to work, we cannot free the elements before the offset
             offset + self.len()
         };
-        if desired_capacity < self.capacity() {
-            if let Some(bytes) = Arc::get_mut(&mut self.data) {
-                if bytes.try_realloc(desired_capacity).is_ok() {
-                    // Realloc complete - update our pointer into `bytes`:
-                    self.ptr = if is_empty {
-                        bytes.as_ptr()
-                    } else {
-                        // SAFETY: we kept all elements leading up to the offset
-                        unsafe { bytes.as_ptr().add(offset) }
-                    }
+        if desired_capacity < self.capacity()
+            && let Some(bytes) = Arc::get_mut(&mut self.data)
+        {
+            if bytes.try_realloc(desired_capacity).is_ok() {
+                // Realloc complete - update our pointer into `bytes`:
+                self.ptr = if is_empty {
+                    bytes.as_ptr()
                 } else {
-                    // Failure to reallocate is fine; we just failed to free up memory.
+                    // SAFETY: we kept all elements leading up to the offset
+                    unsafe { bytes.as_ptr().add(offset) }
                 }
+            } else {
+                // Failure to reallocate is fine; we just failed to free up memory.
             }
         }
     }
@@ -328,7 +328,7 @@ impl Buffer {
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
-        if offset % 8 == 0 {
+        if offset.is_multiple_of(8) {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
@@ -1047,7 +1047,7 @@ mod tests {
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
             // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
             // want to make sure it doesn't unnecessarily create a deep copy.
-            if offset % 8 == 0 {
+            if offset.is_multiple_of(8) {
                 assert_eq!(new_buf.ptr_offset(), offset / 8);
             } else {
                 assert_eq!(new_buf.ptr_offset(), 0);

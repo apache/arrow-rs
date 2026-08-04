@@ -20,7 +20,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy, mask_to_selectors,
+    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -259,11 +259,11 @@ impl ReadPlanBuilder {
         // reader would have produced — rows past the early break are marked
         // "not selected". When no limit is set the loop always exhausts and
         // no padding is needed.
-        if let Some(expected) = expected_rows {
-            if processed_rows < expected {
-                let pad_len = expected - processed_rows;
-                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
-            }
+        if let Some(expected) = expected_rows
+            && processed_rows < expected
+        {
+            let pad_len = expected - processed_rows;
+            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
         }
 
         // If the predicate selected all rows, applying it is a no-op. With no
@@ -335,7 +335,7 @@ fn build_cursor(
             RowSelectionCursor::new_selectors(selectors)
         }
         (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors(mask_to_selectors(mask.mask()))
+            RowSelectionCursor::new_selectors((*mask).into_selectors())
         }
     }
 }

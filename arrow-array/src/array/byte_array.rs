@@ -135,15 +135,15 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // Verify that each pair of offsets is a valid slices of values
         T::validate(&offsets, &values)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
-                    T::Offset::PREFIX,
-                    T::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
+                T::Offset::PREFIX,
+                T::PREFIX,
+                n.len(),
+            )));
         }
 
         Ok(Self {
