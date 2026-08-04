@@ -269,7 +269,7 @@ pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) 
 /// Bitwise AND of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn intersect_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return l & r;
+        return combine_equal_masks(l, r, |a, b| a & b);
     }
     combine_uneven_masks(l, r, |a, b| a & b)
 }
@@ -277,9 +277,29 @@ pub(super) fn intersect_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBu
 /// Bitwise OR of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return l | r;
+        return combine_equal_masks(l, r, |a, b| a | b);
     }
     combine_uneven_masks(l, r, |a, b| a | b)
+}
+
+/// Combines two masks of equal length with the bitwise operation `op`.
+///
+/// `BitAnd`/`BitOr` on `&BooleanBuffer` normalise the result to a zero bit offset,
+/// which costs a second allocation and a shifting copy of the whole mask when the
+/// operands are not byte aligned. Building the buffer directly keeps the offset,
+/// as the uneven path does.
+fn combine_equal_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+where
+    F: FnMut(u64, u64) -> u64,
+{
+    BooleanBuffer::from_bitwise_binary_op(
+        l.values(),
+        l.offset(),
+        r.values(),
+        r.offset(),
+        l.len(),
+        op,
+    )
 }
 
 /// Combines two masks of differing lengths with the bitwise operation `op`,
@@ -846,7 +866,7 @@ mod tests {
 
     /// Expected result of combining two masks of possibly differing lengths:
     /// `op` over the common prefix, then the longer side's tail unchanged.
-    fn expected_uneven(l: &[bool], r: &[bool], op: fn(bool, bool) -> bool) -> Vec<bool> {
+    fn expected_combined(l: &[bool], r: &[bool], op: fn(bool, bool) -> bool) -> Vec<bool> {
         let common = l.len().min(r.len());
         let longer = if l.len() > r.len() { l } else { r };
         (0..common)
@@ -862,10 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn test_uneven_masks_with_offsets() {
-        // Cover offsets and prefix lengths that are not byte (or word) aligned
-        // on either side, including the case where the longer mask starts mid
-        // byte and the common prefix ends mid byte.
+    fn test_mask_algebra_with_offsets() {
+        // Offsets and lengths that are not byte (or word) aligned on either side,
+        // so the common prefix can start and end mid byte. Covers both the equal
+        // and uneven length paths.
         let base: Vec<bool> = (0..600).map(|i| i % 7 == 0 || i % 3 == 1).collect();
         let other: Vec<bool> = (0..600).map(|i| i % 5 == 2 || i % 11 == 4).collect();
         let base = BooleanBuffer::from(base);
@@ -873,7 +893,20 @@ mod tests {
 
         for l_offset in [0, 1, 5, 8, 13, 64, 67] {
             for r_offset in [0, 1, 3, 8, 60, 64, 70] {
-                for (l_len, r_len) in [(0, 9), (9, 0), (1, 200), (200, 1), (63, 130), (321, 65)] {
+                for (l_len, r_len) in [
+                    (0, 9),
+                    (9, 0),
+                    (1, 200),
+                    (200, 1),
+                    (63, 130),
+                    (321, 65),
+                    (0, 0),
+                    (1, 1),
+                    (63, 63),
+                    (64, 64),
+                    (200, 200),
+                    (321, 321),
+                ] {
                     let l = base.slice(l_offset, l_len);
                     let r = other.slice(r_offset, r_len);
                     let l_bits: Vec<bool> = l.iter().collect();
@@ -883,12 +916,12 @@ mod tests {
 
                     assert_mask_eq(
                         &intersect_masks(&l, &r),
-                        &expected_uneven(&l_bits, &r_bits, |a, b| a && b),
+                        &expected_combined(&l_bits, &r_bits, |a, b| a && b),
                         &format!("intersect {context}"),
                     );
                     assert_mask_eq(
                         &union_masks(&l, &r),
-                        &expected_uneven(&l_bits, &r_bits, |a, b| a || b),
+                        &expected_combined(&l_bits, &r_bits, |a, b| a || b),
                         &format!("union {context}"),
                     );
                 }
@@ -897,13 +930,17 @@ mod tests {
     }
 
     #[test]
-    fn test_uneven_masks_fuzz() {
+    fn test_mask_algebra_fuzz() {
         let mut rng = rng();
         for _ in 0..200 {
             let l_offset = rng.random_range(0..70);
             let r_offset = rng.random_range(0..70);
             let l_len = rng.random_range(0..300);
-            let r_len = rng.random_range(0..300);
+            // Bias towards equal lengths so that path is hit often
+            let r_len = match rng.random_bool(0.25) {
+                true => l_len,
+                false => rng.random_range(0..300),
+            };
 
             let l_bits: Vec<bool> = (0..l_offset + l_len)
                 .map(|_| rng.random_bool(0.5))
@@ -918,12 +955,12 @@ mod tests {
 
             assert_mask_eq(
                 &intersect_masks(&l, &r),
-                &expected_uneven(&l_bits, &r_bits, |a, b| a && b),
+                &expected_combined(&l_bits, &r_bits, |a, b| a && b),
                 "intersect",
             );
             assert_mask_eq(
                 &union_masks(&l, &r),
-                &expected_uneven(&l_bits, &r_bits, |a, b| a || b),
+                &expected_combined(&l_bits, &r_bits, |a, b| a || b),
                 "union",
             );
         }
