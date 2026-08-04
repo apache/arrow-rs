@@ -2367,13 +2367,13 @@ unsafe fn decode_column(
                         let null_row_bytes: &[u8] = &null_rows[field_idx].data;
 
                         for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
-                                if *next_idx == idx {
-                                    sparse_data.push(*bytes);
+                            if let Some((next_idx, bytes)) = field_row_iter.peek()
+                                && *next_idx == idx
+                            {
+                                sparse_data.push(*bytes);
 
-                                    field_row_iter.next();
-                                    continue;
-                                }
+                                field_row_iter.next();
+                                continue;
                             }
                             sparse_data.push(null_row_bytes);
                         }
@@ -4426,7 +4426,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_values() {
         // Use `with_values_field` on `MapBuilder` to set the values are not nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, false));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
         // Entry 0: {"a": 1, "b": 2}
@@ -4464,7 +4468,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_map_but_with_nullable_values() {
         // Map column is non-nullable, but values are nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, true));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            true,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
 
@@ -4845,9 +4853,17 @@ mod tests {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_map(
             "",
-            "entries",
-            Field::new("keys", keys.data_type().clone(), false),
-            Field::new("values", values.data_type().clone(), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                keys.data_type().clone(),
+                false,
+            ),
+            Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                values.data_type().clone(),
+                true,
+            ),
             false,
             true,
         ));
@@ -6355,11 +6371,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6386,11 +6410,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6416,11 +6448,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0i32].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6444,11 +6484,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6474,11 +6522,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 0, 0, 0].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6507,11 +6563,19 @@ mod tests {
         let inner_null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let inner_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let inner_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(inner_entries_fields.clone().into()),
             false,
         ));
@@ -6535,11 +6599,19 @@ mod tests {
 
         let inner_map_type = DataType::Map(inner_struct_field.clone(), false);
         let outer_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", inner_map_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                inner_map_type,
+                true,
+            )),
         ];
         let outer_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(outer_entries_fields.clone().into()),
             false,
         ));
@@ -6574,11 +6646,19 @@ mod tests {
         let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6625,11 +6705,19 @@ mod tests {
 
         let list_type = list_array.data_type().clone();
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", list_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                list_type,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));

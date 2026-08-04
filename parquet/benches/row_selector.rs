@@ -46,7 +46,7 @@ fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> Boo
 
 /// Generates a mask alternating between selected and skipped runs of `run_len` rows.
 fn generate_run_length_mask(total_rows: usize, run_len: usize) -> BooleanBuffer {
-    BooleanBuffer::from_iter((0..total_rows).map(|row| (row / run_len) % 2 == 0))
+    BooleanBuffer::from_iter((0..total_rows).map(|row| (row / run_len).is_multiple_of(2)))
 }
 
 /// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.

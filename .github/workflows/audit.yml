@@ -32,6 +32,9 @@ on:
       - '**/Cargo.lock'
       - rust-toolchain.toml
 
+permissions:
+  contents: read
+
 jobs:
   cargo-audit:
     name: Audit

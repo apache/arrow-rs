@@ -569,10 +569,10 @@ impl ParquetMetaDataReader {
     /// file footer (8 bytes). Otherwise returns `8`.
     #[cfg(all(feature = "async", feature = "arrow"))]
     fn get_prefetch_size(&self) -> usize {
-        if let Some(prefetch) = self.prefetch_hint {
-            if prefetch > FOOTER_SIZE {
-                return prefetch;
-            }
+        if let Some(prefetch) = self.prefetch_hint
+            && prefetch > FOOTER_SIZE
+        {
+            return prefetch;
         }
         FOOTER_SIZE
     }

@@ -414,7 +414,7 @@ mod tests {
     use super::*;
     use crate::BooleanBuffer;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::iter::Copied;
     use std::slice::Iter;

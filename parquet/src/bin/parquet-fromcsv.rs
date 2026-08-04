@@ -350,7 +350,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     let parquet_file = File::create(&args.output_file).map_err(|e| {
         ParquetFromCsvError::with_context(
             e,
-            &format!("Failed to create output file {:#?}", &args.output_file),
+            &format!("Failed to create output file {:#?}", args.output_file),
         )
     })?;
 
@@ -366,7 +366,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     let input_file = File::open(&args.input_file).map_err(|e| {
         ParquetFromCsvError::with_context(
             e,
-            &format!("Failed to open input file {:#?}", &args.input_file),
+            &format!("Failed to open input file {:#?}", args.input_file),
         )
     })?;
 

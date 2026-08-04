@@ -132,6 +132,8 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
 ) -> Result<ArrayRef, ArrowError> {
     let value_buffer = values.values();
     let value_offsets = values.value_offsets();
+    // A null *value* must produce a null row, not the empty slice its offsets happen to span.
+    let values_have_nulls = values.null_count() != 0;
     let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
     builder.append_block(value_buffer.clone());
     for i in keys.iter() {
@@ -140,6 +142,11 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
                 let idx = v.to_usize().ok_or_else(|| {
                     ArrowError::ComputeError("Invalid dictionary index".to_string())
                 })?;
+
+                if values_have_nulls && values.is_null(idx) {
+                    builder.append_null();
+                    continue;
+                }
 
                 // Safety
                 // (1) The index is within bounds as they are offsets

@@ -1731,9 +1731,9 @@ mod tests {
             ),
             Field::new_map(
                 "my_map",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                "my_entries",
+                Field::new("my_keys", DataType::Utf8, false),
+                Field::new("my_values", DataType::Int32, true),
                 false,
                 true,
             ),
@@ -1776,9 +1776,9 @@ mod tests {
                 }
             }
             OPTIONAL GROUP my_map (MAP) {
-                REPEATED GROUP entries {
-                    REQUIRED BINARY keys (STRING);
-                    OPTIONAL INT32 values;
+                REPEATED GROUP my_entries {
+                    REQUIRED BINARY my_keys (STRING);
+                    OPTIONAL INT32 my_values;
                 }
             }
         }
