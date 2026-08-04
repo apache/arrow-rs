@@ -20,7 +20,7 @@ extern crate criterion;
 
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, ZstdLevel};
+use parquet::basic::{Compression, Encoding, ZstdLevel};
 
 extern crate arrow;
 extern crate parquet;
@@ -119,6 +119,31 @@ fn create_large_string_bench_batch(size: usize, value_size: usize) -> Result<Rec
     let value = "x".repeat(value_size);
     let array = Arc::new(StringArray::from_iter_values(
         (0..size).map(|_| value.as_str()),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing a long common prefix and
+/// ending in a short distinct suffix — the case `DELTA_BYTE_ARRAY` exists
+/// for: consecutive values dedup to a prefix length plus a few suffix bytes.
+fn create_large_string_shared_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+) -> Result<RecordBatch> {
+    let prefix = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{prefix}{i:08}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings whose leading bytes differ — the
+/// adversarial case for `DELTA_BYTE_ARRAY`, where every prefix length is ~0
+/// and the encoding stores each value in full.
+fn create_large_string_distinct_bench_batch(size: usize, value_size: usize) -> Result<RecordBatch> {
+    let filler = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{i:08}{filler}")),
     )) as _;
     Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
@@ -651,5 +676,52 @@ fn bench_all_writers(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_all_writers);
+/// Writes BYTE_ARRAY columns of large (multi-MiB) string values with
+/// `DELTA_BYTE_ARRAY`, with `PLAIN` on the same data as a baseline.
+///
+/// Two data shapes bracket the encoding's best and worst case:
+/// * `large_string_shared_prefix`: values like `xxx…x00000000`,
+///   `xxx…x00000001`, … share a long common prefix and differ only in a
+///   short suffix — the case `DELTA_BYTE_ARRAY` is designed to handle well,
+///   encoding each value as a prefix length plus a few suffix bytes.
+/// * `large_string_distinct`: values like `00000000x…xxx`, `00000001x…xxx`, …
+///   differ in their leading bytes, so prefix deduplication saves nothing and
+///   the encoding stores each value in full.
+fn bench_delta_byte_array_writers(c: &mut Criterion) {
+    // Each 2 MiB value alone exceeds the default 1 MiB data page size limit.
+    let shared = create_large_string_shared_prefix_bench_batch(128, 2 * 1024 * 1024).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(128, 2 * 1024 * 1024).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    for (batch_name, batch) in [
+        ("large_string_shared_prefix", &shared),
+        ("large_string_distinct", &distinct),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
+            group.bench_function(prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches, bench_all_writers, bench_delta_byte_array_writers);
 criterion_main!(benches);

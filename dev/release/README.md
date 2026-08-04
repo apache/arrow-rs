@@ -45,56 +45,50 @@ crates.io, the Rust ecosystem's package manager.
 
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
-The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/dev/release/update_change_log.sh)
-
-This script creates a changelog using github issues and the
-labels associated with them.
-
 ## Prepare CHANGELOG and version
+
+- Ensure [`git-cliff`](https://git-cliff.org/docs/installation/) is installed
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
-Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
+First copy the contents of `CHANGELOG.md` into `CHANGELOG-old.md`.
+
+Then do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
 git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
-# Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v README.md`
+# Update versions.
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v CHANGELOG-old.md | grep -v README.md`
+cargo check # update Cargo.lock with new versions
 git commit -a -m 'Update version'
 
+# Assuming remote name is apache; if named differently ensure this is changed,
+# since we need the tags from the GitHub repository
+git fetch apache --tags
+
 # ensure your github token is available
-export ARROW_GITHUB_API_TOKEN=<TOKEN>
+export GITHUB_TOKEN=<TOKEN>
 
-# manually edit ./dev/release/update_change_log.sh to reflect the release version
-# create the changelog
-./dev/release/update_change_log.sh
-# commit the initial changes
+# e.g. TAG=60.0.0; this is just used to format the CHANGELOG, so tag doesn't
+# need to exist yet, and don't put an RC tag either
+# (we are excluding our above version bump commit from the changelog)
+git-cliff --tag <TAG> --unreleased --output CHANGELOG.md --skip-commit $(git rev-parse HEAD)
+
+# review change log, adjust labels on PR's as required
+# can rerun above git-cliff command if needed
+
+# commit the changelog
 git commit -a -m 'Create changelog'
-
-# run automated script to copy labels to issues based on referenced PRs
-# (NOTE 1:  this must be done by a committer / other who has
-# write access to the repository)
-#
-# NOTE 2: this must be done after creating the initial CHANGELOG file
-python dev/release/label_issues.py
-
-# review change log / edit issues and labels if needed, rerun, repeat as necessary
-# note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
-./dev/release/update_change_log.sh
-
-# Commit the changes
-git commit -a -m 'Update changelog'
 
 git push
 ```
 
 Note that when reviewing the change log, rather than editing the
-`CHANGELOG.md`, it is preferred to update the issues and their labels
-(e.g. add `invalid` label to exclude them from release notes)
+`CHANGELOG.md`, it is preferred to update the PRs and their labels
+(e.g. add `development-process` label to exclude them from release notes)
 
 Merge this PR to `main` prior to the next step.
 
@@ -216,7 +210,7 @@ Rust Arrow Crates:
 (cd arrow-schema && cargo publish)
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
-(cd arrow-cmp && cargo publish) 
+(cd arrow-cmp && cargo publish)
 (cd arrow-select && cargo publish)
 (cd arrow-ord && cargo publish)
 (cd arrow-cast && cargo publish)

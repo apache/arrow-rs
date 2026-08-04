@@ -48,14 +48,13 @@ use algebra::{
     intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
-pub(crate) use boolean::mask_to_selectors;
 use boolean::{
     MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
 use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
-pub use selector::{RowSelectionIter, RowSelector};
+pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
 /// [`RowSelection`] represents selecting a subset of rows
@@ -300,7 +299,7 @@ impl RowSelection {
     fn into_selectors_vec(self) -> Vec<RowSelector> {
         match self.inner {
             RowSelectionInner::Selectors(s) => s,
-            RowSelectionInner::Mask(m) => mask_to_selectors(m.mask()),
+            RowSelectionInner::Mask(m) => (*m).into_selectors(),
         }
     }
 
@@ -363,7 +362,9 @@ impl RowSelection {
     ///
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
-    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    /// e.g. `ObjectStore::get_ranges` in the [`object_store`] crate
+    ///
+    /// [`object_store`]: https://crates.io/crates/object_store
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         match &self.inner {
             RowSelectionInner::Selectors(selectors) => {
@@ -487,12 +488,10 @@ impl RowSelection {
                 intersect_row_selections(l, r)
             }
             (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                let r = mask_to_selectors(r.mask());
-                intersect_row_selections(l, &r)
+                intersect_row_selections(l, &r.borrowed_selectors())
             }
             (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                let l = mask_to_selectors(l.mask());
-                intersect_row_selections(&l, r)
+                intersect_row_selections(&l.borrowed_selectors(), r)
             }
         }
     }
@@ -504,23 +503,19 @@ impl RowSelection {
     ///
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
-        match &self.inner {
-            RowSelectionInner::Mask(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
-                }
-                RowSelectionInner::Selectors(r) => {
-                    let l = mask_to_selectors(l.mask());
-                    union_row_selections(&l, r)
-                }
-            },
-            RowSelectionInner::Selectors(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    let r = mask_to_selectors(r.mask());
-                    union_row_selections(l, &r)
-                }
-                RowSelectionInner::Selectors(r) => union_row_selections(l, r),
-            },
+        match (&self.inner, &other.inner) {
+            (RowSelectionInner::Mask(l), RowSelectionInner::Mask(r)) => {
+                Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(l, r)
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
+                union_row_selections(l, &r.borrowed_selectors())
+            }
+            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(&l.borrowed_selectors(), r)
+            }
         }
     }
 
@@ -605,7 +600,8 @@ impl RowSelection {
         }
     }
 
-    /// Returns a borrowed iterator yielding the [`RowSelector`]s for this selection.
+    /// Returns an iterator over the [`RowSelector`]s for this
+    /// [`RowSelection`].
     ///
     /// Mask-backed selections materialize a `Vec<RowSelector>` cache on first
     /// call (one allocation, `O(set_slices)` work) so the iterator can hand out
@@ -613,10 +609,10 @@ impl RowSelection {
     /// over mask-backed selections, prefer streaming directly via
     /// [`Self::as_mask`] + [`MaskRunIter::new`] — that path is allocation-free
     /// and avoids populating the cache.
-    pub fn iter(&self) -> RowSelectionIter<'_> {
+    pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
         match &self.inner {
-            RowSelectionInner::Selectors(s) => RowSelectionIter::new(s),
-            RowSelectionInner::Mask(m) => RowSelectionIter::new(m.selectors()),
+            RowSelectionInner::Selectors(s) => s.iter(),
+            RowSelectionInner::Mask(m) => m.selectors().iter(),
         }
     }
 

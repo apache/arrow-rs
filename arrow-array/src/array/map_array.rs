@@ -80,13 +80,13 @@ impl MapArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for MapArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for MapArray, expected {len} got {}",
+                n.len(),
+            )));
         }
         if field.is_nullable() || entries.null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(
@@ -144,6 +144,31 @@ impl MapArray {
         ordered: bool,
     ) -> Self {
         Self::try_new(field, offsets, entries, nulls, ordered).unwrap()
+    }
+
+    /// Create a new [`MapArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `offsets.len() - 1 == nulls.len()` if `nulls` is `Some`
+    /// - `offsets.last() <= entries.len()`
+    /// - `entries` has exactly 2 columns and its keys column is non-nullable
+    /// - `field.data_type() == entries.data_type()`
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(field, offsets, entries, nulls, ordered);
+        }
+        Self {
+            data_type: DataType::Map(field, ordered),
+            nulls,
+            entries,
+            value_offsets: offsets,
+        }
     }
 
     /// Deconstruct this array into its constituent parts

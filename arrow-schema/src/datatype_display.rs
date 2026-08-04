@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::DataType;
+use crate::Metadata;
+use std::fmt;
 use std::fmt::Display;
-use std::{collections::HashMap, fmt};
 
 impl Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn format_metadata(metadata: &HashMap<String, String>) -> String {
+        fn format_metadata(metadata: &Metadata) -> String {
             format!("{}", FormatMetadata(metadata))
         }
 
@@ -183,8 +184,8 @@ impl Display for DataType {
     }
 }
 
-/// Adapter to format a metadata HashMap consistently.
-struct FormatMetadata<'a>(&'a HashMap<String, String>);
+/// Adapter to format [`Metadata`] consistently.
+struct FormatMetadata<'a>(&'a Metadata);
 
 impl fmt::Display for FormatMetadata<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -192,10 +193,9 @@ impl fmt::Display for FormatMetadata<'_> {
         if metadata.is_empty() {
             Ok(())
         } else {
-            let mut entries: Vec<(&String, &String)> = metadata.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
+            // `Metadata` iterates in sorted key order
             write!(f, ", metadata: ")?;
-            f.debug_map().entries(entries).finish()
+            f.debug_map().entries(metadata.iter()).finish()
         }
     }
 }
@@ -203,6 +203,7 @@ impl fmt::Display for FormatMetadata<'_> {
 #[cfg(test)]
 mod tests {
 
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use crate::Field;
