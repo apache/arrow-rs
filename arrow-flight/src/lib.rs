@@ -186,7 +186,7 @@ fn limited_fmt(f: &mut fmt::Formatter<'_>, value: &[u8], limit: usize) -> fmt::R
     if value.len() > limit {
         write!(f, "{:?}", &value[..limit])
     } else {
-        write!(f, "{:?}", &value)
+        write!(f, "{:?}", value)
     }
 }
 
