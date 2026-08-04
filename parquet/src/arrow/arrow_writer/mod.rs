@@ -368,45 +368,45 @@ impl<W: Write + Send> ArrowWriter<W> {
             ),
         };
 
-        if let Some(max_rows) = self.max_row_group_row_count {
-            if in_progress.buffered_rows + batch.num_rows() > max_rows {
-                let to_write = max_rows - in_progress.buffered_rows;
-                let a = batch.slice(0, to_write);
-                let b = batch.slice(to_write, batch.num_rows() - to_write);
-                self.write(&a)?;
-                return self.write(&b);
-            }
+        if let Some(max_rows) = self.max_row_group_row_count
+            && in_progress.buffered_rows + batch.num_rows() > max_rows
+        {
+            let to_write = max_rows - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
         }
 
         // Check byte limit: if we have buffered data, use measured average row size
         // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes {
-            if in_progress.buffered_rows > 0 {
-                let current_bytes = in_progress.get_estimated_total_bytes();
+        if let Some(max_bytes) = self.max_row_group_bytes
+            && in_progress.buffered_rows > 0
+        {
+            let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if current_bytes >= max_bytes {
-                    self.flush()?;
-                    return self.write(batch);
-                }
+            if current_bytes >= max_bytes {
+                self.flush()?;
+                return self.write(batch);
+            }
 
-                if let Some(avg_row_bytes) = current_bytes
-                    .checked_div(in_progress.buffered_rows)
-                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
-                {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+            if let Some(avg_row_bytes) = current_bytes
+                .checked_div(in_progress.buffered_rows)
+                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            {
+                // At this point, `current_bytes < max_bytes` (checked above)
+                let remaining_bytes = max_bytes - current_bytes;
+                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
-                    if batch.num_rows() > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            let a = batch.slice(0, rows_that_fit);
-                            let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                            self.write(&a)?;
-                            return self.write(&b);
-                        } else {
-                            self.flush()?;
-                            return self.write(batch);
-                        }
+                if batch.num_rows() > rows_that_fit {
+                    if rows_that_fit > 0 {
+                        let a = batch.slice(0, rows_that_fit);
+                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
+                        self.write(&a)?;
+                        return self.write(&b);
+                    } else {
+                        self.flush()?;
+                        return self.write(batch);
                     }
                 }
             }
@@ -2753,13 +2753,17 @@ mod tests {
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
         let entries_struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Arc::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    entries_struct_type,
+                    false,
+                )),
                 false,
             ),
             true,
@@ -4008,9 +4012,9 @@ mod tests {
             Field::new_list("my_list", Field::new("item", DataType::Int32, false), false);
         let map_field = Field::new_map(
             "my_map",
-            "entries",
-            Field::new("keys", DataType::Int32, false),
-            Field::new("values", DataType::Int32, true),
+            "my_entries",
+            Field::new("my_keys", DataType::Int32, false),
+            Field::new("my_values", DataType::Int32, true),
             false,
             true,
         );
@@ -4038,9 +4042,9 @@ mod tests {
         let map_field = &schema.get_fields()[1].get_fields()[0];
         // Coerced name of "entries" should be "key_value"
         assert_eq!(map_field.name(), "key_value");
-        // Coerced name of "keys" should be "key"
+        // Coerced name of "my_keys" should be "key"
         assert_eq!(map_field.get_fields()[0].name(), "key");
-        // Coerced name of "values" should be "value"
+        // Coerced name of "my_values" should be "value"
         assert_eq!(map_field.get_fields()[1].name(), "value");
 
         // Double check schema after reading from the file
@@ -4882,11 +4886,7 @@ mod tests {
     #[test]
     fn test_arrow_writer_metadata() {
         let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
-        let file_schema = batch_schema.clone().with_metadata(
-            vec![("foo".to_string(), "bar".to_string())]
-                .into_iter()
-                .collect(),
-        );
+        let file_schema = batch_schema.clone().with_metadata([("foo", "bar")]);
 
         let batch = RecordBatch::try_new(
             Arc::new(batch_schema),

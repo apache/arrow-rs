@@ -237,15 +237,15 @@ fn convert_stats(
             };
 
             fn check_len(min: &Option<&[u8]>, max: &Option<&[u8]>, len: usize) -> Result<()> {
-                if let Some(min) = min {
-                    if min.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse min statistic",));
-                    }
+                if let Some(min) = min
+                    && min.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse min statistic",));
                 }
-                if let Some(max) = max {
-                    if max.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse max statistic",));
-                    }
+                if let Some(max) = max
+                    && max.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse max statistic",));
                 }
                 Ok(())
             }
@@ -712,7 +712,7 @@ fn read_row_group(
             }
             // 6: we don't expose total_compressed_size
             7 => {
-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)?);
+                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -838,11 +838,6 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // Read row groups and handle ordinal assignment
                 let mut assigner = OrdinalAssigner::new();
                 for ordinal in 0..list_ident.size {
-                    let ordinal: i16 = ordinal.try_into().map_err(|_| {
-                        ParquetError::General(format!(
-                            "Row group ordinal {ordinal} exceeds i16 max value",
-                        ))
-                    })?;
                     let rg = read_row_group(&mut prot, schema_descr, options)?;
                     rg_vec.push(assigner.ensure(ordinal, rg)?);
                 }
@@ -964,7 +959,7 @@ impl OrdinalAssigner {
     ///    groups must also not have ordinals.
     fn ensure(
         &mut self,
-        actual_ordinal: i16,
+        actual_ordinal: i32,
         mut rg: RowGroupMetaData,
     ) -> Result<RowGroupMetaData> {
         let rg_has_ordinal = rg.ordinal.is_some();
@@ -1463,6 +1458,8 @@ impl<'a> WriteThrift for FileMeta<'a> {
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
+        // only write ordinal if all values will fit in an i16
+        writer.set_write_row_group_ordinal(self.row_groups.len() <= i16::MAX as usize);
 
         self.file_metadata
             .version
@@ -1623,7 +1620,12 @@ impl WriteThrift for RowGroupMetaData {
         last_field_id = self
             .compressed_size()
             .write_thrift_field(writer, 6, last_field_id)?;
-        if let Some(ordinal) = self.ordinal() {
+
+        // write ordinal if it will fit in an i16
+        if writer.write_row_group_ordinal()
+            && let Some(ordinal) = self.ordinal()
+            && let Ok(ordinal) = i16::try_from(ordinal)
+        {
             ordinal.write_thrift_field(writer, 7, last_field_id)?;
         }
         writer.write_struct_end()

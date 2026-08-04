@@ -925,7 +925,7 @@ mod tests {
         }
     }
     use arrow_buffer::Buffer;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
