@@ -132,6 +132,7 @@ semicolon_in_expressions_from_macros = "warn"
 trivial_numeric_casts = "warn"
 unexpected_cfgs = "warn"
 unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
 unused_import_braces = "warn"
 unused_lifetimes = "warn"
 
@@ -139,7 +140,6 @@ unused_lifetimes = "warn"
 # and each has far too many violations to fix in one go:
 elided_lifetimes_in_paths = "allow"      # ~1200 violations
 explicit_outlives_requirements = "allow" # ~80 violations
-unused_extern_crates = "allow"           # ~60 violations
 
 [workspace.lints.rustdoc]
 all = { level = "warn", priority = -1 }

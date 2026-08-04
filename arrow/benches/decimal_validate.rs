@@ -25,8 +25,6 @@ use arrow::array::{
 use criterion::Criterion;
 use rand::Rng;
 
-extern crate arrow;
-
 use arrow_buffer::i256;
 
 fn validate_decimal32_array(array: Decimal32Array) {
