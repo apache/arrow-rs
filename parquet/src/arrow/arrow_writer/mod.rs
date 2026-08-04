@@ -2575,8 +2575,12 @@ mod tests {
         let binary_view_values: ArrayRef =
             Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
 
-        one_column_roundtrip(Arc::clone(&string_view_values), false);
-        one_column_roundtrip(Arc::clone(&binary_view_values), false);
+        RoundTripTest::new(Arc::clone(&string_view_values))
+            .with_nullable(false)
+            .run();
+        RoundTripTest::new(Arc::clone(&binary_view_values))
+            .with_nullable(false)
+            .run();
 
         let batch = RecordBatch::try_new(
             Arc::new(schema),
@@ -3175,101 +3179,138 @@ mod tests {
         })
     }
 
-    struct RoundTripOptions {
+    /// Round trip testing fixture:
+    ///
+    /// Tests based on this fixture write data to parquet and then read it back.
+    struct RoundTripTest {
         values: ArrayRef,
-        schema: SchemaRef,
+        /// Optionally supplied schema
+        schema: Option<SchemaRef>,
+        /// If the created schema should be nullable. Defaults to true. Ignored
+        /// if schema is set to Some.
+        nullable: bool,
         bloom_filter: bool,
         bloom_filter_ndv: Option<u64>,
         bloom_filter_position: BloomFilterPosition,
     }
 
-    impl RoundTripOptions {
-        fn new(values: ArrayRef, nullable: bool) -> Self {
-            let data_type = values.data_type().clone();
-            let schema = Schema::new(vec![Field::new("col", data_type, nullable)]);
+    impl RoundTripTest {
+        /// Create a test for round tripping values with a nullable schema
+        fn new(values: ArrayRef) -> Self {
             Self {
                 values,
-                schema: Arc::new(schema),
+                schema: None,
+                nullable: true,
                 bloom_filter: false,
                 bloom_filter_ndv: None,
                 bloom_filter_position: BloomFilterPosition::AfterRowGroup,
             }
         }
-    }
 
-    fn one_column_roundtrip(values: ArrayRef, nullable: bool) -> Vec<Bytes> {
-        one_column_roundtrip_with_options(RoundTripOptions::new(values, nullable))
-    }
+        /// Set the schema
+        pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+            self.schema = Some(schema);
+            self
+        }
 
-    fn one_column_roundtrip_with_schema(values: ArrayRef, schema: SchemaRef) -> Vec<Bytes> {
-        let mut options = RoundTripOptions::new(values, false);
-        options.schema = schema;
-        one_column_roundtrip_with_options(options)
-    }
+        /// Set the nullable flag
+        pub fn with_nullable(mut self, nullable: bool) -> Self {
+            self.nullable = nullable;
+            self
+        }
 
-    fn one_column_roundtrip_with_options(options: RoundTripOptions) -> Vec<Bytes> {
-        let RoundTripOptions {
-            values,
-            schema,
-            bloom_filter,
-            bloom_filter_ndv,
-            bloom_filter_position,
-        } = options;
+        /// Set bloom filter
+        pub fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
+            self.bloom_filter = bloom_filter;
+            self
+        }
 
-        let encodings = match values.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
-                vec![
+        /// Set bloom filter max ndv
+        pub fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: Option<u64>) -> Self {
+            self.bloom_filter_ndv = bloom_filter_ndv;
+            self
+        }
+
+        /// Set bloom filter position
+        pub fn with_bloom_filter_position(
+            mut self,
+            bloom_filter_position: BloomFilterPosition,
+        ) -> Self {
+            self.bloom_filter_position = bloom_filter_position;
+            self
+        }
+
+        /// Run the test specified by the options, returning the encoded Parquet bytes
+        fn run(self) -> Vec<Bytes> {
+            let RoundTripTest {
+                values,
+                schema,
+                nullable,
+                bloom_filter,
+                bloom_filter_ndv,
+                bloom_filter_position,
+            } = self;
+
+            let schema = schema.unwrap_or_else(|| {
+                let data_type = values.data_type().clone();
+                Arc::new(Schema::new(vec![Field::new("col", data_type, nullable)]))
+            });
+
+            let encodings = match values.data_type() {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+                    vec![
+                        Encoding::PLAIN,
+                        Encoding::DELTA_BYTE_ARRAY,
+                        Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                    ]
+                }
+                DataType::Int64
+                | DataType::Int32
+                | DataType::Int16
+                | DataType::Int8
+                | DataType::UInt64
+                | DataType::UInt32
+                | DataType::UInt16
+                | DataType::UInt8 => vec![
                     Encoding::PLAIN,
-                    Encoding::DELTA_BYTE_ARRAY,
-                    Encoding::DELTA_LENGTH_BYTE_ARRAY,
-                ]
-            }
-            DataType::Int64
-            | DataType::Int32
-            | DataType::Int16
-            | DataType::Int8
-            | DataType::UInt64
-            | DataType::UInt32
-            | DataType::UInt16
-            | DataType::UInt8 => vec![
-                Encoding::PLAIN,
-                Encoding::DELTA_BINARY_PACKED,
-                Encoding::BYTE_STREAM_SPLIT,
-            ],
-            DataType::Float32 | DataType::Float64 => {
-                vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
-            }
-            _ => vec![Encoding::PLAIN],
-        };
+                    Encoding::DELTA_BINARY_PACKED,
+                    Encoding::BYTE_STREAM_SPLIT,
+                ],
+                DataType::Float32 | DataType::Float64 => {
+                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
+                }
+                _ => vec![Encoding::PLAIN],
+            };
 
-        let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+            let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
 
-        let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
+            let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
 
-        let mut files = vec![];
-        for dictionary_size in [0, 1, 1024] {
-            for encoding in &encodings {
-                for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-                    for row_group_size in row_group_sizes {
-                        let mut builder = WriterProperties::builder()
-                            .set_writer_version(version)
-                            .set_max_row_group_row_count(Some(row_group_size))
-                            .set_dictionary_enabled(dictionary_size != 0)
-                            .set_dictionary_page_size_limit(dictionary_size.max(1))
-                            .set_encoding(*encoding)
-                            .set_bloom_filter_enabled(bloom_filter)
-                            .set_bloom_filter_position(bloom_filter_position);
-                        if let Some(ndv) = bloom_filter_ndv {
-                            builder = builder.set_bloom_filter_max_ndv(ndv);
+            let mut files = vec![];
+            for dictionary_size in [0, 1, 1024] {
+                for encoding in &encodings {
+                    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+                        for row_group_size in row_group_sizes {
+                            let mut builder = WriterProperties::builder()
+                                .set_writer_version(version)
+                                .set_max_row_group_row_count(Some(row_group_size))
+                                .set_dictionary_enabled(dictionary_size != 0)
+                                .set_dictionary_page_size_limit(dictionary_size.max(1))
+                                .set_encoding(*encoding)
+                                .set_bloom_filter_enabled(bloom_filter)
+                                .set_bloom_filter_position(bloom_filter_position);
+                            if let Some(ndv) = bloom_filter_ndv {
+                                builder = builder.set_bloom_filter_max_ndv(ndv);
+                            }
+                            let props = builder.build();
+
+                            files.push(roundtrip_opts(&expected_batch, props))
                         }
-                        let props = builder.build();
-
-                        files.push(roundtrip_opts(&expected_batch, props))
                     }
                 }
             }
+            files
         }
-        files
     }
 
     fn values_required<A, I>(iter: I) -> Vec<Bytes>
@@ -3279,7 +3320,7 @@ mod tests {
     {
         let raw_values: Vec<_> = iter.into_iter().collect();
         let values = Arc::new(A::from(raw_values));
-        one_column_roundtrip(values, false)
+        RoundTripTest::new(values).with_nullable(false).run()
     }
 
     fn values_optional<A, I>(iter: I) -> Vec<Bytes>
@@ -3293,7 +3334,7 @@ mod tests {
             .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
             .collect();
         let optional_values = Arc::new(A::from(optional_raw_values));
-        one_column_roundtrip(optional_values, true)
+        RoundTripTest::new(optional_values).run()
     }
 
     fn required_and_optional<A, I>(iter: I)
@@ -3370,12 +3411,12 @@ mod tests {
     #[test]
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
-        one_column_roundtrip(values, true);
+        RoundTripTest::new(values).run();
     }
     #[test]
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
-        one_column_roundtrip(values, true);
+        RoundTripTest::new(values).run();
         // null arrays are always nullable, a test with non-nullable nulls fails
     }
 
@@ -3590,14 +3631,14 @@ mod tests {
 
     // The timestamp array types don't implement From<Vec<T>> because they need the timezone
     // argument, and they also doesn't support building from a Vec<Option<T>>, so call
-    // one_column_roundtrip manually instead of calling required_and_optional for these tests.
+    // RoundTripTest manually instead of calling required_and_optional for these tests.
 
     #[test]
     fn timestamp_second_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from(raw_values));
 
-        one_column_roundtrip(values, false);
+        RoundTripTest::new(values).with_nullable(false).run();
     }
 
     #[test]
@@ -3605,7 +3646,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from(raw_values));
 
-        one_column_roundtrip(values, false);
+        RoundTripTest::new(values).with_nullable(false).run();
     }
 
     #[test]
@@ -3613,7 +3654,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
 
-        one_column_roundtrip(values, false);
+        RoundTripTest::new(values).with_nullable(false).run();
     }
 
     #[test]
@@ -3621,7 +3662,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from(raw_values));
 
-        one_column_roundtrip(values, false);
+        RoundTripTest::new(values).with_nullable(false).run();
     }
 
     #[test]
@@ -3728,11 +3769,12 @@ mod tests {
     #[test]
     fn i32_column_bloom_filter_at_end() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
-        let mut options = RoundTripOptions::new(array, false);
-        options.bloom_filter = true;
-        options.bloom_filter_position = BloomFilterPosition::End;
+        let files = RoundTripTest::new(array)
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .with_bloom_filter_position(BloomFilterPosition::End)
+            .run();
 
-        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -3744,10 +3786,11 @@ mod tests {
     #[test]
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
-        let mut options = RoundTripOptions::new(array, false);
-        options.bloom_filter = true;
+        let files = RoundTripTest::new(array)
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .run();
 
-        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -3765,11 +3808,12 @@ mod tests {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
 
         // NDV much larger than actual distinct values — tests folding a large filter down
-        let mut options = RoundTripOptions::new(array.clone(), false);
-        options.bloom_filter = true;
-        options.bloom_filter_ndv = Some(1_000_000);
+        let files = RoundTripTest::new(array.clone())
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .with_bloom_filter_ndv(Some(1_000_000))
+            .run();
 
-        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -3778,11 +3822,12 @@ mod tests {
         );
 
         // NDV smaller than actual distinct values — tests the underestimate path
-        let mut options = RoundTripOptions::new(array, false);
-        options.bloom_filter = true;
-        options.bloom_filter_ndv = Some(3);
+        let files = RoundTripTest::new(array)
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .with_bloom_filter_ndv(Some(3))
+            .run();
 
-        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -3798,10 +3843,11 @@ mod tests {
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
-        let mut options = RoundTripOptions::new(array, false);
-        options.bloom_filter = true;
+        let files = RoundTripTest::new(array)
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .run();
 
-        let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
             files,
             "col".to_string(),
@@ -3816,10 +3862,10 @@ mod tests {
         let raw_strs = raw_values.iter().map(|s| s.as_str());
 
         let array = Arc::new(StringArray::from_iter_values(raw_strs));
-        let mut options = RoundTripOptions::new(array, false);
-        options.bloom_filter = true;
-
-        let files = one_column_roundtrip_with_options(options);
+        let files = RoundTripTest::new(array)
+            .with_nullable(false)
+            .with_bloom_filter(true)
+            .run();
 
         let optional_raw_values: Vec<_> = raw_values
             .iter()
@@ -3849,7 +3895,7 @@ mod tests {
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
 
-        one_column_roundtrip(array, true);
+        RoundTripTest::new(array).run();
     }
 
     #[test]
@@ -3931,7 +3977,7 @@ mod tests {
         let a = ListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip(values, true);
+        RoundTripTest::new(values).run();
     }
 
     #[test]
@@ -3956,7 +4002,7 @@ mod tests {
         let a = LargeListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip(values, true);
+        RoundTripTest::new(values).run();
     }
 
     #[test]
@@ -3972,10 +4018,10 @@ mod tests {
         ];
 
         let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data.clone());
-        one_column_roundtrip(Arc::new(list), true);
+        RoundTripTest::new(Arc::new(list)).run();
 
         let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        one_column_roundtrip(Arc::new(list), true);
+        RoundTripTest::new(Arc::new(list)).run();
     }
 
     #[test]
@@ -3992,7 +4038,7 @@ mod tests {
         builder.values().append_value("large payload over 12 bytes");
         builder.append(true);
 
-        one_column_roundtrip(Arc::new(builder.finish()), true);
+        RoundTripTest::new(Arc::new(builder.finish())).run();
     }
 
     #[test]
@@ -4002,7 +4048,7 @@ mod tests {
         let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
 
         let values = Arc::new(s);
-        one_column_roundtrip(values, false);
+        RoundTripTest::new(values).with_nullable(false).run();
     }
 
     #[test]
@@ -4120,7 +4166,7 @@ mod tests {
             .collect();
 
         // build a record batch
-        one_column_roundtrip_with_schema(Arc::new(d), schema);
+        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
     }
 
     #[test]
@@ -4374,7 +4420,7 @@ mod tests {
         builder.append(12345678).unwrap();
         let d = builder.finish();
 
-        one_column_roundtrip_with_schema(Arc::new(d), schema);
+        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
     }
 
     #[test]
@@ -4388,14 +4434,14 @@ mod tests {
             .unwrap();
 
         let array = DictionaryArray::new(keys, Arc::new(values));
-        one_column_roundtrip(Arc::new(array.clone()), true);
+        RoundTripTest::new(Arc::new(array.clone())).run();
 
         let values = Decimal32Array::from(integers)
             .with_precision_and_scale(9, 2)
             .unwrap();
 
         let array = array.with_values(Arc::new(values));
-        one_column_roundtrip(Arc::new(array), true);
+        RoundTripTest::new(Arc::new(array)).run();
     }
 
     #[test]
@@ -4409,14 +4455,14 @@ mod tests {
             .unwrap();
 
         let array = DictionaryArray::new(keys, Arc::new(values));
-        one_column_roundtrip(Arc::new(array.clone()), true);
+        RoundTripTest::new(Arc::new(array.clone())).run();
 
         let values = Decimal64Array::from(integers)
             .with_precision_and_scale(12, 2)
             .unwrap();
 
         let array = array.with_values(Arc::new(values));
-        one_column_roundtrip(Arc::new(array), true);
+        RoundTripTest::new(Arc::new(array)).run();
     }
 
     #[test]
@@ -4430,14 +4476,14 @@ mod tests {
             .unwrap();
 
         let array = DictionaryArray::new(keys, Arc::new(values));
-        one_column_roundtrip(Arc::new(array.clone()), true);
+        RoundTripTest::new(Arc::new(array.clone())).run();
 
         let values = Decimal128Array::from(integers)
             .with_precision_and_scale(12, 2)
             .unwrap();
 
         let array = array.with_values(Arc::new(values));
-        one_column_roundtrip(Arc::new(array), true);
+        RoundTripTest::new(Arc::new(array)).run();
     }
 
     #[test]
@@ -4455,14 +4501,14 @@ mod tests {
             .unwrap();
 
         let array = DictionaryArray::new(keys, Arc::new(values));
-        one_column_roundtrip(Arc::new(array.clone()), true);
+        RoundTripTest::new(Arc::new(array.clone())).run();
 
         let values = Decimal256Array::from(integers)
             .with_precision_and_scale(12, 2)
             .unwrap();
 
         let array = array.with_values(Arc::new(values));
-        one_column_roundtrip(Arc::new(array), true);
+        RoundTripTest::new(Arc::new(array)).run();
     }
 
     #[test]
@@ -4483,7 +4529,7 @@ mod tests {
             .copied()
             .collect();
 
-        one_column_roundtrip_with_schema(Arc::new(d), schema);
+        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
     }
 
     #[test]
@@ -4499,7 +4545,7 @@ mod tests {
             u32::MAX,
         ];
         let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
-        let files = one_column_roundtrip(values, false);
+        let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
             // check statistics are valid
@@ -4545,7 +4591,7 @@ mod tests {
             u64::MAX,
         ];
         let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
-        let files = one_column_roundtrip(values, false);
+        let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
             // check statistics are valid
@@ -4582,7 +4628,7 @@ mod tests {
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
-        let files = one_column_roundtrip(values, true);
+        let files = RoundTripTest::new(values).run();
 
         for file in files {
             // check statistics are valid
@@ -4684,7 +4730,7 @@ mod tests {
 
         let array = Arc::new(list_builder.finish());
 
-        one_column_roundtrip(array, true);
+        RoundTripTest::new(array).run();
     }
 
     fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
