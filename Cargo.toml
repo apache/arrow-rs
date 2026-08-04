@@ -233,6 +233,7 @@ unnecessary_struct_initialization = "warn"
 unused_async = "warn"
 unused_peekable = "warn"
 unused_rounding = "warn"
+useless_let_if_seq = "warn"
 wildcard_dependencies = "warn"
 zero_sized_map_values = "warn"
 

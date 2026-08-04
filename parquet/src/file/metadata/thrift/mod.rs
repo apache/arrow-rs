@@ -427,17 +427,15 @@ fn read_column_metadata<'a>(
     // mask for seen required fields in ColumnMetaData
     let mut seen_mask = 0u16;
 
-    let mut skip_pes = false;
-    let mut pes_mask = true;
-    let mut skip_col_stats = false;
-    let mut skip_size_stats = false;
-
-    if let Some(opts) = options {
-        skip_pes = opts.skip_encoding_stats(col_index);
-        pes_mask = opts.encoding_stats_as_mask();
-        skip_col_stats = opts.skip_column_stats(col_index);
-        skip_size_stats = opts.skip_size_stats(col_index);
-    }
+    let (skip_pes, pes_mask, skip_col_stats, skip_size_stats) = match options {
+        Some(opts) => (
+            opts.skip_encoding_stats(col_index),
+            opts.encoding_stats_as_mask(),
+            opts.skip_column_stats(col_index),
+            opts.skip_size_stats(col_index),
+        ),
+        None => (false, true, false, false),
+    };
 
     // struct ColumnMetaData {
     //   1: required Type type
@@ -772,13 +770,10 @@ pub(crate) fn parquet_metadata_from_bytes(
     #[cfg(feature = "encryption")]
     let mut footer_signing_key_metadata: Option<&[u8]> = None;
 
-    // this will need to be set before parsing row groups
-    let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
-
+    // this will need to be set before parsing row groups.
     // see if we already have a schema.
-    if let Some(options) = options {
-        schema_descr = options.schema().cloned();
-    }
+    let mut schema_descr: Option<Arc<SchemaDescriptor>> =
+        options.and_then(|options| options.schema().cloned());
 
     // struct FileMetaData {
     //   1: required i32 version

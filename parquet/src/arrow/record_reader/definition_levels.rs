@@ -172,18 +172,8 @@ pub(crate) fn build_filtered_validity_bitmap(
         let mut include_mask: u64 = 0;
         let mut value_mask: u64 = 0;
         for (i, &d) in chunk.iter().enumerate() {
-            let mut include = true;
-            if let Some(threshold) = include_threshold
-                && d < threshold
-            {
-                include = false;
-            }
-            if include
-                && let Some((reps, max_rep)) = rep_filter
-                && reps[base + i] > max_rep
-            {
-                include = false;
-            }
+            let include = !include_threshold.is_some_and(|threshold| d < threshold)
+                && !rep_filter.is_some_and(|(reps, max_rep)| reps[base + i] > max_rep);
             include_mask |= (include as u64) << i;
             value_mask |= ((d >= value_level) as u64) << i;
         }
