@@ -636,6 +636,24 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(
+        values: ScalarBuffer<T::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self {
+            data_type: T::DATA_TYPE,
+            values,
+            nulls,
+        }
+    }
+
     /// Create a new [`PrimitiveArray`] of the given length where all values are null
     pub fn new_null(length: usize) -> Self {
         Self {
@@ -655,14 +673,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != values.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
-                    values.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != values.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                values.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {

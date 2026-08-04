@@ -715,7 +715,7 @@ fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
                 .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
         }
         _ => Err(ArrowError::JsonError(format!(
-            "Invalid UTF-16 surrogate pair. High: {high:#02X}, Low: {low:#02X}"
+            "Invalid UTF-16 surrogate pair. High: {high:#04X}, Low: {low:#04X}"
         ))),
     }
 }

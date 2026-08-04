@@ -393,10 +393,10 @@ impl Format {
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
             for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
-                if let Some(string) = record.get(i) {
-                    if !self.null_regex.is_null(string) {
-                        column_type.update(string)
-                    }
+                if let Some(string) = record.get(i)
+                    && !self.null_regex.is_null(string)
+                {
+                    column_type.update(string)
                 }
             }
         }
@@ -728,7 +728,7 @@ fn validate_header(rows: &StringRecords<'_>, fields: &Fields) -> Result<(), Arro
 fn parse(
     rows: &StringRecords<'_>,
     fields: &Fields,
-    metadata: Option<std::collections::HashMap<String, String>>,
+    metadata: Option<Metadata>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
     null_regex: &NullRegex,
@@ -1384,7 +1384,7 @@ mod tests {
         assert_eq!(37, batch.num_rows());
         assert_eq!(3, batch.num_columns());
 
-        assert_eq!(&metadata, batch.schema().metadata());
+        assert_eq!(batch.schema().metadata(), &metadata);
     }
 
     #[test]

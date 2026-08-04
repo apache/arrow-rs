@@ -1152,7 +1152,7 @@ impl<'a> ListElementBuilder<'a> {
             Self::Shredded(b) => {
                 let (value, typed_value, nulls) = b.finish()?;
                 Ok(ArrayRef::from(ShreddedVariantFieldArray::from_parts(
-                    Some(Arc::new(value)),
+                    Arc::new(value),
                     Some(typed_value),
                     nulls,
                 )))
@@ -1404,7 +1404,7 @@ impl VariantToBinaryVariantArrowRowBuilder {
     fn finish(mut self) -> Result<ArrayRef> {
         let variant_array = VariantArray::from_parts(
             self.metadata,
-            Some(Arc::new(self.builder.build()?)),
+            Arc::new(self.builder.build()?),
             None, // no typed_value column
             self.nulls.finish(),
         );
@@ -1460,10 +1460,10 @@ mod tests {
         let item_field = Arc::new(Field::new("item", DataType::Int32, true));
         let struct_fields = Fields::from(vec![Field::new("child", DataType::Int32, true)]);
         let map_entries_field = Arc::new(Field::new(
-            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            "entries",
             DataType::Struct(Fields::from(vec![
-                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Float64, true),
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float64, true),
             ])),
             true,
         ));

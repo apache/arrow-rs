@@ -138,13 +138,13 @@ impl StructArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for StructArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect number of nulls for StructArray, expected {len} got {}",
+                n.len(),
+            )));
         }
 
         for (f, a) in fields.iter().zip(&arrays) {
@@ -166,17 +166,15 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable() {
-                if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
-                        && a.null_count() > 0
-                    {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Found unmasked nulls for non-nullable StructArray field {:?}",
-                            f.name()
-                        )));
-                    }
-                }
+            if !f.is_nullable()
+                && let Some(a) = a.logical_nulls()
+                && !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                && a.null_count() > 0
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Found unmasked nulls for non-nullable StructArray field {:?}",
+                    f.name()
+                )));
             }
         }
 

@@ -1883,8 +1883,8 @@ mod tests {
     /// Checks that `actual_meta` contains all of `expected_meta`, and any additional
     /// keys in `actual_meta` are from a permitted set.
     fn assert_metadata_is_superset(
-        expected_meta: &HashMap<String, String>,
-        actual_meta: &HashMap<String, String>,
+        expected_meta: &arrow_schema::Metadata,
+        actual_meta: &arrow_schema::Metadata,
         context: &str,
     ) {
         let allowed_additions: HashSet<&str> =
