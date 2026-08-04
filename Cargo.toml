@@ -124,6 +124,7 @@ simdutf8 = { version = "0.1.5", default-features = false }
 #
 # Keep the lists sorted.
 [workspace.lints.rust]
+explicit_outlives_requirements = "warn"
 future_incompatible = { level = "warn", priority = -1 }
 nonstandard_style = { level = "warn", priority = -1 }
 rust_2018_idioms = { level = "warn", priority = -1 }
@@ -135,9 +136,6 @@ unsafe_op_in_unsafe_fn = "warn"
 unused_extern_crates = "warn"
 unused_import_braces = "warn"
 unused_lifetimes = "warn"
-
-# TODO: fix the violations and enable this too. It is part of `rust_2018_idioms`:
-explicit_outlives_requirements = "allow" # ~80 violations
 
 # Deliberately left off: all the noise of spelling out elided lifetimes and
 # redundant qualifications, without catching anything that matters.
