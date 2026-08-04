@@ -133,6 +133,7 @@ trivial_numeric_casts = "warn"
 unexpected_cfgs = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_import_braces = "warn"
+unused_lifetimes = "warn"
 
 # TODO: fix the violations and enable these too. They are all part of `rust_2018_idioms`,
 # and each has far too many violations to fix in one go:
