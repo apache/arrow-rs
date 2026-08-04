@@ -293,6 +293,7 @@ impl FallbackEncoder {
             encoding,
             min_value,
             max_value,
+            nan_count: None,
             variable_length_bytes,
         })
     }
@@ -415,6 +416,7 @@ impl DictEncoder {
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
+            nan_count: None,
             variable_length_bytes,
         }
     }
