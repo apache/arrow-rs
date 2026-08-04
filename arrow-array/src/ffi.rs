@@ -109,36 +109,7 @@ use arrow_data::{ArrayData, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
 
-use crate::array::ArrayRef;
-
 type Result<T> = std::result::Result<T, ArrowError>;
-
-/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-///
-/// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
-/// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
-/// Usually the raw pointers are provided by the array data consumer.
-#[deprecated(
-    since = "52.0.0",
-    note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from"
-)]
-pub unsafe fn export_array_into_raw(
-    src: ArrayRef,
-    out_array: *mut FFI_ArrowArray,
-    out_schema: *mut FFI_ArrowSchema,
-) -> Result<()> {
-    let data = src.to_data();
-    let array = FFI_ArrowArray::new(&data);
-    let schema = FFI_ArrowSchema::try_from(data.data_type())?;
-
-    unsafe { std::ptr::write_unaligned(out_array, array) };
-    unsafe { std::ptr::write_unaligned(out_schema, schema) };
-
-    Ok(())
-}
 
 /// returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 /// This is set by the Arrow specification
@@ -1148,35 +1119,6 @@ mod tests_to_then_from_ffi {
         assert_eq!(actual, &expected);
 
         // (drop/release)
-        Ok(())
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_export_array_into_raw() -> Result<()> {
-        let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
-
-        // Assume two raw pointers provided by the consumer
-        let mut out_array = FFI_ArrowArray::empty();
-        let mut out_schema = FFI_ArrowSchema::empty();
-
-        {
-            let out_array_ptr = std::ptr::addr_of_mut!(out_array);
-            let out_schema_ptr = std::ptr::addr_of_mut!(out_schema);
-            unsafe {
-                export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
-            }
-        }
-
-        // (simulate consumer) import it
-        let data = unsafe { from_ffi(out_array, &out_schema) }?;
-        let array = make_array(data);
-
-        // perform some operation
-        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-
-        // verify
-        assert_eq!(array, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
 

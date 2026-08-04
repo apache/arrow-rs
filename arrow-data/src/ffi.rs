@@ -166,7 +166,7 @@ impl FFI_ArrowArray {
 
         let buffers_ptr = buffers
             .iter()
-            .flat_map(|maybe_buffer| match maybe_buffer {
+            .filter_map(|maybe_buffer| match maybe_buffer {
                 Some(b) => Some(b.as_ptr() as *const c_void),
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.

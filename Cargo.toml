@@ -47,15 +47,11 @@ members = [
     "parquet_derive_test",
 ]
 
-# Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
-#
-# Critically this prevents dev-dependencies from enabling features even when not building a target that
-# uses dev-dependencies, e.g. the library crate. This in turn ensures that we can catch invalid feature
-# flag combinations that would otherwise only surface in dependent crates
-#
-# Reference - https://doc.rust-lang.org/nightly/cargo/reference/features.html#feature-resolver-version-2
-#
-resolver = "2"
+# This is the default for edition 2024 but we must manually specify it for virtual
+# workspaces.
+# - https://github.com/rust-lang/cargo/issues/10112
+# - https://github.com/rust-lang/cargo/issues/10587
+resolver = "3"
 
 exclude = [
     # arrow-pyarrow-testing is excluded because it requires a Python interpreter with the pyarrow package installed,
@@ -82,7 +78,7 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 arrow = { version = "59.2.0", path = "./arrow", default-features = false }
@@ -112,9 +108,74 @@ criterion = { version = "0.8.0", default-features = false }
 
 insta = { version = "1.46.3", default-features = false }
 
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 
 simdutf8 = { version = "0.1.5", default-features = false }
+
+# Lints that are shared by every crate in the workspace.
+#
+# Each member crate opts in with:
+#
+#   [lints]
+#   workspace = true
+#
+# Only lints that are `allow` by default are worth listing here; the lints that clippy
+# enables by default are already enforced by CI (`cargo clippy ... -- -D warnings`).
+#
+# Keep the lists sorted.
+[workspace.lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2021_prelude_collisions = "warn"
+semicolon_in_expressions_from_macros = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_import_braces = "warn"
+
+# TODO: fix the violations and enable these too. They are all part of `rust_2018_idioms`,
+# and each has far too many violations to fix in one go:
+elided_lifetimes_in_paths = "allow"      # ~1200 violations
+explicit_outlives_requirements = "allow" # ~80 violations
+unused_extern_crates = "allow"           # ~60 violations
+
+[workspace.lints.rustdoc]
+all = { level = "warn", priority = -1 }
+broken_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
+
+[workspace.lints.clippy]
+bool_to_int_with_if = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+doc_comment_double_space_linebreaks = "warn"
+doc_include_without_cfg = "warn"
+flat_map_option = "warn"
+format_push_string = "warn"
+invalid_upcast_comparisons = "warn"
+iter_filter_is_some = "warn"
+iter_with_drain = "warn"
+literal_string_with_formatting_args = "warn"
+manual_instant_elapsed = "warn"
+match_wild_err_arm = "warn"
+mut_mut = "warn"
+mutex_integer = "warn"
+option_as_ref_cloned = "warn"
+path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
+ptr_offset_by_literal = "warn"
+rc_mutex = "warn"
+ref_binding_to_reference = "warn"
+same_length_and_capacity = "warn"
+should_panic_without_expect = "warn"
+single_char_pattern = "warn"
+stable_sort_primitive = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_self_imports = "warn"
+unnecessary_struct_initialization = "warn"
+unused_peekable = "warn"
+zero_sized_map_values = "warn"
 
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling

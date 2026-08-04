@@ -14,34 +14,42 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-name: audit
+name: "CodeQL"
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
   pull_request:
-    paths:
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - rust-toolchain.toml
+    branches: [ "main" ]
+  schedule:
+    - cron: '16 4 * * 1'
 
 permissions:
   contents: read
 
 jobs:
-  cargo-audit:
-    name: Audit
-    runs-on: ubuntu-latest
+  analyze:
+    name: Analyze Actions
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run audit check
-        run: cargo audit
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+      with:
+        languages: actions
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+      with:
+        category: "/language:actions"

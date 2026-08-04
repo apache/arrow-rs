@@ -928,7 +928,7 @@ unsafe impl Array for UnionArray {
         }
         self.fields
             .iter()
-            .flat_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
+            .filter_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
             .sum::<usize>()
             + sum
     }
@@ -942,7 +942,7 @@ unsafe impl Array for UnionArray {
             + self
                 .fields
                 .iter()
-                .flat_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
+                .filter_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
                 .sum::<usize>()
             + sum
     }

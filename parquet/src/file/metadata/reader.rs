@@ -513,7 +513,7 @@ impl ParquetMetaDataReader {
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => fetch.fetch(range.start..range.end).await?,
+            _ => fetch.fetch(range.clone()).await?,
         };
 
         // Sanity check
@@ -569,10 +569,10 @@ impl ParquetMetaDataReader {
     /// file footer (8 bytes). Otherwise returns `8`.
     #[cfg(all(feature = "async", feature = "arrow"))]
     fn get_prefetch_size(&self) -> usize {
-        if let Some(prefetch) = self.prefetch_hint {
-            if prefetch > FOOTER_SIZE {
-                return prefetch;
-            }
+        if let Some(prefetch) = self.prefetch_hint
+            && prefetch > FOOTER_SIZE
+        {
+            return prefetch;
         }
         FOOTER_SIZE
     }
@@ -1209,7 +1209,6 @@ mod async_tests {
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
 
-        dbg!("test");
         // Metadata hint too large
         fetch_count.store(0, Ordering::SeqCst);
         suffix_fetch_count.store(0, Ordering::SeqCst);

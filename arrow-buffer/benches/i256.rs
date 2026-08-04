@@ -19,7 +19,7 @@ use arrow_buffer::i256;
 use criterion::*;
 use num_traits::cast::ToPrimitive;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::{hint, str::FromStr};
 
 const SIZE: usize = 1024;
