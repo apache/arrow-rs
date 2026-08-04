@@ -3208,31 +3208,31 @@ mod tests {
         }
 
         /// Set the schema
-        pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        fn with_schema(mut self, schema: SchemaRef) -> Self {
             self.schema = Some(schema);
             self
         }
 
         /// Set the nullable flag
-        pub fn with_nullable(mut self, nullable: bool) -> Self {
+        fn with_nullable(mut self, nullable: bool) -> Self {
             self.nullable = nullable;
             self
         }
 
         /// Set bloom filter
-        pub fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
+        fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
             self.bloom_filter = bloom_filter;
             self
         }
 
         /// Set bloom filter max ndv
-        pub fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: Option<u64>) -> Self {
-            self.bloom_filter_ndv = bloom_filter_ndv;
+        fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
+            self.bloom_filter_ndv = Some(bloom_filter_ndv);
             self
         }
 
         /// Set bloom filter position
-        pub fn with_bloom_filter_position(
+        fn with_bloom_filter_position(
             mut self,
             bloom_filter_position: BloomFilterPosition,
         ) -> Self {
@@ -3811,7 +3811,7 @@ mod tests {
         let files = RoundTripTest::new(array.clone())
             .with_nullable(false)
             .with_bloom_filter(true)
-            .with_bloom_filter_ndv(Some(1_000_000))
+            .with_bloom_filter_ndv(1_000_000)
             .run();
 
         check_bloom_filter(
@@ -3825,7 +3825,7 @@ mod tests {
         let files = RoundTripTest::new(array)
             .with_nullable(false)
             .with_bloom_filter(true)
-            .with_bloom_filter_ndv(Some(3))
+            .with_bloom_filter_ndv(3)
             .run();
 
         check_bloom_filter(
