@@ -381,7 +381,7 @@ impl MutableBuffer {
             let byte_count = to_copy * bytes_per_copy;
             unsafe {
                 // Get to the start of the data before we started copying anything
-                let src = self.data.as_ptr().add(length_before) as *const u8;
+                let src = self.data.as_ptr().add(length_before).cast_const();
                 // Go to the current location to copy to (end of current data)
                 let dst = self.data.as_ptr().add(self.len);
                 // SAFETY: the pointers are not overlapping as there is `byte_count` or less between them
