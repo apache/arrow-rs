@@ -1160,7 +1160,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
-    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -2673,5 +2673,79 @@ mod tests {
             rg_out.close().unwrap();
         }
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_int96_interop() {
+        // this file has an INT96 column. rewrite it with min/max statistics sorted per
+        // recent changes to the spec. (see https://github.com/apache/parquet-format/pull/584)
+        let file = get_test_file("int96_timestamp_order.parquet");
+        let read_opts = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, read_opts).unwrap();
+        let file_metadata = reader.metadata().file_metadata();
+        let schema = file_metadata.schema_descr().root_schema_ptr();
+
+        // helper function to extract Int96 min/max from column metadata and the column index
+        fn retrieve_stats(metadata: &ParquetMetaData) -> (&[u8], &[u8], &Int96, &Int96) {
+            // sanity check that the proper column order is specified
+            let column_orders = metadata
+                .file_metadata()
+                .column_orders()
+                .expect("column_orders is missing");
+            assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
+
+            let stats = metadata
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .expect("statistics missing");
+            let min = stats.min_bytes_opt().expect("min stats missing");
+            let max = stats.max_bytes_opt().expect("max stats missing");
+
+            let col_idx = metadata.column_index().expect("column index not present");
+            let col0 = match &col_idx[0][0] {
+                ColumnIndexMetaData::INT96(index) => index,
+                _ => panic!("expected INT96 stats"),
+            };
+            let col_min = col0.min_value(0).expect("ColumnIndex min not present");
+            let col_max = col0.max_value(0).expect("ColumnIndex max not present");
+
+            (min, max, col_min, col_max)
+        }
+
+        // save read stats for later
+        let (exp_min, exp_max, exp_col_min, exp_col_max) = retrieve_stats(reader.metadata());
+
+        // write file back out again
+        let props = Arc::new(WriterProperties::builder().build());
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        let mut rg_out = writer.next_row_group().unwrap();
+        let rg_in = reader.get_row_group(0).unwrap();
+
+        // int96 is column 0
+        let col_in = rg_in.get_column_reader(0).unwrap();
+        let mut typed_in = get_typed_column_reader::<Int96Type>(col_in);
+
+        let mut values = Vec::new();
+        typed_in.read_records(4, None, None, &mut values).unwrap();
+
+        let mut col_out = rg_out.next_column().unwrap().unwrap();
+        col_out
+            .typed::<Int96Type>()
+            .write_batch(&values, None, None)
+            .unwrap();
+        col_out.close().unwrap();
+        rg_out.close().unwrap();
+
+        let new_metadata = writer.close().unwrap();
+
+        // check that new stats match the original stats
+        let (new_min, new_max, new_col_min, new_col_max) = retrieve_stats(&new_metadata);
+        assert_eq!(new_min, exp_min);
+        assert_eq!(new_max, exp_max);
+        assert_eq!(new_col_min, exp_col_min);
+        assert_eq!(new_col_max, exp_col_max);
     }
 }
