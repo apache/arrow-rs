@@ -829,7 +829,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     ) -> Result<()> {
         let delta = field_id.wrapping_sub(last_field_id);
         if delta > 0 && delta <= 0xf {
-            self.write_byte((delta as u8) << 4 | field_type as u8)
+            self.write_byte(((delta as u8) << 4) | field_type as u8)
         } else {
             self.write_byte(field_type as u8)?;
             self.write_i16(field_id)
@@ -839,7 +839,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Used to indicate the start of a list of `element_type` elements.
     pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
         if len < 15 {
-            self.write_byte((len as u8) << 4 | element_type as u8)
+            self.write_byte(((len as u8) << 4) | element_type as u8)
         } else {
             self.write_byte(0xf0u8 | element_type as u8)?;
             self.write_vlq(len as _)

@@ -215,7 +215,7 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);
