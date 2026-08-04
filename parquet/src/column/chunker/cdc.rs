@@ -156,7 +156,7 @@ impl ContentDefinedChunker {
             ));
         }
 
-        let avg_chunk_size = (min_chunk_size + max_chunk_size) / 2;
+        let avg_chunk_size = min_chunk_size.midpoint(max_chunk_size);
         // Target size after subtracting the min-size skip window and dividing by the
         // number of hash tables (for central-limit-theorem normalization).
         let target_size = (avg_chunk_size - min_chunk_size) / NUM_GEARHASH_TABLES as i64;
