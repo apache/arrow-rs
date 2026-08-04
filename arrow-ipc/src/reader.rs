@@ -1616,15 +1616,6 @@ impl<R: Read> StreamReader<R> {
         })
     }
 
-    /// Deprecated, use [`StreamReader::try_new`] instead.
-    #[deprecated(since = "53.0.0", note = "use `try_new` instead")]
-    pub fn try_new_unbuffered(
-        reader: R,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
-        Self::try_new(reader, projection)
-    }
-
     /// Return the schema of the stream
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
