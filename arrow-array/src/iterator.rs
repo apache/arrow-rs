@@ -67,10 +67,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
 
     #[inline]
     fn is_null(&self, idx: usize) -> bool {
-        self.logical_nulls
-            .as_ref()
-            .map(|x| x.is_null(idx))
-            .unwrap_or_default()
+        self.logical_nulls.as_ref().is_some_and(|x| x.is_null(idx))
     }
 }
 

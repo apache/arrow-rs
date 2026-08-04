@@ -507,7 +507,7 @@ impl Schema {
             && other
                 .metadata
                 .iter()
-                .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
+                .all(|(k, v1)| self.metadata.get(k).is_some_and(|v2| v1 == v2))
     }
 }
 

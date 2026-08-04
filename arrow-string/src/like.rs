@@ -374,7 +374,7 @@ fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
-        if nulls.map(|n| n.is_null(idx)).unwrap_or_default() || a.is_null(key) {
+        if nulls.is_some_and(|n| n.is_null(idx)) || a.is_null(key) {
             return None;
         }
         Some(a.value(key))

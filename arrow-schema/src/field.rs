@@ -927,7 +927,7 @@ impl Field {
         && (self.nullable || !other.nullable)
         // make sure self.metadata is a superset of other.metadata
         && other.metadata.iter().all(|(k, v1)| {
-            self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
+            self.metadata.get(k).is_some_and(|v2| v1 == v2)
         })
     }
 
