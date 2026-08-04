@@ -213,15 +213,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         T::validate(&views, &buffers)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != views.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
-                    T::PREFIX,
-                    views.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != views.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
+                T::PREFIX,
+                views.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {

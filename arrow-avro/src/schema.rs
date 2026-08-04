@@ -20,8 +20,8 @@
 #[cfg(feature = "canonical_extension_types")]
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
-    UnionMode,
+    ArrowError, DataType, Field as ArrowField, IntervalUnit, Metadata, Schema as ArrowSchema,
+    TimeUnit, UnionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
@@ -517,10 +517,8 @@ impl AvroSchema {
         let opts = options.unwrap_or_default();
         let order = opts.null_order.unwrap_or_default();
         let strip = opts.strip_metadata;
-        if !strip {
-            if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-                return Ok(AvroSchema::new(json.clone()));
-            }
+        if !strip && let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+            return Ok(AvroSchema::new(json.clone()));
         }
         let mut name_gen = NameGenerator::default();
         let fields_json = schema
@@ -1155,10 +1153,7 @@ fn is_internal_arrow_key(key: &str) -> bool {
 /// skipping keys that are Avro-reserved, internal Arrow keys, or
 /// nested under the `avro.schema.` namespace. Values that parse as
 /// JSON are inserted as JSON; otherwise the raw string is preserved.
-fn extend_with_passthrough_metadata(
-    target: &mut JsonMap<String, Value>,
-    metadata: &HashMap<String, String>,
-) {
+fn extend_with_passthrough_metadata(target: &mut JsonMap<String, Value>, metadata: &Metadata) {
     for (meta_key, meta_val) in metadata {
         if meta_key.starts_with("avro.") || is_internal_arrow_key(meta_key) {
             continue;
@@ -1318,7 +1313,7 @@ fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
 fn datatype_to_avro(
     dt: &DataType,
     field_name: &str,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
     strip: bool,
@@ -1915,7 +1910,7 @@ fn datatype_to_avro(
 fn process_datatype(
     dt: &DataType,
     field_name: &str,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
     is_nullable: bool,

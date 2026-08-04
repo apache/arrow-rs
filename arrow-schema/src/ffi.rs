@@ -649,8 +649,9 @@ impl TryFrom<&FFI_ArrowSchema> for Field {
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self, ArrowError> {
         let dtype = DataType::try_from(c_schema)?;
-        let mut field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable());
-        field.set_metadata(c_schema.metadata()?);
+        let field = Field::new(c_schema.name().unwrap_or(""), dtype, c_schema.nullable())
+            .with_dict_is_ordered(c_schema.dictionary_ordered())
+            .with_metadata(c_schema.metadata()?);
         Ok(field)
     }
 }
@@ -936,7 +937,7 @@ mod tests {
             Field::new("address", DataType::Utf8, false),
             Field::new("priority", DataType::UInt8, false),
         ])
-        .with_metadata([("hello".to_string(), "world".to_string())].into());
+        .with_metadata([("hello", "world")]);
 
         round_trip_schema(schema);
 
@@ -988,6 +989,10 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(schema).unwrap();
         assert!(arrow_schema.child(0).dictionary_ordered());
+
+        // Round-trip: the ordered flag must be preserved when converting back to a Field.
+        let field = Field::try_from(arrow_schema.child(0)).unwrap();
+        assert_eq!(field.dict_is_ordered(), Some(true));
     }
 
     #[test]

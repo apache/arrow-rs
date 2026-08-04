@@ -7635,6 +7635,50 @@ mod tests {
     }
 
     #[test]
+    fn test_dict_to_view_null_dictionary_value_is_null() {
+        // Ensure we preserve nulls in the values
+        let keys = Int32Array::from_iter([Some(0), Some(1), Some(2), None, Some(1)]);
+
+        let values = StringArray::from(vec![Some("aa"), None, Some("a value over twelve bytes")]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys.clone(), Arc::new(values)).unwrap();
+        let casted = cast(&dict, &DataType::Utf8View).unwrap();
+        assert_eq!(
+            casted.as_string_view().iter().collect::<Vec<_>>(),
+            vec![
+                Some("aa"),
+                None,
+                Some("a value over twelve bytes"),
+                None,
+                None
+            ]
+        );
+        // the same input cast to Utf8 goes through `unpack_dictionary` and always agreed
+        let reference = cast(&dict, &DataType::Utf8).unwrap();
+        assert_eq!(
+            casted.as_string_view().iter().collect::<Vec<_>>(),
+            reference.as_string::<i32>().iter().collect::<Vec<_>>()
+        );
+
+        let values = BinaryArray::from_opt_vec(vec![
+            Some(b"aa".as_slice()),
+            None,
+            Some(b"a value over twelve bytes"),
+        ]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let casted = cast(&dict, &DataType::BinaryView).unwrap();
+        assert_eq!(
+            casted.as_binary_view().iter().collect::<Vec<_>>(),
+            vec![
+                Some(b"aa".as_slice()),
+                None,
+                Some(b"a value over twelve bytes"),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
     fn test_view_to_dict() {
         let string_view_array = StringViewArray::from_iter(VIEW_TEST_DATA);
         let string_dict_array: DictionaryArray<Int8Type> = VIEW_TEST_DATA.into_iter().collect();
