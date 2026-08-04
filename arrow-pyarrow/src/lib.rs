@@ -51,16 +51,6 @@
 //! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
 //! easier to create.)
 //!
-//! # Type stubs
-//!
-//! With the `experimental-inspect` feature enabled, each conversion records the pyarrow class it
-//! maps to in PyO3's introspection data, so a generated `.pyi` says `pyarrow.Array` where it would
-//! otherwise say `_typeshed.Incomplete`. The hints live on [`FromPyArrow::INPUT_TYPE`],
-//! [`ToPyArrow::OUTPUT_TYPE`] and [`IntoPyArrow::OUTPUT_TYPE`], and [`PyArrowType`] forwards them.
-//!
-//! Input hints name the pyarrow class only, and are therefore narrower than what is accepted: the
-//! PyCapsule interface is duck-typed and has no canonical Python type to name.
-//!
 //! (2) Although arrow-rs offers [Table], a convenience wrapper for [pyarrow.Table](https://arrow.apache.org/docs/python/generated/pyarrow.Table)
 //! that internally holds `Vec<RecordBatch>`, it is meant primarily for use cases where you already
 //! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
@@ -68,6 +58,16 @@
 //! For example, a `pyarrow.Table` (or any other object that implements the ArrayStream PyCapsule
 //! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>` instead of
 //! forcing eager reading into `Vec<RecordBatch>`.
+//!
+//! # Type stubs
+//!
+//! With the `experimental-inspect` feature enabled, each conversion records the pyarrow class it
+//! maps to in PyO3's introspection data, so a generated `.pyi` says `pyarrow.Array` where it would
+//! otherwise say `_typeshed.Incomplete`. The hints live on `FromPyArrow::INPUT_TYPE`,
+//! `ToPyArrow::OUTPUT_TYPE` and `IntoPyArrow::OUTPUT_TYPE`, and `PyArrowType` forwards them.
+//!
+//! Input hints name the pyarrow classes only, and are therefore narrower than what is accepted: the
+//! PyCapsule interface is duck-typed and has no canonical Python type to name.
 
 use std::convert::{From, TryFrom};
 use std::ffi::CStr;
@@ -89,10 +89,12 @@ use pyo3::ffi::Py_uintptr_t;
 use pyo3::inspect::PyStaticExpr;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
+#[cfg(feature = "experimental-inspect")]
+use pyo3::type_object::PyTypeInfo;
 use pyo3::types::{PyCapsule, PyDict, PyList, PyString, PyType};
 use pyo3::{CastError, import_exception, intern};
 #[cfg(feature = "experimental-inspect")]
-use pyo3::{type_hint_identifier, type_hint_subscript};
+use pyo3::{type_hint_identifier, type_hint_subscript, type_hint_union};
 
 import_exception!(pyarrow, ArrowException);
 /// Represents an exception raised by PyArrow.
@@ -102,6 +104,19 @@ fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
 
+/// The type hint shared by every conversion that imports through the ArrowArrayStream PyCapsule
+/// interface, i.e. [`ArrowArrayStreamReader`] and [`Table`].
+///
+/// Both go through the same `__arrow_c_stream__` path and therefore accept exactly the same
+/// objects, so naming only one of the two classes would make a stub generator reject usage this
+/// crate's own documentation recommends — importing a `pyarrow.Table` as a
+/// `PyArrowType<ArrowArrayStreamReader>`.
+#[cfg(feature = "experimental-inspect")]
+const ARRAY_STREAM_INPUT_TYPE: PyStaticExpr = type_hint_union!(
+    type_hint_identifier!("pyarrow", "RecordBatchReader"),
+    type_hint_identifier!("pyarrow", "Table")
+);
+
 /// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
     /// The Python type this conversion accepts, as a type hint.
@@ -109,7 +124,7 @@ pub trait FromPyArrow: Sized {
     /// Used by [`FromPyObject::INPUT_TYPE`] on [`PyArrowType`] so that a stub generator can write
     /// `pyarrow.Array` where it would otherwise write `_typeshed.Incomplete`.
     ///
-    /// This names the pyarrow class only. Every conversion here *also* accepts any object
+    /// This names pyarrow classes only. Every conversion here *also* accepts any object
     /// implementing the relevant [PyCapsule interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html)
     /// method, which is duck-typed and has no canonical Python type to point at — neither pyarrow
     /// nor typeshed defines one. The hint is therefore narrower than what is accepted at runtime.
@@ -370,10 +385,8 @@ impl<T: FromPyArrow> FromPyArrow for Vec<T> {
 
 impl<T: ToPyArrow> ToPyArrow for Vec<T> {
     #[cfg(feature = "experimental-inspect")]
-    const OUTPUT_TYPE: PyStaticExpr = type_hint_subscript!(
-        type_hint_identifier!("builtins", "list"),
-        <T as ToPyArrow>::OUTPUT_TYPE
-    );
+    const OUTPUT_TYPE: PyStaticExpr =
+        type_hint_subscript!(PyList::TYPE_HINT, <T as ToPyArrow>::OUTPUT_TYPE);
 
     fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.iter()
@@ -460,7 +473,7 @@ impl ToPyArrow for RecordBatch {
 /// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
 impl FromPyArrow for ArrowArrayStreamReader {
     #[cfg(feature = "experimental-inspect")]
-    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "RecordBatchReader");
+    const INPUT_TYPE: PyStaticExpr = ARRAY_STREAM_INPUT_TYPE;
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
@@ -594,7 +607,7 @@ impl TryFrom<Box<dyn RecordBatchReader>> for Table {
 /// Convert a `pyarrow.Table` (or any other ArrowArrayStream compliant object) into [`Table`]
 impl FromPyArrow for Table {
     #[cfg(feature = "experimental-inspect")]
-    const INPUT_TYPE: PyStaticExpr = type_hint_identifier!("pyarrow", "Table");
+    const INPUT_TYPE: PyStaticExpr = ARRAY_STREAM_INPUT_TYPE;
 
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
         let reader: Box<dyn RecordBatchReader> =
@@ -800,15 +813,17 @@ mod introspection_tests {
         );
         assert_eq!(
             output_type::<Vec<RecordBatch>>(),
-            "list[pyarrow.RecordBatch]"
+            "builtins.list[pyarrow.RecordBatch]"
         );
     }
 
+    /// Outputs are exact, but both stream imports accept either class, because both go through
+    /// `__arrow_c_stream__`.
     #[test]
     fn readers_and_tables_map_to_their_pyarrow_class() {
         assert_eq!(
             input_type::<ArrowArrayStreamReader>(),
-            "pyarrow.RecordBatchReader"
+            "pyarrow.RecordBatchReader | pyarrow.Table"
         );
         assert_eq!(
             output_type::<ArrowArrayStreamReader>(),
@@ -818,7 +833,10 @@ mod introspection_tests {
             output_type::<Box<dyn RecordBatchReader + Send>>(),
             "pyarrow.RecordBatchReader"
         );
-        assert_eq!(input_type::<Table>(), "pyarrow.Table");
+        assert_eq!(
+            input_type::<Table>(),
+            "pyarrow.RecordBatchReader | pyarrow.Table"
+        );
         assert_eq!(output_type::<Table>(), "pyarrow.Table");
     }
 }
