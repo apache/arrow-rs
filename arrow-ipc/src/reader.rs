@@ -534,7 +534,8 @@ impl<'a> RecordBatchDecoder<'a> {
     /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
     /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
     /// - Null count consistency and buffer length checks
-    /// # Safety
+    ///
+    /// # Undefined behavior
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
     /// certain that the data is valid. Invalid data that bypasses these checks
