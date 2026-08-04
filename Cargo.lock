@@ -226,7 +226,7 @@ dependencies = [
  "num-complex",
  "num-integer",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -275,7 +275,7 @@ dependencies = [
  "half",
  "num-bigint 0.5.1",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -297,7 +297,7 @@ dependencies = [
  "insta",
  "lexical-core",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ryu",
 ]
 
@@ -445,7 +445,7 @@ dependencies = [
  "lexical-core",
  "memchr",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ryu",
  "serde",
  "serde_core",
@@ -464,7 +464,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "half",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -515,7 +515,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.10.1",
 ]
 
 [[package]]
