@@ -28,6 +28,8 @@ on:
       - main
   pull_request:
     paths:
+      - Cargo.toml
+      - Cargo.lock
       - .github/**
       - rust-toolchain.toml
       - arrow/**
