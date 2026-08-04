@@ -19,7 +19,8 @@ use criterion::*;
 use half::f16;
 use parquet::basic::{Encoding, Type as ParquetType};
 use parquet::data_type::{
-    DataType, DoubleType, FixedLenByteArray, FixedLenByteArrayType, FloatType,
+    BoolType, DataType, DoubleType, FixedLenByteArray, FixedLenByteArrayType, FloatType, Int32Type,
+    Int64Type,
 };
 use parquet::decoding::{Decoder, get_decoder};
 use parquet::encoding::get_encoder;
@@ -84,6 +85,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut f32s = Vec::new();
     let mut f64s = Vec::new();
     let mut d128s = Vec::new();
+    let mut bools = Vec::new();
+    let mut i32s = Vec::new();
+    let mut i64s = Vec::new();
     for _ in 0..n {
         f16s.push(FixedLenByteArray::from(
             f16::from_f32(rng.random::<f32>()).to_le_bytes().to_vec(),
@@ -93,12 +97,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         d128s.push(FixedLenByteArray::from(
             rng.random::<i128>().to_be_bytes().to_vec(),
         ));
+        bools.push(rng.random::<bool>());
+        i32s.push(rng.random::<i32>());
+        // Keep deltas below 32 bits, mimicking timestamp-like data
+        i64s.push(rng.random_range(0..1i64 << 28));
     }
 
     bench_typed::<FloatType>(c, &f32s, Encoding::BYTE_STREAM_SPLIT, 0);
     bench_typed::<DoubleType>(c, &f64s, Encoding::BYTE_STREAM_SPLIT, 0);
     bench_typed::<FixedLenByteArrayType>(c, &f16s, Encoding::BYTE_STREAM_SPLIT, 2);
     bench_typed::<FixedLenByteArrayType>(c, &d128s, Encoding::BYTE_STREAM_SPLIT, 16);
+    bench_typed::<BoolType>(c, &bools, Encoding::PLAIN, 0);
+    bench_typed::<BoolType>(c, &bools, Encoding::RLE, 0);
+    bench_typed::<Int32Type>(c, &i32s, Encoding::DELTA_BINARY_PACKED, 0);
+    bench_typed::<Int64Type>(c, &i64s, Encoding::DELTA_BINARY_PACKED, 0);
 }
 
 criterion_group!(benches, criterion_benchmark);

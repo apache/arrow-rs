@@ -219,9 +219,13 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
             RleEncoder::new_from_buf(1, buffer)
         });
 
-        for value in values {
-            let value = value.as_u64()?;
-            rle_encoder.put(value)
+        let mut buf = [0_u64; 64];
+        for chunk in values.chunks(buf.len()) {
+            let buf = &mut buf[..chunk.len()];
+            for (b, value) in buf.iter_mut().zip(chunk) {
+                *b = value.as_u64()?;
+            }
+            rle_encoder.put_batch(buf);
         }
         Ok(())
     }
@@ -412,12 +416,15 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
             self.bit_writer.write_at(offset + i, bit_width as u8);
 
-            // Encode values in current mini block using min_delta and bit_width
-            for j in 0..n {
-                let packed_value =
-                    self.subtract_u64(self.deltas[i * self.mini_block_size + j], min_delta);
-                self.bit_writer.put_value(packed_value, bit_width);
+            // Encode values in current mini block using min_delta and bit_width. This
+            // mini block's deltas are not read again, so they can be rewritten in place
+            // with the values to pack
+            let start = i * self.mini_block_size;
+            for j in start..start + n {
+                self.deltas[j] = self.subtract_u64(self.deltas[j], min_delta) as i64;
             }
+            self.bit_writer
+                .put_batch(&self.deltas[start..start + n], bit_width);
 
             // Pad the last block (n < mini_block_size)
             for _ in n..self.mini_block_size {
