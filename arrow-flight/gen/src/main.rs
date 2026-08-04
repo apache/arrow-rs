@@ -29,7 +29,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir("src")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
-    // read file contents to string
     let buffer = std::fs::read_to_string("src/arrow.flight.protocol.rs")?;
     // append warning that file was auto-generated
     let mut file = OpenOptions::new()
@@ -48,7 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir("src/sql")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
-    // read file contents to string
     let buffer = std::fs::read_to_string("src/sql/arrow.flight.protocol.sql.rs")?;
     // append warning that file was auto-generate
     let mut file = OpenOptions::new()

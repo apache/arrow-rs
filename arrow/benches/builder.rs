@@ -35,7 +35,11 @@ const BATCH_SIZE: usize = 8 << 10;
 const NUM_BATCHES: usize = 64;
 
 fn bench_primitive(c: &mut Criterion) {
-    let data = vec![100i64; BATCH_SIZE];
+    #[expect(
+        clippy::large_stack_arrays,
+        reason = "kept on the stack so the benchmark measures what it always has"
+    )]
+    let data: [i64; BATCH_SIZE] = [100; BATCH_SIZE];
 
     let mut group = c.benchmark_group("bench_primitive");
     group.throughput(Throughput::Bytes(
