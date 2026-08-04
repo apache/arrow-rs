@@ -2684,29 +2684,33 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(file, read_opts).unwrap();
         let file_metadata = reader.metadata().file_metadata();
         let schema = file_metadata.schema_descr().root_schema_ptr();
-        assert_eq!(
-            file_metadata.column_order(0),
-            ColumnOrder::INT96_TIMESTAMP_ORDER
-        );
 
+        // helper function to extract Int96 min/max from column metadata and the column index
         fn retrieve_stats(metadata: &ParquetMetaData) -> (&[u8], &[u8], &Int96, &Int96) {
+            // sanity check that the proper column order is specified
+            let column_orders = metadata
+                .file_metadata()
+                .column_orders()
+                .expect("column_orders is missing");
+            assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
+
             let stats = metadata
                 .row_group(0)
                 .column(0)
                 .statistics()
                 .expect("statistics missing");
-            let exp_min = stats.min_bytes_opt().expect("min stats missing");
-            let exp_max = stats.max_bytes_opt().expect("max stats missing");
+            let min = stats.min_bytes_opt().expect("min stats missing");
+            let max = stats.max_bytes_opt().expect("max stats missing");
 
             let col_idx = metadata.column_index().expect("column index not present");
             let col0 = match &col_idx[0][0] {
                 ColumnIndexMetaData::INT96(index) => index,
                 _ => panic!("expected INT96 stats"),
             };
-            let exp_col_min = col0.min_value(0).expect("ColumnIndex min not present");
-            let exp_col_max = col0.max_value(0).expect("ColumnIndex max not present");
+            let col_min = col0.min_value(0).expect("ColumnIndex min not present");
+            let col_max = col0.max_value(0).expect("ColumnIndex max not present");
 
-            (exp_min, exp_max, exp_col_min, exp_col_max)
+            (min, max, col_min, col_max)
         }
 
         // save read stats for later
@@ -2736,11 +2740,6 @@ mod tests {
         rg_out.close().unwrap();
 
         let new_metadata = writer.close().unwrap();
-        let column_orders = new_metadata
-            .file_metadata()
-            .column_orders()
-            .expect("column_orders is missing");
-        assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
 
         // check that new stats match the original stats
         let (new_min, new_max, new_col_min, new_col_max) = retrieve_stats(&new_metadata);
