@@ -1186,7 +1186,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             Type::FIXED_LEN_BYTE_ARRAY
                 if !matches!(
                     self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. }) | Some(&LogicalType::Float16)
+                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
                 ) =>
             {
                 true

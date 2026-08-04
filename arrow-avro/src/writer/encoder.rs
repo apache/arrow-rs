@@ -1044,7 +1044,7 @@ impl FieldPlan {
                 {
                     matches!(
                         arrow_field.extension_type_name(),
-                        Some("arrow.uuid") | Some("uuid")
+                        Some("arrow.uuid" | "uuid")
                     )
                 }
                 #[cfg(not(feature = "canonical_extension_types"))]

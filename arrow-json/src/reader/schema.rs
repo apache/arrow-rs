@@ -94,9 +94,8 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
         (DataType::Null, o) | (o, DataType::Null) => o,
         (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
         (DataType::Int64, DataType::Int64) => DataType::Int64,
-        (DataType::Float64, DataType::Float64)
-        | (DataType::Float64, DataType::Int64)
-        | (DataType::Int64, DataType::Float64) => DataType::Float64,
+        (DataType::Float64 | DataType::Int64, DataType::Float64)
+        | (DataType::Float64, DataType::Int64) => DataType::Float64,
         (DataType::List(l), DataType::List(r)) => {
             list_type_of(coerce_data_type(vec![l.data_type(), r.data_type()]))
         }

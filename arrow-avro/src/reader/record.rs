@@ -324,8 +324,7 @@ impl Decoder {
             (Codec::Float64, Some(Promotion::FloatToDouble)) => {
                 Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Utf8, Some(Promotion::BytesToString))
-            | (Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
+            (Codec::Utf8 | Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
