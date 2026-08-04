@@ -736,11 +736,9 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Copy rows selected by a [`FilterPredicate`] from `source`.
     ///
-    /// Unlike the other copy methods, the source array is passed in directly
-    /// rather than read from the array set by [`Self::set_source`].
-    ///
-    /// The default implementation sets `source` via [`Self::set_source`] and
-    /// then calls [`Self::copy_rows_by_filter`].
+    /// This method allows more flexibility when copying rows from a source
+    /// array. though the default implementation sets `source` via
+    /// [`Self::set_source`] and then calls [`Self::copy_rows_by_filter`].
     fn copy_rows_by_filter_from(
         &mut self,
         source: ArrayRef,
