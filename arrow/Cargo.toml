@@ -338,3 +338,6 @@ required-features = ["chrono-tz"]
 [[test]]
 name = "arithmetic"
 required-features = ["chrono-tz"]
+
+[lints]
+workspace = true

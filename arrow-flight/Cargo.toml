@@ -110,3 +110,6 @@ required-features = ["cli", "flight-sql", "tls-ring"]
 name = "flight"
 path = "benches/flight.rs"
 harness = false
+
+[lints]
+workspace = true

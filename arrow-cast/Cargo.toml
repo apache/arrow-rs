@@ -76,3 +76,6 @@ harness = false
 [[bench]]
 name = "parse_decimal"
 harness = false
+
+[lints]
+workspace = true

@@ -1086,6 +1086,10 @@ mod tests {
     fn test_boolean_array_from_iter_with_larger_upper_bound() {
         // See https://github.com/apache/arrow-rs/issues/8505
         // This returns an upper size hint of 4
+        #[expect(
+            clippy::iter_filter_is_some,
+            reason = "the point of the test is the size hint of `filter`, which `flatten` does not have"
+        )]
         let iterator = vec![Some(true), None, Some(false), None]
             .into_iter()
             .filter(Option::is_some);

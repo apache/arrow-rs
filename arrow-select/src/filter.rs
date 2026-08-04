@@ -1806,7 +1806,7 @@ mod tests {
             .skip(offset)
             .take(truncated_length)
             .enumerate()
-            .flat_map(|(idx, v)| v.then(|| idx))
+            .filter_map(|(idx, v)| v.then_some(idx))
             .collect();
 
         assert_eq!(slice_bits, expected_bits);
@@ -2373,7 +2373,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "buffer.len() >= predicate.filter.len()")]
     fn test_filter_bits_too_large() {
         let buffer = BooleanBuffer::from(vec![false; 8]);
         let predicate = BooleanArray::from(vec![true; 9]);
@@ -2382,7 +2382,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "values.len() >= predicate.filter.len()")]
     fn test_filter_native_too_large() {
         let values = vec![1; 8];
         let predicate = BooleanArray::from(vec![false; 9]);

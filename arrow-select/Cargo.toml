@@ -45,3 +45,6 @@ ahash = { version = "0.8", default-features = false}
 
 [dev-dependencies]
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+
+[lints]
+workspace = true

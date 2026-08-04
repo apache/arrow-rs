@@ -733,7 +733,7 @@ mod tests {
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
     fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
-        match result.expect("Expected Ok(DecodeResult::NeedsData{ranges})") {
+        match result.expect("Expected Ok(DecodeResult::NeedsData(ranges))") {
             DecodeResult::NeedsData(ranges) => ranges,
             result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
         }

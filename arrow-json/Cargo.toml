@@ -75,3 +75,6 @@ harness = false
 [[bench]]
 name = "json_writer"
 harness = false
+
+[lints]
+workspace = true

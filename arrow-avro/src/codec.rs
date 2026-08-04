@@ -1198,7 +1198,7 @@ impl From<&Codec> for UnionFieldKind {
 
 fn union_branch_name(dt: &AvroDataType) -> String {
     if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
-        if name.contains(".") {
+        if name.contains('.') {
             // Full name
             return name.to_string();
         }

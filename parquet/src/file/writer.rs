@@ -1067,8 +1067,8 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
     fn page_encryptor_and_sink_mut(
         &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
-        self.page_encryptor.as_mut().map(|pe| (pe, &mut self.sink))
+    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
+        self.page_encryptor.as_mut().map(|pe| (pe, &mut *self.sink))
     }
 }
 
@@ -1080,7 +1080,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
     fn page_encryptor_and_sink_mut(
         &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
         None
     }
 }
