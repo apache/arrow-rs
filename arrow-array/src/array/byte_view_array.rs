@@ -1215,7 +1215,7 @@ mod tests {
     use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
     use arrow_schema::DataType;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;

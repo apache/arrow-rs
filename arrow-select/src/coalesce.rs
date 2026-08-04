@@ -777,7 +777,7 @@ mod tests {
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::ops::Range;
 
     #[test]
