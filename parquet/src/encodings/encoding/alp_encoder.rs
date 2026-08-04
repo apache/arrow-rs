@@ -958,4 +958,94 @@ mod tests {
         assert_eq!(decoder.get(&mut out).unwrap(), page2.len());
         assert_bits_eq(&out, &page2);
     }
+
+    /// A streaming page ending exactly on a vector boundary must finish with an
+    /// empty carry buffer.
+    #[test]
+    fn test_streaming_page_ends_on_vector_boundary() {
+        // Flushing a throwaway first page builds the preset and switches the
+        // encoder to streaming. Only the second page is under test.
+        let preset_page: Vec<f64> = (0..100).map(|i| (i as f64) * 0.01).collect();
+        let values: Vec<f64> = (0..2 * VECTOR_SIZE).map(|i| (i as f64) * 0.01).collect();
+
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        encoder.put(&preset_page).unwrap();
+        let _ = encoder.flush_buffer().unwrap();
+
+        let empty_page_estimate = encoder.estimated_data_encoded_size();
+        encoder.put(&values).unwrap();
+        // The size estimate for a streamed page comes from the running count.
+        assert!(encoder.estimated_data_encoded_size() > empty_page_estimate);
+        // The 2048 values streamed through as two complete vectors, so this
+        // flush reaches `StreamingPage::finish` with an empty carry: the page
+        // must assemble correctly without the trailing-partial-vector encode
+        // that every other streaming test ends with.
+        let page = encoder.flush_buffer().unwrap();
+
+        let mut decoder = AlpDecoder::<DoubleType>::new();
+        decoder.set_data(page, values.len()).unwrap();
+        let mut out = vec![0.0f64; values.len()];
+        assert_eq!(decoder.get(&mut out).unwrap(), values.len());
+        assert_bits_eq(&out, &values);
+    }
+
+    /// The memory estimate must track the buffers in both encoder states: the
+    /// buffered first page and the streaming state after it.
+    #[test]
+    fn test_estimated_memory_size_tracks_buffers() {
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        // A fresh encoder has allocated nothing.
+        assert_eq!(encoder.estimated_memory_size(), 0);
+
+        let values: Vec<f64> = (0..1500).map(|i| (i as f64) * 0.01).collect();
+        // First-page state: only the raw-value buffer is live (scratch and
+        // streaming are untouched), so the estimate must cover its bytes.
+        encoder.put(&values).unwrap();
+        assert!(encoder.estimated_memory_size() >= values.len() * std::mem::size_of::<f64>());
+
+        // The flushed first-page buffer and encoding scratch space keep their
+        // capacities, and the preset is retained. Capture that full baseline.
+        let _ = encoder.flush_buffer().unwrap();
+        let after_flush = encoder.estimated_memory_size();
+
+        // Streaming state: the streaming-page buffers now hold encoded vectors,
+        // which must be counted on top of that baseline.
+        encoder.put(&values).unwrap();
+        assert!(encoder.estimated_memory_size() > after_flush);
+    }
+
+    /// Fill the preset to `MAX_COMBINATIONS` and include a vector no candidate
+    /// can encode, exercising the all-exception size estimate and the early
+    /// exit of the per-vector candidate search.
+    #[test]
+    fn test_full_preset_with_all_exception_vector() {
+        // Nine vectors are sampled at stride two, so the even-indexed ones
+        // decide the preset: four distinct decimal scales, plus the all-NaN
+        // ninth vector, which no candidate can encode and which therefore
+        // contributes the worst-case fallback pair as the fifth candidate.
+        let scales = [0.01, 0.01, 0.001, 0.01, 0.0001, 0.01, 0.00001, 0.01];
+        let mut values = Vec::with_capacity(9 * VECTOR_SIZE);
+        for scale in scales {
+            values.extend((0..VECTOR_SIZE).map(|i| (i as f64) * scale));
+        }
+        values.extend(std::iter::repeat_n(f64::NAN, VECTOR_SIZE));
+
+        let preset = build_preset(&values);
+        assert_eq!(preset.len(), MAX_COMBINATIONS);
+
+        let nan_vector = &values[8 * VECTOR_SIZE..];
+        let mut sample = Vec::new();
+        sample_values(nan_vector, &mut sample);
+        let candidate_costs: Vec<_> = preset
+            .iter()
+            .map(|&params| estimate_size_bits(&sample, params, false))
+            .collect();
+        assert!(candidate_costs.windows(2).all(|costs| costs[0] == costs[1]));
+
+        // Encoding the NaN vector prices all five candidates at the same
+        // all-exception size, so the per-vector search stops early after
+        // `SAMPLING_EARLY_EXIT_THRESHOLD` non-improving candidates. The
+        // round-trip proves the page survives both paths losslessly.
+        assert_bits_eq(&roundtrip::<DoubleType>(&values), &values);
+    }
 }

@@ -856,6 +856,37 @@ mod tests {
     }
 
     #[test]
+    fn test_set_data_rejects_compression_mode() {
+        let data = make_alp_page_bytes(1, 0, 3, 1, &[4], 8);
+        let err = decode_err::<DoubleType>(data, 1);
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: unsupported compression mode 1")
+        );
+    }
+
+    #[test]
+    fn test_set_data_rejects_num_elements_exceeding_num_values() {
+        let data = make_alp_page_bytes(0, 0, 3, 5, &[4], 8);
+        let err = decode_err::<FloatType>(data, 2);
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: header num_elements 5 exceeds page num_values 2")
+        );
+    }
+
+    #[test]
+    fn test_set_data_rejects_short_offsets_section() {
+        // 9 elements at vector size 8 means two vectors, so 8 bytes of offsets.
+        let data = make_alp_page_bytes(0, 0, 3, 9, &[4], 0);
+        let err = decode_err::<FloatType>(data, 9);
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: expected at least 8 bytes for 2 offsets, got 4")
+        );
+    }
+
+    #[test]
     fn test_decode_rejects_invalid_exponent_f32() {
         let vector = make_vector(VectorSpec {
             exponent: 11,
@@ -928,6 +959,56 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: num_exceptions 2 exceeds vector num_elements 1")
+        );
+    }
+
+    #[test]
+    fn test_decode_rejects_short_vector_metadata() {
+        // Three bytes cannot hold the 9-byte f32 vector header.
+        let page = make_page_from_vectors(3, 1, &[vec![0u8; 3]]);
+        let err = decode_err::<FloatType>(page, 1);
+        assert!(err.to_string().contains(
+            "Invalid ALP page: vector metadata too short, expected at least 9 bytes, got 3"
+        ));
+    }
+
+    #[test]
+    fn test_decode_rejects_bit_width_overflow() {
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 33,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let page = make_page_from_vectors(3, 1, &[vector]);
+        let err = decode_err::<FloatType>(page, 1);
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: bit width 33 exceeds 32")
+        );
+    }
+
+    #[test]
+    fn test_decode_rejects_out_of_bounds_vector_offset() {
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 1,
+            packed_values: &[0],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        // The second vector's offset points far past the end of the body.
+        let mut page = make_alp_page_bytes(0, 0, 3, 12, &[8, 200], 0);
+        page.extend_from_slice(&vector0);
+        let err = decode_err::<FloatType>(page, 12);
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: vector offset 200 out of bounds at index 0")
         );
     }
 
@@ -1246,6 +1327,55 @@ mod tests {
         assert_eq!(read, 1);
         assert_eq!(out[0], 21.0);
         assert_eq!(decoder.values_left(), 2);
+    }
+
+    /// A skip absorbed entirely by the vector already being decoded. `skip` has
+    /// two halves: an offset-array jump when the request leaves the open vector
+    /// (covered by `test_alp_decoder_skip_across_vectors`) and an in-place
+    /// advance of the open vector's live bit-reader state. This exercises the
+    /// in-place half alone.
+    #[test]
+    fn test_alp_decoder_skip_within_current_vector() {
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let vector1 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 20u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
+
+        let mut decoder = AlpDecoder::<FloatType>::new();
+        decoder.set_data(Bytes::from(page), 12).unwrap();
+
+        // Reading two values opens vector 0 and leaves it mid-flight with six
+        // values remaining, so the skip below must advance it in place.
+        let mut head = [0.0f32; 2];
+        assert_eq!(decoder.get(&mut head).unwrap(), 2);
+        assert_eq!(head, [10.0, 11.0]);
+
+        // Positions 2..5 fit inside those six, so the skip returns early
+        // without consulting the offset array.
+        assert_eq!(decoder.skip(3).unwrap(), 3);
+        assert_eq!(decoder.values_left(), 7);
+
+        // Resuming mid-vector and reading across the boundary proves the bit
+        // reader advanced exactly three values: any other count would shift
+        // the delta-1 values (11.0, 21.0) into the wrong slots.
+        let mut tail = [0.0f32; 4];
+        assert_eq!(decoder.get(&mut tail).unwrap(), 4);
+        assert_eq!(tail, [10.0, 10.0, 10.0, 20.0]);
     }
 
     #[test]
