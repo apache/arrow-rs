@@ -17,64 +17,8 @@
 
 //! Page-granular scan planning: what bytes a scan needs, in decode order.
 //!
-//! [`ParquetPushDecoder`](super::ParquetPushDecoder) reports what it needs one
-//! *row group* at a time: [`DecodeResult::NeedsData`](crate::DecodeResult) does
-//! not resolve until every projected byte of the row group is buffered. That is
-//! the right granularity when the caller wants a whole row group's reader, but
-//! it forces callers who schedule their own I/O to buffer a full row group
-//! before any decoding starts, and it gives them no way to ask "what does the
-//! *next batch* need?".
-//!
-//! [`plan_scan_ranges`] answers that question. It decomposes a scan into the
-//! individual pages it will read, in the order decoding will need them, and
-//! tags each with the span of selected rows it serves. A caller can then:
-//!
-//! * fetch only what the next batch needs (low time-to-first-batch),
-//! * bound resident bytes by dropping pages once the decode cursor passes
-//!   `last_row` (memory bounded by a readahead window, not by row-group size),
-//! * and issue readahead as far ahead as its own byte budget allows.
-//!
-//! The plan is *demand*, not *schedule*: it says which bytes the query will
-//! read and when they are first needed. How many to request at once, how far to
-//! read ahead, and whether to merge nearby ranges into fewer requests are
-//! caller policy — they depend on the storage medium, not on the file.
-//!
-//! # Units
-//!
-//! The plan is deliberately not expressed in a fixed number of rows or bytes.
-//! Pages carry row tags, so a caller working to a byte budget takes pages until
-//! the budget is met, and a caller working in rows takes pages until the row
-//! tags cover its window. This matters for schemas with large values: a fixed
-//! row count can imply an unbounded number of bytes (8192 rows of 1 MB values
-//! is 8 GB), so scheduling to a byte budget is the safer default.
-//!
-//! Note that a caller can never fetch less than what one output batch needs —
-//! [`ParquetRecordBatchReader`](crate::arrow::arrow_reader::ParquetRecordBatchReader)
-//! decodes `batch_size` rows at a time — so with very large values the floor on
-//! resident bytes is one batch's worth of pages. Lowering `batch_size` is the
-//! lever for that; this plan cannot subdivide a batch.
-//!
-//! # Example
-//!
-//! ```no_run
-//! # use parquet::arrow::push_decoder::plan_scan_ranges;
-//! # use parquet::arrow::ProjectionMask;
-//! # use parquet::file::metadata::ParquetMetaData;
-//! # fn get_metadata() -> ParquetMetaData { unimplemented!() }
-//! # fn fetch(ranges: &[std::ops::Range<u64>]) { unimplemented!() }
-//! let metadata = get_metadata();
-//! let plan = plan_scan_ranges(&metadata, &[0, 1], &ProjectionMask::all(), None)
-//!     .expect("offset index required for page-granular planning");
-//!
-//! // Fetch pages needed for the first 1024 selected rows.
-//! let first: Vec<_> = plan
-//!     .ranges
-//!     .iter()
-//!     .filter(|p| p.first_row < 1024)
-//!     .map(|p| p.range.clone())
-//!     .collect();
-//! fetch(&first);
-//! ```
+//! See [`plan_scan_ranges`], which is re-exported from
+//! [`push_decoder`](super) along with the types it returns.
 
 use std::ops::Range;
 
@@ -132,6 +76,28 @@ impl ScanPlan {
 
 /// Plan the pages a scan will read, in the order decoding needs them.
 ///
+/// [`ParquetPushDecoder`](super::ParquetPushDecoder) reports what it needs one
+/// *row group* at a time: [`DecodeResult::NeedsData`](crate::DecodeResult) does
+/// not resolve until every projected byte of the row group is buffered. That is
+/// the right granularity when the caller wants a whole row group's reader, but
+/// it forces callers who schedule their own I/O to buffer a full row group
+/// before any decoding starts, and it gives them no way to ask "what does the
+/// *next batch* need?".
+///
+/// This function answers that question. It decomposes a scan into the
+/// individual pages it will read, in the order decoding will need them, and
+/// tags each with the span of selected rows it serves. A caller can then:
+///
+/// * fetch only what the next batch needs (low time-to-first-batch),
+/// * bound resident bytes by dropping pages once the decode cursor passes
+///   `last_row` (memory bounded by a readahead window, not by row-group size),
+/// * and issue readahead as far ahead as its own byte budget allows.
+///
+/// The plan is *demand*, not *schedule*: it says which bytes the query will
+/// read and when they are first needed. How many to request at once, how far to
+/// read ahead, and whether to merge nearby ranges into fewer requests are
+/// caller policy — they depend on the storage medium, not on the file.
+///
 /// `row_groups` are read in the order given. `selection`, when present, applies
 /// across the concatenated rows of those row groups, matching
 /// [`ParquetPushDecoderBuilder::with_row_selection`](super::ParquetPushDecoderBuilder::with_row_selection).
@@ -140,8 +106,45 @@ impl ScanPlan {
 /// Returns `None` when the metadata has no offset index: page locations are
 /// what make page-granular planning possible, so callers should fall back to
 /// row-group-granular fetching (load the page index with
-/// [`ArrowReaderOptions::with_page_index`](crate::arrow::arrow_reader::ArrowReaderOptions::with_page_index)
+/// [`ArrowReaderOptions::with_page_index_policy`](crate::arrow::arrow_reader::ArrowReaderOptions::with_page_index_policy)
 /// to enable it).
+///
+/// # Units
+///
+/// The plan is deliberately not expressed in a fixed number of rows or bytes.
+/// Pages carry row tags, so a caller working to a byte budget takes pages until
+/// the budget is met, and a caller working in rows takes pages until the row
+/// tags cover its window. This matters for schemas with large values: a fixed
+/// row count can imply an unbounded number of bytes (8192 rows of 1 MB values
+/// is 8 GB), so scheduling to a byte budget is the safer default.
+///
+/// Note that a caller can never fetch less than what one output batch needs —
+/// [`ParquetRecordBatchReader`](crate::arrow::arrow_reader::ParquetRecordBatchReader)
+/// decodes `batch_size` rows at a time — so with very large values the floor on
+/// resident bytes is one batch's worth of pages. Lowering `batch_size` is the
+/// lever for that; this plan cannot subdivide a batch.
+///
+/// # Example
+///
+/// ```no_run
+/// # use parquet::arrow::push_decoder::plan_scan_ranges;
+/// # use parquet::arrow::ProjectionMask;
+/// # use parquet::file::metadata::ParquetMetaData;
+/// # fn get_metadata() -> ParquetMetaData { unimplemented!() }
+/// # fn fetch(ranges: &[std::ops::Range<u64>]) { unimplemented!() }
+/// let metadata = get_metadata();
+/// let plan = plan_scan_ranges(&metadata, &[0, 1], &ProjectionMask::all(), None)
+///     .expect("offset index required for page-granular planning");
+///
+/// // Fetch pages needed for the first 1024 selected rows.
+/// let first: Vec<_> = plan
+///     .ranges
+///     .iter()
+///     .filter(|p| p.first_row < 1024)
+///     .map(|p| p.range.clone())
+///     .collect();
+/// fetch(&first);
+/// ```
 pub fn plan_scan_ranges(
     metadata: &ParquetMetaData,
     row_groups: &[usize],
@@ -281,6 +284,7 @@ mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions, RowSelector};
+    use crate::file::metadata::PageIndexPolicy;
     use crate::file::properties::WriterProperties;
     use arrow_array::{Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -316,7 +320,7 @@ mod tests {
         }
         writer.close().unwrap();
         let bytes = Bytes::from(buf);
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let metadata = ArrowReaderMetadata::load(&bytes, options).unwrap();
         (bytes, metadata)
     }
