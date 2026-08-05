@@ -53,7 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 mod byte_budget_chunker;
 pub(crate) mod encoder;
 
-use byte_budget_chunker::ByteBudgetChunker;
+use byte_budget_chunker::{ByteBudgetChunker, SubBatch};
 
 macro_rules! downcast_writer {
     ($e:expr, $i:ident, $b:expr) => {
@@ -655,9 +655,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // mini-batch (the common case — small or fixed-width values, no
             // further page-size accounting needed), or must we fall back to
             // byte-budget-aware sub-batching to keep a page from overshooting
-            // `data_page_size_limit`? `pick_sub_batch_size` returns
-            // `chunk_size` for the former.
-            let sub_batch_size = chunker.pick_sub_batch_size(
+            // `data_page_size_limit`? `pick_sub_batch` returns `None` for
+            // the former, and otherwise how wide one mini-batch may be.
+            let sub_batch = chunker.pick_sub_batch(
                 &self.encoder,
                 values,
                 value_indices,
@@ -666,25 +666,28 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 chunk_size,
             );
 
-            if sub_batch_size >= chunk_size {
-                values_offset += self.write_mini_batch(
-                    values,
-                    values_offset,
-                    value_indices,
-                    chunk_size,
-                    chunk_def,
-                    chunk_rep,
-                )?;
-            } else {
-                values_offset += self.write_granular_chunk(
-                    values,
-                    values_offset,
-                    value_indices,
-                    chunk_size,
-                    chunk_def,
-                    chunk_rep,
-                    sub_batch_size,
-                )?;
+            match sub_batch {
+                None => {
+                    values_offset += self.write_mini_batch(
+                        values,
+                        values_offset,
+                        value_indices,
+                        chunk_size,
+                        chunk_def,
+                        chunk_rep,
+                    )?;
+                }
+                Some(sub_batch) => {
+                    values_offset += self.write_granular_chunk(
+                        values,
+                        values_offset,
+                        value_indices,
+                        chunk_size,
+                        chunk_def,
+                        chunk_rep,
+                        sub_batch,
+                    )?;
+                }
             }
             levels_offset = end_offset;
         }
@@ -847,13 +850,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         })
     }
 
-    /// Writes a chunk in `sub_batch_size`-level sub-batches, checking the
-    /// data page byte limit after each. This keeps the page size close to
+    /// Writes a chunk in sub-batches sized by `sub_batch`, checking the page
+    /// byte limit after each. This keeps the page size close to
     /// `data_page_size_limit` instead of overshooting it by a whole chunk.
     ///
-    /// For repeated/nested columns sub-batches step from one `rep == 0`
-    /// boundary to the next so a record never spans data pages, matching
-    /// the parquet format rule.
+    /// [`SubBatch::Values`] windows are cut on value boundaries, walking
+    /// definition levels to find where the value budget is used up;
+    /// [`SubBatch::Levels`] windows are a fixed level count. See [`SubBatch`]
+    /// for which budget gets which and why.
+    ///
+    /// For repeated/nested columns sub-batches then extend to the next
+    /// `rep == 0` boundary so a record never spans data pages, matching the
+    /// parquet format rule. A record holding several over-limit values
+    /// therefore still exceeds the budget; that is inherent to the format.
     ///
     /// Returns the total number of values consumed across all sub-batches.
     ///
@@ -870,30 +879,40 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         chunk_size: usize,
         chunk_def: LevelDataRef<'_>,
         chunk_rep: LevelDataRef<'_>,
-        sub_batch_size: usize,
+        sub_batch: SubBatch,
     ) -> Result<usize> {
-        // The chunker always sizes a sub-batch to at least one level, so each
+        // The chunker always sizes a sub-batch to at least one value or one
+        // level, and a value-exact window spans at least one level, so each
         // iteration below makes progress (`sub_end > sub_start`).
-        debug_assert!(sub_batch_size >= 1, "chunker must size at least one level");
+        debug_assert!(
+            matches!(sub_batch, SubBatch::Values(n) | SubBatch::Levels(n) if n >= 1),
+            "chunker must size at least one value or level"
+        );
+        let max_def_level = self.descr.max_def_level();
         let mut values_consumed = 0;
         let mut sub_start = 0;
         while sub_start < chunk_size {
+            let window_end = match sub_batch {
+                SubBatch::Values(n) => {
+                    Self::window_end_for_values(chunk_def, chunk_size, max_def_level, sub_start, n)
+                }
+                SubBatch::Levels(n) => (sub_start + n).min(chunk_size),
+            };
             let sub_end = match chunk_rep {
                 LevelDataRef::Materialized(levels) => {
-                    // Pack up to `sub_batch_size` levels per mini-batch, then
-                    // extend to the next record boundary (rep == 0) so a
-                    // record never spans data pages. Packing whole records
-                    // rather than stepping one record at a time avoids
-                    // calling `write_mini_batch` per record: records average
-                    // only a handful of levels, so a record-at-a-time step
-                    // would issue many more mini-batches than necessary.
-                    let mut e = (sub_start + sub_batch_size).min(chunk_size);
+                    // Extend the window to the next record boundary
+                    // (rep == 0) so a record never spans data pages. Packing
+                    // whole records rather than stepping one record at a time
+                    // avoids calling `write_mini_batch` per record: records
+                    // average only a handful of levels, so a record-at-a-time
+                    // step would issue many more mini-batches than necessary.
+                    let mut e = window_end;
                     while e < chunk_size && levels[e] != 0 {
                         e += 1;
                     }
                     e
                 }
-                _ => (sub_start + sub_batch_size).min(chunk_size),
+                _ => window_end,
             };
             let sub_len = sub_end - sub_start;
             let written = self.write_mini_batch(
@@ -908,6 +927,54 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             sub_start = sub_end;
         }
         Ok(values_consumed)
+    }
+
+    /// Index one past the last level of a sub-batch window that starts at
+    /// `start` and covers at most `max_values` values, clamped to
+    /// `chunk_size`.
+    ///
+    /// Nulls trailing the last value are left to the next window, so a window
+    /// ends immediately after the value that exhausts its budget. The window
+    /// always spans at least one level, so callers make progress: `start` is
+    /// below `chunk_size` and `max_values` is at least one.
+    ///
+    /// Only nullable and nested columns pay the level walk. It runs solely in
+    /// the granular path, whose values are by definition large enough to
+    /// overflow a page budget, so touching each of the chunk's levels once is
+    /// noise next to writing those values — and that path already makes full
+    /// def-level and rep-level passes.
+    fn window_end_for_values(
+        chunk_def: LevelDataRef<'_>,
+        chunk_size: usize,
+        max_def_level: i16,
+        start: usize,
+        max_values: usize,
+    ) -> usize {
+        match chunk_def {
+            // `max_def_level == 0`: every level is a value.
+            LevelDataRef::Absent => (start + max_values).min(chunk_size),
+            LevelDataRef::Uniform { value, .. } => {
+                if value == max_def_level {
+                    (start + max_values).min(chunk_size)
+                } else {
+                    // Uniformly below max def: the chunk holds no values at
+                    // all, so no window boundary can help. (The chunker
+                    // returns `None` for such a chunk, so this is defensive.)
+                    chunk_size
+                }
+            }
+            LevelDataRef::Materialized(levels) => {
+                let mut seen = 0;
+                let mut end = start;
+                while end < chunk_size && seen < max_values {
+                    if levels[end] == max_def_level {
+                        seen += 1;
+                    }
+                    end += 1;
+                }
+                end
+            }
+        }
     }
 
     /// Creates a new streaming level encoder appropriate for the writer version.
@@ -1094,12 +1161,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` keep their tighter one-value page
     /// bound.
     ///
-    /// Known limitation: the caller's trigger keys on a page-opening
-    /// mini-batch holding exactly one value. Nulls in a chunk make the
-    /// byte-budget chunker emit multi-level mini-batches, so on nullable
-    /// columns pages that open with a two-value mini-batch miss the
-    /// exemption and dedup is only partial; see
-    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup`.
+    /// The caller's trigger keys on a page-opening mini-batch holding exactly
+    /// one value. `write_granular_chunk` cuts windows after an exact value
+    /// count, so an over-limit value gets a single-value mini-batch whether
+    /// or not the chunk contains nulls; see
+    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_dedup`.
+    /// The exception is a repeated column, where a record holding several
+    /// over-limit values cannot be split across pages at all.
     #[cold]
     fn set_page_size_exemption(&mut self) {
         if !self.encoder.compresses_against_previous_value() {
@@ -3124,30 +3192,77 @@ mod tests {
     }
 
     #[test]
-    fn test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup() {
-        // Documents the *current* behavior of the first-value exemption on a
-        // nullable column; this pins a known limitation, not an ideal.
+    fn test_column_writer_caps_page_size_with_sparse_nulls() {
+        // `PLAIN` keeps ratio-scaled windows, so a sparsely-null chunk puts
+        // *two* over-limit values on a page rather than one. That is the
+        // deliberate choice: value-exact windows would cut this to one, but
+        // `PLAIN` stores a value identically wherever it lands, so the output
+        // is byte for byte the same either way while the page count doubles.
         //
-        // The exemption fires when a page's first mini-batch contains exactly
-        // one value. For a non-nullable column the byte-budget chunker gives
-        // an over-limit value a one-level mini-batch, so that always holds.
-        // One null in the chunk changes the level:value ratio to 17:16, the
-        // chunker rounds up to two-level mini-batches, and a page whose first
-        // mini-batch carries two values misses the exemption: it is cut after
-        // those two values, and its first value is stored in full.
+        // What has to hold is that the bound stays a small constant and does
+        // not scale with `write_batch_size` — the failure #9972 fixed, where
+        // a page took a whole mini-batch. A window spans
+        // `ceil(values * levels / values_in_chunk)` levels, which covers at
+        // most two values however sparse the nulls are, so two is the whole
+        // exposure. Assert it exactly: this test fails if the encoding gate
+        // on value-exact windows is dropped (pages would hold one value) as
+        // well as if the bound is lost (they would hold many).
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_values = 16;
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|_| ByteArray::from(vec![b'a'; value_size]))
+            .collect();
+        // 17 levels: a null at index 8, values everywhere else.
+        let def_levels: Vec<i16> = (0..num_values as i16 + 1)
+            .map(|i| i16::from(i != 8))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+
+        // At most two values' payload on any page, and never a whole
+        // mini-batch's worth.
+        let upper_bound = 2 * value_size + 64;
+        for (size, n_levels) in &pages.data_pages {
+            assert!(
+                *size <= upper_bound,
+                "page size {size} exceeds two-value bound ({upper_bound}B); pages {:?}",
+                pages.data_pages,
+            );
+            assert!(
+                *n_levels <= 3,
+                "page holds {n_levels} levels, expected at most 3 (two values + a null); \
+                 pages {:?}",
+                pages.data_pages,
+            );
+        }
+        // Two-level windows over 17 levels: eight pages carrying two levels
+        // and a ninth holding the remainder.
+        let num_levels: usize = num_values + 1;
+        assert_eq!(pages.data_pages.len(), num_levels.div_ceil(2));
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_nullable_shared_prefix_dedup() {
+        // A null in the chunk must not cost dedup. The first-value exemption
+        // fires when a page's opening mini-batch holds exactly one value, and
+        // `write_granular_chunk` cuts windows after an exact value count, so
+        // the over-limit value that opens the page gets a single-value
+        // mini-batch regardless of where nulls fall.
         //
-        // The one mini-batch that pairs the null with a value has a single
-        // value, so the page it opens does get the exemption and accumulates
-        // every remaining suffix. The result for 16 identical values with a
-        // null at index 8 is four two-value pages (each storing one value in
-        // full), then one exempt page holding the rest:
-        //
-        //   values per page: [2, 2, 2, 2, 9]  (counts include the null level)
-        //   total bytes:     ~5 full values, vs ~1 ideally and 16 for PLAIN
-        //
-        // If the exemption trigger is ever keyed on values written to the
-        // page (0 -> 1) instead of mini-batch shape, this test should fail
-        // with fewer, larger pages — update it to pin the improved layout.
+        // This pinned `[2, 2, 2, 2, 9]` before #10538: the chunker scaled the
+        // one-value budget by the chunk's 17:16 level:value ratio and rounded
+        // up to two-level windows, so most pages opened with two values,
+        // missed the exemption, and stored their first value in full — ~5
+        // full values against ~1 here (`PLAIN` stores all 16).
         let value_size = 64 * 1024;
         let page_byte_limit = 16 * 1024;
         let num_values = 16;
@@ -3170,13 +3285,15 @@ mod tests {
         let pages =
             write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
 
+        // One page holding all 17 levels: the first value is exempt and every
+        // later value dedups down to a length pair.
         let per_page_values: Vec<u32> = pages.data_pages.iter().map(|(_, n)| *n).collect();
-        assert_eq!(per_page_values, vec![2, 2, 2, 2, 9]);
+        assert_eq!(per_page_values, vec![num_values as u32 + 1]);
 
         let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
         assert!(
-            total_bytes > 4 * value_size && total_bytes < 6 * value_size,
-            "expected ~5 full values' worth of bytes (partial dedup), \
+            total_bytes < 2 * value_size,
+            "expected ~one full value's worth of bytes (full dedup), \
              got {total_bytes}B across pages {:?}",
             pages.data_pages,
         );
