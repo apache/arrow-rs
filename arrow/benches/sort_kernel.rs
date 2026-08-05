@@ -21,8 +21,6 @@ use criterion::Criterion;
 
 use std::sync::Arc;
 
-extern crate arrow;
-
 use arrow::compute::{SortColumn, lexsort, sort, sort_to_indices};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
