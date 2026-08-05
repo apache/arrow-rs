@@ -38,6 +38,7 @@ pub(crate) fn can_rank(data_type: &DataType) -> bool {
                 | DataType::Binary
                 | DataType::LargeBinary
                 | DataType::Utf8View
+                | DataType::BinaryView
         )
 }
 
@@ -63,6 +64,7 @@ pub fn rank(array: &dyn Array, options: Option<SortOptions>) -> Result<Vec<u32>,
         DataType::Binary => bytes_rank(array.as_bytes::<BinaryType>(), options),
         DataType::LargeBinary => bytes_rank(array.as_bytes::<LargeBinaryType>(), options),
         DataType::Utf8View => byte_view_rank(array.as_string_view(), options),
+        DataType::BinaryView => byte_view_rank(array.as_binary_view(), options),
         d => return Err(ArrowError::ComputeError(format!("{d:?} not supported in rank")))
     };
     Ok(ranks)
@@ -378,7 +380,11 @@ mod tests {
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 1, 4, 3]);
 
-        let values = BinaryArray::from(v);
+        let values = BinaryArray::from(v.clone());
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[3, 1, 4, 3]);
+
+        let values = BinaryViewArray::from_iter_values(v);
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 1, 4, 3]);
     }
@@ -390,6 +396,19 @@ mod tests {
             Some("bar"),
             None,
             Some("a string longer than twelve bytes"),
+        ]);
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[3, 4, 1, 3]);
+    }
+
+    #[test]
+    fn test_binary_view_with_nulls() {
+        let long_value = b"a binary value longer than twelve bytes".as_ref();
+        let values = BinaryViewArray::from_iter([
+            Some(long_value),
+            Some(b"bar".as_ref()),
+            None,
+            Some(long_value),
         ]);
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 4, 1, 3]);
