@@ -93,8 +93,6 @@ macro_rules! from_bitpacked {
                 const BATCH_SIZE: usize = std::mem::size_of::<$ty>() * 8;
 
                 #[inline]
-                // The cast is a no-op when `$ty` is `u64`.
-                #[allow(trivial_numeric_casts)]
                 fn from_u64(v: u64) -> Self {
                     v as _
                 }
@@ -141,7 +139,29 @@ macro_rules! from_bitpacked_delegate {
 }
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
-from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32, u64 => unpack64);
+from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32);
+
+// `u64` is written out by hand: the `as` cast the macro uses would be a no-op here,
+// and it is the only instantiation for which that is true.
+impl FromBitpacked for u64 {
+    const BIT_CAPACITY: usize = std::mem::size_of::<u64>() * 8;
+    // this has to match the signature of the unpack* functions
+    const BATCH_SIZE: usize = std::mem::size_of::<u64>() * 8;
+
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        v
+    }
+
+    #[inline]
+    fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
+        unpack64(
+            input,
+            (&mut output[..Self::BATCH_SIZE]).try_into().unwrap(),
+            num_bits,
+        )
+    }
+}
 from_bitpacked_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
 
 impl FromBitpacked for bool {
