@@ -35,7 +35,7 @@ use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields,
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
 };

@@ -23,8 +23,8 @@ use arrow_avro::schema::{
 };
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use criterion::{criterion_group, criterion_main};
-use rand::Rng;
 use rand::rngs::ThreadRng;
+use rand::{Rng, RngExt};
 use std::hint::black_box;
 
 const BATCH_SIZE: usize = 8192;
