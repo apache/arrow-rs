@@ -4862,7 +4862,7 @@ mod test {
         use arrow::datatypes::Int64Type;
 
         let string_array: ArrayRef = Arc::new(StringArray::from(vec![
-            r"[[1, 2], [3]]",
+            "[[1, 2], [3]]",
             r#"[[4], "not a list", [5, 6]]"#,
         ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
@@ -4940,7 +4940,7 @@ mod test {
 
     #[test]
     fn test_variant_get_list_like_unsafe_cast_preserves_null_elements() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec![r"[1, null, 3]"]));
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, null, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let cast_options = CastOptions {
             safe: false,

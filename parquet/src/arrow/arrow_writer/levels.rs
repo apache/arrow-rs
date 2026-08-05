@@ -2164,10 +2164,10 @@ mod tests {
         let expected = vec![
             String::new(),
             String::new(),
-            r"[]".to_string(),
-            r"[{list: [3, ], integers: }]".to_string(),
-            r"[, {list: , integers: 5}]".to_string(),
-            r"[]".to_string(),
+            "[]".to_string(),
+            "[{list: [3, ], integers: }]".to_string(),
+            "[, {list: , integers: 5}]".to_string(),
+            "[]".to_string(),
         ];
 
         let actual: Vec<_> = (0..6)
