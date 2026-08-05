@@ -5653,7 +5653,7 @@ pub(crate) mod tests {
     /// `RowGroup.ordinal` thrift field is optional; Go parquet writers emit
     /// such files) must read fine without row numbers, and must fail
     /// deterministically with them — even when every *selected* row group
-    /// carries an ordinal. See #10381.
+    /// carries an ordinal. See <https://github.com/apache/arrow-rs/issues/10381>.
     #[test]
     fn test_mixed_row_group_ordinals() -> Result<()> {
         use crate::file::metadata::{ParquetMetaDataReader, RowGroupMetaData};

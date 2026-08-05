@@ -947,11 +947,10 @@ pub(crate) fn parquet_metadata_from_bytes(
 ///   deterministically instead (see `RowNumberReader::try_new`); plain
 ///   reads that never touch ordinals succeed.
 fn ensure_row_group_ordinals(row_groups: &mut [RowGroupMetaData]) -> Result<()> {
-    if row_groups.iter().all(|rg| rg.ordinal.is_some()) {
-        return Ok(());
-    }
+    // All set (honor them as written) or mixed (leave as-is): either way there
+    // is nothing to backfill. Only when *no* row group carries an ordinal do we
+    // assign positions below.
     if row_groups.iter().any(|rg| rg.ordinal.is_some()) {
-        // Mixed: leave as-is.
         return Ok(());
     }
     for (idx, rg) in row_groups.iter_mut().enumerate() {
