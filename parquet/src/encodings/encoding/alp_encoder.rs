@@ -663,11 +663,13 @@ where
     }
 
     fn estimated_data_encoded_size(&self) -> usize {
-        // Encoded size is not known until the parameters are chosen, so bound it
-        // by the unencoded size: a vector never encodes larger than storing every
-        // value as an exception. Bounding by value count (not the running encoded
-        // size) keeps the writer's page-boundary decisions identical whether the
-        // page is buffered or streamed.
+        // Encoded size is not known until the parameters are chosen. In the
+        // worst case, almost every value is an exception while two encodable
+        // values force a full-width packed FOR range. Bound both the packed
+        // placeholder/value and the raw exception value by the exact type's
+        // width, plus the exception position. Bounding by value count (not the
+        // running encoded size) keeps the writer's page-boundary decisions
+        // identical whether the page is buffered or streamed.
         let len = self.current_page_len();
         let num_vectors = len.div_ceil(VECTOR_SIZE);
         ALP_HEADER_SIZE
@@ -675,7 +677,8 @@ where
                 * (std::mem::size_of::<u32>()
                     + AlpInfo::STORED_SIZE
                     + ForInfo::<<T::T as AlpFloat>::Exact>::stored_size())
-            + len * (<T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
+            + len
+                * (2 * <T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
     }
 
     fn estimated_memory_size(&self) -> usize {
@@ -1012,6 +1015,39 @@ mod tests {
         // which must be counted on top of that baseline.
         encoder.put(&values).unwrap();
         assert!(encoder.estimated_memory_size() > after_flush);
+    }
+
+    /// The size estimate must include packed placeholders as well as raw
+    /// exception values when both sections coexist at their widest.
+    #[test]
+    fn test_estimated_data_size_covers_wide_packed_values_with_exceptions() {
+        let mut values = vec![f64::NAN; VECTOR_SIZE];
+        // Both positions are sampled when building the preset. At exponent and
+        // factor zero their integer range is exactly 2^63, forcing a 64-bit
+        // packed section; every other value remains an exception.
+        values[0] = f64::ENCODING_LOWER_LIMIT;
+        values[4] = 1024.0;
+
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        encoder.put(&values).unwrap();
+        let estimated_size = encoder.estimated_data_encoded_size();
+        let page = encoder.flush_buffer().unwrap();
+
+        let vector_start = ALP_HEADER_SIZE + std::mem::size_of::<u32>();
+        let num_exceptions = u16::from_le_bytes([
+            page[vector_start + 2],
+            page[vector_start + 3],
+        ]);
+        let bit_width = page[
+            vector_start + AlpInfo::STORED_SIZE + <f64 as AlpFloat>::Exact::WIDTH
+        ];
+        assert_eq!(num_exceptions as usize, VECTOR_SIZE - 2);
+        assert_eq!(bit_width, 64);
+        assert!(
+            estimated_size >= page.len(),
+            "estimated {estimated_size} bytes, encoded {} bytes",
+            page.len()
+        );
     }
 
     /// Fill the preset to `MAX_COMBINATIONS` and include a vector no candidate
