@@ -451,7 +451,7 @@ impl IpcWriteOptions {
     #[cfg(feature = "zstd")]
     fn check_zstd_level(self, level: i32) -> Result<Self, ArrowError> {
         let range = zstd::compression_level_range();
-        if !range.contains(&(level as zstd::zstd_safe::CompressionLevel)) {
+        if !range.contains(&level) {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ZSTD compression level must be between {} and {}, got {}",
                 range.start(),

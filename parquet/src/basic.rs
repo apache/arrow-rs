@@ -987,6 +987,11 @@ pub enum SortOrder {
     UNDEFINED,
     /// Use IEEE 754 total order.
     TOTAL_ORDER,
+    /// Use INT96 timestamp order (see [parquet-format/#584] and the [Thrift spec]).
+    ///
+    /// [parquet-format/#584]: https://github.com/apache/parquet-format/pull/584
+    /// [Thrift spec]: https://github.com/apache/parquet-format/blob/2076361bb64e2de9ca6a8d06eda025a6fa4e9df6/src/main/thrift/parquet.thrift#L1230-L1233
+    INT96_TIMESTAMP,
 }
 
 impl SortOrder {
@@ -1009,6 +1014,8 @@ pub enum ColumnOrder {
     TYPE_DEFINED_ORDER(SortOrder),
     /// Column ordering to use for floating point types.
     IEEE_754_TOTAL_ORDER,
+    /// Column ordering to use for INT96 types.
+    INT96_TIMESTAMP_ORDER,
     // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
@@ -1043,9 +1050,11 @@ impl ColumnOrder {
             || matches!(physical_type, Type::FLOAT | Type::DOUBLE)
         {
             ColumnOrder::IEEE_754_TOTAL_ORDER
+        } else if matches!(physical_type, Type::INT96) {
+            ColumnOrder::INT96_TIMESTAMP_ORDER
         } else {
             let sort_order =
-                Self::sort_order_for_type(logical_type, converted_type, physical_type, true);
+                Self::get_sort_order_for_type(logical_type, converted_type, physical_type, true);
             ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
         }
     }
@@ -1054,7 +1063,26 @@ impl ColumnOrder {
     ///
     /// `is_type_defined` indicates whether the column order for this type is
     /// [`ColumnOrder::TYPE_DEFINED_ORDER`].
+    ///
+    /// It is now preferred to obtain this via [`Self::sort_order`].
+    #[deprecated(since = "60.0.0", note = "use `ColumnOrder::sort_order` instead")]
     pub fn sort_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+        is_type_defined: bool,
+    ) -> SortOrder {
+        ColumnOrder::get_sort_order_for_type(
+            logical_type,
+            converted_type,
+            physical_type,
+            is_type_defined,
+        )
+    }
+
+    // this is pub(crate) so it can be used in the thrift parser to correctly instantiate
+    // the column_orders vec
+    pub(crate) fn get_sort_order_for_type(
         logical_type: Option<&LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
@@ -1142,7 +1170,13 @@ impl ColumnOrder {
             // Order: false, true
             Type::BOOLEAN => SortOrder::UNSIGNED,
             Type::INT32 | Type::INT64 => SortOrder::SIGNED,
-            Type::INT96 => SortOrder::UNDEFINED,
+            Type::INT96 => {
+                if is_type_defined {
+                    SortOrder::UNDEFINED
+                } else {
+                    SortOrder::INT96_TIMESTAMP
+                }
+            }
             // Notes to remember when comparing float/double values:
             // If legacy TYPE_DEFINED_ORDER is specified:
             //   If the min is a NaN, it should be ignored.
@@ -1171,6 +1205,7 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
+            ColumnOrder::INT96_TIMESTAMP_ORDER => SortOrder::INT96_TIMESTAMP,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
             ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
@@ -1192,6 +1227,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
             2 => {
                 prot.skip_empty_struct()?;
                 Self::IEEE_754_TOTAL_ORDER
+            }
+            3 => {
+                prot.skip_empty_struct()?;
+                Self::INT96_TIMESTAMP_ORDER
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -1219,6 +1258,10 @@ impl WriteThrift for ColumnOrder {
             }
             Self::IEEE_754_TOTAL_ORDER => {
                 writer.write_field_begin(FieldType::Struct, 2, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::INT96_TIMESTAMP_ORDER => {
+                writer.write_field_begin(FieldType::Struct, 3, 0)?;
                 writer.write_struct_end()?;
             }
             _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
@@ -2021,6 +2064,7 @@ mod tests {
         assert_eq!(SortOrder::UNSIGNED.to_string(), "UNSIGNED");
         assert_eq!(SortOrder::UNDEFINED.to_string(), "UNDEFINED");
         assert_eq!(SortOrder::TOTAL_ORDER.to_string(), "TOTAL_ORDER");
+        assert_eq!(SortOrder::INT96_TIMESTAMP.to_string(), "INT96_TIMESTAMP");
     }
 
     #[test]
@@ -2040,6 +2084,10 @@ mod tests {
         assert_eq!(
             ColumnOrder::IEEE_754_TOTAL_ORDER.to_string(),
             "IEEE_754_TOTAL_ORDER"
+        );
+        assert_eq!(
+            ColumnOrder::INT96_TIMESTAMP_ORDER.to_string(),
+            "INT96_TIMESTAMP_ORDER"
         );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
     }
@@ -2188,6 +2236,10 @@ mod tests {
             SortOrder::UNDEFINED
         );
         assert_eq!(
+            ColumnOrder::get_default_sort_order(Type::INT96, false),
+            SortOrder::INT96_TIMESTAMP
+        );
+        assert_eq!(
             ColumnOrder::get_default_sort_order(Type::FLOAT, false),
             SortOrder::TOTAL_ORDER
         );
@@ -2230,6 +2282,10 @@ mod tests {
         assert_eq!(
             ColumnOrder::IEEE_754_TOTAL_ORDER.sort_order(),
             SortOrder::TOTAL_ORDER
+        );
+        assert_eq!(
+            ColumnOrder::INT96_TIMESTAMP_ORDER.sort_order(),
+            SortOrder::INT96_TIMESTAMP
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
     }

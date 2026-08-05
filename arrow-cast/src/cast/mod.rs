@@ -646,7 +646,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 ///   has the wrong length it will be replaced with NULL, otherwise an error will be returned
 /// * Primitive to `List`: a list array with 1 value per slot is created
 /// * `Date32` and `Date64`: precision lost when going to higher interval
-/// * `Time32 and `Time64`: precision lost when going to higher interval
+/// * `Time32` and `Time64`: precision lost when going to higher interval
 /// * `Timestamp` and `Date{32|64}`: precision lost when going to higher interval
 /// * Temporal to/from backing Primitive: zero-copy with data type change
 /// * `Float16/Float32/Float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
@@ -2616,7 +2616,7 @@ where
 
 fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
 where
-    T: ArrowPrimitiveType + ArrowPrimitiveType,
+    T: ArrowPrimitiveType,
 {
     let mut b = BooleanBuilder::with_capacity(from.len());
 

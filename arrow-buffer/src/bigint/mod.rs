@@ -1331,7 +1331,7 @@ impl Not for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1948,7 +1948,7 @@ mod tests {
         assert_eq!(!i256::ONE, i256::from_parts(u128::MAX - 1, -1));
     }
 
-    #[should_panic]
+    #[should_panic(expected = "rhs overflow for shift")]
     #[test]
     fn test_shl_panic_on_arg_overflow() {
         let value = i256::from(123);

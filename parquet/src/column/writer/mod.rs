@@ -4771,7 +4771,7 @@ mod tests {
             let values = page.iter().filter_map(Clone::clone).collect::<Vec<_>>();
             let def_levels = page
                 .iter()
-                .map(|maybe_value| if maybe_value.is_some() { 1 } else { 0 })
+                .map(|maybe_value| i16::from(maybe_value.is_some()))
                 .collect::<Vec<_>>();
             writer.write_batch(&values, Some(&def_levels), None)?;
             writer.flush_data_pages()?;
