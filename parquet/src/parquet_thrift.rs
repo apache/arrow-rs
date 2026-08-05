@@ -893,7 +893,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 
     /// Write a zig-zag encoded `i64` value.
     pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
-        self.write_zig_zag(val as _)
+        self.write_zig_zag(val)
     }
 
     /// Write a double value.
