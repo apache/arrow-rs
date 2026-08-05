@@ -48,6 +48,9 @@ on:
       - parquet-variant-json/**
       - .github/**
 
+permissions:
+  contents: read
+
 jobs:
   # test the crate
   linux-test:

@@ -1095,11 +1095,11 @@ fn sift_down_worst_heap(
         }
 
         let right = left + 1;
-        let mut worst = left;
-
-        if right < heap.len() && compare(heap[left], heap[right]) == Ordering::Less {
-            worst = right;
-        }
+        let worst = if right < heap.len() && compare(heap[left], heap[right]) == Ordering::Less {
+            right
+        } else {
+            left
+        };
 
         if compare(heap[pos], heap[worst]) != Ordering::Less {
             break;
@@ -1212,7 +1212,7 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{Rng, RngExt, SeedableRng};
 
     fn create_decimal_array<T: DecimalType>(
         data: Vec<Option<usize>>,
@@ -5137,7 +5137,7 @@ mod tests {
 
         // Use standard library sort as reference
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         // Use our sorting algorithm
         let string_array = StringArray::from(test_cases.clone());
@@ -5185,7 +5185,7 @@ mod tests {
 
         let strings: Vec<&str> = test_cases.iter().map(|(s, _)| *s).collect();
         let mut expected = strings.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         let string_array = StringArray::from(strings.clone());
         let indices: Vec<u32> = (0..strings.len() as u32).collect();
@@ -5218,7 +5218,7 @@ mod tests {
         ];
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         let string_array = StringArray::from(test_cases.clone());
         let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
@@ -5336,7 +5336,7 @@ mod tests {
         let test_cases = vec!["a", "ab", "ba", "baa", "abba", "abbc", "abc", "cda"];
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
         expected.reverse(); // Descending order
 
         let string_array = StringArray::from(test_cases.clone());
@@ -5395,7 +5395,7 @@ mod tests {
         let limit = 3;
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
         expected.truncate(limit);
 
         let string_array = StringArray::from(test_cases.clone());

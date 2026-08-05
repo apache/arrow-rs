@@ -49,6 +49,9 @@ on:
       - arrow-string/**
       - arrow/**
 
+permissions:
+  contents: read
+
 jobs:
   integration:
     name: Archery test With other arrows

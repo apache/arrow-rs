@@ -178,7 +178,7 @@ impl WritableMetadataBuilder {
     /// If the number of field names exceeds the maximum allowed value for `u32`.
     fn num_field_names(&self) -> usize {
         let n = self.field_names.len();
-        assert!(n <= u32::MAX as usize);
+        assert!(u32::try_from(n).is_ok());
 
         n
     }

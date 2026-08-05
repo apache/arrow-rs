@@ -75,8 +75,7 @@ impl Int64Case {
     fn make_int64_batches_with_null(&self) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("i64", DataType::Int64, true)]));
 
-        let v64: Vec<i64> =
-            (self.no_null_values_start as _..self.no_null_values_end as _).collect();
+        let v64: Vec<i64> = (self.no_null_values_start..self.no_null_values_end).collect();
 
         RecordBatch::try_new(
             schema,

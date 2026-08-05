@@ -574,9 +574,9 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
         // ArrayData is valid, and verified type above
         let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
+            data_type,
             value_offsets,
             value_data,
-            data_type,
             nulls,
         }
     }

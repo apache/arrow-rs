@@ -451,7 +451,7 @@ impl IpcWriteOptions {
     #[cfg(feature = "zstd")]
     fn check_zstd_level(self, level: i32) -> Result<Self, ArrowError> {
         let range = zstd::compression_level_range();
-        if !range.contains(&(level as zstd::zstd_safe::CompressionLevel)) {
+        if !range.contains(&level) {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ZSTD compression level must be between {} and {}, got {}",
                 range.start(),
@@ -2275,18 +2275,19 @@ fn reencode_offsets<O: OffsetSizeTrait>(
 /// In particular, this handles re-encoding the offsets if they don't start at `0`,
 /// slicing the values buffer as appropriate. This helps reduce the encoded
 /// size of sliced arrays, as values that have been sliced away are not encoded
-fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+/// Returns the offsets and values buffers, in that order.
+fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> [Buffer; 2] {
     if data.is_empty() {
         // As per specification, offsets buffer has N+1 elements.
         // So an empty array should still be encoded with a single 0 offset.
         let mut offsets = MutableBuffer::new(size_of::<O>());
         offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
-        return (offsets.into(), MutableBuffer::new(0).into());
+        return [offsets.into(), MutableBuffer::new(0).into()];
     }
 
     let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
     let values = data.buffers()[1].slice_with_length(original_start_offset, len);
-    (offsets, values)
+    [offsets, values]
 }
 
 /// Similar logic as [`get_byte_array_buffers()`] but slices the child array instead
@@ -2409,8 +2410,7 @@ fn write_array_data(
 
     let data_type = array_data.data_type();
     if matches!(data_type, DataType::Binary | DataType::Utf8) {
-        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
-        for buffer in [offsets, values] {
+        for buffer in get_byte_array_buffers::<i32>(array_data) {
             offset = encode_sink_buffer(
                 buffer,
                 meta,
@@ -2451,8 +2451,7 @@ fn write_array_data(
             )?;
         }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
-        let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
-        for buffer in [offsets, values] {
+        for buffer in get_byte_array_buffers::<i64>(array_data) {
             offset = encode_sink_buffer(
                 buffer,
                 meta,
@@ -3089,7 +3088,7 @@ mod tests {
     #[test]
     fn test_empty_utf8_ipc_writes_nonempty_offsets_buffer() {
         let name = StringArray::from(Vec::<String>::new());
-        let (offsets, values) = get_byte_array_buffers::<i32>(&name.to_data());
+        let [offsets, values] = get_byte_array_buffers::<i32>(&name.to_data());
 
         assert_eq!(name.len(), 0);
         assert_eq!(
@@ -3103,7 +3102,7 @@ mod tests {
     #[test]
     fn test_empty_large_utf8_ipc_writes_nonempty_offsets_buffer() {
         let name = LargeStringArray::from(Vec::<String>::new());
-        let (offsets, values) = get_byte_array_buffers::<i64>(&name.to_data());
+        let [offsets, values] = get_byte_array_buffers::<i64>(&name.to_data());
 
         assert_eq!(name.len(), 0);
         assert_eq!(

@@ -21,8 +21,6 @@ use criterion::Criterion;
 
 use rand::Rng;
 
-extern crate arrow;
-
 use arrow::compute::{TakeOptions, take, take_record_batch};
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;

@@ -98,7 +98,7 @@ pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
 macro_rules! make_stats_iterator {
     ($iterator_type:ident, $func:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
         /// Maps an iterator of `ParquetStatistics` into an iterator of
-        /// `&$stat_value_type``
+        /// `&$stat_value_type`
         ///
         /// Yielded elements:
         /// * Some(stats) if valid

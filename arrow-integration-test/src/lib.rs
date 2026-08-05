@@ -1272,9 +1272,6 @@ impl ArrowJsonBatch {
 mod tests {
     use super::*;
 
-    use std::fs::File;
-    use std::io::Read;
-
     #[test]
     fn test_schema_equality() {
         let json = r#"
@@ -1596,9 +1593,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut file = File::open("data/integration.json").unwrap();
-        let mut json = String::new();
-        file.read_to_string(&mut json).unwrap();
+        let json = std::fs::read_to_string("data/integration.json").unwrap();
         let arrow_json: ArrowJson = serde_json::from_str(&json).unwrap();
         // test schemas
         assert!(arrow_json.schema.equals_schema(&schema));
