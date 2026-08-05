@@ -24,6 +24,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
+pub mod cleanup_non_empty_nulls;
 pub mod coalesce;
 pub mod concat;
 pub mod dictionary;

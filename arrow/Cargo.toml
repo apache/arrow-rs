@@ -196,6 +196,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "cleanup_non_empty_nulls_kernel"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "length_kernel"
 harness = false
 
