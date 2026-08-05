@@ -446,7 +446,7 @@ mod tests {
             test_float,
             [0x06, 0x2c, 0x93, 0x4e],
             decode_float,
-            1234567890.1234
+            1_234_568_000.0
         );
 
         test_decoder_bounds!(
