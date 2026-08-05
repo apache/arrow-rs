@@ -126,19 +126,27 @@ simdutf8 = { version = "0.1.5", default-features = false }
 #
 # Keep the lists sorted.
 [workspace.lints.rust]
+explicit_outlives_requirements = "warn"
 future_incompatible = { level = "warn", priority = -1 }
 nonstandard_style = { level = "warn", priority = -1 }
 rust_2018_idioms = { level = "warn", priority = -1 }
 rust_2021_prelude_collisions = "warn"
 semicolon_in_expressions_from_macros = "warn"
+trivial_numeric_casts = "warn"
+unexpected_cfgs = "warn"
 unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
 unused_import_braces = "warn"
+unused_lifetimes = "warn"
 
-# TODO: fix the violations and enable these too. They are all part of `rust_2018_idioms`,
-# and each has far too many violations to fix in one go:
-elided_lifetimes_in_paths = "allow"      # ~1200 violations
-explicit_outlives_requirements = "allow" # ~80 violations
-unused_extern_crates = "allow"           # ~60 violations
+# Deliberately left off: all the noise of spelling out elided lifetimes and
+# redundant qualifications, without catching anything that matters.
+# `elided_lifetimes_in_paths` is part of `rust_2018_idioms`, so it has to be
+# turned off explicitly; the other two are `allow` by default and are listed
+# only to record the decision.
+elided_lifetimes_in_paths = "allow" # ~600 violations in ~100 files
+trivial_casts = "allow"             # ~2000 violations
+unused_qualifications = "allow"     # ~2000 violations
 
 [workspace.lints.rustdoc]
 all = { level = "warn", priority = -1 }

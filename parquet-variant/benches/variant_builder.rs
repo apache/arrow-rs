@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate parquet_variant;
-
 use criterion::*;
 
 use parquet_variant::{Variant, VariantBuilder};
