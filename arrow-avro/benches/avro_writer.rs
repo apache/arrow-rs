@@ -17,10 +17,6 @@
 
 //! Benchmarks for `arrow-avro` Writer (Avro Object Container File)
 
-extern crate arrow_avro;
-extern crate criterion;
-extern crate once_cell;
-
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
     Float32Array, Float64Array, ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
