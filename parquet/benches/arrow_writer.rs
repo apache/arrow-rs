@@ -22,9 +22,6 @@ use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
 
-extern crate arrow;
-extern crate parquet;
-
 use std::hint::black_box;
 use std::io::Empty;
 use std::sync::Arc;

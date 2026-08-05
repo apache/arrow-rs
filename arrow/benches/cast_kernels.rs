@@ -25,8 +25,6 @@ use std::hint;
 use chrono::DateTime;
 use std::sync::Arc;
 
-extern crate arrow;
-
 use arrow::array::*;
 use arrow::compute::cast;
 use arrow::datatypes::*;

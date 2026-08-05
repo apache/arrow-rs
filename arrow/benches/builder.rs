@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-extern crate criterion;
-extern crate rand;
-
 use std::mem::size_of;
 
 use criterion::*;
