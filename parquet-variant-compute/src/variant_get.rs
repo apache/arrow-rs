@@ -3534,8 +3534,8 @@ mod test {
     }
 
     #[test]
-    fn test_unshredded_struct_safe_cast_non_object_rows_are_null() {
-        let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123", "{}"];
+    fn test_unshredded_struct_safe_cast_and_field_mismatches() {
+        let json_strings = vec![r#"{"a": 1, "b": 2, "extra": 3}"#, "123", "{}"];
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
         let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
 
@@ -3562,7 +3562,8 @@ mod test {
             .column(1)
             .as_primitive::<arrow::datatypes::Int32Type>();
 
-        // Row 0 is an object, so the struct row is valid with extracted fields.
+        // Row 0 is an object, so the struct row is valid with extracted fields. Object fields
+        // that aren't present in the requested struct are ignored.
         assert!(!struct_result.is_null(0));
         assert_eq!(field_a.value(0), 1);
         assert_eq!(field_b.value(0), 2);
@@ -3576,6 +3577,33 @@ mod test {
         assert!(!struct_result.is_null(2));
         assert!(field_a.is_null(2));
         assert!(field_b.is_null(2));
+    }
+
+    #[test]
+    fn test_unshredded_struct_missing_non_nullable_field_errors() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![r#"{"a": 1}"#]));
+        let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("missing", DataType::Int32, false),
+        ]);
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Struct(struct_fields),
+                true,
+            ))),
+            cast_options: CastOptions::default(),
+        };
+
+        let err = variant_get(&variant_array_ref, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unmasked nulls for non-nullable StructArray field \"missing\""),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -5320,8 +5348,8 @@ mod test {
         let fields = UnionFields::try_new(
             vec![0, 1],
             vec![
-                Field::new("null", DataType::Null, true),
                 Field::new("int", DataType::Int64, true),
+                Field::new("null", DataType::Null, true),
             ],
         )
         .unwrap();
@@ -5337,11 +5365,11 @@ mod test {
         let expected: ArrayRef = Arc::new(
             UnionArray::try_new(
                 fields,
-                ScalarBuffer::from(vec![1i8, 0, 0, 0]),
+                ScalarBuffer::from(vec![0i8, 1, 1, 1]),
                 Some(ScalarBuffer::from(vec![0i32, 0, 1, 2])),
                 vec![
-                    Arc::new(NullArray::new(3)),
                     Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(NullArray::new(3)),
                 ],
             )
             .unwrap(),
@@ -5458,8 +5486,9 @@ mod test {
 
     #[test]
     fn get_variant_as_union_no_matching_field() {
+        // Like other requested fields, union child nullability does not override safe casting.
         let fields =
-            UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, true)]).unwrap();
+            UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, false)]).unwrap();
         let mut builder = VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from("kept"));
         builder.append_variant(Variant::Int8(1));

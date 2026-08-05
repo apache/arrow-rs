@@ -712,6 +712,8 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
         }
         let mut children = Vec::with_capacity(fields.len());
         for (type_id, field) in fields.iter() {
+            // Match the other typed builders: nullability is schema metadata and does not
+            // override safe-cast behavior, which may append null for an unrepresentable value.
             children.push(UnionChildBuilder {
                 type_id,
                 builder: make_typed_variant_to_arrow_row_builder(
