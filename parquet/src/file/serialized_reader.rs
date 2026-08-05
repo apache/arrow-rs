@@ -283,10 +283,10 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 fn get_midpoint_offset(meta: &RowGroupMetaData) -> i64 {
     let col = meta.column(0);
     let mut offset = col.data_page_offset();
-    if let Some(dic_offset) = col.dictionary_page_offset() {
-        if offset > dic_offset {
-            offset = dic_offset
-        }
+    if let Some(dic_offset) = col.dictionary_page_offset()
+        && offset > dic_offset
+    {
+        offset = dic_offset
     };
     offset + meta.compressed_size() / 2
 }

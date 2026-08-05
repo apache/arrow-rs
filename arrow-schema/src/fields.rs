@@ -196,10 +196,7 @@ impl Fields {
                 Struct(fields) => {
                     let filtered: Result<Vec<_>, _> =
                         fields.iter().map(|f| filter_field(f, filter)).collect();
-                    let filtered: Fields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: Fields = filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -212,10 +209,8 @@ impl Fields {
                         .iter()
                         .map(|(id, f)| filter_field(f, filter).map(|f| f.map(|f| (id, f))))
                         .collect();
-                    let filtered: UnionFields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: UnionFields =
+                        filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -250,10 +245,7 @@ impl Fields {
             .iter()
             .map(|f| filter_field(f, &mut filter))
             .collect();
-        let filtered = filtered?
-            .iter()
-            .filter_map(|f| f.as_ref().cloned())
-            .collect();
+        let filtered = filtered?.iter().filter_map(|f| f.clone()).collect();
         Ok(filtered)
     }
 }
@@ -675,9 +667,13 @@ mod tests {
             ),
             Field::new_map(
                 "g",
-                "entries",
-                Field::new("keys", DataType::LargeUtf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(
+                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::LargeUtf8,
+                    false,
+                ),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),

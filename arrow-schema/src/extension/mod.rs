@@ -23,7 +23,6 @@ mod canonical;
 pub use canonical::*;
 
 use crate::{ArrowError, DataType};
-use std::collections::HashMap;
 
 /// The metadata key for the string name identifying an [`ExtensionType`].
 pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
@@ -283,7 +282,7 @@ pub trait ExtensionType: Sized {
     /// [`Field`]: crate::Field
     fn try_new_from_field_metadata(
         data_type: &DataType,
-        metadata: &HashMap<String, String>,
+        metadata: &crate::Metadata,
     ) -> Result<Self, ArrowError> {
         // Check the extension name in the metadata
         match metadata.get(EXTENSION_TYPE_NAME_KEY).map(|s| s.as_str()) {

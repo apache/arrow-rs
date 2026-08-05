@@ -813,7 +813,7 @@ impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
+    use rand::RngExt;
     use rand::rng;
     use rand::seq::SliceRandom;
 

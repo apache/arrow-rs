@@ -475,14 +475,10 @@ mod tests {
     fn missing_name() {
         let field =
             Field::new_fixed_size_list("", Field::new("", DataType::Float32, false), 3, false)
-                .with_metadata(
-                    [(
-                        EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                        r#"{ "shape": [100, 200, 500], }"#.to_owned(),
-                    )]
-                    .into_iter()
-                    .collect(),
-                );
+                .with_metadata([(
+                    EXTENSION_TYPE_METADATA_KEY,
+                    r#"{ "shape": [100, 200, 500], }"#,
+                )]);
         field.extension_type::<FixedShapeTensor>();
     }
 
@@ -505,14 +501,7 @@ mod tests {
     fn missing_metadata() {
         let field =
             Field::new_fixed_size_list("", Field::new("", DataType::Float32, false), 3, false)
-                .with_metadata(
-                    [(
-                        EXTENSION_TYPE_NAME_KEY.to_owned(),
-                        FixedShapeTensor::NAME.to_owned(),
-                    )]
-                    .into_iter()
-                    .collect(),
-                );
+                .with_metadata([(EXTENSION_TYPE_NAME_KEY, FixedShapeTensor::NAME)]);
         field.extension_type::<FixedShapeTensor>();
     }
 
@@ -528,20 +517,10 @@ mod tests {
             i32::try_from(fixed_shape_tensor.list_size()).expect("overflow"),
             false,
         )
-        .with_metadata(
-            [
-                (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    FixedShapeTensor::NAME.to_owned(),
-                ),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
-                    r#"{ "not-shape": [] }"#.to_owned(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        .with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, FixedShapeTensor::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, r#"{ "not-shape": [] }"#),
+        ]);
         field.extension_type::<FixedShapeTensor>();
     }
 

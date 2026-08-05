@@ -1772,7 +1772,7 @@ impl From<NaiveDate> for Variant<'_, '_> {
 
 impl From<DateTime<Utc>> for Variant<'_, '_> {
     fn from(value: DateTime<Utc>) -> Self {
-        if value.nanosecond() % 1000 > 0 {
+        if !value.nanosecond().is_multiple_of(1000) {
             Variant::TimestampNanos(value)
         } else {
             Variant::TimestampMicros(value)
@@ -1782,7 +1782,7 @@ impl From<DateTime<Utc>> for Variant<'_, '_> {
 
 impl From<NaiveDateTime> for Variant<'_, '_> {
     fn from(value: NaiveDateTime) -> Self {
-        if value.nanosecond() % 1000 > 0 {
+        if !value.nanosecond().is_multiple_of(1000) {
             Variant::TimestampNtzNanos(value)
         } else {
             Variant::TimestampNtzMicros(value)
