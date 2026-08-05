@@ -27,7 +27,7 @@ use parquet_variant::{
 };
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use uuid::Uuid;
 
 /// Returns a directory path for the parquet variant test data.
