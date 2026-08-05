@@ -753,10 +753,10 @@ fn interval_mul_f64(
     const SECONDS_PER_DAY: f64 = SECONDS_IN_DAY as f64;
 
     // Keep integral factors exact instead of round-tripping i64 nanoseconds through f64.
-    if factor.fract() == 0. {
-        if let Some(factor) = ToPrimitive::to_i64(&factor) {
-            return IntervalMonthDayNanoType::mul_i64(interval, factor);
-        }
+    if factor.fract() == 0.
+        && let Some(factor) = ToPrimitive::to_i64(&factor)
+    {
+        return IntervalMonthDayNanoType::mul_i64(interval, factor);
     }
 
     // Based on DuckDB's INTERVAL * DOUBLE implementation, which is referenced from PostgreSQL's interval_mul:
