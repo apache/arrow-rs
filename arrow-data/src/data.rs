@@ -2222,7 +2222,7 @@ impl ArrayDataBuilder {
 
     /// Creates an `ArrayData`, consuming `self`
     ///
-    /// # Safety
+    /// # Undefined behavior
     ///
     /// By default the underlying buffers are checked to ensure they are valid
     /// Arrow data. However, if the [`Self::skip_validation`] flag has been set

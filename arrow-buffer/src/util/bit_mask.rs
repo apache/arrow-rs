@@ -172,7 +172,7 @@ mod tests {
     use super::*;
     use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng, TryRngCore};
+    use rand::{RngExt, SeedableRng, TryRng};
     use std::fmt::Display;
 
     #[test]

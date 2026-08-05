@@ -835,7 +835,7 @@ mod tests {
         let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         {
-            let values = [100; 5000];
+            let values = vec![100; 5000];
             let def_levels = [1i16; 5000];
             let mut rep_levels = [1i16; 5000];
             for idx in 0..1000 {

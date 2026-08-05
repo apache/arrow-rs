@@ -785,10 +785,7 @@ impl Iterator for RowIter<'_> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Result<Row>> {
-        let mut row = None;
-        if let Some(ref mut iter) = self.row_iter {
-            row = iter.next();
-        }
+        let mut row = self.row_iter.as_mut().and_then(|iter| iter.next());
 
         while row.is_none() && self.current_row_group < self.num_row_groups {
             // We do not expect any failures when accessing a row group, and file reader

@@ -29,6 +29,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # Check workspace wide compile and test with default features for
   # mac

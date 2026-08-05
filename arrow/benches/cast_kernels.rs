@@ -25,8 +25,6 @@ use std::hint;
 use chrono::DateTime;
 use std::sync::Arc;
 
-extern crate arrow;
-
 use arrow::array::*;
 use arrow::compute::cast;
 use arrow::datatypes::*;
@@ -137,7 +135,7 @@ fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
             builder.append_null()
         } else {
             builder.append_value(
-                rng.random_range(-999_999_999f32..999_999_999f32)
+                rng.random_range(-1_000_000_000_f32..1_000_000_000_f32)
                     .to_string(),
             )
         }

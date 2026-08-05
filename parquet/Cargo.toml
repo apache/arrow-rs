@@ -165,10 +165,6 @@ required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
 
 [[test]]
-name = "arrow_writer_layout"
-required-features = ["arrow"]
-
-[[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
@@ -319,3 +315,6 @@ harness = false
 
 [lib]
 bench = false
+
+[lints]
+workspace = true

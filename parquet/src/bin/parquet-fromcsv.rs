@@ -41,7 +41,7 @@
 //! # Options
 //!
 //! ```text
-#![doc = include_str!("./parquet-fromcsv-help.txt")] // Update for this file : Run test test_command_help
+#![cfg_attr(doc, doc = include_str!("./parquet-fromcsv-help.txt"))] // Update for this file : Run test test_command_help
 //! ```
 //!
 //! ## Parquet file options
@@ -434,10 +434,7 @@ mod tests {
     fn test_command_help() {
         let mut cmd = Args::command();
         let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let mut path_buf = PathBuf::from(dir);
-        path_buf.push("src");
-        path_buf.push("bin");
-        path_buf.push("parquet-fromcsv-help.txt");
+        let path_buf = PathBuf::from(dir).join("src/bin/parquet-fromcsv-help.txt");
         let expected = std::fs::read_to_string(path_buf).unwrap();
         let mut buffer_vec = Vec::new();
         let mut buffer = std::io::Cursor::new(&mut buffer_vec);
@@ -522,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "CommandLineParseError")]
     fn test_parse_arg_format_error() {
         parse_args(vec!["--input-format", "excel"]).unwrap();
     }

@@ -201,7 +201,7 @@ mod tests {
     use crate::array::{ArrayRef, BinaryArray, BooleanArray, Int32Array, StringArray};
     use crate::iterator::ArrayIter;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::sync::Arc;
 
@@ -895,7 +895,7 @@ mod tests {
                 let mut items = Vec::with_capacity(iter.len());
 
                 let cb = |acc, item| {
-                    items.push(CallArgs { item, acc });
+                    items.push(CallArgs { acc, item });
 
                     item.map(|val| val + 100)
                 };

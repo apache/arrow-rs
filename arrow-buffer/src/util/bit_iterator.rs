@@ -414,7 +414,7 @@ mod tests {
     use super::*;
     use crate::BooleanBuffer;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::iter::Copied;
     use std::slice::Iter;
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_bit_index_u32_long_all_set() {
         let len = 200;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let num_bytes = len / 8 + usize::from(len % 8 != 0);
         let bytes = vec![0xFFu8; num_bytes];
 
         let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn test_bit_index_u32_none_set() {
         let len = 50;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let num_bytes = len / 8 + usize::from(len % 8 != 0);
         let bytes = vec![0u8; num_bytes];
 
         let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();

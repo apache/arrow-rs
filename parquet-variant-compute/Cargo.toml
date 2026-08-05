@@ -54,3 +54,6 @@ arrow = { workspace = true, features = ["test_utils"] }
 [[bench]]
 name = "variant_kernels"
 harness = false
+
+[lints]
+workspace = true
