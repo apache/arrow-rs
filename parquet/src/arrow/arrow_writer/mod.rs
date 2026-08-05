@@ -506,33 +506,6 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.finish()
     }
 
-    /// Create a new row group writer and return its column writers.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `ArrowRowGroupWriterFactory` instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        self.flush()?;
-        let in_progress = self
-            .row_group_writer_factory
-            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
-        Ok(in_progress.writers)
-    }
-
-    /// Append the given column chunks to the file as a new row group.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `SerializedFileWriter` directly instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        let mut row_group_writer = self.writer.next_row_group()?;
-        for chunk in chunks {
-            chunk.append_to_row_group(&mut row_group_writer)?;
-        }
-        row_group_writer.close()?;
-        Ok(())
-    }
-
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
     ///
     /// Flushes any outstanding data before returning.
