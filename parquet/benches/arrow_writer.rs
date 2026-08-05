@@ -22,7 +22,7 @@ use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 
 use std::hint::black_box;
 use std::io::Empty;
