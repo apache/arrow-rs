@@ -418,6 +418,7 @@ fn read_encoding_stats_as_mask<'a>(
 
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
+#[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
 fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
@@ -427,15 +428,17 @@ fn read_column_metadata<'a>(
     // mask for seen required fields in ColumnMetaData
     let mut seen_mask = 0u16;
 
-    let (skip_pes, pes_mask, skip_col_stats, skip_size_stats) = match options {
-        Some(opts) => (
-            opts.skip_encoding_stats(col_index),
-            opts.encoding_stats_as_mask(),
-            opts.skip_column_stats(col_index),
-            opts.skip_size_stats(col_index),
-        ),
-        None => (false, true, false, false),
-    };
+    let mut skip_pes = false;
+    let mut pes_mask = true;
+    let mut skip_col_stats = false;
+    let mut skip_size_stats = false;
+
+    if let Some(opts) = options {
+        skip_pes = opts.skip_encoding_stats(col_index);
+        pes_mask = opts.encoding_stats_as_mask();
+        skip_col_stats = opts.skip_column_stats(col_index);
+        skip_size_stats = opts.skip_size_stats(col_index);
+    }
 
     // struct ColumnMetaData {
     //   1: required Type type
