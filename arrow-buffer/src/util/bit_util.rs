@@ -851,7 +851,7 @@ mod tests {
     use crate::bit_iterator::BitIterator;
     use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_round_upto_multiple_of_64() {

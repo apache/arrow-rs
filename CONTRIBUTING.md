@@ -190,6 +190,17 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
 
+In addition to the lints that `clippy` enables by default, we enable a few extra ones in
+`[workspace.lints]` in the root `Cargo.toml`. Every crate in the workspace opts in to those with:
+
+```toml
+[lints]
+workspace = true
+```
+
+New crates should include that section, and new lints should be added to `[workspace.lints]`
+rather than to individual crates, so that they apply everywhere.
+
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
 Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.

@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "incompatible data type for builder")]
     fn test_override_data_type_invalid() {
         PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt64);
     }

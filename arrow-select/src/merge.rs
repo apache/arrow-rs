@@ -564,7 +564,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    // The message differs between debug and release: in release the
+    // `cfg(debug_assertions)` bounds check in `merge_n` is compiled out and the
+    // slice index panics instead.
+    #[should_panic(expected = "out of bounds")]
     fn test_merge_n_invalid_indices() {
         let a1 = StringArray::from(vec![Some("A")]);
 

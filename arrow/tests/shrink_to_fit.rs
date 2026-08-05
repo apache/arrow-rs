@@ -45,7 +45,6 @@ fn test_shrink_to_fit_after_concat() {
         memory_use(|| {
             let mut concatenated = concatenate(num_concats, list_array.clone());
             concatenated.shrink_to_fit(); // This is what we're testing!
-            dbg!(concatenated.data_type());
             concatenated
         });
     let expected_len = num_concats * array_len;

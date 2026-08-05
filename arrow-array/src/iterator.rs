@@ -201,7 +201,7 @@ mod tests {
     use crate::array::{ArrayRef, BinaryArray, BooleanArray, Int32Array, StringArray};
     use crate::iterator::ArrayIter;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::sync::Arc;
 
