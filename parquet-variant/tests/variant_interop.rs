@@ -132,7 +132,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
             "primitive_decimal16",
             Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap()),
         ),
-        ("primitive_float", Variant::Float(1234567890.1234)),
+        ("primitive_float", Variant::Float(1_234_568_000.0)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
         ("primitive_int16", Variant::Int16(1234)),

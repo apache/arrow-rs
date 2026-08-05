@@ -30,6 +30,7 @@ use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
+use crate::util::prefix::common_prefix_length;
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
@@ -201,15 +202,8 @@ impl FallbackEncoder {
                 for idx in indices {
                     let value = values.value(idx);
                     let value = value.as_ref();
-                    let mut prefix_length = 0;
 
-                    while prefix_length < last_value.len()
-                        && prefix_length < value.len()
-                        && last_value[prefix_length] == value[prefix_length]
-                    {
-                        prefix_length += 1;
-                    }
-
+                    let prefix_length = common_prefix_length(last_value, value);
                     let suffix_length = value.len() - prefix_length;
 
                     last_value.clear();

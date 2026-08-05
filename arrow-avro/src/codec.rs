@@ -208,9 +208,9 @@ impl AvroDataType {
         resolution: Option<ResolutionInfo>,
     ) -> Self {
         Self {
-            codec,
-            metadata,
             nullability,
+            metadata,
+            codec,
             resolution,
         }
     }

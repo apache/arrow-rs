@@ -146,43 +146,34 @@ struct SizeStatistics {
 );
 
 fn convert_geo_stats(
-    stats: Option<GeospatialStatistics>,
-) -> Option<Box<crate::geospatial::statistics::GeospatialStatistics>> {
-    stats.map(|st| {
-        let bbox = convert_bounding_box(st.bbox);
-        let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
-        Box::new(crate::geospatial::statistics::GeospatialStatistics::new(
-            bbox,
-            geospatial_types,
-        ))
-    })
+    st: GeospatialStatistics,
+) -> crate::geospatial::statistics::GeospatialStatistics {
+    let bbox = st.bbox.map(convert_bounding_box);
+    let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
+    crate::geospatial::statistics::GeospatialStatistics::new(bbox, geospatial_types)
 }
 
-fn convert_bounding_box(
-    bbox: Option<BoundingBox>,
-) -> Option<crate::geospatial::bounding_box::BoundingBox> {
-    bbox.map(|bb| {
-        let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
-            bb.xmin.into(),
-            bb.xmax.into(),
-            bb.ymin.into(),
-            bb.ymax.into(),
-        );
+fn convert_bounding_box(bb: BoundingBox) -> crate::geospatial::bounding_box::BoundingBox {
+    let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
+        bb.xmin.into(),
+        bb.xmax.into(),
+        bb.ymin.into(),
+        bb.ymax.into(),
+    );
 
-        newbb = match (bb.zmin, bb.zmax) {
-            (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.zmin, bb.zmax) {
+        (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb = match (bb.mmin, bb.mmax) {
-            (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.mmin, bb.mmax) {
+        (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb
-    })
+    newbb
 }
 
 /// Create a [`crate::file::statistics::Statistics`] from a thrift [`Statistics`] object.
@@ -236,7 +227,7 @@ fn convert_stats(
                 stats.max_value
             };
 
-            fn check_len(min: &Option<&[u8]>, max: &Option<&[u8]>, len: usize) -> Result<()> {
+            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
                 if let Some(min) = min
                     && min.len() < len
                 {
@@ -252,10 +243,10 @@ fn convert_stats(
 
             let physical_type = column_descr.physical_type();
             match physical_type {
-                Type::BOOLEAN => check_len(&min, &max, 1),
-                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
-                Type::INT96 => check_len(&min, &max, 12),
+                Type::BOOLEAN => check_len(min, max, 1),
+                Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                Type::INT96 => check_len(min, max, 12),
                 _ => Ok(()),
             }?;
 
@@ -427,6 +418,7 @@ fn read_encoding_stats_as_mask<'a>(
 
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
+#[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
 fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
@@ -544,7 +536,7 @@ fn read_column_metadata<'a>(
             }
             17 => {
                 let val = GeospatialStatistics::read_thrift(&mut *prot)?;
-                column.geo_statistics = convert_geo_stats(Some(val));
+                column.geo_statistics = Some(Box::new(convert_geo_stats(val)));
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -781,13 +773,10 @@ pub(crate) fn parquet_metadata_from_bytes(
     #[cfg(feature = "encryption")]
     let mut footer_signing_key_metadata: Option<&[u8]> = None;
 
-    // this will need to be set before parsing row groups
-    let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
-
+    // this will need to be set before parsing row groups.
     // see if we already have a schema.
-    if let Some(options) = options {
-        schema_descr = options.schema().cloned();
-    }
+    let mut schema_descr: Option<Arc<SchemaDescriptor>> =
+        options.and_then(|options| options.schema().cloned());
 
     // struct FileMetaData {
     //   1: required i32 version
@@ -1459,7 +1448,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
-        writer.set_write_row_group_ordinal(self.row_groups.len() <= i16::MAX as usize);
+        writer.set_write_row_group_ordinal(i16::try_from(self.row_groups.len()).is_ok());
 
         self.file_metadata
             .version

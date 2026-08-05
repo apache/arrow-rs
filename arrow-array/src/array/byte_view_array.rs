@@ -618,7 +618,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                     total_len: current_elements,
                 });
             }
-            debug_assert!(groups.len() <= i32::MAX as usize);
+            debug_assert!(i32::try_from(groups.len()).is_ok());
 
             // Second pass: copy each group into an exactly-sized buffer.
             let mut views_buf = Vec::with_capacity(len);

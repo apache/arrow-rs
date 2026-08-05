@@ -1095,11 +1095,11 @@ fn sift_down_worst_heap(
         }
 
         let right = left + 1;
-        let mut worst = left;
-
-        if right < heap.len() && compare(heap[left], heap[right]) == Ordering::Less {
-            worst = right;
-        }
+        let worst = if right < heap.len() && compare(heap[left], heap[right]) == Ordering::Less {
+            right
+        } else {
+            left
+        };
 
         if compare(heap[pos], heap[worst]) != Ordering::Less {
             break;
