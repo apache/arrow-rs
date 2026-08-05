@@ -1346,27 +1346,6 @@ impl ArrowRowGroupWriterFactory {
     }
 }
 
-/// Returns [`ArrowColumnWriter`]s for each column in a given schema
-#[deprecated(since = "57.0.0", note = "Use `ArrowRowGroupWriterFactory` instead")]
-pub fn get_column_writers(
-    parquet: &SchemaDescriptor,
-    props: &WriterPropertiesPtr,
-    arrow: &SchemaRef,
-) -> Result<Vec<ArrowColumnWriter>> {
-    let mut writers = Vec::with_capacity(arrow.fields.len());
-    let mut leaves = parquet.columns().iter();
-    let column_factory = ArrowColumnWriterFactory::new();
-    for field in &arrow.fields {
-        column_factory.get_arrow_column_writer(
-            field.data_type(),
-            props,
-            &mut leaves,
-            &mut writers,
-        )?;
-    }
-    Ok(writers)
-}
-
 /// Creates [`ArrowColumnWriter`] instances
 struct ArrowColumnWriterFactory {
     /// Allocates the per-column-chunk [`PageStore`] backing each page writer.
