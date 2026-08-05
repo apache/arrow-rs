@@ -37,9 +37,15 @@ const MASK_ALGEBRA_LENGTHS: &[(&str, usize, usize)] = &[
     ("tail_most", MASK_ALGEBRA_ROWS, 1_000),
 ];
 
-/// Bit offsets applied to both operands. Masks come from [`BooleanBuffer::slice`], so a
-/// non-zero offset is normal, and one that is not byte aligned is the expensive case.
-const MASK_ALGEBRA_OFFSETS: &[(&str, usize)] = &[("aligned", 0), ("unaligned", 3)];
+/// Bit offsets for the left and right operand. Masks come from [`BooleanBuffer::slice`],
+/// so a non-zero offset is normal. Whether the two share a sub-64-bit alignment decides
+/// which path the underlying bitwise helpers take, so both are covered.
+const MASK_ALGEBRA_OFFSETS: &[(&str, usize, usize)] = &[
+    ("both_zero", 0, 0),
+    ("same_mod64", 3, 3),
+    ("same_mod64_far", 3, 67),
+    ("diff_mod64", 3, 5),
+];
 
 /// Generates a random RowSelection with a specified selection ratio.
 ///
@@ -77,10 +83,10 @@ fn mask_algebra_operand(len: usize, offset: usize, selection_ratio: f64) -> RowS
 /// mask-backed. The `intersection`/`union` benchmarks above are selector-backed and take
 /// the [`RowSelector`] merge path instead.
 fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
-    for (offset_label, offset) in MASK_ALGEBRA_OFFSETS {
+    for (offset_label, left_offset, right_offset) in MASK_ALGEBRA_OFFSETS {
         for (length_label, left_len, right_len) in MASK_ALGEBRA_LENGTHS {
-            let left = mask_algebra_operand(*left_len, *offset, selection_ratio);
-            let right = mask_algebra_operand(*right_len, *offset, selection_ratio);
+            let left = mask_algebra_operand(*left_len, *left_offset, selection_ratio);
+            let right = mask_algebra_operand(*right_len, *right_offset, selection_ratio);
             let label = format!("{length_label}/{offset_label}");
 
             c.bench_with_input(

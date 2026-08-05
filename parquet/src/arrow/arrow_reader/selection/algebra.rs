@@ -269,17 +269,17 @@ pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) 
 /// Bitwise AND of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn intersect_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return combine_equal_masks(l, r, |a, b| a & b);
+        return combine_equal_length_masks(l, r, |a, b| a & b);
     }
-    combine_uneven_masks(l, r, |a, b| a & b)
+    combine_unequal_length_masks(l, r, |a, b| a & b)
 }
 
 /// Bitwise OR of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return combine_equal_masks(l, r, |a, b| a | b);
+        return combine_equal_length_masks(l, r, |a, b| a | b);
     }
-    combine_uneven_masks(l, r, |a, b| a | b)
+    combine_unequal_length_masks(l, r, |a, b| a | b)
 }
 
 /// Combines two masks of equal length with the bitwise operation `op`.
@@ -288,7 +288,7 @@ pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer
 /// which costs a second allocation and a shifting copy of the whole mask when the
 /// operands are not byte aligned. Building the buffer directly keeps the offset,
 /// as the uneven path does.
-fn combine_equal_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+fn combine_equal_length_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
 where
     F: FnMut(u64, u64) -> u64,
 {
@@ -302,7 +302,7 @@ where
     )
 }
 
-/// Combines two masks of differing lengths with the bitwise operation `op`,
+/// Combines two masks of unequal length with the bitwise operation `op`,
 /// passing the longer side's tail through unchanged.
 ///
 /// The longer mask is copied once into a [`MutableBuffer`] and `op` is then
@@ -311,35 +311,33 @@ where
 /// [`BooleanBufferBuilder`].
 ///
 /// Neither the mask offsets nor the prefix length are assumed to be byte
-/// aligned: the copy keeps the longer mask's sub-byte offset so it stays a
-/// plain byte copy, and the offset is carried over to the returned buffer.
-fn combine_uneven_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+/// aligned: the copy keeps the longer mask's offset within its first byte so it
+/// stays a plain byte copy, and that offset is carried over to the result. Only
+/// the longer mask's own byte range is copied, so the result does not retain the
+/// backing allocation it was sliced from.
+fn combine_unequal_length_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
 where
     F: FnMut(u64, u64) -> u64,
 {
     let (longer, shorter) = if l.len() > r.len() { (l, r) } else { (r, l) };
-    let common = shorter.len();
-    if common == 0 {
-        return longer.clone();
-    }
 
-    let bit_offset = longer.offset() % 8;
-    let start = longer.offset() / 8;
-    let end = bit_util::ceil(longer.offset() + longer.len(), 8);
-    let bytes = &longer.values()[start..end];
+    let sub_byte_offset = longer.offset() % 8;
+    let start_byte = longer.offset() / 8;
+    let end_byte = bit_util::ceil(longer.offset() + longer.len(), 8);
+    let bytes = &longer.values()[start_byte..end_byte];
     let mut buffer = MutableBuffer::new(bytes.len());
     buffer.extend_from_slice(bytes);
 
     bit_util::apply_bitwise_binary_op(
         buffer.as_slice_mut(),
-        bit_offset,
+        sub_byte_offset,
         shorter.values(),
         shorter.offset(),
-        common,
+        shorter.len(),
         op,
     );
 
-    BooleanBuffer::new(buffer.into(), bit_offset, longer.len())
+    BooleanBuffer::new(buffer.into(), sub_byte_offset, longer.len())
 }
 
 /// Applies `other` to the selected rows of `mask`, preserving the original row domain.
@@ -925,6 +923,29 @@ mod tests {
                         &format!("union {context}"),
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_algebra_does_not_retain_backing_buffer() {
+        // A short slice of a long mask must not keep the long allocation alive,
+        // including when the other operand is empty and contributes nothing.
+        let long = BooleanBuffer::from((0..80_000).map(|i| i % 3 == 0).collect::<Vec<bool>>());
+        assert!(long.inner().len() >= 10_000);
+
+        for (l, r) in [
+            (long.slice(5, 40), BooleanBuffer::new_unset(0)),
+            (long.slice(5, 40), BooleanBuffer::new_set(7)),
+            (BooleanBuffer::new_set(7), long.slice(5, 40)),
+        ] {
+            for combined in [intersect_masks(&l, &r), union_masks(&l, &r)] {
+                assert!(
+                    combined.inner().len() <= 16,
+                    "result retained a {} byte buffer for a {} bit mask",
+                    combined.inner().len(),
+                    combined.len()
+                );
             }
         }
     }
