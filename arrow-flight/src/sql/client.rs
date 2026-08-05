@@ -183,7 +183,7 @@ where
                 .map_err(|_| ArrowError::ParseError("Can't read auth header".to_string()))?;
             let bearer = "Bearer ";
             if !auth.starts_with(bearer) {
-                return Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
+                Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
             }
             let auth = auth[bearer.len()..].to_string();
             self.token = Some(auth);
@@ -587,10 +587,9 @@ where
                 .await?
                 .message()
                 .await?
+                && let Some(handle) = self.unpack_prepared_statement_handle(&result)?
             {
-                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
-                    self.handle = handle;
-                }
+                self.handle = handle;
             }
         }
         Ok(())

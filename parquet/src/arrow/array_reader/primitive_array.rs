@@ -671,6 +671,10 @@ mod tests {
                     ;
 
                 // create expected array as primitive, and cast to result type
+                #[expect(
+                    trivial_numeric_casts,
+                    reason = "the cast is a no-op when the source and result types are the same"
+                )]
                 let expected = PrimitiveArray::<$result_arrow_cast_type>::from(
                     data[0..50]
                         .iter()

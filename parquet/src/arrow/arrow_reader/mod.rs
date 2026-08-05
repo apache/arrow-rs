@@ -24,7 +24,9 @@ use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRe
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 use selection::MaskCursor;
-pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
+pub use selection::{
+    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector,
+};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -840,6 +842,44 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
+    }
+}
+
+impl ParquetMetaDataReader {
+    /// Applies the metadata related settings from [`ArrowReaderOptions`],
+    /// such as the [`ParquetMetaDataOptions`], decryption properties, and
+    /// [`PageIndexPolicy`] to this reader.
+    ///
+    /// The page index policies are only applied if at least one of them is not
+    /// [`PageIndexPolicy::Skip`], so policies previously configured on this
+    /// reader (e.g. from a preload setting) are preserved when the options do
+    /// not request the page index.
+    ///
+    /// This encodes the canonical way to construct a `ParquetMetaDataReader`
+    /// inside `AsyncFileReader::get_metadata` (available with the `async`
+    /// feature), so implementations outside this crate do not need to
+    /// duplicate it.
+    pub fn with_arrow_reader_options(mut self, options: Option<&ArrowReaderOptions>) -> Self {
+        let Some(options) = options else { return self };
+
+        self = self.with_metadata_options(Some(options.metadata_options().clone()));
+
+        #[cfg(feature = "encryption")]
+        {
+            self = self.with_decryption_properties(
+                options.file_decryption_properties.as_ref().map(Arc::clone),
+            );
+        }
+
+        if options.column_index_policy() != PageIndexPolicy::Skip
+            || options.offset_index_policy() != PageIndexPolicy::Skip
+        {
+            self = self
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self
     }
 }
 
@@ -3653,9 +3693,7 @@ pub(crate) mod tests {
     }
 
     fn get_test_file(file_name: &str) -> File {
-        let mut path = PathBuf::new();
-        path.push(arrow::util::test_util::arrow_test_data());
-        path.push(file_name);
+        let path = PathBuf::from(arrow::util::test_util::arrow_test_data()).join(file_name);
 
         File::open(path.as_path()).expect("File not found!")
     }
@@ -4042,9 +4080,7 @@ pub(crate) mod tests {
 
         let schema_without_metadata = Arc::new(Schema::new(vec![field.clone()]));
 
-        let metadata = [("key".to_string(), "value".to_string())]
-            .into_iter()
-            .collect();
+        let metadata = arrow_schema::Metadata::from([("key".to_string(), "value".to_string())]);
 
         let schema_with_metadata = Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 

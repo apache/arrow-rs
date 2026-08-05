@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -47,7 +48,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
     let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        write!(message_type, "REQUIRED FLOAT {i};").ok();
         column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
@@ -124,7 +125,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
                 .set_column_metadata(columns)
                 .set_total_byte_size(rng.random_range(1..2000000000))
                 .set_num_rows(rng.random_range(1..10000000000))
-                .set_ordinal(i as i16)
+                .set_ordinal(i as i32)
                 .build()
                 .unwrap()
         })

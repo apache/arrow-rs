@@ -20,7 +20,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{
-    Array, ArrowNativeTypeOp, BooleanArray, GenericByteArray, downcast_primitive_array,
+    Array, ArrowNativeTypeOp, BooleanArray, GenericByteArray, GenericByteViewArray,
+    downcast_primitive_array,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, SortOptions};
@@ -36,6 +37,8 @@ pub(crate) fn can_rank(data_type: &DataType) -> bool {
                 | DataType::LargeUtf8
                 | DataType::Binary
                 | DataType::LargeBinary
+                | DataType::Utf8View
+                | DataType::BinaryView
         )
 }
 
@@ -60,6 +63,8 @@ pub fn rank(array: &dyn Array, options: Option<SortOptions>) -> Result<Vec<u32>,
         DataType::LargeUtf8 => bytes_rank(array.as_bytes::<LargeUtf8Type>(), options),
         DataType::Binary => bytes_rank(array.as_bytes::<BinaryType>(), options),
         DataType::LargeBinary => bytes_rank(array.as_bytes::<LargeBinaryType>(), options),
+        DataType::Utf8View => byte_view_rank(array.as_string_view(), options),
+        DataType::BinaryView => byte_view_rank(array.as_binary_view(), options),
         d => return Err(ArrowError::ComputeError(format!("{d:?} not supported in rank")))
     };
     Ok(ranks)
@@ -84,6 +89,23 @@ fn primitive_rank<T: ArrowNativeTypeOp>(
 
 #[inline(never)]
 fn bytes_rank<T: ByteArrayType>(array: &GenericByteArray<T>, options: SortOptions) -> Vec<u32> {
+    let to_sort: Vec<(&[u8], u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
+        Some(n) => n
+            .valid_indices()
+            .map(|idx| (array.value(idx).as_ref(), idx as u32))
+            .collect(),
+        None => (0..array.len())
+            .map(|idx| (array.value(idx).as_ref(), idx as u32))
+            .collect(),
+    };
+    rank_impl(array.len(), to_sort, options, Ord::cmp, PartialEq::eq)
+}
+
+#[inline(never)]
+fn byte_view_rank<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    options: SortOptions,
+) -> Vec<u32> {
     let to_sort: Vec<(&[u8], u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
         Some(n) => n
             .valid_indices()
@@ -349,13 +371,46 @@ mod tests {
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[4, 3, 2, 2]);
 
+        let values = StringViewArray::from(v);
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[4, 3, 2, 2]);
+
         let v: Vec<&[u8]> = vec![&[1, 2], &[0], &[1, 2, 3], &[1, 2]];
         let values = LargeBinaryArray::from(v.clone());
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 1, 4, 3]);
 
-        let values = BinaryArray::from(v);
+        let values = BinaryArray::from(v.clone());
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 1, 4, 3]);
+
+        let values = BinaryViewArray::from_iter_values(v);
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[3, 1, 4, 3]);
+    }
+
+    #[test]
+    fn test_string_view_with_nulls() {
+        let values = StringViewArray::from(vec![
+            Some("a string longer than twelve bytes"),
+            Some("bar"),
+            None,
+            Some("a string longer than twelve bytes"),
+        ]);
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[3, 4, 1, 3]);
+    }
+
+    #[test]
+    fn test_binary_view_with_nulls() {
+        let long_value = b"a binary value longer than twelve bytes".as_ref();
+        let values = BinaryViewArray::from_iter([
+            Some(long_value),
+            Some(b"bar".as_ref()),
+            None,
+            Some(long_value),
+        ]);
+        let res = rank(&values, None).unwrap();
+        assert_eq!(res, &[3, 4, 1, 3]);
     }
 }

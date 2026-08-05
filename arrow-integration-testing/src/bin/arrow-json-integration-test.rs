@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Converts between the Arrow IPC file format and the integration test JSON format.
+
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
 #![allow(unused_crate_dependencies)]
 

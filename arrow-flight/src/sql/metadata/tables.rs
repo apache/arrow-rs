@@ -267,7 +267,7 @@ impl GetTablesBuilder {
 
     /// Return the schema of the RecordBatch that will be returned from [`CommandGetTables`]
     ///
-    /// Note the schema differs based on the values of `include_schema
+    /// Note the schema differs based on the values of `include_schema`
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
     pub fn schema(&self) -> SchemaRef {

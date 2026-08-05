@@ -93,6 +93,17 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Create a new [`BooleanArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(values: BooleanBuffer, nulls: Option<NullBuffer>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self { values, nulls }
+    }
+
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
         Self {
@@ -914,7 +925,7 @@ mod tests {
         }
     }
     use arrow_buffer::Buffer;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -1075,6 +1086,10 @@ mod tests {
     fn test_boolean_array_from_iter_with_larger_upper_bound() {
         // See https://github.com/apache/arrow-rs/issues/8505
         // This returns an upper size hint of 4
+        #[expect(
+            clippy::iter_filter_is_some,
+            reason = "the point of the test is the size hint of `filter`, which `flatten` does not have"
+        )]
         let iterator = vec![Some(true), None, Some(false), None]
             .into_iter()
             .filter(Option::is_some);

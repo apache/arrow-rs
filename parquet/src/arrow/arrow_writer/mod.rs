@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_array::{PrimitiveArray, types::*};
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
 };
@@ -368,45 +368,45 @@ impl<W: Write + Send> ArrowWriter<W> {
             ),
         };
 
-        if let Some(max_rows) = self.max_row_group_row_count {
-            if in_progress.buffered_rows + batch.num_rows() > max_rows {
-                let to_write = max_rows - in_progress.buffered_rows;
-                let a = batch.slice(0, to_write);
-                let b = batch.slice(to_write, batch.num_rows() - to_write);
-                self.write(&a)?;
-                return self.write(&b);
-            }
+        if let Some(max_rows) = self.max_row_group_row_count
+            && in_progress.buffered_rows + batch.num_rows() > max_rows
+        {
+            let to_write = max_rows - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
         }
 
         // Check byte limit: if we have buffered data, use measured average row size
         // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes {
-            if in_progress.buffered_rows > 0 {
-                let current_bytes = in_progress.get_estimated_total_bytes();
+        if let Some(max_bytes) = self.max_row_group_bytes
+            && in_progress.buffered_rows > 0
+        {
+            let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if current_bytes >= max_bytes {
-                    self.flush()?;
-                    return self.write(batch);
-                }
+            if current_bytes >= max_bytes {
+                self.flush()?;
+                return self.write(batch);
+            }
 
-                if let Some(avg_row_bytes) = current_bytes
-                    .checked_div(in_progress.buffered_rows)
-                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
-                {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+            if let Some(avg_row_bytes) = current_bytes
+                .checked_div(in_progress.buffered_rows)
+                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            {
+                // At this point, `current_bytes < max_bytes` (checked above)
+                let remaining_bytes = max_bytes - current_bytes;
+                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
-                    if batch.num_rows() > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            let a = batch.slice(0, rows_that_fit);
-                            let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                            self.write(&a)?;
-                            return self.write(&b);
-                        } else {
-                            self.flush()?;
-                            return self.write(batch);
-                        }
+                if batch.num_rows() > rows_that_fit {
+                    if rows_that_fit > 0 {
+                        let a = batch.slice(0, rows_that_fit);
+                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
+                        self.write(&a)?;
+                        return self.write(&b);
+                    } else {
+                        self.flush()?;
+                        return self.write(batch);
                     }
                 }
             }
@@ -1751,19 +1751,19 @@ fn write_leaf(
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column.as_primitive::<Decimal32Type>();
-                    get_decimal_32_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column.as_primitive::<Decimal64Type>();
-                    get_decimal_64_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_128_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Decimal256(_, _) => {
                     let array = column.as_primitive::<Decimal256Type>();
-                    get_decimal_256_array_slice(array, indices.iter().copied())
+                    get_decimal_array_slice(array, indices.iter().copied())
                 }
                 ArrowDataType::Float16 => {
                     let array = column.as_primitive::<Float16Type>();
@@ -1821,14 +1821,10 @@ fn get_interval_ym_array_slice(
     array: &arrow_array::IntervalYearMonthArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut value = array.value(i).to_le_bytes().to_vec();
-        let mut suffix = vec![0; 8];
-        value.append(&mut suffix);
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
-    }
-    values
+    chunk_array_slice(12, indices, move |i, chunk| {
+        let value = array.value(i);
+        chunk[0..4].copy_from_slice(&value.to_le_bytes());
+    })
 }
 
 /// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
@@ -1837,93 +1833,111 @@ fn get_interval_dt_array_slice(
     array: &arrow_array::IntervalDayTimeArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let mut out = [0; 12];
+    chunk_array_slice(12, indices, move |i, chunk| {
         let value = array.value(i);
-        out[4..8].copy_from_slice(&value.days.to_le_bytes());
-        out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
-        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
-    }
-    values
+        chunk[4..8].copy_from_slice(&value.days.to_le_bytes());
+        chunk[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+    })
 }
 
-fn get_decimal_32_array_slice(
-    array: &arrow_array::Decimal32Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(4 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+trait NativeDecimalType: DecimalType {
+    type NativeBytes: AsRef<[u8]>;
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes;
+}
+impl NativeDecimalType for Decimal32Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
     }
-    values
+}
+impl NativeDecimalType for Decimal64Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
+}
+impl NativeDecimalType for Decimal128Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
+}
+impl NativeDecimalType for Decimal256Type {
+    type NativeBytes = [u8; Self::BYTE_LENGTH];
+
+    fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
+        value.to_be_bytes()
+    }
 }
 
-fn get_decimal_64_array_slice(
-    array: &arrow_array::Decimal64Array,
+fn get_decimal_array_slice<T: NativeDecimalType>(
+    array: &PrimitiveArray<T>,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(8 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
-}
+    let chunk_size = decimal_length_from_precision(array.precision());
+    assert!(chunk_size <= T::BYTE_LENGTH);
 
-fn get_decimal_128_array_slice(
-    array: &arrow_array::Decimal128Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(16 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    if chunk_size == T::BYTE_LENGTH {
+        // Special-case that allows inlining memcpy.
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
+            let as_be_bytes = T::to_be_bytes(array.value(i));
+            chunk.copy_from_slice(as_be_bytes.as_ref());
+        })
+    } else {
+        chunk_array_slice(chunk_size, indices, move |i, chunk| {
+            let as_be_bytes = T::to_be_bytes(array.value(i));
+            let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - chunk.len())..];
+            chunk.copy_from_slice(resized_value);
+        })
     }
-    values
-}
-
-fn get_decimal_256_array_slice(
-    array: &arrow_array::Decimal256Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    let size = decimal_length_from_precision(array.precision());
-    for i in indices {
-        let as_be_bytes = array.value(i).to_be_bytes();
-        let resized_value = as_be_bytes[(32 - size)..].to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
-    }
-    values
 }
 
 fn get_float_16_array_slice(
     array: &arrow_array::Float16Array,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(i).to_le_bytes().to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)));
-    }
-    values
+    chunk_array_slice(2, indices, move |i, chunk| {
+        let value = array.value(i).to_le_bytes();
+        chunk.copy_from_slice(&value);
+    })
 }
 
 fn get_fsb_array_slice(
     array: &arrow_array::FixedSizeBinaryArray,
     indices: impl ExactSizeIterator<Item = usize>,
 ) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(i).to_vec();
-        values.push(FixedLenByteArray::from(ByteArray::from(value)))
+    chunk_array_slice(array.value_size(), indices, move |i, chunk| {
+        let value = array.value(i);
+        chunk.copy_from_slice(value);
+    })
+}
+
+#[inline]
+fn chunk_array_slice(
+    chunk_size: usize,
+    indices: impl ExactSizeIterator<Item = usize>,
+    writer: impl Fn(usize, &mut [u8]),
+) -> Vec<FixedLenByteArray> {
+    let capacity = indices.len() * chunk_size;
+    // TODO: This could be done with Vec::spare_capacity_mut,
+    //       but [MaybeUninit]::write_copy_of_slice is gated behind MSRV 1.93
+    let mut arena = vec![0; capacity];
+    for (i, chunk) in indices.zip(arena.chunks_exact_mut(chunk_size)) {
+        writer(i, chunk);
+    }
+    chunk_contiguous_vec(arena, chunk_size)
+}
+
+fn chunk_contiguous_vec(arena: Vec<u8>, chunk_size: usize) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(arena.len() / chunk_size);
+    let mut arena = Bytes::from(arena);
+    while arena.len() >= chunk_size {
+        let slice = arena.split_to(chunk_size);
+        values.push(FixedLenByteArray::from(ByteArray::from(slice)));
     }
     values
 }
@@ -1931,6 +1945,7 @@ fn get_fsb_array_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering;
     use std::collections::HashMap;
 
     use std::fs::File;
@@ -3407,10 +3422,120 @@ mod tests {
             for column in row_group.columns() {
                 assert!(column.offset_index_offset().is_some());
                 assert!(column.offset_index_length().is_some());
-                assert!(column.column_index_offset().is_none());
-                assert!(column.column_index_length().is_none());
+                assert!(column.column_index_offset().is_some());
+                assert!(column.column_index_length().is_some());
             }
         }
+        assert!(file_meta_data.column_index().is_some());
+        if let Some(col_indexes) = file_meta_data.column_index() {
+            for rg_idx in col_indexes {
+                for idx in rg_idx {
+                    assert!(idx.nan_counts().is_some());
+                    let float_idx = match idx {
+                        ColumnIndexMetaData::DOUBLE(idx) => idx,
+                        _ => panic!("expected double statistics"),
+                    };
+                    for i in 0..idx.num_pages() as usize {
+                        assert_eq!(float_idx.nan_count(i), Some(10));
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.min_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.max_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn check_page_offset_index_with_mixed_nan() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Float64,
+            true,
+        )]));
+
+        let mut out = Vec::with_capacity(1024);
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut out, schema.clone(), Some(props))
+            .expect("Unable to write file");
+
+        // write a page of all NaN (since batch min and max are NaN, global min/max are NaN)
+        let values = Arc::new(Float64Array::from(vec![f64::NAN; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a page of all -NaN (batch min/max is -NaN, should update global min to -NaN)
+        let values = Arc::new(Float64Array::from(vec![-f64::NAN; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a page of all 0 (non-NaN should override global min/max, now 0/0)
+        let values = Arc::new(Float64Array::from(vec![0_f64; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a mixed page (should now have min -1, max 1)
+        let values = Arc::new(Float64Array::from(vec![
+            -1.0,
+            0.0,
+            f64::NAN,
+            -f64::NAN,
+            1.0,
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        let file_meta_data = writer.close().unwrap();
+
+        // check the column chunk stats are correct
+        let col_stats = file_meta_data
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .expect("missing column chunk statistics");
+
+        assert_eq!(col_stats.nan_count_opt(), Some(22));
+        assert_eq!(col_stats.min_bytes_opt(), Some((-1.0f64).as_bytes()));
+        assert_eq!(col_stats.max_bytes_opt(), Some(1.0f64.as_bytes()));
+
+        assert!(file_meta_data.column_index().is_some());
+        let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
+        assert_eq!(col_idx.num_pages(), 4);
+
+        // test each page
+        let float_idx = match col_idx {
+            ColumnIndexMetaData::DOUBLE(idx) => idx,
+            _ => panic!("expected double statistics"),
+        };
+
+        assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));
+        assert_eq!(
+            f64::NAN.total_cmp(float_idx.min_value(0).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            f64::NAN.total_cmp(float_idx.max_value(0).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            (-f64::NAN).total_cmp(float_idx.min_value(1).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            (-f64::NAN).total_cmp(float_idx.max_value(1).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(float_idx.min_value(2), Some(&0.0));
+        assert_eq!(float_idx.max_value(2), Some(&0.0));
+        assert_eq!(float_idx.min_value(3), Some(&-1.0));
+        assert_eq!(float_idx.max_value(3), Some(&1.0));
     }
 
     #[test]
@@ -4761,11 +4886,7 @@ mod tests {
     #[test]
     fn test_arrow_writer_metadata() {
         let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
-        let file_schema = batch_schema.clone().with_metadata(
-            vec![("foo".to_string(), "bar".to_string())]
-                .into_iter()
-                .collect(),
-        );
+        let file_schema = batch_schema.clone().with_metadata([("foo", "bar")]);
 
         let batch = RecordBatch::try_new(
             Arc::new(batch_schema),
