@@ -420,7 +420,7 @@ pub struct ArrowSchemaConverter<'a> {
     schema_root: &'a str,
     /// Should we coerce Arrow types to compatible Parquet types?
     ///
-    /// See docs on [Self::with_coerce_types]`
+    /// See docs on [`Self::with_coerce_types`]
     coerce_types: bool,
 }
 

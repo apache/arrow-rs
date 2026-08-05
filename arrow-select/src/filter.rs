@@ -365,10 +365,18 @@ impl IterationStrategy {
 }
 
 /// Borrowed description of which rows a [`FilterPredicate`] selects.
+///
+/// This is used for filtering multiple arrays with the same predicate without
+/// having to clone the predicate's internal data structures (e.g. the list of
+/// indices or slices).
 pub(crate) enum FilterSelection<'a> {
+    /// No rows are selected
     None,
+    /// All `len` rows are selected
     All { len: usize },
+    /// Iterator of `(start, end)` slices, each a run of contiguous selected rows
     Slices(FilterSlices<'a>),
+    /// Iterator of the indices of the selected rows
     Indices(FilterIndices<'a>),
 }
 
@@ -378,7 +386,9 @@ pub(crate) type FilterSlices<'a> =
 pub(crate) type FilterIndices<'a> =
     FilterIterator<std::iter::Copied<std::slice::Iter<'a, usize>>, IndexIterator<'a>>;
 
-/// Holds either materialized rows or a lazy iterator.
+/// Internal implementation of [`FilterSelection`] that holds either an iterator
+/// over a precomputed (materialized) list of rows, or a lazy iterator that
+/// derives the selected rows from the predicate on the fly.
 ///
 /// This does not implement [`Iterator`] on purpose. Callers use
 /// [`Self::for_each`] or [`Self::try_for_each`] so the enum is matched once
@@ -393,6 +403,7 @@ where
     M: Iterator,
     I: Iterator<Item = M::Item>,
 {
+    /// Call the infallible function `f` for each item in this [`FilterIterator`]
     pub(crate) fn for_each<F>(self, f: F)
     where
         F: FnMut(M::Item),
@@ -403,6 +414,8 @@ where
         }
     }
 
+    /// Call the fallible function `f` for each item in this [`FilterIterator`],
+    /// stopping and returning the error if `f` returns `Err`.
     pub(crate) fn try_for_each<F, E>(self, mut f: F) -> Result<(), E>
     where
         F: FnMut(M::Item) -> Result<(), E>,
@@ -429,6 +442,7 @@ where
 pub struct FilterPredicate {
     filter: BooleanArray,
     count: usize,
+    /// Precomputed strategy for iterating over the selected rows of this predicate
     strategy: IterationStrategy,
 }
 
@@ -468,6 +482,8 @@ impl FilterPredicate {
         self.count
     }
 
+    /// Return a [`FilterSelection`] for iterating over the rows selected by
+    /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
         match &self.strategy {
             IterationStrategy::None => FilterSelection::None,
@@ -1790,7 +1806,7 @@ mod tests {
             .skip(offset)
             .take(truncated_length)
             .enumerate()
-            .flat_map(|(idx, v)| v.then(|| idx))
+            .filter_map(|(idx, v)| v.then_some(idx))
             .collect();
 
         assert_eq!(slice_bits, expected_bits);
@@ -2357,7 +2373,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "buffer.len() >= predicate.filter.len()")]
     fn test_filter_bits_too_large() {
         let buffer = BooleanBuffer::from(vec![false; 8]);
         let predicate = BooleanArray::from(vec![true; 9]);
@@ -2366,7 +2382,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "values.len() >= predicate.filter.len()")]
     fn test_filter_native_too_large() {
         let values = vec![1; 8];
         let predicate = BooleanArray::from(vec![false; 9]);

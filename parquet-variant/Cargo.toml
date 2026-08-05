@@ -66,3 +66,6 @@ harness = false
 [[bench]]
 name = "variant_validation"
 harness = false
+
+[lints]
+workspace = true

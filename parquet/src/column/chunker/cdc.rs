@@ -715,9 +715,7 @@ mod tests {
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
         // Pattern: null at indices 0, 3, 6, 9, 12, 15, 18 → 7 nulls, 13 non-null
-        let def_levels: Vec<i16> = (0..num_levels)
-            .map(|i| if i % 3 == 0 { 0 } else { 1 })
-            .collect();
+        let def_levels: Vec<i16> = (0..num_levels).map(|i| i16::from(i % 3 != 0)).collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
         let chunks = chunker.calculate(
@@ -811,17 +809,17 @@ mod arrow_tests {
                     let arr: BooleanArray = (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
-                                Some(val % 2 == 0)
+                                Some(val.is_multiple_of(2))
                             }
                         })
                         .collect();
                     Arc::new(arr)
                 } else {
                     let arr: BooleanArray = (0..length)
-                        .map(|i| Some(test_hash(seed, i as u64) % 2 == 0))
+                        .map(|i| Some(test_hash(seed, i as u64).is_multiple_of(2)))
                         .collect();
                     Arc::new(arr)
                 }
@@ -839,7 +837,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("str_{val}"))
@@ -858,7 +856,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("bin_{val}").into_bytes())
@@ -877,7 +875,7 @@ mod arrow_tests {
                 let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::new(size);
                 for i in 0..length {
                     let val = test_hash(seed, i as u64);
-                    if nullable && val % 10 == 0 {
+                    if nullable && val.is_multiple_of(10) {
                         builder.append_null();
                     } else {
                         let s = format!("bin_{val}");

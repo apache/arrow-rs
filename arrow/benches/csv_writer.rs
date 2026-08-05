@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-extern crate criterion;
-
 use criterion::*;
 
 use arrow::array::*;

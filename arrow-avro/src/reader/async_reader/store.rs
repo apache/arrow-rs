@@ -31,7 +31,7 @@ use tokio::runtime::Handle;
 /// An implementation of an AsyncFileReader using the [`ObjectStore`] API.
 #[deprecated(
     since = "59.2.0",
-    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `arrow-avro/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime."
+    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `arrow-avro/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime. See also https://github.com/apache/arrow-rs/issues/10308"
 )]
 #[derive(Clone, Debug)]
 pub struct AvroObjectReader {
@@ -61,7 +61,7 @@ impl AvroObjectReader {
     /// [here]: https://www.influxdata.com/blog/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
     #[deprecated(
         since = "59.2.0",
-        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`"
+        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`. See also https://github.com/apache/arrow-rs/issues/10308"
     )]
     pub fn with_runtime(self, handle: Handle) -> Self {
         Self {

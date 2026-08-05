@@ -131,14 +131,12 @@ impl<'a> IpcSchemaEncoder<'a> {
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
 ) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
-    let mut ordered_keys = metadata.keys().collect::<Vec<_>>();
-    ordered_keys.sort();
-    let custom_metadata = ordered_keys
-        .into_iter()
-        .map(|k| {
-            let v = metadata.get(k).unwrap();
+    // `Metadata` iterates in deterministic (sorted) key order
+    let custom_metadata = metadata
+        .iter()
+        .map(|(k, v)| {
             let fb_key_name = fbb.create_string(k);
             let fb_val_name = fbb.create_string(v);
 
@@ -192,7 +190,7 @@ impl From<crate::Field<'_>> for Field {
     }
 }
 
-/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema].
+/// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
@@ -215,10 +213,10 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
             let kv = md_fields.get(i);
             let k_str = kv.key();
             let v_str = kv.value();
-            if let Some(k) = k_str {
-                if let Some(v) = v_str {
-                    metadata.insert(k.to_string(), v.to_string());
-                }
+            if let Some(k) = k_str
+                && let Some(v) = v_str
+            {
+                metadata.insert(k.to_string(), v.to_string());
             }
         }
     }
@@ -294,25 +292,22 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
 
 /// Get the Arrow data type from the flatbuffer Field table
 pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> DataType {
-    if let Some(dictionary) = field.dictionary() {
-        if may_be_dictionary {
-            let int = dictionary.indexType().unwrap();
-            let index_type = match (int.bitWidth(), int.is_signed()) {
-                (8, true) => DataType::Int8,
-                (8, false) => DataType::UInt8,
-                (16, true) => DataType::Int16,
-                (16, false) => DataType::UInt16,
-                (32, true) => DataType::Int32,
-                (32, false) => DataType::UInt32,
-                (64, true) => DataType::Int64,
-                (64, false) => DataType::UInt64,
-                _ => panic!("Unexpected bitwidth and signed"),
-            };
-            return DataType::Dictionary(
-                Box::new(index_type),
-                Box::new(get_data_type(field, false)),
-            );
-        }
+    if let Some(dictionary) = field.dictionary()
+        && may_be_dictionary
+    {
+        let int = dictionary.indexType().unwrap();
+        let index_type = match (int.bitWidth(), int.is_signed()) {
+            (8, true) => DataType::Int8,
+            (8, false) => DataType::UInt8,
+            (16, true) => DataType::Int16,
+            (16, false) => DataType::UInt16,
+            (32, true) => DataType::Int32,
+            (32, false) => DataType::UInt32,
+            (64, true) => DataType::Int64,
+            (64, false) => DataType::UInt64,
+            _ => panic!("Unexpected bitwidth and signed"),
+        };
+        return DataType::Dictionary(Box::new(index_type), Box::new(get_data_type(field, false)));
     }
 
     match field.type_type() {

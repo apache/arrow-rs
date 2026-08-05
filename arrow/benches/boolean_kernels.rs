@@ -21,8 +21,6 @@ use criterion::Criterion;
 
 use arrow::util::bench_util::create_boolean_array;
 
-extern crate arrow;
-
 use arrow::array::*;
 use arrow::compute::kernels::boolean as boolean_kernels;
 use std::hint;

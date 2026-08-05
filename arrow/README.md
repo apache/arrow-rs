@@ -36,11 +36,6 @@ Arrow features are supported by this crate.
 
 [Implementation Status Page]: https://arrow.apache.org/docs/status.html
 
-
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions.
-
 ## Versioning / Releases
 
 The `arrow` crate follows the [SemVer standard] defined by Cargo and works well

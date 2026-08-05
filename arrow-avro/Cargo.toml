@@ -125,3 +125,6 @@ harness = false
 [[bench]]
 name = "project_record"
 harness = false
+
+[lints]
+workspace = true

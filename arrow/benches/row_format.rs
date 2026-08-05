@@ -17,7 +17,6 @@
 
 #[macro_use]
 extern crate criterion;
-extern crate core;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
