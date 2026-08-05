@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Generates the Rust bindings for the Arrow Flight protobuf definitions.
+
 use std::{
     fs::OpenOptions,
     io::{Read, Write},

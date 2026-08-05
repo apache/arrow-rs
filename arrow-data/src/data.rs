@@ -516,7 +516,9 @@ impl ArrayData {
     ///
     /// This is approximately the number of bytes if a new
     /// [`ArrayData`] was formed by creating new [`Buffer`]s with
-    /// exactly the data needed.
+    /// exactly the data needed. For variadic layouts, this includes the full
+    /// capacity of every variadic buffer retained by a zero-copy slice, without
+    /// inspecting which buffers or ranges are referenced by the slice.
     ///
     /// For example, a [`DataType::Int64`] with `100` elements,
     /// [`Self::get_slice_memory_size`] would return `100 * 8 = 800`. If
@@ -575,6 +577,13 @@ impl ArrayData {
                 BufferSpec::AlwaysNull => {
                     // Nothing to do
                 }
+            }
+        }
+
+        if layout.variadic {
+            // Slicing view arrays retains all variadic data buffers unchanged.
+            for buffer in self.buffers.iter().skip(layout.buffers.len()) {
+                result += buffer.capacity();
             }
         }
 
@@ -847,10 +856,10 @@ impl ArrayData {
     pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
-            if let BufferSpec::FixedWidth { alignment, .. } = spec {
-                if buffer.as_ptr().align_offset(*alignment) != 0 {
-                    *buffer = Buffer::from_slice_ref(buffer.as_ref());
-                }
+            if let BufferSpec::FixedWidth { alignment, .. } = spec
+                && buffer.as_ptr().align_offset(*alignment) != 0
+            {
+                *buffer = Buffer::from_slice_ref(buffer.as_ref());
             }
         }
         // align children data recursively
@@ -2344,6 +2353,7 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ByteView;
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
 
@@ -2626,6 +2636,56 @@ mod tests {
         let string_data_slice = string_data.slice(1, 2);
         assert!(string_data_slice.ptr_eq(&string_data_slice));
         assert!(!string_data_slice.ptr_eq(&string_data))
+    }
+
+    #[test]
+    fn test_slice_memory_size_view_payload_buffers() {
+        for data_type in [DataType::Utf8View, DataType::BinaryView] {
+            let inline_only = ArrayData::builder(data_type.clone())
+                .len(2)
+                .add_buffer(Buffer::from_vec(vec![0_u128; 2]))
+                .build()
+                .unwrap();
+            assert_eq!(
+                inline_only.get_slice_memory_size().unwrap(),
+                2 * mem::size_of::<u128>()
+            );
+
+            let mut first_payload = Vec::with_capacity(32);
+            first_payload.extend_from_slice(b"first payload");
+            let first_view =
+                ByteView::new(first_payload.len().try_into().unwrap(), &first_payload[..4])
+                    .as_u128();
+            let first_payload = Buffer::from_vec(first_payload);
+            assert!(first_payload.capacity() > first_payload.len());
+            let first_payload_capacity = first_payload.capacity();
+
+            let mut second_payload = Vec::with_capacity(64);
+            second_payload.extend_from_slice(b"second payload");
+            let second_view = ByteView::new(
+                second_payload.len().try_into().unwrap(),
+                &second_payload[..4],
+            )
+            .with_buffer_index(1)
+            .as_u128();
+            let second_payload = Buffer::from_vec(second_payload);
+            assert!(second_payload.capacity() > second_payload.len());
+            let second_payload_capacity = second_payload.capacity();
+
+            let data = ArrayData::builder(data_type)
+                .len(3)
+                .add_buffer(Buffer::from_vec(vec![first_view, 0_u128, second_view]))
+                .add_buffer(first_payload)
+                .add_buffer(second_payload)
+                .build()
+                .unwrap();
+            let sliced = data.slice(1, 1);
+
+            assert_eq!(
+                sliced.get_slice_memory_size().unwrap(),
+                mem::size_of::<u128>() + first_payload_capacity + second_payload_capacity
+            );
+        }
     }
 
     #[test]

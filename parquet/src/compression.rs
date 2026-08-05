@@ -20,7 +20,9 @@
 //! See [`Compression`](crate::basic::Compression) enum for all available compression
 //! algorithms.
 //!
-#[cfg_attr(
+// NOTE: this must be an inner attribute so that the example is attached to the module (and
+// therefore actually run as a doc test) rather than to the `use` statement below.
+#![cfg_attr(
     feature = "experimental",
     doc = r##"
 # Example

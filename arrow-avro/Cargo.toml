@@ -48,6 +48,9 @@ avro_custom_types = ["dep:arrow-select"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
+# Deprecated: implement `AsyncFileReader` directly instead, see the example on
+# the `AsyncFileReader` trait documentation and `arrow-avro/examples/object_store.rs`.
+# This feature will be removed in a future release.
 object_store = ["dep:object_store", "async"]
 
 [dependencies]
@@ -98,6 +101,11 @@ once_cell = "1.21.3"
 half = { version = "2.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 
+[[example]]
+name = "object_store"
+required-features = ["async"]
+path = "./examples/object_store.rs"
+
 [[bench]]
 name = "avro_reader"
 harness = false
@@ -117,3 +125,6 @@ harness = false
 [[bench]]
 name = "project_record"
 harness = false
+
+[lints]
+workspace = true

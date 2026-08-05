@@ -281,19 +281,20 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, AvroError> {
-        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-            if info.writer_is_union && !info.reader_is_union {
-                let mut clone = data_type.clone();
-                clone.resolution = None; // Build target base decoder without Union resolution
-                let target = Self::try_new_internal(&clone)?;
-                let decoder = Self::Union(
-                    UnionDecoderBuilder::new()
-                        .with_resolved_union(info.clone())
-                        .with_target(target)
-                        .build()?,
-                );
-                return Ok(decoder);
-            }
+        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+            && info.writer_is_union
+            && !info.reader_is_union
+        {
+            let mut clone = data_type.clone();
+            clone.resolution = None; // Build target base decoder without Union resolution
+            let target = Self::try_new_internal(&clone)?;
+            let decoder = Self::Union(
+                UnionDecoderBuilder::new()
+                    .with_resolved_union(info.clone())
+                    .with_target(target)
+                    .build()?,
+            );
+            return Ok(decoder);
         }
         Self::try_new_internal(data_type)
     }
@@ -554,10 +555,10 @@ impl Decoder {
                 let mut builder = UnionDecoderBuilder::new()
                     .with_fields(fields.clone())
                     .with_branches(decoders);
-                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-                    if info.reader_is_union {
-                        builder = builder.with_resolved_union(info.clone());
-                    }
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+                    && info.reader_is_union
+                {
+                    builder = builder.with_resolved_union(info.clone());
                 }
                 Self::Union(builder.build()?)
             }
@@ -1635,13 +1636,13 @@ impl Decoder {
                     )));
                 }
                 let final_len = moff.len() - 1;
-                if let Some(n) = &nulls {
-                    if n.len() != final_len {
-                        return Err(AvroError::InvalidArgument(format!(
-                            "Map array null buffer length {} != final map length {final_len}",
-                            n.len()
-                        )));
-                    }
+                if let Some(n) = &nulls
+                    && n.len() != final_len
+                {
+                    return Err(AvroError::InvalidArgument(format!(
+                        "Map array null buffer length {} != final map length {final_len}",
+                        n.len()
+                    )));
                 }
                 let entries_fields = match map_field.data_type() {
                     DataType::Struct(fields) => fields.clone(),

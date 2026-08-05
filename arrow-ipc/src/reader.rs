@@ -43,7 +43,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::{CompressionCodec, DecompressionContext};
-use crate::r#gen::Message::{self};
+use crate::r#gen::Message;
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
@@ -1614,15 +1614,6 @@ impl<R: Read> StreamReader<R> {
             projection,
             skip_validation: UnsafeFlag::new(),
         })
-    }
-
-    /// Deprecated, use [`StreamReader::try_new`] instead.
-    #[deprecated(since = "53.0.0", note = "use `try_new` instead")]
-    pub fn try_new_unbuffered(
-        reader: R,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
-        Self::try_new(reader, projection)
     }
 
     /// Return the schema of the stream

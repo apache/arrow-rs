@@ -48,7 +48,6 @@ use algebra::{
     intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
-pub(crate) use boolean::mask_to_selectors;
 use boolean::{
     MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
 };
@@ -300,7 +299,7 @@ impl RowSelection {
     fn into_selectors_vec(self) -> Vec<RowSelector> {
         match self.inner {
             RowSelectionInner::Selectors(s) => s,
-            RowSelectionInner::Mask(m) => mask_to_selectors(m.mask()),
+            RowSelectionInner::Mask(m) => (*m).into_selectors(),
         }
     }
 
@@ -489,12 +488,10 @@ impl RowSelection {
                 intersect_row_selections(l, r)
             }
             (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                let r = mask_to_selectors(r.mask());
-                intersect_row_selections(l, &r)
+                intersect_row_selections(l, &r.borrowed_selectors())
             }
             (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                let l = mask_to_selectors(l.mask());
-                intersect_row_selections(&l, r)
+                intersect_row_selections(&l.borrowed_selectors(), r)
             }
         }
     }
@@ -506,23 +503,19 @@ impl RowSelection {
     ///
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
-        match &self.inner {
-            RowSelectionInner::Mask(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
-                }
-                RowSelectionInner::Selectors(r) => {
-                    let l = mask_to_selectors(l.mask());
-                    union_row_selections(&l, r)
-                }
-            },
-            RowSelectionInner::Selectors(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    let r = mask_to_selectors(r.mask());
-                    union_row_selections(l, &r)
-                }
-                RowSelectionInner::Selectors(r) => union_row_selections(l, r),
-            },
+        match (&self.inner, &other.inner) {
+            (RowSelectionInner::Mask(l), RowSelectionInner::Mask(r)) => {
+                Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(l, r)
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
+                union_row_selections(l, &r.borrowed_selectors())
+            }
+            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(&l.borrowed_selectors(), r)
+            }
         }
     }
 

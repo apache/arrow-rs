@@ -64,3 +64,6 @@ harness = false
 [[bench]]
 name = "ipc_reader"
 harness = false
+
+[lints]
+workspace = true

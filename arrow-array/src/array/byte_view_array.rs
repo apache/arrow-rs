@@ -213,15 +213,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         T::validate(&views, &buffers)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != views.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
-                    T::PREFIX,
-                    views.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != views.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
+                T::PREFIX,
+                views.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -1215,7 +1215,7 @@ mod tests {
     use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
     use arrow_schema::DataType;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;

@@ -53,7 +53,7 @@ use tokio::runtime::Handle;
 /// ```
 #[deprecated(
     since = "59.2.0",
-    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime."
+    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime. See https://github.com/apache/arrow-rs/issues/10308"
 )]
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
@@ -140,7 +140,7 @@ impl ParquetObjectReader {
     /// [here]: https://www.influxdata.com/blog/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
     #[deprecated(
         since = "59.2.0",
-        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`"
+        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`. See https://github.com/apache/arrow-rs/issues/10308"
     )]
     pub fn with_runtime(self, handle: Handle) -> Self {
         Self {
@@ -236,14 +236,13 @@ impl AsyncFileReader for ParquetObjectReader {
             // When page_index_policy is Skip (default), use the reader's preload flags.
             // When page_index_policy is Optional or Required, override the preload flags
             // to ensure the specified policy takes precedence.
-            if let Some(options) = options {
-                if options.column_index_policy() != PageIndexPolicy::Skip
-                    || options.offset_index_policy() != PageIndexPolicy::Skip
-                {
-                    metadata = metadata
-                        .with_column_index_policy(options.column_index_policy())
-                        .with_offset_index_policy(options.offset_index_policy());
-                }
+            if let Some(options) = options
+                && (options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip)
+            {
+                metadata = metadata
+                    .with_column_index_policy(options.column_index_policy())
+                    .with_offset_index_policy(options.offset_index_policy());
             }
 
             let metadata = if let Some(file_size) = self.file_size {
