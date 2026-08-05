@@ -4011,7 +4011,7 @@ mod tests {
         let err = schema.project(&[5]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("out of bounds") && msg.contains("5") && msg.contains("2"),
+            msg.contains("out of bounds") && msg.contains('5') && msg.contains('2'),
             "Expected out of bounds error, got: {msg}"
         );
     }
@@ -4030,7 +4030,7 @@ mod tests {
         let err = schema.project(&[1]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("out of bounds") && msg.contains("1"),
+            msg.contains("out of bounds") && msg.contains('1'),
             "Expected out of bounds error for edge case, got: {msg}"
         );
     }
@@ -4050,7 +4050,7 @@ mod tests {
         let err = schema.project(&[0, 1, 0]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("Duplicate projection index") && msg.contains("0"),
+            msg.contains("Duplicate projection index") && msg.contains('0'),
             "Expected duplicate index error, got: {msg}"
         );
     }
@@ -4069,7 +4069,7 @@ mod tests {
         let err = schema.project(&[1, 1]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("Duplicate projection index") && msg.contains("1"),
+            msg.contains("Duplicate projection index") && msg.contains('1'),
             "Expected duplicate index error for consecutive duplicates, got: {msg}"
         );
     }

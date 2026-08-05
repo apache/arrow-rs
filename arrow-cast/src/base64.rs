@@ -89,7 +89,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
         let encoded = b64_encode(e, a);

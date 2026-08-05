@@ -715,9 +715,7 @@ mod tests {
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
         // Pattern: null at indices 0, 3, 6, 9, 12, 15, 18 → 7 nulls, 13 non-null
-        let def_levels: Vec<i16> = (0..num_levels)
-            .map(|i| if i % 3 == 0 { 0 } else { 1 })
-            .collect();
+        let def_levels: Vec<i16> = (0..num_levels).map(|i| i16::from(i % 3 != 0)).collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
         let chunks = chunker.calculate(

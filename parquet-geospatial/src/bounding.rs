@@ -146,7 +146,7 @@ impl GeometryBounder {
     /// for PointZ). The output is always returned sorted.
     pub fn geometry_types(&self) -> Vec<i32> {
         let mut out = self.geometry_types.iter().copied().collect::<Vec<_>>();
-        out.sort();
+        out.sort_unstable();
         out
     }
 

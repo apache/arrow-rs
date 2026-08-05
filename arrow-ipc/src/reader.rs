@@ -43,7 +43,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::{CompressionCodec, DecompressionContext};
-use crate::r#gen::Message::{self};
+use crate::r#gen::Message;
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 

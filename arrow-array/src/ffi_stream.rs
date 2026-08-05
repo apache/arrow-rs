@@ -466,8 +466,8 @@ mod tests {
         pub fn new(
             schema: SchemaRef,
             iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
-        ) -> Box<TestRecordBatchReader> {
-            Box::new(TestRecordBatchReader { schema, iter })
+        ) -> TestRecordBatchReader {
+            TestRecordBatchReader { schema, iter }
         }
     }
 
@@ -488,7 +488,7 @@ mod tests {
     fn _test_round_trip_export(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
         let mut ffi_stream = FFI_ArrowArrayStream::new(reader);
@@ -533,7 +533,7 @@ mod tests {
     fn _test_round_trip_import(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
@@ -595,7 +595,7 @@ mod tests {
 
         let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);

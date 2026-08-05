@@ -22,9 +22,6 @@ use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
 
-extern crate arrow;
-extern crate parquet;
-
 use std::hint::black_box;
 use std::io::Empty;
 use std::sync::Arc;
@@ -144,6 +141,23 @@ fn create_large_string_distinct_bench_batch(size: usize, value_size: usize) -> R
     let filler = "x".repeat(value_size - 8);
     let array = Arc::new(StringArray::from_iter_values(
         (0..size).map(|i| format!("{i:08}{filler}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing their first
+/// `shared_bytes` bytes and differing thereafter — the realistic sorted-column
+/// case (paths, URLs, keys), where prefix deduplication saves part of each
+/// value rather than all or none of it.
+fn create_string_partial_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+    shared_bytes: usize,
+) -> Result<RecordBatch> {
+    let shared = "x".repeat(shared_bytes);
+    let tail = "y".repeat(value_size - shared_bytes - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{shared}{i:08}{tail}")),
     )) as _;
     Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
@@ -676,6 +690,61 @@ fn bench_all_writers(c: &mut Criterion) {
     }
 }
 
+/// Writes BYTE_ARRAY columns of *small* string values with `DELTA_BYTE_ARRAY`,
+/// with `PLAIN` on the same data as a baseline.
+///
+/// Values here sit far below `data_page_size_limit`, so many share a page and
+/// the encoder's previous-value state survives across them. This is the regime
+/// `DELTA_BYTE_ARRAY` is actually deployed in, and — unlike the multi-MiB
+/// benches below — the one where the shared-prefix scan runs to real depth.
+///
+/// * `small_string_shared_prefix`: values differing only in a trailing counter,
+///   so each scan covers nearly the whole value.
+/// * `small_string_partial_prefix`: values sharing their first half, the
+///   sorted-column case.
+/// * `small_string_distinct`: values differing from byte 0, where the scan
+///   stops immediately and prefix deduplication saves nothing.
+fn bench_small_delta_byte_array_writers(c: &mut Criterion) {
+    const ROWS: usize = 8192;
+    const VALUE_SIZE: usize = 1024;
+
+    let shared_prefix = create_large_string_shared_prefix_bench_batch(ROWS, VALUE_SIZE).unwrap();
+    let partial_prefix =
+        create_string_partial_prefix_bench_batch(ROWS, VALUE_SIZE, VALUE_SIZE / 2).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(ROWS, VALUE_SIZE).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    for (batch_name, batch) in [
+        ("small_string_shared_prefix", &shared_prefix),
+        ("small_string_partial_prefix", &partial_prefix),
+        ("small_string_distinct", &distinct),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
+            group.bench_function(prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
 /// Writes BYTE_ARRAY columns of large (multi-MiB) string values with
 /// `DELTA_BYTE_ARRAY`, with `PLAIN` on the same data as a baseline.
 ///
@@ -723,5 +792,10 @@ fn bench_delta_byte_array_writers(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_all_writers, bench_delta_byte_array_writers);
+criterion_group!(
+    benches,
+    bench_all_writers,
+    bench_small_delta_byte_array_writers,
+    bench_delta_byte_array_writers
+);
 criterion_main!(benches);

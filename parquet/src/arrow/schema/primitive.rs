@@ -183,7 +183,7 @@ fn check_decimal_length(type_length: i32) -> Result<()> {
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int32),
-        (Some(ref t @ LogicalType::Integer(int)), _) => match (int.bit_width, int.is_signed) {
+        (Some(t @ LogicalType::Integer(int)), _) => match (int.bit_width, int.is_signed) {
             (8, true) => Ok(DataType::Int8),
             (16, true) => Ok(DataType::Int16),
             (32, true) => Ok(DataType::Int32),

@@ -19,6 +19,7 @@
 pub mod bit_util;
 mod bit_pack;
 pub(crate) mod interner;
+pub(crate) mod prefix;
 
 pub mod push_buffers;
 #[cfg(any(test, feature = "test_common"))]
