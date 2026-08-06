@@ -33,6 +33,16 @@ use std::sync::Arc;
 use crate::rank::{can_rank, rank};
 pub use arrow_schema::SortOptions;
 
+const COUNT_SORT_DICTIONARY_MAX_CARDINALITY_RATIO: usize = 8;
+const COUNT_SORT_DICTIONARY_SMALL_INPUT_MAX_CARDINALITY_RATIO: usize = 4;
+const COUNT_SORT_DICTIONARY_MIN_VALUES_FOR_MAX_CARDINALITY_RATIO: usize = 16 * 1024;
+const COUNT_SORT_DICTIONARY_MIN_DISORDER_INVERSIONS: usize = 2;
+const COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_COUNT: usize = 16;
+const COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_JITTER: usize = 17;
+const COUNT_SORT_DICTIONARY_MIN_DISTINCT_RANK_SAMPLES: usize = 8;
+const COUNT_SORT_DICTIONARY_DISTINCT_RANK_SAMPLE_COUNT: usize = 16;
+const COUNT_SORT_DICTIONARY_RANK_SAMPLE_JITTER: usize = 17;
+
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
 /// Performs a sort on values and indices. Nulls are ordered according
@@ -561,9 +571,43 @@ fn sort_dictionary<K: ArrowDictionaryKeyType>(
     limit: Option<usize>,
 ) -> Result<UInt32Array, ArrowError> {
     let keys: &PrimitiveArray<K> = dict.keys();
+    let dictionary_len = dict.values().len();
     let rank = child_rank(dict.values().as_ref(), options)?;
 
-    // create tuples that are used for sorting
+    // An adaptive comparison sort is cheaper for ordered dictionary ranks.
+    // When rank samples follow dictionary keys, key samples are a cheaper
+    // disorder signal. Otherwise, sample ranks directly. First cheaply reject
+    // monotonic inputs and sparse rank use, then require sustained disorder so
+    // a single inversion stays on the adaptive comparison-sort path.
+    if can_count_sort_dictionary(
+        dictionary_len,
+        value_indices.len(),
+        null_indices.len(),
+        options,
+        limit,
+    ) {
+        let use_count_sort = if dictionary_ranks_follow_key_samples(&rank) {
+            dictionary_keys_have_mixed_samples(keys, &value_indices)
+                && dictionary_ranks_have_many_distinct_samples(keys, &value_indices, &rank)
+                && dictionary_keys_have_many_inversions(keys, &value_indices)
+        } else {
+            dictionary_ranks_have_mixed_samples(keys, &value_indices, &rank)
+                && dictionary_ranks_have_many_distinct_samples(keys, &value_indices, &rank)
+                && dictionary_ranks_have_many_inversions(keys, &value_indices, &rank)
+        };
+        if use_count_sort {
+            return Ok(count_sort_dictionary(
+                keys,
+                value_indices,
+                &rank,
+                &null_indices,
+                options,
+                limit,
+            ));
+        }
+    }
+
+    // Create tuples that are used for sorting
     let mut valids = value_indices
         .into_iter()
         .map(|index| {
@@ -573,6 +617,264 @@ fn sort_dictionary<K: ArrowDictionaryKeyType>(
         .collect::<Vec<(u32, u32)>>();
 
     Ok(sort_impl(options, &mut valids, &null_indices, limit, |a, b| a.cmp(&b)).into())
+}
+
+fn can_count_sort_dictionary(
+    dictionary_len: usize,
+    value_count: usize,
+    null_count: usize,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> bool {
+    // Counting needs one counter per dictionary entry, so cap its allocation
+    // relative to the values it will sort. At the widest ratio, small valid
+    // inputs cannot amortize zeroing and scanning the counter array; nulls do
+    // not participate in that work. Partial sorting can avoid ordering every
+    // valid value.
+    if dictionary_len > value_count.saturating_mul(COUNT_SORT_DICTIONARY_MAX_CARDINALITY_RATIO) {
+        return false;
+    }
+    if value_count < COUNT_SORT_DICTIONARY_MIN_VALUES_FOR_MAX_CARDINALITY_RATIO
+        && dictionary_len
+            > value_count.saturating_mul(COUNT_SORT_DICTIONARY_SMALL_INPUT_MAX_CARDINALITY_RATIO)
+    {
+        return false;
+    }
+    match (limit, options.nulls_first) {
+        (Some(limit), true) => limit.saturating_sub(null_count) >= value_count,
+        _ => true,
+    }
+}
+
+#[inline]
+fn dictionary_ranks_follow_key_samples(rank: &[u32]) -> bool {
+    let Some((&first, &last)) = rank.first().zip(rank.last()) else {
+        return true;
+    };
+    let last_rank = u32::try_from(rank.len()).unwrap();
+    (first == 1 && last == last_rank) || (first == last_rank && last == 1)
+}
+
+#[inline]
+fn dictionary_keys_have_mixed_samples<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: &[u32],
+) -> bool {
+    let Some(&first_index) = value_indices.first() else {
+        return false;
+    };
+
+    let mut previous_key = keys.value(first_index as usize).as_usize();
+    let mut ascending = false;
+    let mut descending = false;
+    for offset in [
+        value_indices.len() / 7,
+        value_indices.len().saturating_mul(3) / 7,
+        value_indices.len().saturating_mul(6) / 7,
+    ] {
+        let current_key = keys.value(value_indices[offset] as usize).as_usize();
+        ascending |= previous_key < current_key;
+        descending |= previous_key > current_key;
+        if ascending && descending {
+            return true;
+        }
+        previous_key = current_key;
+    }
+    false
+}
+
+// A second sample pass prevents an isolated inversion from selecting counting sort.
+#[inline]
+fn dictionary_keys_have_many_inversions<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: &[u32],
+) -> bool {
+    let Some(&first_index) = value_indices.first() else {
+        return false;
+    };
+
+    let sample_count = value_indices
+        .len()
+        .min(COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_COUNT);
+    let sample_width = value_indices.len() / sample_count;
+    let mut previous_key = keys.value(first_index as usize).as_usize();
+    let mut ascending_inversions = 0;
+    let mut descending_inversions = 0;
+    for sample in 1..sample_count {
+        // Perturb distributed samples to avoid aligning with periodic keys.
+        let offset = sample * sample_width
+            + sample * COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_JITTER % sample_width;
+        let current_key = keys.value(value_indices[offset] as usize).as_usize();
+        ascending_inversions += usize::from(previous_key > current_key);
+        descending_inversions += usize::from(previous_key < current_key);
+        if ascending_inversions >= COUNT_SORT_DICTIONARY_MIN_DISORDER_INVERSIONS
+            && descending_inversions >= COUNT_SORT_DICTIONARY_MIN_DISORDER_INVERSIONS
+        {
+            return true;
+        }
+        previous_key = current_key;
+    }
+    false
+}
+
+// Avoid initializing a large counter array when the input uses only a few ranks.
+#[cold]
+#[inline(never)]
+fn dictionary_ranks_have_many_distinct_samples<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: &[u32],
+    rank: &[u32],
+) -> bool {
+    let sample_count = value_indices
+        .len()
+        .min(COUNT_SORT_DICTIONARY_DISTINCT_RANK_SAMPLE_COUNT);
+    if sample_count < COUNT_SORT_DICTIONARY_MIN_DISTINCT_RANK_SAMPLES {
+        return false;
+    }
+
+    let sample_width = value_indices.len() / sample_count;
+    let mut distinct = [0u32; COUNT_SORT_DICTIONARY_MIN_DISTINCT_RANK_SAMPLES];
+    let mut distinct_len = 0;
+    for sample in 0..sample_count {
+        // Perturb evenly spaced samples to avoid aligning with periodic keys.
+        let offset = sample * COUNT_SORT_DICTIONARY_RANK_SAMPLE_JITTER % sample_width;
+        let key = keys.value(value_indices[sample * sample_width + offset] as usize);
+        let rank = rank[key.as_usize()];
+        if distinct[..distinct_len].contains(&rank) {
+            continue;
+        }
+        distinct[distinct_len] = rank;
+        distinct_len += 1;
+        if distinct_len == distinct.len() {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
+fn dictionary_ranks_have_mixed_samples<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: &[u32],
+    rank: &[u32],
+) -> bool {
+    let Some(&first_index) = value_indices.first() else {
+        return false;
+    };
+
+    let mut previous_rank = rank[keys.value(first_index as usize).as_usize()];
+    let mut ascending = false;
+    let mut descending = false;
+    for offset in [
+        value_indices.len() / 7,
+        value_indices.len().saturating_mul(3) / 7,
+        value_indices.len().saturating_mul(6) / 7,
+    ] {
+        let current_rank = rank[keys.value(value_indices[offset] as usize).as_usize()];
+        ascending |= previous_rank < current_rank;
+        descending |= previous_rank > current_rank;
+        if ascending && descending {
+            return true;
+        }
+        previous_rank = current_rank;
+    }
+    false
+}
+
+// A second sample pass prevents an isolated inversion from selecting counting sort.
+#[inline(never)]
+fn dictionary_ranks_have_many_inversions<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: &[u32],
+    rank: &[u32],
+) -> bool {
+    let Some(&first_index) = value_indices.first() else {
+        return false;
+    };
+
+    let sample_count = value_indices
+        .len()
+        .min(COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_COUNT);
+    let sample_width = value_indices.len() / sample_count;
+    let mut previous_rank = rank[keys.value(first_index as usize).as_usize()];
+    let mut ascending_inversions = 0;
+    let mut descending_inversions = 0;
+    for sample in 1..sample_count {
+        // Perturb distributed samples to avoid aligning with periodic keys.
+        let offset = sample * sample_width
+            + sample * COUNT_SORT_DICTIONARY_DISORDER_SAMPLE_JITTER % sample_width;
+        let index = value_indices[offset];
+        let current_rank = rank[keys.value(index as usize).as_usize()];
+        ascending_inversions += usize::from(previous_rank > current_rank);
+        descending_inversions += usize::from(previous_rank < current_rank);
+        if ascending_inversions >= COUNT_SORT_DICTIONARY_MIN_DISORDER_INVERSIONS
+            && descending_inversions >= COUNT_SORT_DICTIONARY_MIN_DISORDER_INVERSIONS
+        {
+            return true;
+        }
+        previous_rank = current_rank;
+    }
+    false
+}
+
+#[cold]
+#[inline(never)]
+fn count_sort_dictionary<K: ArrowDictionaryKeyType>(
+    keys: &PrimitiveArray<K>,
+    value_indices: Vec<u32>,
+    rank: &[u32],
+    null_indices: &[u32],
+    options: SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array {
+    // Ranks are bounded by the dictionary cardinality and use one-based values.
+    // The output indices are u32, so each bucket count fits in u32 as well.
+    let mut counts = vec![0u32; rank.len() + 1];
+    for &index in &value_indices {
+        let key = keys.value(index as usize);
+        let rank: usize = rank[key.as_usize()].try_into().unwrap();
+        counts[rank] += 1;
+    }
+
+    let mut offset = 0u32;
+    if options.descending {
+        for count in counts.iter_mut().rev() {
+            let end = offset + *count;
+            *count = offset;
+            offset = end;
+        }
+    } else {
+        for count in &mut counts {
+            let end = offset + *count;
+            *count = offset;
+            offset = end;
+        }
+    }
+
+    let len = value_indices.len() + null_indices.len();
+    let limit = limit.unwrap_or(len).min(len);
+    let mut out = Vec::with_capacity(len);
+    let value_offset = if options.nulls_first {
+        out.extend_from_slice(null_indices);
+        null_indices.len()
+    } else {
+        0
+    };
+    out.resize(value_offset + value_indices.len(), 0);
+
+    for index in value_indices {
+        let key = keys.value(index as usize);
+        let rank: usize = rank[key.as_usize()].try_into().unwrap();
+        let offset = &mut counts[rank];
+        out[value_offset + usize::try_from(*offset).unwrap()] = index;
+        *offset += 1;
+    }
+
+    if !options.nulls_first {
+        out.extend_from_slice(null_indices);
+    }
+    out.truncate(limit);
+    out.into()
 }
 
 fn sort_list<O: OffsetSizeTrait>(
@@ -4645,6 +4947,314 @@ mod tests {
 
         partial_sort(&mut before, last, |a, b| a.cmp(b));
         assert_eq!(&d[0..last], &before[0..last]);
+    }
+
+    #[test]
+    fn test_dictionary_count_sort_selection() {
+        let nulls_first = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        assert!(can_count_sort_dictionary(4, 12, 2, nulls_first, None));
+        assert!(can_count_sort_dictionary(4, 12, 2, nulls_first, Some(14)));
+        assert!(!can_count_sort_dictionary(4, 12, 2, nulls_first, Some(3)));
+        assert!(can_count_sort_dictionary(4, 12, 2, nulls_last, Some(3)));
+        assert!(can_count_sort_dictionary(24, 12, 2, nulls_last, None));
+        assert!(can_count_sort_dictionary(48, 12, 2, nulls_last, None));
+        assert!(!can_count_sort_dictionary(96, 12, 2, nulls_last, None));
+        assert!(!can_count_sort_dictionary(
+            65_536, 8_192, 57_344, nulls_last, None
+        ));
+        assert!(can_count_sort_dictionary(
+            COUNT_SORT_DICTIONARY_MIN_VALUES_FOR_MAX_CARDINALITY_RATIO * 8,
+            COUNT_SORT_DICTIONARY_MIN_VALUES_FOR_MAX_CARDINALITY_RATIO,
+            2,
+            nulls_last,
+            None
+        ));
+        assert!(!can_count_sort_dictionary(97, 12, 2, nulls_last, None));
+    }
+
+    #[test]
+    fn test_dictionary_rank_disorder() {
+        let sorted_keys = Int8Array::from_iter_values(0_i8..65);
+        let reverse_keys = Int8Array::from_iter_values((0_i8..65).rev());
+        let indices = (0..65).collect::<Vec<_>>();
+        let sorted_rank = (1..=65).collect::<Vec<u32>>();
+        let reverse_rank = (1..=65).rev().collect::<Vec<u32>>();
+        let permuted_rank = (0..65)
+            .map(|rank| (rank * 3) % 65 + 1)
+            .collect::<Vec<u32>>();
+        let repeated_keys = Int8Array::from_iter_values((0_i8..4).cycle().take(4096));
+        let repeated_indices = (0..4096).collect::<Vec<_>>();
+        let periodic_keys = Int16Array::from_iter_values(
+            (0_usize..4096).map(|index| i16::try_from(index * 21 % 256).unwrap()),
+        );
+        let periodic_indices = (0..4096).collect::<Vec<_>>();
+        let periodic_rank = (0..256).collect::<Vec<u32>>();
+        let nearly_ordered_keys =
+            Int8Array::from_iter_values((0_i8..65).map(|key| if key == 27 { 0 } else { key }));
+        let mut nearly_ordered_rank = sorted_rank.clone();
+        nearly_ordered_rank[27] = 1;
+
+        assert!(dictionary_ranks_follow_key_samples(&sorted_rank));
+        assert!(dictionary_ranks_follow_key_samples(&reverse_rank));
+        assert!(!dictionary_ranks_follow_key_samples(&permuted_rank));
+        assert!(!dictionary_keys_have_mixed_samples(&sorted_keys, &indices));
+        assert!(!dictionary_keys_have_mixed_samples(&reverse_keys, &indices));
+        assert!(dictionary_keys_have_mixed_samples(
+            &periodic_keys,
+            &periodic_indices
+        ));
+        assert!(dictionary_keys_have_mixed_samples(
+            &nearly_ordered_keys,
+            &indices
+        ));
+        assert!(!dictionary_keys_have_many_inversions(
+            &sorted_keys,
+            &indices
+        ));
+        assert!(!dictionary_keys_have_many_inversions(
+            &reverse_keys,
+            &indices
+        ));
+        assert!(dictionary_keys_have_many_inversions(
+            &periodic_keys,
+            &periodic_indices
+        ));
+        assert!(!dictionary_keys_have_many_inversions(
+            &nearly_ordered_keys,
+            &indices
+        ));
+        assert!(!dictionary_ranks_have_many_distinct_samples(
+            &repeated_keys,
+            &repeated_indices,
+            &[1, 2, 3, 4]
+        ));
+        assert!(dictionary_ranks_have_many_distinct_samples(
+            &periodic_keys,
+            &periodic_indices,
+            &periodic_rank
+        ));
+
+        assert!(!dictionary_ranks_have_mixed_samples(
+            &sorted_keys,
+            &indices,
+            &sorted_rank
+        ));
+        assert!(!dictionary_ranks_have_mixed_samples(
+            &reverse_keys,
+            &indices,
+            &sorted_rank
+        ));
+        assert!(dictionary_ranks_have_mixed_samples(
+            &sorted_keys,
+            &indices,
+            &permuted_rank
+        ));
+        assert!(dictionary_ranks_have_mixed_samples(
+            &periodic_keys,
+            &periodic_indices,
+            &periodic_rank
+        ));
+        assert!(dictionary_ranks_have_mixed_samples(
+            &sorted_keys,
+            &indices,
+            &nearly_ordered_rank
+        ));
+        assert!(!dictionary_ranks_have_many_inversions(
+            &sorted_keys,
+            &indices,
+            &sorted_rank
+        ));
+        assert!(!dictionary_ranks_have_many_inversions(
+            &reverse_keys,
+            &indices,
+            &sorted_rank
+        ));
+        assert!(dictionary_ranks_have_many_inversions(
+            &sorted_keys,
+            &indices,
+            &permuted_rank
+        ));
+        assert!(dictionary_ranks_have_many_inversions(
+            &periodic_keys,
+            &periodic_indices,
+            &periodic_rank
+        ));
+        assert!(!dictionary_ranks_have_many_inversions(
+            &sorted_keys,
+            &indices,
+            &nearly_ordered_rank
+        ));
+    }
+
+    #[test]
+    fn test_count_sort_dictionary_permuted_values() {
+        let keys = Int8Array::from_iter_values(0_i8..65);
+        let values = Int32Array::from_iter_values((0..65).map(|value| (value * 3) % 65));
+        let dictionary = DictionaryArray::<Int8Type>::new(keys.clone(), Arc::new(values.clone()));
+        let plain = Int32Array::from_iter_values(
+            keys.values().iter().map(|key| values.value(*key as usize)),
+        );
+        let value_indices = (0..dictionary.len() as u32).collect::<Vec<_>>();
+        let rank = child_rank(dictionary.values().as_ref(), SortOptions::default()).unwrap();
+
+        assert!(!dictionary_keys_have_many_inversions(
+            dictionary.keys(),
+            &value_indices
+        ));
+        assert!(!dictionary_ranks_follow_key_samples(&rank));
+        assert!(dictionary_ranks_have_many_inversions(
+            dictionary.keys(),
+            &value_indices,
+            &rank
+        ));
+        assert!(dictionary_ranks_have_many_distinct_samples(
+            dictionary.keys(),
+            &value_indices,
+            &rank
+        ));
+        assert_eq!(
+            sort_to_indices(&dictionary, None, None).unwrap(),
+            sort_to_indices(&plain, None, None).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_count_sort_dictionary_disordered_keys() {
+        let keys =
+            Int8Array::from_iter_values((0_i8..16).cycle().take(256).map(|key| (key * 5) % 16));
+        let values = Int32Array::from_iter_values(0..16);
+        let dictionary = DictionaryArray::<Int8Type>::new(keys.clone(), Arc::new(values));
+        let plain = Int32Array::from_iter_values(keys.values().iter().map(|key| i32::from(*key)));
+        let options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let expected = sort_to_indices(&plain, Some(options), None).unwrap();
+        let actual = sort_to_indices(&dictionary, Some(options), None).unwrap();
+        let value_indices = (0..dictionary.len() as u32).collect::<Vec<_>>();
+        let rank = child_rank(dictionary.values().as_ref(), options).unwrap();
+
+        let values_at_indices = |indices: &UInt32Array| {
+            indices
+                .values()
+                .iter()
+                .map(|index| plain.value(*index as usize))
+                .collect::<Vec<_>>()
+        };
+        assert!(dictionary_ranks_have_many_inversions(
+            dictionary.keys(),
+            &value_indices,
+            &rank
+        ));
+        assert_eq!(values_at_indices(&actual), values_at_indices(&expected));
+    }
+
+    #[test]
+    fn test_count_sort_dictionary_matches_plain_array() {
+        let mut key_values = vec![
+            Some(0_i8),
+            Some(3),
+            None,
+            Some(1),
+            Some(2),
+            Some(4),
+            Some(0),
+            Some(1),
+            Some(3),
+            None,
+            Some(2),
+            Some(4),
+            Some(3),
+            Some(0),
+        ];
+        key_values.extend((0..8).flat_map(|_| [Some(1), Some(0), Some(3), Some(2)]));
+        let keys = Int8Array::from(key_values);
+        let values = Int32Array::from(vec![
+            Some(20),
+            None,
+            Some(10),
+            Some(20),
+            Some(30),
+            Some(40),
+            Some(50),
+            Some(60),
+            Some(70),
+            Some(80),
+            Some(90),
+            Some(100),
+            Some(110),
+            Some(120),
+            Some(130),
+            Some(140),
+        ]);
+        let dictionary = DictionaryArray::<Int8Type>::new(keys, Arc::new(values));
+        let mut plain_values = vec![
+            Some(20),
+            Some(20),
+            None,
+            None,
+            Some(10),
+            Some(30),
+            Some(20),
+            None,
+            Some(20),
+            None,
+            Some(10),
+            Some(30),
+            Some(20),
+            Some(20),
+        ];
+        plain_values.extend((0..8).flat_map(|_| [None, Some(20), Some(20), Some(10)]));
+        let plain = Int32Array::from(plain_values);
+        let values_at_indices = |indices: &UInt32Array| {
+            indices
+                .values()
+                .iter()
+                .map(|index| {
+                    let index = *index as usize;
+                    plain.is_valid(index).then(|| plain.value(index))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for options in [
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        ] {
+            for limit in [None, Some(0), Some(3), Some(8), Some(20)] {
+                let expected =
+                    values_at_indices(&sort_to_indices(&plain, Some(options), limit).unwrap());
+                let actual_indices = sort_to_indices(&dictionary, Some(options), limit).unwrap();
+                let actual = values_at_indices(&actual_indices);
+                let mut positions = actual_indices.values().to_vec();
+                positions.sort_unstable();
+                positions.dedup();
+                assert_eq!(positions.len(), actual_indices.len());
+                assert_eq!(actual, expected, "options: {options:?}, limit: {limit:?}");
+            }
+        }
     }
 
     #[test]
