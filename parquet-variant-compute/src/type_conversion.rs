@@ -18,7 +18,7 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::compute::{
-    CastOptions, DecimalCast, parse_string_to_decimal_native, rescale_decimal,
+    CastOptions, DecimalCast, decimal_f64_power, parse_string_to_decimal_native, rescale_decimal,
     single_float_to_decimal,
 };
 use arrow::datatypes::{
@@ -223,7 +223,7 @@ where
     O: DecimalType,
     O::Native: DecimalCast,
 {
-    let mul = 10_f64.powi(scale as i32);
+    let mul = decimal_f64_power(scale as i32);
 
     match variant {
         Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(

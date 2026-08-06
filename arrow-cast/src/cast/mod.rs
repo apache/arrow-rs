@@ -77,8 +77,9 @@ pub use decimal::{
 };
 pub use string::cast_single_string_to_boolean_default;
 
-// IEEE-754 representations of 10^0 through 10^76. Storing the results of `powi`
-// preserves the existing rounding behavior while avoiding repeated exponentiation.
+// IEEE-754 bit patterns of `10_f64.powi(0..=Decimal256Type::MAX_SCALE)`.
+// Values are taken from `10_f64.powi` so lookups are bit-identical to the previous
+// calculation for every valid non-negative decimal scale.
 const DECIMAL_F64_POWERS: [u64; Decimal256Type::MAX_SCALE as usize + 1] = [
     0x3ff0000000000000,
     0x4024000000000000,
@@ -159,15 +160,20 @@ const DECIMAL_F64_POWERS: [u64; Decimal256Type::MAX_SCALE as usize + 1] = [
     0x4fb61bcca7119917,
 ];
 
+/// Return `10^scale` as `f64` for decimal cast scaling.
+///
+/// For `0 <= scale <= Decimal256Type::MAX_SCALE`, returns a precomputed value that is
+/// bit-identical to `10_f64.powi(scale)`. Negative or out-of-range scales fall back to
+/// `powi` to preserve prior behavior.
 #[inline]
-fn decimal_f64_power(scale: i32) -> f64 {
+pub fn decimal_f64_power(scale: i32) -> f64 {
     let Ok(exponent) = usize::try_from(scale) else {
         return 10_f64.powi(scale);
     };
-    let Some(power) = DECIMAL_F64_POWERS.get(exponent) else {
-        return 10_f64.powi(scale);
-    };
-    f64::from_bits(*power)
+    match DECIMAL_F64_POWERS.get(exponent) {
+        Some(power) => f64::from_bits(*power),
+        None => 10_f64.powi(scale),
+    }
 }
 
 /// Lossy conversion from decimal to float.
@@ -2949,8 +2955,8 @@ mod tests {
     fn test_decimal_f64_power_matches_powi() {
         for scale in -(Decimal256Type::MAX_SCALE as i32)..=Decimal256Type::MAX_SCALE as i32 {
             assert_eq!(
-                decimal_f64_power(scale),
-                10_f64.powi(scale),
+                decimal_f64_power(scale).to_bits(),
+                10_f64.powi(scale).to_bits(),
                 "scale {scale}"
             );
         }
