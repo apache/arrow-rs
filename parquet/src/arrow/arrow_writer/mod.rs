@@ -506,33 +506,6 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.finish()
     }
 
-    /// Create a new row group writer and return its column writers.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `ArrowRowGroupWriterFactory` instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        self.flush()?;
-        let in_progress = self
-            .row_group_writer_factory
-            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
-        Ok(in_progress.writers)
-    }
-
-    /// Append the given column chunks to the file as a new row group.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `SerializedFileWriter` directly instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        let mut row_group_writer = self.writer.next_row_group()?;
-        for chunk in chunks {
-            chunk.append_to_row_group(&mut row_group_writer)?;
-        }
-        row_group_writer.close()?;
-        Ok(())
-    }
-
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
     ///
     /// Flushes any outstanding data before returning.
@@ -930,8 +903,8 @@ pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
 ///
-/// This function can be used along with [`get_column_writers`] to encode
-/// individual columns in parallel. See example on [`ArrowColumnWriter`]
+/// This function can be used to encode individual columns in parallel.
+/// See example on [`ArrowColumnWriter`]
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -1344,27 +1317,6 @@ impl ArrowRowGroupWriterFactory {
     fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
         ArrowColumnWriterFactory::new().with_page_store_factory(self.page_store_factory.clone())
     }
-}
-
-/// Returns [`ArrowColumnWriter`]s for each column in a given schema
-#[deprecated(since = "57.0.0", note = "Use `ArrowRowGroupWriterFactory` instead")]
-pub fn get_column_writers(
-    parquet: &SchemaDescriptor,
-    props: &WriterPropertiesPtr,
-    arrow: &SchemaRef,
-) -> Result<Vec<ArrowColumnWriter>> {
-    let mut writers = Vec::with_capacity(arrow.fields.len());
-    let mut leaves = parquet.columns().iter();
-    let column_factory = ArrowColumnWriterFactory::new();
-    for field in &arrow.fields {
-        column_factory.get_arrow_column_writer(
-            field.data_type(),
-            props,
-            &mut leaves,
-            &mut writers,
-        )?;
-    }
-    Ok(writers)
 }
 
 /// Creates [`ArrowColumnWriter`] instances
