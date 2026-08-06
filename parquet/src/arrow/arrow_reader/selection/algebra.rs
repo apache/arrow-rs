@@ -285,9 +285,10 @@ pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer
 /// Combines two masks of equal length with the bitwise operation `op`.
 ///
 /// `BitAnd`/`BitOr` on `&BooleanBuffer` normalise the result to a zero bit offset,
-/// which costs a second allocation and a shifting copy of the whole mask when the
-/// operands are not byte aligned. Building the buffer directly keeps the offset,
-/// as the uneven path does.
+/// which costs a second allocation and a shifting copy when both operands
+/// share the same non-zero sub-64-bit alignment, causing
+/// `from_bitwise_binary_op` to return a non-zero-offset result. Building the
+/// buffer directly keeps the offset, as the unequal-length path does.
 fn combine_equal_length_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
 where
     F: FnMut(u64, u64) -> u64,
@@ -931,8 +932,10 @@ mod tests {
     fn test_mask_algebra_does_not_retain_backing_buffer() {
         // A short slice of a long mask must not keep the long allocation alive,
         // including when the other operand is empty and contributes nothing.
+        // Comparing capacities rather than lengths, since a shallow slice reports a
+        // short length while still holding the original allocation through its `Arc`.
         let long = BooleanBuffer::from((0..80_000).map(|i| i % 3 == 0).collect::<Vec<bool>>());
-        assert!(long.inner().len() >= 10_000);
+        assert!(long.inner().capacity() >= 10_000);
 
         for (l, r) in [
             (long.slice(5, 40), BooleanBuffer::new_unset(0)),
@@ -941,10 +944,8 @@ mod tests {
         ] {
             for combined in [intersect_masks(&l, &r), union_masks(&l, &r)] {
                 assert!(
-                    combined.inner().len() <= 16,
-                    "result retained a {} byte buffer for a {} bit mask",
-                    combined.inner().len(),
-                    combined.len()
+                    combined.inner().capacity() < long.inner().capacity(),
+                    "result retained the original backing allocation"
                 );
             }
         }
