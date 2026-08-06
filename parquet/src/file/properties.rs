@@ -528,11 +528,16 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_enabled`]
     pub fn dictionary_enabled(&self, col: &ColumnPath) -> bool {
+        self.dictionary_enabled_setting(col)
+            .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
+    }
+
+    /// Returns the explicitly configured dictionary setting for a column, if any.
+    pub(crate) fn dictionary_enabled_setting(&self, col: &ColumnPath) -> Option<bool> {
         self.column_properties
             .get(col)
             .and_then(|c| c.dictionary_enabled())
             .or_else(|| self.default_column_properties.dictionary_enabled())
-            .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
     }
 
     /// Returns which statistics are written for a column.
