@@ -5380,6 +5380,40 @@ mod test {
     }
 
     #[test]
+    fn get_variant_as_union_with_fixed_size_list_child() {
+        let item = Arc::new(Field::new("item", DataType::Int64, true));
+        let fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("fixed", DataType::FixedSizeList(item, 2), true)],
+        )
+        .unwrap();
+        let json = StringArray::from(vec!["[1, 2]"]);
+        let array = ArrayRef::from(json_to_variant(&(Arc::new(json) as ArrayRef)).unwrap());
+
+        for safe in [true, false] {
+            let options =
+                union_get_options(&fields, UnionMode::Dense).with_cast_options(CastOptions {
+                    safe,
+                    ..Default::default()
+                });
+            let result = variant_get(&array, options).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[0i8]);
+            let list = union
+                .child(0)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+            assert_eq!(
+                list.value(0)
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .values(),
+                &[1, 2]
+            );
+        }
+    }
+
+    #[test]
     fn get_variant_as_union_skips_decimal_that_cannot_fit() {
         let fields = UnionFields::try_new(
             vec![0, 1],

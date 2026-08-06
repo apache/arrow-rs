@@ -882,6 +882,7 @@ fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8>
         (Variant::Object(_), Struct(_)) => 0,
         (Variant::Object(_), Map(..)) => 1,
         (Variant::List(_), List(_)) => 0,
+        (Variant::List(list), FixedSizeList(_, size)) if list.len() == *size as usize => 0,
         (Variant::List(_), LargeList(_)) => 1,
         (Variant::List(_), ListView(_)) => 2,
         (Variant::List(_), LargeListView(_)) => 3,
