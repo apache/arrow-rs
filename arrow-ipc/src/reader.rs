@@ -3933,8 +3933,9 @@ mod tests {
     fn test_stream_reader_rejects_implausible_body_length() {
         for body_length in [i64::MAX, 1 << 50, -1] {
             let stream = stream_with_declared_body(body_length, 0);
-            let err = StreamReader::try_new(std::io::Cursor::new(stream), None)
-                .expect_err("a message declaring {body_length} body bytes must not be accepted");
+            let err = StreamReader::try_new(std::io::Cursor::new(stream), None).expect_err(
+                &format!("a message declaring {body_length} body bytes must not be accepted"),
+            );
             let err = err.to_string();
             assert!(
                 err.contains("Invalid IPC message body length")
