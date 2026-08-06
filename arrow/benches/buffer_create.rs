@@ -22,8 +22,6 @@ use criterion::Criterion;
 use rand::Rng;
 use rand::distr::Uniform;
 
-extern crate arrow;
-
 use arrow::{
     buffer::{Buffer, MutableBuffer},
     datatypes::ToByteSlice,

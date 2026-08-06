@@ -513,7 +513,7 @@ impl ParquetMetaDataReader {
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => fetch.fetch(range.start..range.end).await?,
+            _ => fetch.fetch(range.clone()).await?,
         };
 
         // Sanity check
@@ -647,7 +647,7 @@ impl ParquetMetaDataReader {
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         let prefetch = self.get_prefetch_size();
 
-        let suffix = fetch.fetch_suffix(prefetch as _).await?;
+        let suffix = fetch.fetch_suffix(prefetch).await?;
         let suffix_len = suffix.len();
 
         if suffix_len < FOOTER_SIZE {
@@ -1052,10 +1052,10 @@ mod async_tests {
     }
 
     fn read_range(file: &mut File, range: Range<u64>) -> Result<Bytes> {
-        file.seek(SeekFrom::Start(range.start as _))?;
+        file.seek(SeekFrom::Start(range.start))?;
         let len = range.end - range.start;
         let mut buf = Vec::with_capacity(len.try_into().unwrap());
-        file.take(len as _).read_to_end(&mut buf)?;
+        file.take(len).read_to_end(&mut buf)?;
         Ok(buf.into())
     }
 
@@ -1209,7 +1209,6 @@ mod async_tests {
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
 
-        dbg!("test");
         // Metadata hint too large
         fetch_count.store(0, Ordering::SeqCst);
         suffix_fetch_count.store(0, Ordering::SeqCst);

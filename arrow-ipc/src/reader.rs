@@ -43,7 +43,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::{CompressionCodec, DecompressionContext};
-use crate::r#gen::Message::{self};
+use crate::r#gen::Message;
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
@@ -534,7 +534,8 @@ impl<'a> RecordBatchDecoder<'a> {
     /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
     /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
     /// - Null count consistency and buffer length checks
-    /// # Safety
+    ///
+    /// # Undefined behavior
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
     /// certain that the data is valid. Invalid data that bypasses these checks
@@ -3203,6 +3204,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_with_massive_column_count() {
         // 499_999 is upper limit for default settings (1_000_000)
         let limit = 600_000;
@@ -3770,7 +3772,7 @@ mod tests {
         use std::sync::Arc;
 
         use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
-        use arrow_buffer::Buffer;
+        use arrow_buffer::{Buffer, MutableBuffer};
         use arrow_data::ArrayData;
         use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 
@@ -3788,7 +3790,7 @@ mod tests {
             let width = data_type.primitive_width().unwrap();
             let data = ArrayData::builder(data_type)
                 .len(len)
-                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .add_buffer(Buffer::from(MutableBuffer::from_len_zeroed(len * width)))
                 .build()
                 .unwrap();
 

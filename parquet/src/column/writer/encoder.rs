@@ -69,7 +69,7 @@ pub struct DataPageValues<T> {
 }
 
 /// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
-/// [super::GenericColumnWriter`]
+/// [`super::GenericColumnWriter`]
 pub trait ColumnValueEncoder {
     /// The underlying value type of [`Self::Values`]
     ///

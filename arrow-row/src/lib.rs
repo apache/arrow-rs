@@ -2434,7 +2434,7 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -4583,7 +4583,7 @@ mod tests {
     }
 
     fn generate_primitive_array<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> PrimitiveArray<K>
@@ -4596,10 +4596,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_all_unique_primitive_array<K>(
-        rng: &mut impl RngCore,
-        len: usize,
-    ) -> PrimitiveArray<K>
+    fn generate_all_unique_primitive_array<K>(rng: &mut StdRng, len: usize) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         K::Native: Hash + Eq,
@@ -4628,18 +4625,14 @@ mod tests {
             .collect()
     }
 
-    fn generate_boolean_array(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BooleanArray {
+    fn generate_boolean_array(rng: &mut StdRng, len: usize, valid_percent: f64) -> BooleanArray {
         (0..len)
             .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
             .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
@@ -4654,11 +4647,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> StringViewArray {
+    fn generate_string_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4670,11 +4659,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BinaryViewArray {
+    fn generate_byte_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4715,7 +4700,7 @@ mod tests {
     }
 
     fn generate_dictionary<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         values: ArrayRef,
         len: usize,
         valid_percent: f64,
@@ -4748,7 +4733,7 @@ mod tests {
     }
 
     fn generate_fixed_size_binary(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> FixedSizeBinaryArray {
@@ -4769,7 +4754,7 @@ mod tests {
         builder.finish()
     }
 
-    fn generate_struct(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StructArray {
+    fn generate_struct(rng: &mut StdRng, len: usize, valid_percent: f64) -> StructArray {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let a = generate_primitive_array::<Int32Type>(rng, len, valid_percent);
         let b = generate_strings::<i32>(rng, len, valid_percent);
@@ -4781,14 +4766,9 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<R: RngCore, F>(
-        rng: &mut R,
-        len: usize,
-        valid_percent: f64,
-        values: F,
-    ) -> ListArray
+    fn generate_list<F>(rng: &mut StdRng, len: usize, valid_percent: f64, values: F) -> ListArray
     where
-        F: FnOnce(&mut R, usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let values_len = offsets.last().unwrap().to_usize().unwrap();
@@ -4799,18 +4779,18 @@ mod tests {
     }
 
     fn generate_list_view<F>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         values: F,
     ) -> ListViewArray
     where
-        F: FnOnce(usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         // Generate sizes first, then create a values array large enough
         let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
         let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
-        let values = values(values_len);
+        let values = values(rng, values_len);
 
         // Generate offsets that can overlap, be non-monotonic, or share ranges
         let offsets: Vec<i32> = sizes
@@ -4835,16 +4815,16 @@ mod tests {
         )
     }
 
-    fn generate_map<R: RngCore, KeysFn, ValuesFn>(
-        rng: &mut R,
+    fn generate_map<KeysFn, ValuesFn>(
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         gen_keys: KeysFn,
         gen_values: ValuesFn,
     ) -> MapArray
     where
-        KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
-        ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
+        KeysFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
+        ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let entries_len = offsets.last().unwrap().to_usize().unwrap();
@@ -4897,7 +4877,7 @@ mod tests {
         let keys_arrow_row_converter =
             RowConverter::new(vec![SortField::new(array.key_type().clone())]).unwrap();
 
-        array.iter().enumerate().flat_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
+        array.iter().enumerate().filter_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
             let keys_as_rows = keys_arrow_row_converter.convert_columns(&[Arc::clone(&keys)]).expect("should be able to convert keys");
 
             for i in 0..keys_as_rows.num_rows() {
@@ -4913,7 +4893,7 @@ mod tests {
         })
     }
 
-    fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
+    fn generate_nulls(rng: &mut StdRng, len: usize) -> Option<NullBuffer> {
         Some(NullBuffer::from_iter(
             (0..len).map(|_| rng.random_bool(0.8)),
         ))
@@ -5099,7 +5079,7 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+    fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
         match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
@@ -5139,32 +5119,23 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
+                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
-            19 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
-            )),
-            20 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
-            )),
-            21 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
-            )),
+            19 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+            })),
+            20 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_strings::<i32>(rng, values_len, 0.8))
+            })),
+            21 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_struct(rng, values_len, 0.8))
+            })),
             22 => Arc::new(
-                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                generate_list_view(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),

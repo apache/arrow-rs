@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_mask_matches_selector_backing() {
-        use rand::{Rng, rng};
+        use rand::{RngExt, rng};
 
         let mut rand = rng();
         for _ in 0..200 {

@@ -234,7 +234,7 @@ unsafe fn create_buffer(
     if array.num_buffers() == 0 {
         return None;
     }
-    NonNull::new(array.buffer(index) as _)
+    NonNull::new(array.buffer(index).cast_mut())
         .map(|ptr| unsafe { Buffer::from_custom_allocation(ptr, len, owner) })
 }
 

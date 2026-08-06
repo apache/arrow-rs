@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -30,24 +31,24 @@ use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
 };
-use rand::Rng;
+use rand::{RngExt, SeedableRng};
 
-use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use rand::rngs::StdRng;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
 fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
     let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        write!(message_type, "REQUIRED FLOAT {i};").ok();
         column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)

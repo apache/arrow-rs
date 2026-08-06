@@ -692,12 +692,12 @@ mod tests {
 
         assert_eq!([6, 8, 10], buf2.as_slice());
         assert_eq!(3, buf2.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(2) }, buf2.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(2) }, buf2.as_ptr());
 
         let buf3 = buf2.slice_with_length(1, 2);
         assert_eq!([8, 10], buf3.as_slice());
         assert_eq!(2, buf3.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(3) }, buf3.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(3) }, buf3.as_ptr());
 
         let buf4 = buf.slice(5);
         let empty_slice: [u8; 0] = [];

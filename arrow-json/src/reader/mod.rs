@@ -1571,6 +1571,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_timestamps() {
         test_timestamp::<TimestampSecondType>();
         test_timestamp::<TimestampMillisecondType>();

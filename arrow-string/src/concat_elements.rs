@@ -318,7 +318,7 @@ where
             // in `concat_elements_view_array`, so offset cannot exceed it.
             // Not using `u32::try_from` on each insertion makes a ~5% difference
             // in benchmarking
-            debug_assert!(offset <= i32::MAX as usize);
+            debug_assert!(i32::try_from(offset).is_ok());
             let view_offset: u32 = offset as u32;
 
             self.data.extend_from_slice(left);

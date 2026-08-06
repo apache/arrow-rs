@@ -28,20 +28,28 @@ on:
       - main
   pull_request:
     paths:
+      - Cargo.toml
+      - Cargo.lock
       - .github/**
       - rust-toolchain.toml
+      - arrow/**
+      - arrow-arith/**
       - arrow-array/**
+      - arrow-avro/**
       - arrow-buffer/**
       - arrow-cast/**
       - arrow-csv/**
       - arrow-data/**
       - arrow-ipc/**
       - arrow-json/**
-      - arrow-avro/**
+      - arrow-ord/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**
-      - arrow/**
+
+permissions:
+  contents: read
 
 jobs:
   miri-checks:

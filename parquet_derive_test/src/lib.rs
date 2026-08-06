@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests for the `parquet_derive` procedural macros.
+
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
@@ -26,6 +28,10 @@ use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
 use std::sync::Arc;
 
 #[derive(ParquetRecordWriter)]
+#[expect(
+    clippy::ref_option_ref,
+    reason = "the point of this struct is to cover every field type the derive supports, including `&Option<&T>`"
+)]
 struct ACompleteRecord<'a> {
     pub a_bool: bool,
     pub a_str: &'a str,
@@ -446,12 +452,9 @@ mod tests {
     /// Returns file handle for a temp file in 'target' directory with a provided content
     pub fn get_temp_file(file_name: &str, content: &[u8]) -> fs::File {
         // build tmp path to a file in "target/debug/testdata"
-        let mut path_buf = env::current_dir().unwrap();
-        path_buf.push("target");
-        path_buf.push("debug");
-        path_buf.push("testdata");
-        fs::create_dir_all(&path_buf).unwrap();
-        path_buf.push(file_name);
+        let dir = env::current_dir().unwrap().join("target/debug/testdata");
+        fs::create_dir_all(&dir).unwrap();
+        let path_buf = dir.join(file_name);
 
         // write file content
         let mut tmp_file = fs::File::create(path_buf.as_path()).unwrap();

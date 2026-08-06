@@ -799,6 +799,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_concat_13_incompatible_datatypes_should_not_include_all_of_them() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
@@ -1732,6 +1733,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn concat_many_dictionary_list_arrays() {
         let number_of_unique_values = 8;
         let scalars = (0..80000)
