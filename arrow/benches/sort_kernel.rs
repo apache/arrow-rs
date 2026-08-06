@@ -41,6 +41,83 @@ fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(array)
 }
 
+fn create_string_dictionary_array(
+    len: usize,
+    cardinality: usize,
+    keys_sorted: bool,
+) -> DictionaryArray<Int32Type> {
+    assert!(len > 0 && cardinality > 0 && i32::try_from(cardinality).is_ok());
+
+    let values = StringArray::from_iter_values((0..cardinality).map(|value| format!("{value:08}")));
+    let keys = Int32Array::from_iter_values((0..len).map(|index| {
+        let key = if keys_sorted {
+            (index as u64 * cardinality as u64) / len as u64
+        } else {
+            (index as u64).wrapping_mul(11_400_714_819_323_198_485) % cardinality as u64
+        };
+        i32::try_from(key).unwrap()
+    }));
+
+    DictionaryArray::new(keys, Arc::new(values))
+}
+
+fn create_nearly_sorted_string_dictionary_array(
+    len: usize,
+    cardinality: usize,
+) -> DictionaryArray<Int32Type> {
+    assert!(len > 0 && cardinality > 1 && i32::try_from(cardinality).is_ok());
+
+    let values = StringArray::from_iter_values((0..cardinality).map(|value| format!("{value:08}")));
+    let mut keys = (0..len)
+        .map(|index| i32::try_from((index as u64 * cardinality as u64) / len as u64).unwrap())
+        .collect::<Vec<_>>();
+    // Introduce one out-of-order key while keeping the rest of the input sorted.
+    keys[len.saturating_mul(3) / 7] = 0;
+
+    DictionaryArray::new(Int32Array::from_iter_values(keys), Arc::new(values))
+}
+
+fn create_null_heavy_i32_dictionary_array(
+    len: usize,
+    cardinality: usize,
+    valid_stride: usize,
+) -> DictionaryArray<Int32Type> {
+    assert!(len > 0 && cardinality > 0 && valid_stride > 0 && i32::try_from(cardinality).is_ok());
+
+    let values = Int32Array::from_iter_values(0..i32::try_from(cardinality).unwrap());
+    let keys = Int32Array::from_iter((0..len).map(|index| {
+        if index % valid_stride == 0 {
+            let key = (index as u64).wrapping_mul(11_400_714_819_323_198_485) % cardinality as u64;
+            Some(i32::try_from(key).unwrap())
+        } else {
+            None
+        }
+    }));
+
+    DictionaryArray::new(keys, Arc::new(values))
+}
+
+fn create_cycling_string_dictionary_array(
+    len: usize,
+    cardinality: usize,
+    used_cardinality: usize,
+) -> DictionaryArray<Int32Type> {
+    assert!(
+        len > 0
+            && cardinality > 0
+            && used_cardinality > 0
+            && used_cardinality <= cardinality
+            && i32::try_from(cardinality).is_ok()
+    );
+
+    let values = StringArray::from_iter_values((0..cardinality).map(|value| format!("{value:08}")));
+    let keys = Int32Array::from_iter_values(
+        (0..len).map(|index| i32::try_from(index % used_cardinality).unwrap()),
+    );
+
+    DictionaryArray::new(keys, Arc::new(values))
+}
+
 fn bench_sort(array: &dyn Array) {
     hint::black_box(sort(array, None).unwrap());
 }
@@ -207,6 +284,66 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("sort string[10] dict nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
+
+    // Cover dictionary cardinalities below, at, and above the counting-sort guard.
+    for (len, cardinality) in [
+        (2usize.pow(12), 2usize.pow(8)),
+        (2usize.pow(12), 2usize.pow(12)),
+        (2usize.pow(12), 2usize.pow(13)),
+        (2usize.pow(12), 2usize.pow(14)),
+        (2usize.pow(12), 2usize.pow(15)),
+        (2usize.pow(16), 2usize.pow(8)),
+        (2usize.pow(16), 2usize.pow(10)),
+        (2usize.pow(16), 2usize.pow(11)),
+        (2usize.pow(16), 2usize.pow(12)),
+        (2usize.pow(16), 2usize.pow(16)),
+        (2usize.pow(16), 2usize.pow(17)),
+        (2usize.pow(16), 2usize.pow(18)),
+        (2usize.pow(16), 2usize.pow(19)),
+        (2usize.pow(16), 2usize.pow(20)),
+    ] {
+        let arr = create_string_dictionary_array(len, cardinality, false);
+        c.bench_function(
+            &format!("sort string dictionary n={len} k={cardinality} to indices"),
+            |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+        );
+    }
+
+    // Sorted keys exercise the comparison sort's fast path at cardinalities
+    // selected by the counting-sort guard.
+    for (len, cardinality) in [
+        (2usize.pow(12), 2usize.pow(12)),
+        (2usize.pow(12), 2usize.pow(15)),
+        (2usize.pow(16), 2usize.pow(16)),
+        (2usize.pow(16), 2usize.pow(19)),
+    ] {
+        let arr = create_string_dictionary_array(len, cardinality, true);
+        c.bench_function(
+            &format!("sort sorted string dictionary n={len} k={cardinality} to indices"),
+            |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+        );
+    }
+
+    // A single inversion should keep the adaptive comparison-sort path.
+    let arr = create_nearly_sorted_string_dictionary_array(2usize.pow(16), 16);
+    c.bench_function(
+        "sort nearly sorted string dictionary n=65536 k=16 one inversion to indices",
+        |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+    );
+
+    // Sparse dictionary use must not make a large rank-counting workspace profitable.
+    let arr = create_cycling_string_dictionary_array(2usize.pow(12), 2usize.pow(15), 4);
+    c.bench_function(
+        "sort cycling string dictionary n=4096 k=32768 used=4 to indices",
+        |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+    );
+
+    // The dense-count workspace is sized by dictionary cardinality, not valid entries.
+    let arr = create_null_heavy_i32_dictionary_array(2usize.pow(16), 2usize.pow(16), 8);
+    c.bench_function(
+        "sort null-heavy i32 dictionary n=65536 k=65536 valid=1/8 to indices",
+        |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+    );
 
     let run_encoded_array =
         create_primitive_run_array::<Int16Type, Int32Type>(2usize.pow(12), 2usize.pow(10));
