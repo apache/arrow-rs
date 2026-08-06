@@ -62,6 +62,9 @@ where
 
 /// Same as [`create_primitive_array`] but specialized for f16 since it doesn't
 /// implement the required rand traits.
+///
+/// This may be deprecated/removed in the future if half updates to the required
+/// rand version.
 pub fn create_nullable_f16_array(size: usize, null_density: f32) -> Float16Array {
     let mut rng = seedable_rng();
 
