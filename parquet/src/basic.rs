@@ -295,6 +295,8 @@ union LogicalType {
    17: (GeometryType) Geometry
    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
    18: (GeographyType) Geography
+   /// A reference to a range of bytes, stored inline, elsewhere in this file, or in an external file.
+   19: File
 }
 );
 
@@ -1114,6 +1116,7 @@ impl ColumnOrder {
                 LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
@@ -1341,6 +1344,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 | LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
@@ -1440,6 +1444,7 @@ impl str::FromStr for LogicalType {
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
             "VARIANT" => Ok(LogicalType::variant(None)),
+            "FILE" => Ok(LogicalType::File),
             "GEOMETRY" => Ok(LogicalType::geometry(None)),
             "GEOGRAPHY" => Ok(LogicalType::geography(
                 None,
