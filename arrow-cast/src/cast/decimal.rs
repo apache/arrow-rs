@@ -778,7 +778,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
-    let mul = 10_f64.powi(scale as i32);
+    let mul = decimal_f64_power(scale as i32);
 
     if cast_options.safe {
         array

@@ -77,6 +77,99 @@ pub use decimal::{
 };
 pub use string::cast_single_string_to_boolean_default;
 
+// IEEE-754 representations of 10^0 through 10^76. Storing the results of `powi`
+// preserves the existing rounding behavior while avoiding repeated exponentiation.
+const DECIMAL_F64_POWERS: [u64; Decimal256Type::MAX_SCALE as usize + 1] = [
+    0x3ff0000000000000,
+    0x4024000000000000,
+    0x4059000000000000,
+    0x408f400000000000,
+    0x40c3880000000000,
+    0x40f86a0000000000,
+    0x412e848000000000,
+    0x416312d000000000,
+    0x4197d78400000000,
+    0x41cdcd6500000000,
+    0x4202a05f20000000,
+    0x42374876e8000000,
+    0x426d1a94a2000000,
+    0x42a2309ce5400000,
+    0x42d6bcc41e900000,
+    0x430c6bf526340000,
+    0x4341c37937e08000,
+    0x4376345785d8a000,
+    0x43abc16d674ec800,
+    0x43e158e460913d00,
+    0x4415af1d78b58c40,
+    0x444b1ae4d6e2ef50,
+    0x4480f0cf064dd592,
+    0x44b52d02c7e14af6,
+    0x44ea784379d99db4,
+    0x45208b2a2c280291,
+    0x4554adf4b7320335,
+    0x4589d971e4fe8402,
+    0x45c027e72f1f1281,
+    0x45f431e0fae6d721,
+    0x46293e5939a08cea,
+    0x465f8def8808b024,
+    0x4693b8b5b5056e17,
+    0x46c8a6e32246c99d,
+    0x46fed09bead87c04,
+    0x4733426172c74d82,
+    0x476812f9cf7920e3,
+    0x479e17b84357691c,
+    0x47d2ced32a16a1b1,
+    0x48078287f49c4a1e,
+    0x483d6329f1c35ca5,
+    0x48725dfa371a19e7,
+    0x48a6f578c4e0a061,
+    0x48dcb2d6f618c879,
+    0x4911efc659cf7d4c,
+    0x49466bb7f0435c9f,
+    0x497c06a5ec5433c6,
+    0x49b18427b3b4a05c,
+    0x49e5e531a0a1c873,
+    0x4a1b5e7e08ca3a90,
+    0x4a511b0ec57e649a,
+    0x4a8561d276ddfdc0,
+    0x4ababa4714957d30,
+    0x4af0b46c6cdd6e3e,
+    0x4b24e1878814c9ce,
+    0x4b5a19e96a19fc41,
+    0x4b905031e2503da9,
+    0x4bc4643e5ae44d14,
+    0x4bf97d4df19d6058,
+    0x4c2fdca16e04b86e,
+    0x4c63e9e4e4c2f344,
+    0x4c98e45e1df3b015,
+    0x4ccf1d75a5709c1b,
+    0x4d03726987666191,
+    0x4d384f03e93ff9f6,
+    0x4d6e62c4e38ff874,
+    0x4da2fdbb0e39fb48,
+    0x4dd7bd29d1c87a1a,
+    0x4e0dac74463a98a1,
+    0x4e428bc8abe49f64,
+    0x4e772ebad6ddc73e,
+    0x4eacfa698c95390d,
+    0x4ee21c81f7dd43a8,
+    0x4f16a3a275d49492,
+    0x4f4c4c8b1349b9b7,
+    0x4f81afd6ec0e1412,
+    0x4fb61bcca7119917,
+];
+
+#[inline]
+fn decimal_f64_power(scale: i32) -> f64 {
+    let Ok(exponent) = usize::try_from(scale) else {
+        return 10_f64.powi(scale);
+    };
+    let Some(power) = DECIMAL_F64_POWERS.get(exponent) else {
+        return 10_f64.powi(scale);
+    };
+    f64::from_bits(*power)
+}
+
 /// Lossy conversion from decimal to float.
 ///
 /// Conversion is lossy and follows standard floating point semantics. Values
@@ -88,7 +181,7 @@ where
     D: DecimalType,
     F: Fn(D::Native) -> f64,
 {
-    f(x) / 10_f64.powi(scale)
+    f(x) / decimal_f64_power(scale)
 }
 
 /// CastOptions provides a way to override the default cast behaviors
@@ -2851,6 +2944,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_decimal_f64_power_matches_powi() {
+        for scale in -(Decimal256Type::MAX_SCALE as i32)..=Decimal256Type::MAX_SCALE as i32 {
+            assert_eq!(
+                decimal_f64_power(scale),
+                10_f64.powi(scale),
+                "scale {scale}"
+            );
+        }
+    }
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
