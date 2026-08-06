@@ -889,6 +889,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 0.1% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_001() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -912,6 +913,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 1% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_01() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -935,6 +937,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 10% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_10() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -958,6 +961,7 @@ mod tests {
 
     /// Coalesce multiple batches, 8k rows, with a 90% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_90() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 800,
@@ -981,6 +985,7 @@ mod tests {
 
     /// Coalesce multiple batches, 8k rows, with mixed filers, including 100%
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_mixed() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 800,
@@ -1027,6 +1032,7 @@ mod tests {
             .run();
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_utf8_split() {
         Test::new("coalesce_utf8")
             // 4040 rows of utf8 strings in total, split into batches of 1024
@@ -1070,6 +1076,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_batch_large_no_compact() {
         // view with large strings (has buffers) but full --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
@@ -1160,6 +1167,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_mixed() {
         let large_view_batch =
             stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
@@ -1219,6 +1227,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_many_small_compact() {
         // 200 rows alternating long (28) and short (≤12) strings.
         // Only the 100 long strings go into data buffers: 100 × 28 = 2800.
@@ -1264,6 +1273,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_many_small_boundary() {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
@@ -1294,6 +1304,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_large_small() {
         // The strings are 37 bytes long, so each batch has 100 * 28 = 2800 bytes
         let mixed_batch = stringview_batch_repeated(
@@ -1345,6 +1356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_binary_view() {
         let values: Vec<Option<&[u8]>> = vec![
             Some(b"foo"),

@@ -3204,6 +3204,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_with_massive_column_count() {
         // 499_999 is upper limit for default settings (1_000_000)
         let limit = 600_000;
@@ -3771,7 +3772,7 @@ mod tests {
         use std::sync::Arc;
 
         use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
-        use arrow_buffer::Buffer;
+        use arrow_buffer::{Buffer, MutableBuffer};
         use arrow_data::ArrayData;
         use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 
@@ -3789,7 +3790,7 @@ mod tests {
             let width = data_type.primitive_width().unwrap();
             let data = ArrayData::builder(data_type)
                 .len(len)
-                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .add_buffer(Buffer::from(MutableBuffer::from_len_zeroed(len * width)))
                 .build()
                 .unwrap();
 
