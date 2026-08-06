@@ -853,15 +853,15 @@ fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8>
         (Variant::Float(_), Float32) => 0,
         (Variant::Float(_), Float64) => 1,
         (Variant::Double(_), Float64) => 0,
-        (Variant::Decimal4(_), Decimal32(..)) => 0,
-        (Variant::Decimal4(_), Decimal64(..)) => 1,
-        (Variant::Decimal4(_), Decimal128(..)) => 2,
-        (Variant::Decimal4(_), Decimal256(..)) => 3,
-        (Variant::Decimal8(_), Decimal64(..)) => 0,
-        (Variant::Decimal8(_), Decimal128(..)) => 1,
-        (Variant::Decimal8(_), Decimal256(..)) => 2,
-        (Variant::Decimal16(_), Decimal128(..)) => 0,
-        (Variant::Decimal16(_), Decimal256(..)) => 1,
+        (Variant::Decimal4(_), Decimal32(..)) if variant_fits_decimal(value, data_type) => 0,
+        (Variant::Decimal4(_), Decimal64(..)) if variant_fits_decimal(value, data_type) => 1,
+        (Variant::Decimal4(_), Decimal128(..)) if variant_fits_decimal(value, data_type) => 2,
+        (Variant::Decimal4(_), Decimal256(..)) if variant_fits_decimal(value, data_type) => 3,
+        (Variant::Decimal8(_), Decimal64(..)) if variant_fits_decimal(value, data_type) => 0,
+        (Variant::Decimal8(_), Decimal128(..)) if variant_fits_decimal(value, data_type) => 1,
+        (Variant::Decimal8(_), Decimal256(..)) if variant_fits_decimal(value, data_type) => 2,
+        (Variant::Decimal16(_), Decimal128(..)) if variant_fits_decimal(value, data_type) => 0,
+        (Variant::Decimal16(_), Decimal256(..)) if variant_fits_decimal(value, data_type) => 1,
         (Variant::Date(_), Date32) => 0,
         (Variant::Date(_), Date64) => 1,
         (Variant::TimestampMicros(_), Timestamp(TimeUnit::Microsecond, Some(_))) => 0,
@@ -884,6 +884,28 @@ fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8>
         _ => return None,
     };
     Some(rank)
+}
+
+fn variant_fits_decimal(value: &Variant<'_, '_>, data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Decimal32(precision, scale) => {
+            variant_to_unscaled_decimal::<datatypes::Decimal32Type>(value, *precision, *scale)
+                .is_some()
+        }
+        DataType::Decimal64(precision, scale) => {
+            variant_to_unscaled_decimal::<datatypes::Decimal64Type>(value, *precision, *scale)
+                .is_some()
+        }
+        DataType::Decimal128(precision, scale) => {
+            variant_to_unscaled_decimal::<datatypes::Decimal128Type>(value, *precision, *scale)
+                .is_some()
+        }
+        DataType::Decimal256(precision, scale) => {
+            variant_to_unscaled_decimal::<datatypes::Decimal256Type>(value, *precision, *scale)
+                .is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Builder for converting variant objects into Arrow `MapArray`s.

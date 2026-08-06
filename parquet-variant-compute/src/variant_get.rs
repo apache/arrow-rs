@@ -5343,6 +5343,38 @@ mod test {
     }
 
     #[test]
+    fn get_variant_as_union_skips_decimal_that_cannot_fit() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("too_narrow", DataType::Decimal32(3, 2), true),
+                Field::new("fits", DataType::Decimal32(5, 2), true),
+            ],
+        )
+        .unwrap();
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(VariantDecimal4::try_new(12_345, 2).unwrap().into());
+        let array = ArrayRef::from(builder.build());
+
+        for safe in [true, false] {
+            let options =
+                union_get_options(&fields, UnionMode::Dense).with_cast_options(CastOptions {
+                    safe,
+                    ..Default::default()
+                });
+            let result = variant_get(&array, options).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[1i8]);
+            let decimal = union
+                .child(1)
+                .as_any()
+                .downcast_ref::<Decimal32Array>()
+                .unwrap();
+            assert_eq!(decimal.value(0), 12_345);
+        }
+    }
+
+    #[test]
     fn get_variant_as_union_with_null_field() {
         // nulls and unmatched values land in the Null-typed field instead of the first one
         let fields = UnionFields::try_new(
