@@ -17,7 +17,7 @@
 
 # Continuous benchmarking on CodSpeed.
 #
-# Runs the full workspace bench suite on every push to main, sharded
+# Runs the full workspace bench suite nightly against main, sharded
 # one job per `[[bench]]` target. Sharding at this granularity is
 # required because both crate-level shards (e.g. parquet alone has 16
 # bench targets producing >1000 benchmarks) and the workspace as a
@@ -42,6 +42,23 @@
 # Auth is via GitHub OIDC; the workflow's `id-token` claim is what
 # CodSpeed verifies, so no secret token is required.
 #
+# Schedule rationale: main takes roughly 150 commits a month, in bursts
+# (20+ merges in a day is not unusual). At ~85 jobs a run, benchmarking
+# every push would put thousands of jobs a day into the shared Apache
+# Actions pool. A nightly baseline caps that at one run a day.
+#
+# The cost of that choice is attribution. A regression is localised to
+# one night's worth of commits rather than to a single commit, so
+# tracking it down means bisecting that range by hand — re-run this
+# workflow via workflow_dispatch on the suspect commits. Likewise a PR
+# comparison is made against the most recent nightly report, not against
+# the PR's merge-base, so anything merged since that report is folded
+# into the PR's numbers. Treat a regression on a PR whose base has moved
+# as a prompt to investigate, not as proof the PR caused it.
+#
+# `schedule` always runs against the tip of the default branch, so the
+# baseline commit is whatever main happens to be at 04:17 UTC.
+#
 # The `criterion` workspace dependency is renamed to
 # `codspeed-criterion-compat`, so existing `use criterion::*` benches
 # work unmodified; outside of CodSpeed the compat layer falls back to
@@ -54,9 +71,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  push:
-    branches:
-      - main
+  schedule:
+    # 04:17 UTC nightly. Off the hour on purpose: GitHub's scheduler is
+    # heavily oversubscribed at :00 and delays runs accordingly.
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
