@@ -36,8 +36,13 @@
 # Authorization: only users with write access to the repo can add
 # labels, so the label is itself the authorization gate.
 #
-# Baseline: native `pull_request` event → CodSpeed compares against
-# the base branch's latest CodSpeed report automatically.
+# Baseline: native `pull_request` event → CodSpeed compares against the
+# base branch's latest CodSpeed report automatically. Those reports come
+# from the nightly run in codspeed.yml, not from the PR's merge-base, so
+# the baseline can be up to a day (and a burst of merges) behind. A
+# regression here means "slower than main was last night", which is not
+# the same as "this PR made it slower". When the delta matters, dispatch
+# codspeed.yml on the merge-base first to get an exact comparison point.
 #
 # Fork PR caveat: workflows triggered by `pull_request` from fork PRs
 # do not get an OIDC token. For benches on fork PRs, push the branch
