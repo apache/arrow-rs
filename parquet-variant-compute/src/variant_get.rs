@@ -5343,6 +5343,43 @@ mod test {
     }
 
     #[test]
+    fn get_variant_as_union_with_encoded_children() {
+        let encoded_types = [
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ),
+        ];
+
+        for data_type in encoded_types {
+            let fields = UnionFields::try_new(
+                vec![0],
+                vec![Field::new("encoded", data_type.clone(), true)],
+            )
+            .unwrap();
+            let mut builder = VariantArrayBuilder::new(2);
+            builder.append_variant(Variant::from("apple"));
+            builder.append_variant(Variant::from("banana"));
+            let array = ArrayRef::from(builder.build());
+            let options =
+                union_get_options(&fields, UnionMode::Dense).with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+
+            let result = variant_get(&array, options).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[0i8, 0]);
+            assert_eq!(union.child(0).data_type(), &data_type);
+
+            let decoded = cast(union.child(0).as_ref(), &DataType::Utf8).unwrap();
+            let expected = StringArray::from(vec!["apple", "banana"]);
+            assert_eq!(decoded.as_ref(), &expected);
+        }
+    }
+
+    #[test]
     fn get_variant_as_union_skips_decimal_that_cannot_fit() {
         let fields = UnionFields::try_new(
             vec![0, 1],

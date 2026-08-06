@@ -839,6 +839,10 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
 fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8> {
     use DataType::*;
     let rank = match (value, data_type) {
+        (_, Dictionary(_, value_type)) => return union_child_rank(value, value_type),
+        (_, RunEndEncoded(_, value_field)) => {
+            return union_child_rank(value, value_field.data_type());
+        }
         (Variant::BooleanTrue | Variant::BooleanFalse, Boolean) => 0,
         (Variant::Int8(_), Int8) => 0,
         (Variant::Int8(_), Int16) => 1,
