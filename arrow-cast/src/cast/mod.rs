@@ -162,14 +162,22 @@ const DECIMAL_F64_POWERS: [u64; Decimal256Type::MAX_SCALE as usize + 1] = [
 
 /// Return `10^scale` as `f64` for decimal cast scaling.
 ///
-/// For `0 <= scale <= Decimal256Type::MAX_SCALE`, returns a precomputed value that is
-/// bit-identical to `10_f64.powi(scale)`. Negative or out-of-range scales fall back to
-/// `powi` to preserve prior behavior.
+/// # Lookup vs fallback
+///
+/// - **Lookup table** is used only for non-negative scales that fit the Arrow decimal
+///   scale domain: `0 <= scale <= Decimal256Type::MAX_SCALE` (0..=76). Those entries are
+///   bit-identical to `10_f64.powi(scale)`.
+/// - **Negative scales** (and any `scale > MAX_SCALE`) intentionally do **not** use the
+///   table. They fall back to `10_f64.powi(scale)` so behavior matches the previous
+///   implementation outside the precomputed domain. Negative powers are `1/10^|scale|`
+///   and are not stored in `DECIMAL_F64_POWERS`.
 #[inline]
 pub fn decimal_f64_power(scale: i32) -> f64 {
+    // Negative scales: usize::try_from fails → powi fallback (no LUT).
     let Ok(exponent) = usize::try_from(scale) else {
         return 10_f64.powi(scale);
     };
+    // Non-negative but beyond MAX_SCALE: also powi fallback.
     match DECIMAL_F64_POWERS.get(exponent) {
         Some(power) => f64::from_bits(*power),
         None => 10_f64.powi(scale),
@@ -2952,12 +2960,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decimal_f64_power_matches_powi() {
-        for scale in -(Decimal256Type::MAX_SCALE as i32)..=Decimal256Type::MAX_SCALE as i32 {
+    fn test_decimal_f64_power_lut_matches_powi_for_non_negative_scales() {
+        // Exercises the lookup-table path only (indices into DECIMAL_F64_POWERS).
+        for scale in 0..=Decimal256Type::MAX_SCALE as i32 {
             assert_eq!(
                 decimal_f64_power(scale).to_bits(),
                 10_f64.powi(scale).to_bits(),
-                "scale {scale}"
+                "LUT path scale {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_f64_power_fallback_matches_powi_for_negative_and_out_of_range() {
+        // Negative scales and scale > MAX_SCALE use powi, not the LUT.
+        // This asserts behavioral parity of the fallback, not table coverage.
+        let max = Decimal256Type::MAX_SCALE as i32;
+        for scale in [-max, -1, max + 1, max + 10] {
+            assert_eq!(
+                decimal_f64_power(scale).to_bits(),
+                10_f64.powi(scale).to_bits(),
+                "fallback path scale {scale}"
             );
         }
     }
