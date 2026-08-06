@@ -17,7 +17,6 @@
 
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
-use arrow::util::test_util::seedable_rng;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
@@ -25,7 +24,7 @@ use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
 };
 use parquet_variant_json::append_json;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
@@ -285,7 +284,7 @@ fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
 /// }
 /// ```
 fn json_repeated_struct(count: usize) -> impl Iterator<Item = String> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
     (0..count).map(move |_| {
         let first: String = (0..rng.random_range(1..=20))
             .map(|_| rng.sample(Alphanumeric) as char)
@@ -309,7 +308,7 @@ fn json_repeated_struct(count: usize) -> impl Iterator<Item = String> {
 /// [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
 /// ```
 fn json_repeated_list(count: usize) -> impl Iterator<Item = String> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
     (0..count).map(move |_| {
         let length = rng.random_range(0..=100);
         let mut output = String::new();
@@ -395,7 +394,7 @@ struct RandomJsonGenerator {
 
 impl Default for RandomJsonGenerator {
     fn default() -> Self {
-        let rng = seedable_rng();
+        let rng = StdRng::seed_from_u64(42);
         Self {
             rng,
             null_weight: 0,

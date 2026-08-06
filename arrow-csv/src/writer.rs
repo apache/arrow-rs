@@ -666,6 +666,10 @@ impl WriterBuilder {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::verbose_file_reads,
+    reason = "`tempfile::tempfile()` has no path, so the contents can only be read back through the handle"
+)]
 mod tests {
     use super::*;
 

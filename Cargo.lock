@@ -254,7 +254,7 @@ dependencies = [
  "num-bigint 0.5.1",
  "object_store",
  "once_cell",
- "rand 0.9.5",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "sha2",
@@ -500,7 +500,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "half",
- "rand 0.9.5",
+ "rand 0.10.2",
 ]
 
 [[package]]
@@ -2445,7 +2445,7 @@ dependencies = [
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
- "rand 0.9.5",
+ "rand 0.10.2",
  "ring",
  "seq-macro",
  "serde",
@@ -2482,7 +2482,7 @@ dependencies = [
  "half",
  "indexmap",
  "num-traits",
- "rand 0.9.5",
+ "rand 0.10.2",
  "simdutf8",
  "uuid",
 ]
@@ -2499,7 +2499,7 @@ dependencies = [
  "indexmap",
  "parquet-variant",
  "parquet-variant-json",
- "rand 0.9.5",
+ "rand 0.10.2",
  "serde_json",
  "uuid",
 ]
