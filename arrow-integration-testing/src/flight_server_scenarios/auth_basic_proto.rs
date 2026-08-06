@@ -65,15 +65,15 @@ pub struct AuthBasicProtoScenarioImpl {
 }
 
 impl AuthBasicProtoScenarioImpl {
-    async fn check_auth(&self, metadata: &MetadataMap) -> Result<GrpcServerCallContext, Status> {
+    fn check_auth(&self, metadata: &MetadataMap) -> Result<GrpcServerCallContext, Status> {
         let token = metadata
             .get_bin("auth-token-bin")
             .and_then(|v| v.to_bytes().ok())
             .and_then(|b| String::from_utf8(b.to_vec()).ok());
-        self.is_valid(token).await
+        self.is_valid(token)
     }
 
-    async fn is_valid(&self, token: Option<String>) -> Result<GrpcServerCallContext, Status> {
+    fn is_valid(&self, token: Option<String>) -> Result<GrpcServerCallContext, Status> {
         match token {
             Some(t) if t == *self.username => Ok(GrpcServerCallContext {
                 peer_identity: self.username.to_string(),
@@ -107,7 +107,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -115,7 +115,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -170,7 +170,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -178,7 +178,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -186,7 +186,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<PollInfo>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -195,7 +195,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
         let metadata = request.metadata();
-        self.check_auth(metadata).await?;
+        self.check_auth(metadata)?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -203,7 +203,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        let flight_context = self.check_auth(request.metadata()).await?;
+        let flight_context = self.check_auth(request.metadata())?;
         // Respond with the authenticated username.
         let buf = flight_context.peer_identity().as_bytes().to_vec().into();
         let result = arrow_flight::Result { body: buf };
@@ -215,7 +215,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        self.check_auth(request.metadata()).await?;
+        self.check_auth(request.metadata())?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -224,7 +224,7 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
         let metadata = request.metadata();
-        self.check_auth(metadata).await?;
+        self.check_auth(metadata)?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 }

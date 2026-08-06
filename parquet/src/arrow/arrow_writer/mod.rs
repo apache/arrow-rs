@@ -368,45 +368,45 @@ impl<W: Write + Send> ArrowWriter<W> {
             ),
         };
 
-        if let Some(max_rows) = self.max_row_group_row_count {
-            if in_progress.buffered_rows + batch.num_rows() > max_rows {
-                let to_write = max_rows - in_progress.buffered_rows;
-                let a = batch.slice(0, to_write);
-                let b = batch.slice(to_write, batch.num_rows() - to_write);
-                self.write(&a)?;
-                return self.write(&b);
-            }
+        if let Some(max_rows) = self.max_row_group_row_count
+            && in_progress.buffered_rows + batch.num_rows() > max_rows
+        {
+            let to_write = max_rows - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
         }
 
         // Check byte limit: if we have buffered data, use measured average row size
         // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes {
-            if in_progress.buffered_rows > 0 {
-                let current_bytes = in_progress.get_estimated_total_bytes();
+        if let Some(max_bytes) = self.max_row_group_bytes
+            && in_progress.buffered_rows > 0
+        {
+            let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if current_bytes >= max_bytes {
-                    self.flush()?;
-                    return self.write(batch);
-                }
+            if current_bytes >= max_bytes {
+                self.flush()?;
+                return self.write(batch);
+            }
 
-                if let Some(avg_row_bytes) = current_bytes
-                    .checked_div(in_progress.buffered_rows)
-                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
-                {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+            if let Some(avg_row_bytes) = current_bytes
+                .checked_div(in_progress.buffered_rows)
+                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            {
+                // At this point, `current_bytes < max_bytes` (checked above)
+                let remaining_bytes = max_bytes - current_bytes;
+                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
-                    if batch.num_rows() > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            let a = batch.slice(0, rows_that_fit);
-                            let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                            self.write(&a)?;
-                            return self.write(&b);
-                        } else {
-                            self.flush()?;
-                            return self.write(batch);
-                        }
+                if batch.num_rows() > rows_that_fit {
+                    if rows_that_fit > 0 {
+                        let a = batch.slice(0, rows_that_fit);
+                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
+                        self.write(&a)?;
+                        return self.write(&b);
+                    } else {
+                        self.flush()?;
+                        return self.write(batch);
                     }
                 }
             }
@@ -504,33 +504,6 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Close and finalize the underlying Parquet writer
     pub fn close(mut self) -> Result<ParquetMetaData> {
         self.finish()
-    }
-
-    /// Create a new row group writer and return its column writers.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `ArrowRowGroupWriterFactory` instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        self.flush()?;
-        let in_progress = self
-            .row_group_writer_factory
-            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
-        Ok(in_progress.writers)
-    }
-
-    /// Append the given column chunks to the file as a new row group.
-    #[deprecated(
-        since = "56.2.0",
-        note = "Use `SerializedFileWriter` directly instead, see `ArrowColumnWriter` for an example"
-    )]
-    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        let mut row_group_writer = self.writer.next_row_group()?;
-        for chunk in chunks {
-            chunk.append_to_row_group(&mut row_group_writer)?;
-        }
-        row_group_writer.close()?;
-        Ok(())
     }
 
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
@@ -930,8 +903,8 @@ pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
 ///
-/// This function can be used along with [`get_column_writers`] to encode
-/// individual columns in parallel. See example on [`ArrowColumnWriter`]
+/// This function can be used to encode individual columns in parallel.
+/// See example on [`ArrowColumnWriter`]
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -1344,27 +1317,6 @@ impl ArrowRowGroupWriterFactory {
     fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
         ArrowColumnWriterFactory::new().with_page_store_factory(self.page_store_factory.clone())
     }
-}
-
-/// Returns [`ArrowColumnWriter`]s for each column in a given schema
-#[deprecated(since = "57.0.0", note = "Use `ArrowRowGroupWriterFactory` instead")]
-pub fn get_column_writers(
-    parquet: &SchemaDescriptor,
-    props: &WriterPropertiesPtr,
-    arrow: &SchemaRef,
-) -> Result<Vec<ArrowColumnWriter>> {
-    let mut writers = Vec::with_capacity(arrow.fields.len());
-    let mut leaves = parquet.columns().iter();
-    let column_factory = ArrowColumnWriterFactory::new();
-    for field in &arrow.fields {
-        column_factory.get_arrow_column_writer(
-            field.data_type(),
-            props,
-            &mut leaves,
-            &mut writers,
-        )?;
-    }
-    Ok(writers)
 }
 
 /// Creates [`ArrowColumnWriter`] instances
@@ -1945,6 +1897,7 @@ fn chunk_contiguous_vec(arena: Vec<u8>, chunk_size: usize) -> Vec<FixedLenByteAr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering;
     use std::collections::HashMap;
 
     use std::fs::File;
@@ -3421,10 +3374,120 @@ mod tests {
             for column in row_group.columns() {
                 assert!(column.offset_index_offset().is_some());
                 assert!(column.offset_index_length().is_some());
-                assert!(column.column_index_offset().is_none());
-                assert!(column.column_index_length().is_none());
+                assert!(column.column_index_offset().is_some());
+                assert!(column.column_index_length().is_some());
             }
         }
+        assert!(file_meta_data.column_index().is_some());
+        if let Some(col_indexes) = file_meta_data.column_index() {
+            for rg_idx in col_indexes {
+                for idx in rg_idx {
+                    assert!(idx.nan_counts().is_some());
+                    let float_idx = match idx {
+                        ColumnIndexMetaData::DOUBLE(idx) => idx,
+                        _ => panic!("expected double statistics"),
+                    };
+                    for i in 0..idx.num_pages() as usize {
+                        assert_eq!(float_idx.nan_count(i), Some(10));
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.min_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.max_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn check_page_offset_index_with_mixed_nan() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Float64,
+            true,
+        )]));
+
+        let mut out = Vec::with_capacity(1024);
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut out, schema.clone(), Some(props))
+            .expect("Unable to write file");
+
+        // write a page of all NaN (since batch min and max are NaN, global min/max are NaN)
+        let values = Arc::new(Float64Array::from(vec![f64::NAN; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a page of all -NaN (batch min/max is -NaN, should update global min to -NaN)
+        let values = Arc::new(Float64Array::from(vec![-f64::NAN; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a page of all 0 (non-NaN should override global min/max, now 0/0)
+        let values = Arc::new(Float64Array::from(vec![0_f64; 10]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        // write a mixed page (should now have min -1, max 1)
+        let values = Arc::new(Float64Array::from(vec![
+            -1.0,
+            0.0,
+            f64::NAN,
+            -f64::NAN,
+            1.0,
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![values]).unwrap();
+        writer.write(&batch).unwrap();
+
+        let file_meta_data = writer.close().unwrap();
+
+        // check the column chunk stats are correct
+        let col_stats = file_meta_data
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .expect("missing column chunk statistics");
+
+        assert_eq!(col_stats.nan_count_opt(), Some(22));
+        assert_eq!(col_stats.min_bytes_opt(), Some((-1.0f64).as_bytes()));
+        assert_eq!(col_stats.max_bytes_opt(), Some(1.0f64.as_bytes()));
+
+        assert!(file_meta_data.column_index().is_some());
+        let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
+        assert_eq!(col_idx.num_pages(), 4);
+
+        // test each page
+        let float_idx = match col_idx {
+            ColumnIndexMetaData::DOUBLE(idx) => idx,
+            _ => panic!("expected double statistics"),
+        };
+
+        assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));
+        assert_eq!(
+            f64::NAN.total_cmp(float_idx.min_value(0).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            f64::NAN.total_cmp(float_idx.max_value(0).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            (-f64::NAN).total_cmp(float_idx.min_value(1).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(
+            (-f64::NAN).total_cmp(float_idx.max_value(1).unwrap()),
+            Ordering::Equal
+        );
+        assert_eq!(float_idx.min_value(2), Some(&0.0));
+        assert_eq!(float_idx.max_value(2), Some(&0.0));
+        assert_eq!(float_idx.min_value(3), Some(&-1.0));
+        assert_eq!(float_idx.max_value(3), Some(&1.0));
     }
 
     #[test]
@@ -4775,11 +4838,7 @@ mod tests {
     #[test]
     fn test_arrow_writer_metadata() {
         let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
-        let file_schema = batch_schema.clone().with_metadata(
-            vec![("foo".to_string(), "bar".to_string())]
-                .into_iter()
-                .collect(),
-        );
+        let file_schema = batch_schema.clone().with_metadata([("foo", "bar")]);
 
         let batch = RecordBatch::try_new(
             Arc::new(batch_schema),

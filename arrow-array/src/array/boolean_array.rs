@@ -93,6 +93,17 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Create a new [`BooleanArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(values: BooleanBuffer, nulls: Option<NullBuffer>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self { values, nulls }
+    }
+
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
         Self {
@@ -914,7 +925,7 @@ mod tests {
         }
     }
     use arrow_buffer::Buffer;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -1075,6 +1086,10 @@ mod tests {
     fn test_boolean_array_from_iter_with_larger_upper_bound() {
         // See https://github.com/apache/arrow-rs/issues/8505
         // This returns an upper size hint of 4
+        #[expect(
+            clippy::iter_filter_is_some,
+            reason = "the point of the test is the size hint of `filter`, which `flatten` does not have"
+        )]
         let iterator = vec![Some(true), None, Some(false), None]
             .into_iter()
             .filter(Option::is_some);
@@ -1083,6 +1098,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_boolean_array_builder() {
         // Test building a boolean array with ArrayData builder and offset
         // 000011011
@@ -1334,6 +1350,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_not() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1342,6 +1359,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_preserves_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1354,6 +1372,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_unshared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1364,6 +1383,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_shared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1377,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_with_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let result = arr.bitwise_unary_mut(|x| !x).unwrap();
@@ -1558,6 +1579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_sliced() {
         // Slicing creates a non-zero offset into the underlying buffer.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);
@@ -1571,6 +1593,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_sliced() {
         // Slicing shares the buffer, so _mut must return Err.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);

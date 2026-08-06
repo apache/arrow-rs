@@ -804,7 +804,7 @@ async fn test_multi_predicate_auto_mask_with_sparse_pages() {
     // filter_col: 0 for first and last 100 rows, 1 for middle 100 rows
     // value_col: just row index
     let filter_values: Vec<i32> = (0..num_rows as i32)
-        .map(|i| if (100..200).contains(&i) { 1 } else { 0 })
+        .map(|i| i32::from((100..200).contains(&i)))
         .collect();
     let value_values: Vec<i32> = (0..num_rows as i32).collect();
 

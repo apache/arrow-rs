@@ -213,15 +213,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         T::validate(&views, &buffers)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != views.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
-                    T::PREFIX,
-                    views.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != views.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
+                T::PREFIX,
+                views.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -618,7 +618,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                     total_len: current_elements,
                 });
             }
-            debug_assert!(groups.len() <= i32::MAX as usize);
+            debug_assert!(i32::try_from(groups.len()).is_ok());
 
             // Second pass: copy each group into an exactly-sized buffer.
             let mut views_buf = Vec::with_capacity(len);
@@ -1215,7 +1215,7 @@ mod tests {
     use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
     use arrow_schema::DataType;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;

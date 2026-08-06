@@ -615,8 +615,8 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
-        let offsets = &offsets[range.start..range.end];
-        let sizes = &sizes[range.start..range.end];
+        let offsets = &offsets[range.clone()];
+        let sizes = &sizes[range.clone()];
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
@@ -848,11 +848,12 @@ impl LevelInfoBuilder {
         let len = range.end - range.start;
 
         // Fast path: entire leaf array is null
-        if let Some(nulls) = &info.logical_nulls {
-            if !matches!(info.def_levels, LevelData::Absent) && nulls.null_count() == nulls.len() {
-                info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
-                return;
-            }
+        if let Some(nulls) = &info.logical_nulls
+            && !matches!(info.def_levels, LevelData::Absent)
+            && nulls.null_count() == nulls.len()
+        {
+            info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
+            return;
         }
 
         if matches!(info.def_levels, LevelData::Absent) {

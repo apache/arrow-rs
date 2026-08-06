@@ -341,7 +341,8 @@ impl FlightDataDecoder {
                 let buffer = {
                     // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
                     // reuse the allocation if already aligned, otherwise copy into a fresh aligned buffer.
-                    if data.data_body.as_ptr() as usize % 64 == 0 {
+                    let ptr_value = data.data_body.as_ptr() as usize;
+                    if ptr_value.is_multiple_of(64) {
                         &Buffer::from(data.data_body.clone())
                     } else {
                         &Buffer::from(data.data_body.as_ref())

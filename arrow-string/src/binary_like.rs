@@ -56,7 +56,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-pub(crate) fn binary_apply<'a, 'i, T: BinaryArrayType<'a> + 'a>(
+pub(crate) fn binary_apply<'a, T: BinaryArrayType<'a> + 'a>(
     op: Op,
     l: T,
     l_s: bool,

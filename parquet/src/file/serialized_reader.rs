@@ -283,10 +283,10 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 fn get_midpoint_offset(meta: &RowGroupMetaData) -> i64 {
     let col = meta.column(0);
     let mut offset = col.data_page_offset();
-    if let Some(dic_offset) = col.dictionary_page_offset() {
-        if offset > dic_offset {
-            offset = dic_offset
-        }
+    if let Some(dic_offset) = col.dictionary_page_offset()
+        && offset > dic_offset
+    {
+        offset = dic_offset
     };
     offset + meta.compressed_size() / 2
 }
@@ -411,31 +411,34 @@ pub(crate) fn decode_page(
     //
     // We always use 0 offset for other pages other than v2, `true` flag means
     // that compression will be applied if decompressor is defined
-    let mut offset: usize = 0;
-    let mut can_decompress = true;
-
-    if let Some(ref header_v2) = page_header.data_page_header_v2 {
-        if header_v2.definition_levels_byte_length < 0
-            || header_v2.repetition_levels_byte_length < 0
-            || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
-                > page_header.uncompressed_page_size
-        {
-            return Err(general_err!(
-                "DataPage v2 header contains implausible values \
-                    for definition_levels_byte_length ({}) \
-                    and repetition_levels_byte_length ({}) \
-                    given DataPage header provides uncompressed_page_size ({})",
-                header_v2.definition_levels_byte_length,
-                header_v2.repetition_levels_byte_length,
-                page_header.uncompressed_page_size
-            ));
+    let (offset, can_decompress): (usize, bool) = match page_header.data_page_header_v2 {
+        Some(ref header_v2) => {
+            if header_v2.definition_levels_byte_length < 0
+                || header_v2.repetition_levels_byte_length < 0
+                || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
+                    > page_header.uncompressed_page_size
+            {
+                return Err(general_err!(
+                    "DataPage v2 header contains implausible values \
+                        for definition_levels_byte_length ({}) \
+                        and repetition_levels_byte_length ({}) \
+                        given DataPage header provides uncompressed_page_size ({})",
+                    header_v2.definition_levels_byte_length,
+                    header_v2.repetition_levels_byte_length,
+                    page_header.uncompressed_page_size
+                ));
+            }
+            (
+                usize::try_from(
+                    header_v2.definition_levels_byte_length
+                        + header_v2.repetition_levels_byte_length,
+                )?,
+                // When is_compressed flag is missing the page is considered compressed
+                header_v2.is_compressed.unwrap_or(true),
+            )
         }
-        offset = usize::try_from(
-            header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length,
-        )?;
-        // When is_compressed flag is missing the page is considered compressed
-        can_decompress = header_v2.is_compressed.unwrap_or(true);
-    }
+        None => (0, true),
+    };
 
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {

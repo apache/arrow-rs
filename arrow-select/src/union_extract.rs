@@ -442,6 +442,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_eq_scalar() {
         //multiple all equal chunks, so it's loop and sum logic it's tested
         //multiple chunks after, so it's loop logic it's tested

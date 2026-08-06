@@ -25,8 +25,7 @@ use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 use selection::MaskCursor;
 pub use selection::{
-    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionIter, RowSelectionPolicy,
-    RowSelector,
+    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector,
 };
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -262,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
-    /// [`ArrowReaderOptions::with_page_index`].
+    /// [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// # Example
     ///
@@ -316,7 +315,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Row filters are applied after row group selection and row selection
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// See the [blog post on late materialization] for a more technical explanation.
     ///
@@ -363,7 +362,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to limit the final set of rows decoded after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
@@ -377,7 +376,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to skip rows after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
@@ -616,30 +615,13 @@ impl ArrowReaderOptions {
         }
     }
 
-    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
-    /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
-    ///
-    /// If this is enabled, [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
-    /// information is present in the file.
-    ///
-    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
-    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
-    pub fn with_page_index(self, page_index: bool) -> Self {
-        self.with_page_index_policy(PageIndexPolicy::from(page_index))
-    }
-
-    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
-    ///
     /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
     /// This method sets the same policy for both. For fine-grained control, use
     /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
-    ///
-    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
         self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
@@ -801,20 +783,6 @@ impl ArrowReaderOptions {
         })
     }
 
-    #[deprecated(
-        since = "57.2.0",
-        note = "Use `column_index_policy` or `offset_index_policy` instead"
-    )]
-    /// Returns whether page index reading is enabled.
-    ///
-    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
-    ///
-    /// This can be set via [`with_page_index`][Self::with_page_index] or
-    /// [`with_page_index_policy`][Self::with_page_index_policy].
-    pub fn page_index(&self) -> bool {
-        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
-    }
-
     /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
     ///
     /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
@@ -843,6 +811,44 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
+    }
+}
+
+impl ParquetMetaDataReader {
+    /// Applies the metadata related settings from [`ArrowReaderOptions`],
+    /// such as the [`ParquetMetaDataOptions`], decryption properties, and
+    /// [`PageIndexPolicy`] to this reader.
+    ///
+    /// The page index policies are only applied if at least one of them is not
+    /// [`PageIndexPolicy::Skip`], so policies previously configured on this
+    /// reader (e.g. from a preload setting) are preserved when the options do
+    /// not request the page index.
+    ///
+    /// This encodes the canonical way to construct a `ParquetMetaDataReader`
+    /// inside `AsyncFileReader::get_metadata` (available with the `async`
+    /// feature), so implementations outside this crate do not need to
+    /// duplicate it.
+    pub fn with_arrow_reader_options(mut self, options: Option<&ArrowReaderOptions>) -> Self {
+        let Some(options) = options else { return self };
+
+        self = self.with_metadata_options(Some(options.metadata_options().clone()));
+
+        #[cfg(feature = "encryption")]
+        {
+            self = self.with_decryption_properties(
+                options.file_decryption_properties.as_ref().map(Arc::clone),
+            );
+        }
+
+        if options.column_index_policy() != PageIndexPolicy::Skip
+            || options.offset_index_policy() != PageIndexPolicy::Skip
+        {
+            self = self
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self
     }
 }
 
@@ -879,9 +885,11 @@ impl ArrowReaderMetadata {
     ///
     /// # Notes
     ///
-    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// If `options` indicates the page index should be read, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
+    ///
+    /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index)
@@ -1658,7 +1666,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng, random, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -3656,9 +3664,7 @@ pub(crate) mod tests {
     }
 
     fn get_test_file(file_name: &str) -> File {
-        let mut path = PathBuf::new();
-        path.push(arrow::util::test_util::arrow_test_data());
-        path.push(file_name);
+        let path = PathBuf::from(arrow::util::test_util::arrow_test_data()).join(file_name);
 
         File::open(path.as_path()).expect("File not found!")
     }
@@ -4045,9 +4051,7 @@ pub(crate) mod tests {
 
         let schema_without_metadata = Arc::new(Schema::new(vec![field.clone()]));
 
-        let metadata = [("key".to_string(), "value".to_string())]
-            .into_iter()
-            .collect();
+        let metadata = arrow_schema::Metadata::from([("key".to_string(), "value".to_string())]);
 
         let schema_with_metadata = Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 
