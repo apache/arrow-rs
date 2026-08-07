@@ -702,6 +702,7 @@ pub(crate) mod private {
         + Send
         + HeapSize
         + crate::encodings::decoding::private::GetDecoder
+        + crate::encodings::encoding::private::GetEncoder
         + crate::file::statistics::private::MakeStatistics
     {
         const PHYSICAL_TYPE: Type;
