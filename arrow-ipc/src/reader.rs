@@ -3952,6 +3952,7 @@ mod tests {
     /// first read for a small body, and after at least one growth step for a body larger
     /// than `MAX_PREALLOC_BYTES`.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_stream_reader_rejects_truncated_body() {
         let over_prealloc = MAX_PREALLOC_BYTES as i64 + 1;
         for (body_length, body_bytes) in [(1024, 10), (over_prealloc, MAX_PREALLOC_BYTES)] {
