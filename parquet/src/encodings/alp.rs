@@ -493,8 +493,8 @@ impl AlpFloat for f32 {
 
     const MAX_EXPONENT: u8 = ALP_MAX_EXPONENT_F32;
     const MAGIC_NUMBER: Self = 12582912.0; // 2^22 + 2^23
-    const ENCODING_UPPER_LIMIT: Self = 2147483520.0;
-    const ENCODING_LOWER_LIMIT: Self = -2147483520.0;
+    const ENCODING_UPPER_LIMIT: Self = 2147483500.0;
+    const ENCODING_LOWER_LIMIT: Self = -2147483500.0;
     const ENCODING_SENTINEL: i32 = 2147483520;
 
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
@@ -549,8 +549,8 @@ impl AlpFloat for f64 {
 
     const MAX_EXPONENT: u8 = ALP_MAX_EXPONENT_F64;
     const MAGIC_NUMBER: Self = 6755399441055744.0; // 2^51 + 2^52
-    const ENCODING_UPPER_LIMIT: Self = 9223372036854774784.0;
-    const ENCODING_LOWER_LIMIT: Self = -9223372036854774784.0;
+    const ENCODING_UPPER_LIMIT: Self = 9223372036854775000.0;
+    const ENCODING_LOWER_LIMIT: Self = -9223372036854775000.0;
     const ENCODING_SENTINEL: i64 = 9223372036854774784;
 
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
