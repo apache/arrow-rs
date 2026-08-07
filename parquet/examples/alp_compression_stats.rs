@@ -55,6 +55,11 @@
 //! reported GB/s uses the uncompressed input size (eight bytes per value). The
 //! companion script builds with `-C target-cpu=native` unless `RUSTFLAGS` is
 //! already set.
+//!
+//! A focused random-access comparison performs 100 deterministic point lookups
+//! on `city_temperature_f`. Each lookup starts from an in-memory encoded page;
+//! PLAIN + ZSTD must decompress the complete page, while ALP can skip directly
+//! to the vector containing the selected row.
 
 use std::fs::File;
 use std::hint::black_box;
@@ -80,6 +85,9 @@ use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 const INPUT_BATCH_VALUES: usize = 128 * 1024;
 /// The page size used by all three speed comparisons.
 const SPEED_PAGE_VALUES: usize = 128 * 1024;
+const RANDOM_ACCESS_DATASET: &str = "city_temperature_f";
+const RANDOM_ACCESS_ROWS: usize = 100;
+const RANDOM_ACCESS_TARGET_SECONDS: f64 = 0.05;
 
 struct Row {
     name: String,
@@ -105,6 +113,27 @@ struct SpeedRow {
     plain: Speed,
     plain_zstd: Speed,
     alp: Speed,
+}
+
+struct RandomAccessRow {
+    name: String,
+    plain_us: f64,
+    plain_zstd_us: f64,
+    alp_us: f64,
+}
+
+struct RandomAccessPage {
+    start: usize,
+    num_values: usize,
+    plain: bytes::Bytes,
+    plain_zstd: bytes::Bytes,
+    alp: bytes::Bytes,
+}
+
+struct RandomAccessQuery {
+    page: usize,
+    offset: usize,
+    expected: f64,
 }
 
 #[derive(Default)]
@@ -165,7 +194,11 @@ fn main() -> Result<()> {
     }
 
     let speed_rows = measure_speed(&paths)?;
+    let random_access = measure_random_access(&paths, &rows)?;
     print_table(&rows, &speed_rows);
+    if let Some(random_access) = random_access {
+        print_random_access_table(&random_access);
+    }
     print_summary(&rows, &speed_rows);
     Ok(())
 }
@@ -406,6 +439,22 @@ fn print_average_row(choice: &str, speed: Speed, bits: f64) {
     );
 }
 
+fn print_random_access_table(row: &RandomAccessRow) {
+    println!("\n## Random access\n");
+    println!(
+        "Time to decode {RANDOM_ACCESS_ROWS} deterministic, uniformly distributed rows from `{}` (lower is better). Each lookup starts from the encoded page.\n",
+        row.name
+    );
+    println!("| Parquet choice | {RANDOM_ACCESS_ROWS} random rows (µs) |");
+    println!("|---|---:|");
+    println!("| PLAIN | {:.3} |", row.plain_us);
+    println!("| PLAIN + ZSTD | {:.3} |", row.plain_zstd_us);
+    println!("| ALP | {:.3} |", row.alp_us);
+    println!(
+        "\nPLAIN and ALP reset the page decoder, skip to the selected row, and decode one value. PLAIN + ZSTD additionally decompresses the complete target page for every independent lookup. Encoded pages are already in memory; file I/O and page lookup are excluded."
+    );
+}
+
 fn print_summary(rows: &[Row], speed_rows: &[SpeedRow]) {
     let (plain_mean, plain_zstd_mean, alp_mean) = arithmetic_means(rows);
     let (plain_speed, plain_zstd_speed, alp_speed) = speed_arithmetic_means(speed_rows);
@@ -501,6 +550,218 @@ fn measure_speed(paths: &[PathBuf]) -> Result<Vec<SpeedRow>> {
     }
 
     Ok(rows)
+}
+
+fn measure_random_access(paths: &[PathBuf], rows: &[Row]) -> Result<Option<RandomAccessRow>> {
+    let Some((path, row)) = paths
+        .iter()
+        .zip(rows)
+        .find(|(_, row)| row.name == RANDOM_ACCESS_DATASET)
+    else {
+        return Ok(None);
+    };
+
+    eprintln!("Measuring random access on {}", path.display());
+    benchmark_random_access(path, row.num_values).map(Some)
+}
+
+fn benchmark_random_access(path: &Path, num_values: usize) -> Result<RandomAccessRow> {
+    let descriptor = double_column_descriptor()?;
+    let indices = random_row_indices(num_values);
+    let mut expected = vec![None; indices.len()];
+    let mut pages = Vec::new();
+    let mut page_start = 0usize;
+
+    let mut plain_encoder = get_encoder::<DoubleType>(Encoding::PLAIN, &descriptor)?;
+    let mut alp_encoder = get_encoder::<DoubleType>(Encoding::ALP, &descriptor)?;
+    let mut codec = create_codec(Compression::ZSTD(ZstdLevel::default()), &Default::default())?
+        .expect("ZSTD is a compressed codec");
+    let mut alp_preset_ready = false;
+
+    let read_values = for_each_batch(path, |values| {
+        if !alp_preset_ready {
+            alp_encoder.put(&values)?;
+            black_box(alp_encoder.flush_buffer()?);
+            alp_preset_ready = true;
+        }
+
+        let page_end = page_start + values.len();
+        let selected = indices
+            .iter()
+            .any(|&index| (page_start..page_end).contains(&index));
+        if selected {
+            plain_encoder.put(&values)?;
+            let plain = plain_encoder.flush_buffer()?;
+            alp_encoder.put(&values)?;
+            let alp = alp_encoder.flush_buffer()?;
+
+            let mut plain_zstd = Vec::new();
+            codec.compress(plain.as_ref(), &mut plain_zstd)?;
+            pages.push(RandomAccessPage {
+                start: page_start,
+                num_values: values.len(),
+                plain,
+                plain_zstd: plain_zstd.into(),
+                alp,
+            });
+
+            for (query, &index) in indices.iter().enumerate() {
+                if (page_start..page_end).contains(&index) {
+                    expected[query] = Some(values[index - page_start]);
+                }
+            }
+        }
+        page_start = page_end;
+        Ok(())
+    })?;
+
+    if read_values != num_values {
+        return Err(ParquetError::General(format!(
+            "{} changed length between size and random-access passes",
+            path.display()
+        )));
+    }
+
+    let queries = indices
+        .into_iter()
+        .zip(expected)
+        .map(|(index, expected)| {
+            let page = pages
+                .iter()
+                .position(|page| (page.start..page.start + page.num_values).contains(&index))
+                .expect("every random row belongs to a retained page");
+            RandomAccessQuery {
+                page,
+                offset: index - pages[page].start,
+                expected: expected.expect("every random row was read"),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut plain_decoder: Box<dyn Decoder<DoubleType>> =
+        get_decoder(descriptor.clone(), Encoding::PLAIN)?;
+    decode_random_rows(&mut plain_decoder, &pages, &queries, Encoding::PLAIN, true)?;
+    let plain_us = measure_operation(|| {
+        decode_random_rows(&mut plain_decoder, &pages, &queries, Encoding::PLAIN, false)
+    })?;
+
+    let mut alp_decoder: Box<dyn Decoder<DoubleType>> = get_decoder(descriptor, Encoding::ALP)?;
+    decode_random_rows(&mut alp_decoder, &pages, &queries, Encoding::ALP, true)?;
+    let alp_us = measure_operation(|| {
+        decode_random_rows(&mut alp_decoder, &pages, &queries, Encoding::ALP, false)
+    })?;
+
+    let mut decompressed = Vec::new();
+    decompress_random_pages(&mut codec, &pages, &queries, &mut decompressed, true)?;
+    let zstd_us = measure_operation(|| {
+        decompress_random_pages(&mut codec, &pages, &queries, &mut decompressed, false)
+    })?;
+
+    Ok(RandomAccessRow {
+        name: RANDOM_ACCESS_DATASET.into(),
+        plain_us,
+        plain_zstd_us: zstd_us + plain_us,
+        alp_us,
+    })
+}
+
+fn random_row_indices(num_values: usize) -> Vec<usize> {
+    let mut state = 0x4d59_5df4_d0f3_3173u64;
+    (0..RANDOM_ACCESS_ROWS)
+        .map(|_| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut value = state;
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^= value >> 31;
+            ((value as u128 * num_values as u128) >> 64) as usize
+        })
+        .collect()
+}
+
+fn decode_random_rows(
+    decoder: &mut Box<dyn Decoder<DoubleType>>,
+    pages: &[RandomAccessPage],
+    queries: &[RandomAccessQuery],
+    encoding: Encoding,
+    validate: bool,
+) -> Result<()> {
+    let mut decoded = [0.0];
+    for query in queries {
+        let page = &pages[query.page];
+        let data = match encoding {
+            Encoding::PLAIN => &page.plain,
+            Encoding::ALP => &page.alp,
+            _ => unreachable!(),
+        };
+        decoder.set_data(data.clone(), page.num_values)?;
+        let skipped = decoder.skip(query.offset)?;
+        let read = decoder.get(&mut decoded)?;
+        if skipped != query.offset || read != 1 {
+            return Err(ParquetError::General(format!(
+                "{encoding} random lookup skipped {skipped} and read {read} values"
+            )));
+        }
+        if validate && decoded[0].to_bits() != query.expected.to_bits() {
+            return Err(ParquetError::General(format!(
+                "{encoding} random lookup did not reproduce row {}",
+                page.start + query.offset
+            )));
+        }
+        black_box(decoded[0]);
+    }
+    Ok(())
+}
+
+fn decompress_random_pages(
+    codec: &mut Box<dyn parquet::compression::Codec>,
+    pages: &[RandomAccessPage],
+    queries: &[RandomAccessQuery],
+    decompressed: &mut Vec<u8>,
+    validate: bool,
+) -> Result<()> {
+    for query in queries {
+        let page = &pages[query.page];
+        decompressed.clear();
+        let read = codec.decompress(
+            page.plain_zstd.as_ref(),
+            decompressed,
+            Some(page.plain.len()),
+        )?;
+        if read != page.plain.len() {
+            return Err(ParquetError::General(format!(
+                "ZSTD random lookup decompressed {read} of {} bytes",
+                page.plain.len()
+            )));
+        }
+        if validate && decompressed != page.plain.as_ref() {
+            return Err(ParquetError::General(
+                "ZSTD random lookup did not reproduce the PLAIN page".into(),
+            ));
+        }
+        black_box(decompressed[query.offset * std::mem::size_of::<f64>()]);
+    }
+    Ok(())
+}
+
+fn measure_operation(mut operation: impl FnMut() -> Result<()>) -> Result<f64> {
+    operation()?;
+    let start = Instant::now();
+    operation()?;
+    let estimate = start.elapsed().as_secs_f64();
+    let repetitions = if estimate == 0.0 {
+        10_000
+    } else {
+        (RANDOM_ACCESS_TARGET_SECONDS / estimate)
+            .ceil()
+            .clamp(3.0, 10_000.0) as usize
+    };
+
+    let start = Instant::now();
+    for _ in 0..repetitions {
+        operation()?;
+    }
+    Ok(start.elapsed().as_secs_f64() * 1_000_000.0 / repetitions as f64)
 }
 
 fn double_column_descriptor() -> Result<ColumnDescPtr> {
