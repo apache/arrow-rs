@@ -67,6 +67,18 @@ use super::{MutableBuffer, ScalarBuffer};
 /// let bytes = bytes::Bytes::from("hello");
 /// let buffer = Buffer::from(bytes);
 ///```
+///
+/// # Example: Create a [`bytes::Bytes`] from a `Buffer` (without copying)
+///
+/// [`bytes::Bytes::from_owner`] can also wrap a `Buffer` again without copying.
+/// This made generically available via a `From` implementation.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let bytes = bytes::Bytes::from("hello");
+/// # let buffer = Buffer::from(bytes);
+/// let bytes = bytes::Bytes::from(buffer);
+///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
@@ -534,6 +546,13 @@ impl From<bytes::Bytes> for Buffer {
     }
 }
 
+/// Convert a `Buffer` into a [`bytes::Bytes`]
+impl From<Buffer> for bytes::Bytes {
+    fn from(buffer: Buffer) -> Self {
+        Self::from_owner(buffer)
+    }
+}
+
 /// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
@@ -552,7 +571,7 @@ impl std::ops::Deref for Buffer {
     }
 }
 
-impl AsRef<[u8]> for &Buffer {
+impl AsRef<[u8]> for Buffer {
     fn as_ref(&self) -> &[u8] {
         self.as_slice()
     }
