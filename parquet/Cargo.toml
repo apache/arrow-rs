@@ -90,8 +90,8 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
 arrow-csv = { workspace = true }
-tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
@@ -117,9 +117,8 @@ experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
-# Deprecated: implement `AsyncFileReader` directly instead, see the example on
-# the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`.
 # This feature will be removed in a future release.
+# See https://github.com/apache/arrow-rs/issues/10308
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
 zstd = ["dep:zstd"]
@@ -167,10 +166,6 @@ required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
 
 [[test]]
-name = "arrow_writer_layout"
-required-features = ["arrow"]
-
-[[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
@@ -178,7 +173,12 @@ path = "./tests/arrow_reader/mod.rs"
 [[test]]
 name = "arrow_writer"
 required-features = ["arrow"]
-path = "./tests/arrow_writer.rs"
+path = "./tests/arrow_writer/mod.rs"
+
+[[test]]
+name = "ieee754_nan_interop"
+required-features = ["arrow"]
+path = "./tests/ieee754_nan_interop.rs"
 
 [[test]]
 name = "encryption"
@@ -316,3 +316,6 @@ harness = false
 
 [lib]
 bench = false
+
+[lints]
+workspace = true

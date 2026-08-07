@@ -18,12 +18,11 @@
 #[macro_use]
 extern crate criterion;
 
+use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, ZstdLevel};
-
-extern crate arrow;
-extern crate parquet;
+use parquet::basic::{Compression, Encoding, ZstdLevel};
+use rand::{RngExt, distr::Alphanumeric};
 
 use std::hint::black_box;
 use std::io::Empty;
@@ -99,6 +98,38 @@ fn create_string_bench_batch(
         true_density,
     )?)
 }
+// Creates a DictionaryArray with target cardinality
+fn create_low_card_dictionary_bench_batch(size: usize, cardinality: usize) -> Result<RecordBatch> {
+    let mut rng = rand::rng();
+
+    // Generate `cardinality` unique random strings.
+    let categories: Vec<String> = (0..cardinality)
+        .map(|_| {
+            let len = rng.random_range(10..25);
+
+            (0..len).map(|_| rng.sample(Alphanumeric) as char).collect()
+        })
+        .collect();
+
+    let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+
+    for i in 0..size {
+        builder.append_value(&categories[i % cardinality]);
+    }
+
+    let dict = builder.finish();
+
+    let schema = Schema::new(vec![Field::new(
+        "_1",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(dict)],
+    )?)
+}
 
 /// 1 M short, fixed-width 8-byte strings. Exercises the BYTE_ARRAY hot path
 /// for the case where individual values are small enough that the byte-budget
@@ -119,6 +150,48 @@ fn create_large_string_bench_batch(size: usize, value_size: usize) -> Result<Rec
     let value = "x".repeat(value_size);
     let array = Arc::new(StringArray::from_iter_values(
         (0..size).map(|_| value.as_str()),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing a long common prefix and
+/// ending in a short distinct suffix — the case `DELTA_BYTE_ARRAY` exists
+/// for: consecutive values dedup to a prefix length plus a few suffix bytes.
+fn create_large_string_shared_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+) -> Result<RecordBatch> {
+    let prefix = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{prefix}{i:08}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings whose leading bytes differ — the
+/// adversarial case for `DELTA_BYTE_ARRAY`, where every prefix length is ~0
+/// and the encoding stores each value in full.
+fn create_large_string_distinct_bench_batch(size: usize, value_size: usize) -> Result<RecordBatch> {
+    let filler = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{i:08}{filler}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing their first
+/// `shared_bytes` bytes and differing thereafter — the realistic sorted-column
+/// case (paths, URLs, keys), where prefix deduplication saves part of each
+/// value rather than all or none of it.
+fn create_string_partial_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+    shared_bytes: usize,
+) -> Result<RecordBatch> {
+    let shared = "x".repeat(shared_bytes);
+    let tail = "y".repeat(value_size - shared_bytes - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{shared}{i:08}{tail}")),
     )) as _;
     Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
@@ -530,6 +603,15 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_string_dictionary_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_dictionary", batch));
 
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 20).unwrap();
+    batches.push(("string_dictionary_low_cardinality_20", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 100).unwrap();
+    batches.push(("string_dictionary_low_cardinality_100", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 400).unwrap();
+    batches.push(("string_dictionary_low_cardinality_400", batch));
+
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
 
@@ -651,5 +733,112 @@ fn bench_all_writers(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_all_writers);
+/// Writes BYTE_ARRAY columns of *small* string values with `DELTA_BYTE_ARRAY`,
+/// with `PLAIN` on the same data as a baseline.
+///
+/// Values here sit far below `data_page_size_limit`, so many share a page and
+/// the encoder's previous-value state survives across them. This is the regime
+/// `DELTA_BYTE_ARRAY` is actually deployed in, and — unlike the multi-MiB
+/// benches below — the one where the shared-prefix scan runs to real depth.
+///
+/// * `small_string_shared_prefix`: values differing only in a trailing counter,
+///   so each scan covers nearly the whole value.
+/// * `small_string_partial_prefix`: values sharing their first half, the
+///   sorted-column case.
+/// * `small_string_distinct`: values differing from byte 0, where the scan
+///   stops immediately and prefix deduplication saves nothing.
+fn bench_small_delta_byte_array_writers(c: &mut Criterion) {
+    const ROWS: usize = 8192;
+    const VALUE_SIZE: usize = 1024;
+
+    let shared_prefix = create_large_string_shared_prefix_bench_batch(ROWS, VALUE_SIZE).unwrap();
+    let partial_prefix =
+        create_string_partial_prefix_bench_batch(ROWS, VALUE_SIZE, VALUE_SIZE / 2).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(ROWS, VALUE_SIZE).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    for (batch_name, batch) in [
+        ("small_string_shared_prefix", &shared_prefix),
+        ("small_string_partial_prefix", &partial_prefix),
+        ("small_string_distinct", &distinct),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
+            group.bench_function(prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+/// Writes BYTE_ARRAY columns of large (multi-MiB) string values with
+/// `DELTA_BYTE_ARRAY`, with `PLAIN` on the same data as a baseline.
+///
+/// Two data shapes bracket the encoding's best and worst case:
+/// * `large_string_shared_prefix`: values like `xxx…x00000000`,
+///   `xxx…x00000001`, … share a long common prefix and differ only in a
+///   short suffix — the case `DELTA_BYTE_ARRAY` is designed to handle well,
+///   encoding each value as a prefix length plus a few suffix bytes.
+/// * `large_string_distinct`: values like `00000000x…xxx`, `00000001x…xxx`, …
+///   differ in their leading bytes, so prefix deduplication saves nothing and
+///   the encoding stores each value in full.
+fn bench_delta_byte_array_writers(c: &mut Criterion) {
+    // Each 2 MiB value alone exceeds the default 1 MiB data page size limit.
+    let shared = create_large_string_shared_prefix_bench_batch(128, 2 * 1024 * 1024).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(128, 2 * 1024 * 1024).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    for (batch_name, batch) in [
+        ("large_string_shared_prefix", &shared),
+        ("large_string_distinct", &distinct),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
+            group.bench_function(prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_all_writers,
+    bench_small_delta_byte_array_writers,
+    bench_delta_byte_array_writers
+);
 criterion_main!(benches);

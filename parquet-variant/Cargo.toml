@@ -48,7 +48,7 @@ bench = false
 
 [dev-dependencies]
 criterion = { workspace = true, default-features = false }
-rand = { version = "0.9", default-features = false, features = [
+rand = { version = "0.10", default-features = false, features = [
     "std",
     "std_rng",
     "thread_rng",
@@ -66,3 +66,6 @@ harness = false
 [[bench]]
 name = "variant_validation"
 harness = false
+
+[lints]
+workspace = true

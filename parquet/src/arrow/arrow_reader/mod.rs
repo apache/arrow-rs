@@ -261,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
-    /// [`ArrowReaderOptions::with_page_index`].
+    /// [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// # Example
     ///
@@ -315,7 +315,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Row filters are applied after row group selection and row selection
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// See the [blog post on late materialization] for a more technical explanation.
     ///
@@ -362,7 +362,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to limit the final set of rows decoded after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
@@ -376,7 +376,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to skip rows after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
@@ -615,30 +615,13 @@ impl ArrowReaderOptions {
         }
     }
 
-    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
-    /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
-    ///
-    /// If this is enabled, [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
-    /// information is present in the file.
-    ///
-    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
-    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
-    pub fn with_page_index(self, page_index: bool) -> Self {
-        self.with_page_index_policy(PageIndexPolicy::from(page_index))
-    }
-
-    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
-    ///
     /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
     /// This method sets the same policy for both. For fine-grained control, use
     /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
-    ///
-    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
         self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
@@ -800,20 +783,6 @@ impl ArrowReaderOptions {
         })
     }
 
-    #[deprecated(
-        since = "57.2.0",
-        note = "Use `column_index_policy` or `offset_index_policy` instead"
-    )]
-    /// Returns whether page index reading is enabled.
-    ///
-    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
-    ///
-    /// This can be set via [`with_page_index`][Self::with_page_index] or
-    /// [`with_page_index_policy`][Self::with_page_index_policy].
-    pub fn page_index(&self) -> bool {
-        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
-    }
-
     /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
     ///
     /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
@@ -916,9 +885,11 @@ impl ArrowReaderMetadata {
     ///
     /// # Notes
     ///
-    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// If `options` indicates the page index should be read, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
+    ///
+    /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index)
@@ -1695,7 +1666,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng, random, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -3693,9 +3664,7 @@ pub(crate) mod tests {
     }
 
     fn get_test_file(file_name: &str) -> File {
-        let mut path = PathBuf::new();
-        path.push(arrow::util::test_util::arrow_test_data());
-        path.push(file_name);
+        let path = PathBuf::from(arrow::util::test_util::arrow_test_data()).join(file_name);
 
         File::open(path.as_path()).expect("File not found!")
     }
@@ -4082,9 +4051,7 @@ pub(crate) mod tests {
 
         let schema_without_metadata = Arc::new(Schema::new(vec![field.clone()]));
 
-        let metadata = [("key".to_string(), "value".to_string())]
-            .into_iter()
-            .collect();
+        let metadata = arrow_schema::Metadata::from([("key".to_string(), "value".to_string())]);
 
         let schema_with_metadata = Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 
@@ -5646,6 +5613,85 @@ pub(crate) mod tests {
                 row_numbers: (50..100).chain(0..50).collect(),
             },
             ValuesAndRowNumbers::new_from_reader(arrow_reader)
+        );
+
+        Ok(())
+    }
+
+    /// A file with *mixed* row-group ordinal metadata (spec-valid — the
+    /// `RowGroup.ordinal` thrift field is optional; Go parquet writers emit
+    /// such files) must read fine without row numbers, and must fail
+    /// deterministically with them — even when every *selected* row group
+    /// carries an ordinal. See <https://github.com/apache/arrow-rs/issues/10381>.
+    #[test]
+    fn test_mixed_row_group_ordinals() -> Result<()> {
+        use crate::file::metadata::{ParquetMetaDataReader, RowGroupMetaData};
+
+        // 100 rows split across 4 row groups of 25
+        let array = Int64Array::from_iter_values(5000..5100);
+        let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)])?;
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(25))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props))?;
+        for batch_chunk in (0..10).map(|i| batch.slice(i * 10, 10)) {
+            writer.write(&batch_chunk)?;
+        }
+        writer.close()?;
+        let buffer = Bytes::from(buffer);
+
+        // Strip the ordinal from row group 1 to simulate a mixed-ordinal
+        // writer (the builder starts with no ordinal; copy everything else).
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&buffer)?;
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+        let mut row_groups = metadata.row_groups().to_vec();
+        let stripped = row_groups[1].clone();
+        let mut builder = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(stripped.num_rows())
+            .set_total_byte_size(stripped.total_byte_size())
+            .set_sorting_columns(stripped.sorting_columns().cloned())
+            .set_column_metadata(stripped.columns().to_vec());
+        if let Some(offset) = stripped.file_offset() {
+            builder = builder.set_file_offset(offset);
+        }
+        row_groups[1] = builder.build()?;
+        assert_eq!(row_groups[1].ordinal(), None);
+        let metadata = Arc::new(metadata.into_builder().set_row_groups(row_groups).build());
+
+        // Plain read (no row numbers): succeeds and returns all values.
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(&metadata), ArrowReaderOptions::new())?;
+        let reader =
+            ParquetRecordBatchReaderBuilder::new_with_metadata(buffer.clone(), arrow_metadata)
+                .build()?;
+        let values: Vec<i64> = reader
+            .flat_map(|batch| {
+                let batch = batch.expect("could not read batch");
+                batch
+                    .column(0)
+                    .as_primitive::<types::Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, (5000..5100).collect::<Vec<_>>());
+
+        // Row-number read: fails deterministically, even when selecting only
+        // row groups that DO carry ordinals.
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field])?;
+        let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&metadata), options)?;
+        let result = ParquetRecordBatchReaderBuilder::new_with_metadata(buffer, arrow_metadata)
+            .with_row_groups(vec![0]) // row group 0 has an ordinal
+            .build()
+            .and_then(|mut reader| reader.next().transpose().map_err(|e| e.into()));
+        let err = result.expect_err("row numbers over mixed ordinals must fail");
+        assert!(
+            err.to_string().contains("inconsistent row-group ordinals"),
+            "unexpected error: {err}"
         );
 
         Ok(())

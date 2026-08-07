@@ -89,7 +89,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
         let encoded = b64_encode(e, a);
@@ -103,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_b64() {
         let mut rng = rng();
         let len = rng.random_range(1024..1050);

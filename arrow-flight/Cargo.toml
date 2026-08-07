@@ -62,8 +62,6 @@ all-features = true
 [features]
 default = []
 flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell"]
-# TODO: Remove in the next release
-flight-sql-experimental = ["flight-sql"]
 tls-aws-lc= ["tonic/tls-aws-lc"]
 tls-native-roots = ["tonic/tls-native-roots"]
 tls-ring = ["tonic/tls-ring"]
@@ -112,3 +110,6 @@ required-features = ["cli", "flight-sql", "tls-ring"]
 name = "flight"
 path = "benches/flight.rs"
 harness = false
+
+[lints]
+workspace = true

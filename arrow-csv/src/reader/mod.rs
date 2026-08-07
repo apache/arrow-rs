@@ -393,10 +393,10 @@ impl Format {
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
             for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
-                if let Some(string) = record.get(i) {
-                    if !self.null_regex.is_null(string) {
-                        column_type.update(string)
-                    }
+                if let Some(string) = record.get(i)
+                    && !self.null_regex.is_null(string)
+                {
+                    column_type.update(string)
                 }
             }
         }
@@ -728,7 +728,7 @@ fn validate_header(rows: &StringRecords<'_>, fields: &Fields) -> Result<(), Arro
 fn parse(
     rows: &StringRecords<'_>,
     fields: &Fields,
-    metadata: Option<std::collections::HashMap<String, String>>,
+    metadata: Option<Metadata>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
     null_regex: &NullRegex,
@@ -1384,7 +1384,7 @@ mod tests {
         assert_eq!(37, batch.num_rows());
         assert_eq!(3, batch.num_columns());
 
-        assert_eq!(&metadata, batch.schema().metadata());
+        assert_eq!(batch.schema().metadata(), &metadata);
     }
 
     #[test]
@@ -1506,6 +1506,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_with_schema_inference() {
         let mut file = File::open("test/data/uk_cities_with_headers.csv").unwrap();
 
@@ -1547,6 +1548,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_with_schema_inference_no_headers() {
         let mut file = File::open("test/data/uk_cities.csv").unwrap();
 
@@ -1586,6 +1588,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_builder_with_bounds() {
         let mut file = File::open("test/data/uk_cities.csv").unwrap();
 
@@ -1758,6 +1761,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_init_nulls_with_inference() {
         let format = Format::default().with_header(true).with_delimiter(b',');
 
@@ -1818,6 +1822,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_nulls_with_inference() {
         let mut file = File::open("test/data/various_types.csv").unwrap();
         let format = Format::default().with_header(true).with_delimiter(b'|');
@@ -1876,6 +1881,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_custom_nulls_with_inference() {
         let mut file = File::open("test/data/custom_null_test.csv").unwrap();
 
@@ -1912,6 +1918,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_scientific_notation_with_inference() {
         let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
         let format = Format::default().with_header(false).with_delimiter(b',');
@@ -1993,6 +2000,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_field_schema() {
         assert_eq!(infer_field_schema("A"), DataType::Utf8);
         assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
@@ -2136,6 +2144,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_schema_from_multiple_files() {
         let mut csv1 = NamedTempFile::new().unwrap();
         let mut csv2 = NamedTempFile::new().unwrap();
@@ -2650,6 +2659,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
@@ -2810,6 +2820,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_inference() {
         let cases: &[(&[&str], DataType)] = &[
             (&[], DataType::Null),
@@ -2878,6 +2889,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_record_length_mismatch() {
         let csv = "\
         a,b,c\n\
@@ -2993,6 +3005,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float_precision() {
         let data = [
             "f16,f32,f64",

@@ -802,7 +802,7 @@ macro_rules! temporal_display {
 
             fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let naive = $convert(value as _).ok_or_else(|| {
+                let naive = $convert(value).ok_or_else(|| {
                     ArrowError::CastError(format!(
                         "Failed to convert {} to temporal for {}",
                         value,

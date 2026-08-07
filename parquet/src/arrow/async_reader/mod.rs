@@ -957,7 +957,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;

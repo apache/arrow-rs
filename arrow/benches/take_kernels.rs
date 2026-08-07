@@ -19,9 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use rand::Rng;
-
-extern crate arrow;
+use rand::RngExt;
 
 use arrow::compute::{TakeOptions, take, take_record_batch};
 use arrow::datatypes::*;

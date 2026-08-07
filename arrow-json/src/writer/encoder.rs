@@ -242,7 +242,7 @@ pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
     /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
     /// will be called again for the keys and values of the dictionary, at which point the field type will still be the outer dictionary type but the
     /// array will have a different type.
-    /// For example, `field`` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
+    /// For example, `field` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
     fn make_default_encoder<'a>(
         &self,
         _field: &'a FieldRef,
@@ -317,10 +317,10 @@ pub fn make_encoder<'a>(
         }};
     }
 
-    if let Some(factory) = options.encoder_factory() {
-        if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
-            return Ok(encoder);
-        }
+    if let Some(factory) = options.encoder_factory()
+        && let Some(encoder) = factory.make_default_encoder(field, array, options)?
+    {
+        return Ok(encoder);
     }
 
     let nulls = array.nulls().cloned();
