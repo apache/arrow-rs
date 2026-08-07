@@ -150,6 +150,50 @@ cpu_model() {
   printf '%s' "${model:-unknown}"
 }
 
+cpu_simd() {
+  local architecture features=""
+
+  architecture="$(uname -m)"
+  if [[ -r /proc/cpuinfo ]]; then
+    features="$(awk -F ': *' '/^(flags|Features)[[:space:]]*:/{print $2; exit}' /proc/cpuinfo)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    features="$(
+      sysctl -n machdep.cpu.features machdep.cpu.leaf7_features \
+        2>/dev/null || true
+    )"
+  fi
+  features="$(printf '%s' "$features" | tr '[:upper:]' '[:lower:]')"
+
+  case "$architecture" in
+    x86_64 | amd64 | i386 | i686)
+      if [[ " $features " == *" avx512f "* ]]; then
+        printf '%s' "AVX-512F, AVX2, AVX"
+      elif [[ " $features " == *" avx2 "* ]]; then
+        printf '%s' "AVX2, AVX"
+      elif [[ " $features " == *" avx "* ]]; then
+        printf '%s' "AVX"
+      else
+        printf '%s' "no AVX"
+      fi
+      ;;
+    aarch64 | arm64 | arm*)
+      if [[ " $features " == *" sve2 "* ]]; then
+        printf '%s' "SVE2, SVE, NEON"
+      elif [[ " $features " == *" sve "* ]]; then
+        printf '%s' "SVE, NEON"
+      elif [[ " $features " == *" asimd "* ]] ||
+        [[ " $features " == *" neon "* ]] || [[ "$(uname -s)" == "Darwin" ]]; then
+        printf '%s' "NEON"
+      else
+        printf '%s' "unknown"
+      fi
+      ;;
+    *)
+      printf '%s' "unknown"
+      ;;
+  esac
+}
+
 logical_cpus() {
   local count=""
 
@@ -198,6 +242,7 @@ print_environment() {
   printf '| Worktree | %s |\n' "$worktree"
   printf '| CPU | %s |\n' "$(markdown_escape "$(cpu_model)")"
   printf '| Architecture | `%s` |\n' "$(uname -m)"
+  printf '| SIMD ISA | `%s` |\n' "$(cpu_simd)"
   printf '| Logical CPUs | %s |\n' "$(logical_cpus)"
   printf '| OS and kernel | `%s %s` |\n' "$(uname -s)" "$(uname -r)"
   printf '| CPU governor | `%s` |\n' "$(cpu_governor)"

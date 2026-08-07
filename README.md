@@ -33,11 +33,23 @@ comparison on `city_temperature_f`.
 
 ## Results preview
 
-Example from an AMD Ryzen AI 9 HX PRO 470 using `-C target-cpu=native`. Speed is
-machine-dependent; compressed size is deterministic. The speed and size rows
-are arithmetic means of the 30 per-dataset results.
+Example benchmark run. Speed is machine-dependent; compressed size is
+deterministic. The speed and size rows are arithmetic means of the 30
+per-dataset results.
 
 ```text
+MACHINE
+
+CPU             AMD Ryzen AI 9 HX PRO 470 w/ Radeon 890M
+ARCHITECTURE    x86_64
+SIMD ISA        AVX-512F, AVX2, AVX
+LOGICAL CPUS    24
+OS / KERNEL     Linux 6.19.10-300.fc44.x86_64
+CPU GOVERNOR    powersave
+RUST            rustc 1.96.1 (31fca3adb 2026-06-26)
+LLVM            22.1.2
+RUSTFLAGS       -C target-cpu=native
+
 AVERAGE OF ALL 30 DATASETS
 
                      COMPRESSION     DECOMPRESSION     COMPRESSED SIZE
@@ -212,9 +224,9 @@ the units and averaging beside the tables.
 ## Reproducibility and privacy
 
 The wrapper records a privacy-safe environment table: timestamp, commit and
-worktree state, CPU, architecture, logical CPU count, governor when available,
-OS/kernel, Rust/Cargo/LLVM versions, safe compiler flags, and the dataset
-archive digest.
+worktree state, CPU, architecture, SIMD ISA, logical CPU count, governor when
+available, OS/kernel, Rust/Cargo/LLVM versions, safe compiler flags, and the
+dataset archive digest.
 
 It does not print hostnames, usernames, local paths, network information, Git
 remotes, the complete environment, or raw `/proc/cpuinfo`. Compiler flags that
