@@ -128,6 +128,86 @@ download_datasets() {
   fi
 }
 
+markdown_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//|/\\|}"
+  printf '%s' "$value"
+}
+
+cpu_model() {
+  local model=""
+
+  if [[ -r /proc/cpuinfo ]]; then
+    model="$(awk -F ': *' '/^model name[[:space:]]*:/{print $2; exit}' /proc/cpuinfo)"
+  fi
+  if [[ -z "$model" ]] && command -v sysctl >/dev/null 2>&1; then
+    model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+  fi
+  if [[ -z "$model" ]] && command -v sysctl >/dev/null 2>&1; then
+    model="$(sysctl -n hw.model 2>/dev/null || true)"
+  fi
+  printf '%s' "${model:-unknown}"
+}
+
+logical_cpus() {
+  local count=""
+
+  if command -v getconf >/dev/null 2>&1; then
+    count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  if [[ -z "$count" ]] && command -v nproc >/dev/null 2>&1; then
+    count="$(nproc 2>/dev/null || true)"
+  fi
+  printf '%s' "${count:-unknown}"
+}
+
+cpu_governor() {
+  local governor_file="/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+  if [[ -r "$governor_file" ]]; then
+    tr -d '\n' < "$governor_file"
+  else
+    printf '%s' "unavailable"
+  fi
+}
+
+safe_rustflags() {
+  if [[ "$RUSTFLAGS" =~ ^[-A-Za-z0-9_=+.,[:space:]]+$ ]]; then
+    printf '%s' "$RUSTFLAGS"
+  else
+    printf '%s' "set; value omitted because it contains paths or shell characters"
+  fi
+}
+
+print_environment() {
+  local commit worktree llvm_version
+
+  commit="$(git rev-parse HEAD)"
+  if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+    worktree="dirty"
+  else
+    worktree="clean"
+  fi
+  llvm_version="$(rustc --version --verbose | awk -F ': *' '$1 == "LLVM version" {print $2}')"
+
+  printf '## Benchmark environment\n\n'
+  printf '| Environment | Value |\n'
+  printf '|---|---|\n'
+  printf '| UTC timestamp | `%s` |\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '| Commit | `%s` |\n' "$commit"
+  printf '| Worktree | %s |\n' "$worktree"
+  printf '| CPU | %s |\n' "$(markdown_escape "$(cpu_model)")"
+  printf '| Architecture | `%s` |\n' "$(uname -m)"
+  printf '| Logical CPUs | %s |\n' "$(logical_cpus)"
+  printf '| OS and kernel | `%s %s` |\n' "$(uname -s)" "$(uname -r)"
+  printf '| CPU governor | `%s` |\n' "$(cpu_governor)"
+  printf '| Rust | `%s` |\n' "$(markdown_escape "$(rustc --version)")"
+  printf '| LLVM | `%s` |\n' "$(markdown_escape "${llvm_version:-unknown}")"
+  printf '| Cargo | `%s` |\n' "$(markdown_escape "$(cargo --version)")"
+  printf '| RUSTFLAGS | `%s` |\n' "$(markdown_escape "$(safe_rustflags)")"
+  printf '| Dataset archive SHA-256 | `%s` |\n\n' "$ARCHIVE_SHA256"
+}
+
 if datasets_present; then
   echo "Using the CWI ALP corpus in ${DATA_DIR}" >&2
 else
@@ -137,5 +217,6 @@ fi
 echo "Running the ALP compression benchmark" >&2
 cd "$REPO_ROOT"
 export RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}"
+print_environment
 exec cargo run --quiet --release -p parquet \
   --example alp_compression_stats --features arrow,zstd,experimental -- "$DATA_DIR"

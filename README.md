@@ -61,8 +61,9 @@ archive is deleted after successful extraction unless `ALP_KEEP_ARCHIVE=1` is
 set. Later runs reuse the extracted files.
 
 Progress is written to stderr and the Markdown result tables are written to
-stdout. The complete run normally produces one 90-row table—three Parquet
-choices for each of 30 datasets—followed by the random-access table.
+stdout. The output starts with a privacy-safe benchmark environment table. The
+complete run then produces one 90-row table—three Parquet choices for each of
+30 datasets—followed by the random-access table.
 
 ## Configuration
 
@@ -156,13 +157,24 @@ of three iterations.
 
 ## Reproducibility
 
-Run publication measurements on an otherwise idle machine and record at least:
+The wrapper automatically records:
 
-- CPU model
+- UTC timestamp
+- benchmark commit SHA and clean/dirty worktree state
+- CPU model, architecture, logical CPU count, and scaling governor when
+  available
 - operating system and kernel
-- `rustc --version --verbose`
-- full `RUSTFLAGS`
-- benchmark commit SHA
+- Rust, Cargo, and LLVM versions
+- effective `RUSTFLAGS`
+- pinned dataset archive SHA-256
+
+Environment collection uses an explicit field whitelist. It does not print the
+hostname, username, home directory, absolute repository path, network
+addresses, Git remote URLs, complete environment, or raw `/proc/cpuinfo`.
+Custom `RUSTFLAGS` are printed only when they contain a restricted set of safe
+compiler-flag characters; values containing paths or shell characters are
+reported as set but omitted. Review the generated Markdown before publishing
+it, as with any generated artifact.
 
 Wall-clock throughput varies across machines and with CPU frequency, thermal
 state, and background load. Compressed sizes and the selected random row indices
