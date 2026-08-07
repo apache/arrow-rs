@@ -174,10 +174,19 @@ fn row_group_from_encrypted_thrift(
                     d.path().string()
                 )
             })?;
+            // Reject a negative ordinal cleanly rather than sign-extending it into
+            // a bogus AAD via `as usize`.
+            let rg_ordinal = usize::try_from(rg_ordinal).map_err(|_| {
+                general_err!(
+                    "Row group ordinal {rg_ordinal} is invalid (must be non-negative) \
+                     for decrypting column metadata for column '{}'",
+                    d.path().string()
+                )
+            })?;
             let column_aad = crate::encryption::modules::create_module_aad(
                 decryptor.file_aad(),
                 crate::encryption::modules::ModuleType::ColumnMetaData,
-                rg_ordinal as usize,
+                rg_ordinal,
                 i,
                 None,
             )?;
