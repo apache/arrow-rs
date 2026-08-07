@@ -3225,7 +3225,6 @@ mod tests {
                 | DataType::UInt16
                 | DataType::UInt8 => vec![
                     Encoding::PLAIN,
-
                     Encoding::DELTA_BINARY_PACKED,
                     Encoding::BYTE_STREAM_SPLIT,
                 ],

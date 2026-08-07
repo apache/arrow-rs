@@ -38,7 +38,6 @@ use parquet::file::properties::{
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-mod alp;
 mod bad_data;
 mod bloom_filter;
 #[cfg(feature = "crc")]
@@ -47,6 +46,7 @@ mod int96_stats_roundtrip;
 mod invalid_utf8;
 mod io;
 mod large_string_overflow;
+mod parquet_testing;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;
