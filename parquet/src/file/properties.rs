@@ -1022,6 +1022,11 @@ impl WriterPropertiesBuilder {
     /// Sets default flag to enable/disable dictionary encoding for all columns (defaults to `true`
     /// via [`DEFAULT_DICTIONARY_ENABLED`]).
     ///
+    /// For `FIXED_LEN_BYTE_ARRAY` columns written with [`WriterVersion::PARQUET_1_0`],
+    /// dictionary encoding is disabled by default for compatibility. Calling this method with
+    /// `true`, or [`Self::set_column_dictionary_enabled`] for a specific column, explicitly
+    /// enables it.
+    ///
     /// Use this method to set dictionary encoding, instead of explicitly specifying
     /// encoding in `set_encoding` method.
     pub fn set_dictionary_enabled(mut self, value: bool) -> Self {
@@ -1188,6 +1193,9 @@ impl WriterPropertiesBuilder {
     /// Sets flag to enable/disable dictionary encoding for a specific column.
     ///
     /// Takes precedence over [`Self::set_dictionary_enabled`].
+    ///
+    /// For a `FIXED_LEN_BYTE_ARRAY` column written with [`WriterVersion::PARQUET_1_0`],
+    /// calling this method with `true` overrides the default-disabled behavior.
     pub fn set_column_dictionary_enabled(mut self, col: ColumnPath, value: bool) -> Self {
         self.get_mut_props(col).set_dictionary_enabled(value);
         self
