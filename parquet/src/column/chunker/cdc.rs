@@ -1042,9 +1042,9 @@ mod arrow_tests {
         max_chunk_size: usize,
         expect_dictionary_page: bool,
     ) {
-        // Boolean and FixedSizeBinary never produce dictionary pages (matching C++)
+        // Boolean columns never produce dictionary pages.
         let expect_dict = match array.data_type() {
-            DataType::Boolean | DataType::FixedSizeBinary(_) => false,
+            DataType::Boolean => false,
             _ => expect_dictionary_page,
         };
         assert_eq!(
