@@ -17,9 +17,9 @@
 
 //! Kernels for operating on [`PrimitiveArray`]s
 
-use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::Buffer;
 use arrow_buffer::MutableBuffer;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
@@ -124,13 +124,24 @@ where
 
     let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
-    let values = a
-        .values()
-        .into_iter()
-        .zip(b.values())
-        .map(|(l, r)| op(*l, *r));
-
-    let buffer: Vec<_> = values.collect();
+    let len = a.len();
+    let byte_width = O::Native::get_byte_width();
+    let mut buffer = MutableBuffer::new(len * byte_width);
+    // Safety: we write every element in the loop below
+    unsafe { buffer.set_len(len * byte_width) };
+    let slice = unsafe {
+        std::slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut O::Native, len)
+    };
+    let a_vals = a.values();
+    let b_vals = b.values();
+    for idx in 0..len {
+        unsafe {
+            *slice.get_unchecked_mut(idx) = op(
+                *a_vals.get_unchecked(idx),
+                *b_vals.get_unchecked(idx),
+            );
+        }
+    }
     Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
@@ -276,18 +287,16 @@ where
         let nulls =
             NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
 
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut buffer = vec![O::Native::default(); len];
 
         nulls.try_for_each_valid_idx(|idx| {
             unsafe {
-                *slice.get_unchecked_mut(idx) = op(a.value_unchecked(idx), b.value_unchecked(idx))?
+                *buffer.get_unchecked_mut(idx) = op(a.value_unchecked(idx), b.value_unchecked(idx))?
             };
             Ok::<_, ArrowError>(())
         })?;
 
-        let values = buffer.finish().into();
+        let values = Buffer::from(buffer).into();
         Ok(PrimitiveArray::new(values, Some(nulls)))
     }
 }
@@ -367,8 +376,6 @@ fn create_union_null_buffer(
     }
 }
 
-/// This intentional inline(never) attribute helps LLVM optimize the loop.
-#[inline(never)]
 fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     len: usize,
     a: A,
@@ -379,11 +386,17 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
-    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
+    let byte_width = O::Native::get_byte_width();
+    let mut buffer = MutableBuffer::new(len * byte_width);
+    // Safety: we write every element in the loop below
+    unsafe { buffer.set_len(len * byte_width) };
+    let slice = unsafe {
+        std::slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut O::Native, len)
+    };
     for idx in 0..len {
         unsafe {
-            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
-        };
+            *slice.get_unchecked_mut(idx) = op(a.value_unchecked(idx), b.value_unchecked(idx))?;
+        }
     }
     Ok(PrimitiveArray::new(buffer.into(), None))
 }
