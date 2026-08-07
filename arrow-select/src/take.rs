@@ -599,7 +599,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
             let mut offset = 0;
 
-            for (start, end) in source_ranges.into_iter() {
+            for (start, end) in source_ranges {
                 let value_len = end - start;
                 // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
                 // `dst` asserted above to include the required capacity.

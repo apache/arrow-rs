@@ -21,7 +21,7 @@ extern crate criterion;
 use criterion::Criterion;
 use std::ops::Range;
 
-use rand::Rng;
+use rand::RngExt;
 
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;

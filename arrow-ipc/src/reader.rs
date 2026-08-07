@@ -1260,7 +1260,7 @@ impl FileReaderBuilder {
 
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
-            for kv in fb_custom_metadata.into_iter() {
+            for kv in fb_custom_metadata {
                 custom_metadata.insert(
                     kv.key().unwrap().to_string(),
                     kv.value().unwrap().to_string(),
@@ -1386,7 +1386,7 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if:
+    /// An [`Err`] may be returned if:
     /// - the file does not meet the Arrow Format footer requirements, or
     /// - file endianness does not match the target endianness.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
@@ -1570,7 +1570,7 @@ impl<R: Read> StreamReader<R> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
+    /// An [`Err`] may be returned if the reader does not encounter a schema
     /// as the first message in the stream.
     pub fn try_new(
         reader: R,
@@ -1907,7 +1907,7 @@ impl<R: Read> MessageReader<R> {
     pub fn read_meta_len(&mut self) -> Result<Option<usize>, ArrowError> {
         let mut meta_len: [u8; 4] = [0; 4];
         match self.reader.read_exact(&mut meta_len) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) => {
                 return if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     // Handle EOF without the "0xFFFFFFFF 0x00000000"

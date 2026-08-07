@@ -266,7 +266,7 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_null(0), false);
     /// ```
     fn is_null(&self, index: usize) -> bool {
-        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
     /// Returns whether the element at `index` is *not* null, the

@@ -248,8 +248,7 @@ impl ArrayDecoder for StructArrayDecoder {
             // Sanity check
             assert_eq!(c.len(), pos.len());
             if let Some(a) = c.nulls() {
-                let nulls_valid =
-                    f.is_nullable() || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
+                let nulls_valid = f.is_nullable() || nulls.as_ref().is_some_and(|n| n.contains(a));
 
                 if !nulls_valid {
                     return Err(ArrowError::JsonError(format!(

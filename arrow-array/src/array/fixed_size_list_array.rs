@@ -290,8 +290,7 @@ impl FixedSizeListArray {
             let nulls_valid = field.is_nullable()
                 || nulls
                     .as_ref()
-                    .map(|n| n.expand(size as _).contains(&a))
-                    .unwrap_or_default()
+                    .is_some_and(|n| n.expand(size as _).contains(&a))
                 || (nulls.is_none() && a.null_count() == 0);
 
             if !nulls_valid {

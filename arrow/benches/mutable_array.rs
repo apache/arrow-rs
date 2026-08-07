@@ -19,7 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use rand::Rng;
+use rand::RngExt;
 
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::create_string_array};

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::util::bench_util::create_string_view_array_with_len;
 use criterion::*;
-use rand::Rng;
+use rand::RngExt;
 
 use arrow::array::*;
 use arrow::csv;
