@@ -24,7 +24,7 @@ use arrow::compute::kernels::bitwise::{
 };
 use arrow::datatypes::Int64Type;
 use criterion::Criterion;
-use rand::RngCore;
+use rand::Rng;
 use std::hint;
 
 use arrow::util::bench_util::create_primitive_array;

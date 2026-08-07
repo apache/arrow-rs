@@ -18,7 +18,7 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
