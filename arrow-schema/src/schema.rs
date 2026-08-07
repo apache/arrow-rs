@@ -293,7 +293,7 @@ impl Schema {
             let Schema { metadata, fields } = schema;
 
             // merge metadata
-            for (key, value) in metadata.into_iter() {
+            for (key, value) in metadata {
                 if let Some(old_val) = out_meta.get(&key)
                     && old_val != &value
                 {
@@ -507,7 +507,7 @@ impl Schema {
             && other
                 .metadata
                 .iter()
-                .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
+                .all(|(k, v1)| self.metadata.get(k).is_some_and(|v2| v1 == v2))
     }
 }
 

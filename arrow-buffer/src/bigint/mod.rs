@@ -1478,7 +1478,7 @@ mod tests {
         }
 
         // Exponentiation
-        for exp in vec![0, 1, 2, 3, 8, 100].into_iter() {
+        for exp in [0, 1, 2, 3, 8, 100] {
             let actual = il.wrapping_pow(exp);
             let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone().pow(exp));
             assert_eq!(actual.to_string(), expected.to_string());

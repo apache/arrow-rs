@@ -516,7 +516,7 @@ impl EncodingMask {
     /// A mask consisting of unused bit positions, used for validation. This includes the never
     /// used GROUP_VAR_INT encoding value of `1`.
     const ALLOWED_MASK: u32 =
-        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | 1 << 1;
+        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | (1 << 1);
 
     /// Attempt to create a new `EncodingMask` from an integer.
     ///

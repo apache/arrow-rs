@@ -223,7 +223,7 @@ impl ArrowJson {
             return Ok(false);
         }
 
-        for json_batch in self.get_record_batches()?.into_iter() {
+        for json_batch in self.get_record_batches()? {
             let batch = reader.next();
             match batch {
                 Some(Ok(batch)) => {
