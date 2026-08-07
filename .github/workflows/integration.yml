@@ -49,6 +49,9 @@ on:
       - arrow-string/**
       - arrow/**
 
+permissions:
+  contents: read
+
 jobs:
   integration:
     name: Archery test With other arrows
@@ -227,6 +230,10 @@ jobs:
       - name: Run Rust tests
         run: |
           source venv/bin/activate
+          # arrow-pyarrow's own tests are feature-gated, so the workspace-wide `cargo test` in
+          # rust.yml (default features) does not build them. They need no interpreter at runtime,
+          # but pyo3 needs one to link against, hence the active venv.
+          cargo test -p arrow-pyarrow --all-features
           cd arrow-pyarrow-testing
           cargo test
       - name: Run Python tests

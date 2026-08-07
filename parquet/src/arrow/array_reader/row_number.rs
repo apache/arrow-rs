@@ -45,7 +45,7 @@ impl RowNumberReader {
     ) -> Result<Self> {
         // Pass 1: Build a map from ordinal to first_row_index
         // This is O(M) where M is the total number of row groups in the file
-        let mut ordinal_to_offset: HashMap<i16, i64> = HashMap::new();
+        let mut ordinal_to_offset: HashMap<i32, i64> = HashMap::new();
         let mut first_row_index: i64 = 0;
 
         for rg in parquet_metadata.row_groups() {
@@ -181,7 +181,7 @@ mod tests {
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
-    fn create_test_parquet_metadata(row_groups: Vec<(i16, i64)>) -> ParquetMetaData {
+    fn create_test_parquet_metadata(row_groups: Vec<(i32, i64)>) -> ParquetMetaData {
         let schema_descr = create_test_schema();
 
         let mut row_group_metas = vec![];

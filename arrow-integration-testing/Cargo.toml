@@ -50,3 +50,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 [dev-dependencies]
 arrow-buffer = { path = "../arrow-buffer", default-features = false }
 tempfile = { version = "3", default-features = false }
+
+[lints]
+workspace = true

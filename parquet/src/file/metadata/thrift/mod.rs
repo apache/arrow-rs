@@ -113,6 +113,7 @@ struct Statistics<'a> {
    6: optional binary<'a> min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -145,43 +146,34 @@ struct SizeStatistics {
 );
 
 fn convert_geo_stats(
-    stats: Option<GeospatialStatistics>,
-) -> Option<Box<crate::geospatial::statistics::GeospatialStatistics>> {
-    stats.map(|st| {
-        let bbox = convert_bounding_box(st.bbox);
-        let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
-        Box::new(crate::geospatial::statistics::GeospatialStatistics::new(
-            bbox,
-            geospatial_types,
-        ))
-    })
+    st: GeospatialStatistics,
+) -> crate::geospatial::statistics::GeospatialStatistics {
+    let bbox = st.bbox.map(convert_bounding_box);
+    let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
+    crate::geospatial::statistics::GeospatialStatistics::new(bbox, geospatial_types)
 }
 
-fn convert_bounding_box(
-    bbox: Option<BoundingBox>,
-) -> Option<crate::geospatial::bounding_box::BoundingBox> {
-    bbox.map(|bb| {
-        let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
-            bb.xmin.into(),
-            bb.xmax.into(),
-            bb.ymin.into(),
-            bb.ymax.into(),
-        );
+fn convert_bounding_box(bb: BoundingBox) -> crate::geospatial::bounding_box::BoundingBox {
+    let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
+        bb.xmin.into(),
+        bb.xmax.into(),
+        bb.ymin.into(),
+        bb.ymax.into(),
+    );
 
-        newbb = match (bb.zmin, bb.zmax) {
-            (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.zmin, bb.zmax) {
+        (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb = match (bb.mmin, bb.mmax) {
-            (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
-            // If either None or mismatch, leave it as None and don't error
-            _ => newbb,
-        };
+    newbb = match (bb.mmin, bb.mmax) {
+        (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
+        // If either None or mismatch, leave it as None and don't error
+        _ => newbb,
+    };
 
-        newbb
-    })
+    newbb
 }
 
 /// Create a [`crate::file::statistics::Statistics`] from a thrift [`Statistics`] object.
@@ -207,6 +199,19 @@ fn convert_stats(
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Generic nan count for floating point types
+            let nan_count = stats
+                .nan_count
+                .map(|nan_count| {
+                    if nan_count < 0 {
+                        return Err(general_err!(
+                            "Statistics NaN count is negative {}",
+                            nan_count
+                        ));
+                    }
+                    Ok(nan_count as u64)
+                })
+                .transpose()?;
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -222,26 +227,26 @@ fn convert_stats(
                 stats.max_value
             };
 
-            fn check_len(min: &Option<&[u8]>, max: &Option<&[u8]>, len: usize) -> Result<()> {
-                if let Some(min) = min {
-                    if min.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse min statistic",));
-                    }
+            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
+                if let Some(min) = min
+                    && min.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse min statistic",));
                 }
-                if let Some(max) = max {
-                    if max.len() < len {
-                        return Err(general_err!("Insufficient bytes to parse max statistic",));
-                    }
+                if let Some(max) = max
+                    && max.len() < len
+                {
+                    return Err(general_err!("Insufficient bytes to parse max statistic",));
                 }
                 Ok(())
             }
 
             let physical_type = column_descr.physical_type();
             match physical_type {
-                Type::BOOLEAN => check_len(&min, &max, 1),
-                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
-                Type::INT96 => check_len(&min, &max, 12),
+                Type::BOOLEAN => check_len(min, max, 1),
+                Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                Type::INT96 => check_len(min, max, 12),
                 _ => Ok(()),
             }?;
 
@@ -291,19 +296,25 @@ fn convert_stats(
                     };
                     FStatistics::int96(min, max, distinct_count, null_count, old_format)
                 }
-                Type::FLOAT => FStatistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FLOAT => FStatistics::Float(
+                    ValueStatistics::new(
+                        min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
-                Type::DOUBLE => FStatistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::DOUBLE => FStatistics::Double(
+                    ValueStatistics::new(
+                        min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
                 Type::BYTE_ARRAY => FStatistics::ByteArray(
                     ValueStatistics::new(
@@ -324,6 +335,7 @@ fn convert_stats(
                         null_count,
                         old_format,
                     )
+                    .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
@@ -406,6 +418,7 @@ fn read_encoding_stats_as_mask<'a>(
 
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
+#[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
 fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
@@ -523,7 +536,7 @@ fn read_column_metadata<'a>(
             }
             17 => {
                 let val = GeospatialStatistics::read_thrift(&mut *prot)?;
-                column.geo_statistics = convert_geo_stats(Some(val));
+                column.geo_statistics = Some(Box::new(convert_geo_stats(val)));
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -691,7 +704,7 @@ fn read_row_group(
             }
             // 6: we don't expose total_compressed_size
             7 => {
-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)?);
+                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -760,13 +773,10 @@ pub(crate) fn parquet_metadata_from_bytes(
     #[cfg(feature = "encryption")]
     let mut footer_signing_key_metadata: Option<&[u8]> = None;
 
-    // this will need to be set before parsing row groups
-    let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
-
+    // this will need to be set before parsing row groups.
     // see if we already have a schema.
-    if let Some(options) = options {
-        schema_descr = options.schema().cloned();
-    }
+    let mut schema_descr: Option<Arc<SchemaDescriptor>> =
+        options.and_then(|options| options.schema().cloned());
 
     // struct FileMetaData {
     //   1: required i32 version
@@ -817,11 +827,6 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // Read row groups and handle ordinal assignment
                 let mut assigner = OrdinalAssigner::new();
                 for ordinal in 0..list_ident.size {
-                    let ordinal: i16 = ordinal.try_into().map_err(|_| {
-                        ParquetError::General(format!(
-                            "Row group ordinal {ordinal} exceeds i16 max value",
-                        ))
-                    })?;
                     let rg = read_row_group(&mut prot, schema_descr, options)?;
                     rg_vec.push(assigner.ensure(ordinal, rg)?);
                 }
@@ -876,14 +881,17 @@ pub(crate) fn parquet_metadata_from_bytes(
         return Err(general_err!("Column order length mismatch"));
     }
     // replace default type defined column orders with ones having the correct sort order
-    // TODO(ets): this could instead be done above when decoding
     let column_orders = column_orders.map(|mut cos| {
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
-                let sort_order = ColumnOrder::sort_order_for_type(
+                // use `get_sort_order_for_type` so we don't replace a type defined sort order
+                // with a more recent ordering. we need to preserve what was actually in the
+                // footer.
+                let sort_order = ColumnOrder::get_sort_order_for_type(
                     column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
+                    true,
                 );
                 cos[i] = ColumnOrder::TYPE_DEFINED_ORDER(sort_order);
             }
@@ -940,7 +948,7 @@ impl OrdinalAssigner {
     ///    groups must also not have ordinals.
     fn ensure(
         &mut self,
-        actual_ordinal: i16,
+        actual_ordinal: i32,
         mut rg: RowGroupMetaData,
     ) -> Result<RowGroupMetaData> {
         let rg_has_ordinal = rg.ordinal.is_some();
@@ -1001,6 +1009,7 @@ pub(crate) struct PageStatistics {
    6: optional binary min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -1438,6 +1447,8 @@ impl<'a> WriteThrift for FileMeta<'a> {
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
+        // only write ordinal if all values will fit in an i16
+        writer.set_write_row_group_ordinal(i16::try_from(self.row_groups.len()).is_ok());
 
         self.file_metadata
             .version
@@ -1598,7 +1609,12 @@ impl WriteThrift for RowGroupMetaData {
         last_field_id = self
             .compressed_size()
             .write_thrift_field(writer, 6, last_field_id)?;
-        if let Some(ordinal) = self.ordinal() {
+
+        // write ordinal if it will fit in an i16
+        if writer.write_row_group_ordinal()
+            && let Some(ordinal) = self.ordinal()
+            && let Ok(ordinal) = i16::try_from(ordinal)
+        {
             ordinal.write_thrift_field(writer, 7, last_field_id)?;
         }
         writer.write_struct_end()
@@ -1898,6 +1914,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
             .unwrap()
@@ -1913,6 +1930,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
             .unwrap()
@@ -1943,6 +1961,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
 
         let err = super::convert_stats(&column_descr, Some(make_stats(Some(&invalid), None)))

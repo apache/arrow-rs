@@ -17,6 +17,8 @@
 
 //! Tests for [`ArrowWriter`]
 
+mod layout;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::fs::File;

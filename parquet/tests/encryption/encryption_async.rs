@@ -23,7 +23,7 @@ use crate::encryption_util::{
     AES_128_FOOTER_KEY_NAME, AES_128_KEY_NAME_KEY, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAME_KEYS,
     AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY, AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAME_KEY,
     BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY, TestKeyRetriever, read_encrypted_file,
-    verify_column_indexes, verify_encryption_double_test_data, verify_encryption_test_data,
+    verify_column_indexes, verify_encryption_test_data,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
@@ -33,9 +33,7 @@ use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
 };
-use parquet::arrow::{
-    ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
-};
+use parquet::arrow::{ArrowSchemaConverter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
@@ -420,32 +418,100 @@ async fn test_write_non_uniform_encryption() {
     .await;
 }
 
-#[cfg(feature = "object_store")]
-async fn get_encrypted_meta_store() -> (
-    object_store::ObjectMeta,
-    std::sync::Arc<dyn object_store::ObjectStore>,
-) {
-    use object_store::local::LocalFileSystem;
+/// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+/// example on the [`AsyncFileReader`] trait documentation
+///
+/// [`AsyncFileReader`]: parquet::arrow::async_reader::AsyncFileReader
+/// [`ObjectStore`]: object_store::ObjectStore
+mod object_store_reader {
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::{FutureExt, TryFutureExt};
     use object_store::path::Path;
-    use object_store::{ObjectStore, ObjectStoreExt};
-
+    use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+    use parquet::errors::{ParquetError, Result};
+    use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+    use std::ops::Range;
     use std::sync::Arc;
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let store = LocalFileSystem::new_with_prefix(test_data).unwrap();
 
-    let meta = store
-        .head(&Path::from("uniform_encryption.parquet.encrypted"))
-        .await
-        .unwrap();
+    fn to_parquet_err(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
 
-    (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    #[derive(Clone)]
+    pub struct ObjectStoreReader {
+        pub store: Arc<dyn ObjectStore>,
+        pub path: Path,
+    }
+
+    impl AsyncFileReader for ObjectStoreReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+            self.store
+                .get_range(&self.path, range)
+                .map_err(to_parquet_err)
+                .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+            async move {
+                self.store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+            async move {
+                let metadata = ParquetMetaDataReader::new()
+                    .with_arrow_reader_options(options)
+                    .load_via_suffix_and_finish(self)
+                    .await?;
+                Ok(Arc::new(metadata))
+            }
+            .boxed()
+        }
+    }
+
+    impl MetadataSuffixFetch for &mut ObjectStoreReader {
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+            let options = GetOptions {
+                range: Some(GetRange::Suffix(suffix as u64)),
+                ..Default::default()
+            };
+            async move {
+                let resp = self
+                    .store
+                    .get_opts(&self.path, options)
+                    .await
+                    .map_err(to_parquet_err)?;
+                resp.bytes().await.map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+    }
 }
 
 #[tokio::test]
-#[cfg(feature = "object_store")]
 async fn test_read_encrypted_file_from_object_store() {
-    use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-    let (meta, store) = get_encrypted_meta_store().await;
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store_reader::ObjectStoreReader;
+    use parquet::arrow::async_reader::AsyncFileReader;
+    use std::sync::Arc;
+
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(test_data).unwrap());
+    let path = Path::from("uniform_encryption.parquet.encrypted");
 
     let key_code: &[u8] = "0123456789012345".as_bytes();
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
@@ -453,7 +519,7 @@ async fn test_read_encrypted_file_from_object_store() {
         .unwrap();
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let mut reader = ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
+    let mut reader = ObjectStoreReader { store, path };
     let metadata = reader.get_metadata(Some(&options)).await.unwrap();
     let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
         .await
@@ -1001,96 +1067,6 @@ async fn test_multi_threaded_encrypted_writing() {
     let (read_record_batches, read_metadata) =
         read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
-
-    // Check that file was encrypted
-    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-    );
-}
-
-#[tokio::test]
-async fn test_multi_threaded_encrypted_writing_deprecated() {
-    // Read example data and set up encryption/decryption properties
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
-    let file = std::fs::File::open(path).unwrap();
-
-    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
-        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
-        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
-        .build()
-        .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
-        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
-        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
-        .build()
-        .unwrap();
-
-    let (record_batches, metadata) =
-        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
-    let to_write: Vec<_> = record_batches
-        .iter()
-        .flat_map(|rb| rb.columns().to_vec())
-        .collect();
-    let schema = metadata.schema().clone();
-
-    let props = Some(
-        WriterPropertiesBuilder::default()
-            .with_file_encryption_properties(file_encryption_properties)
-            .build(),
-    );
-
-    // Create a temporary file to write the encrypted data
-    let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), props).unwrap();
-
-    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
-
-    // Get column writers
-    #[allow(deprecated)]
-    let col_writers = writer.get_column_writers().unwrap();
-    let num_columns = col_writers.len();
-
-    let (col_writer_tasks, mut col_array_channels) =
-        spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
-
-    // Send the ArrowLeafColumn data to the respective column writer channels
-    let mut worker_iter = col_array_channels.iter_mut();
-    for (array, field) in to_write.iter().zip(schema.fields()) {
-        for leaves in compute_leaves(field, array).unwrap() {
-            worker_iter.next().unwrap().send(leaves).await.unwrap();
-        }
-    }
-    drop(col_array_channels);
-
-    // Wait for all column writers to finish writing
-    let mut finalized_rg = Vec::with_capacity(num_columns);
-    for task in col_writer_tasks.into_iter() {
-        finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
-    }
-
-    // Append the finalized row group to the SerializedFileWriter
-    #[allow(deprecated)]
-    writer.append_row_group(finalized_rg).unwrap();
-
-    // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
-
-    // Write individual RecordBatches into the file
-    for rb in record_batches {
-        writer.write(&rb).unwrap()
-    }
-    assert!(writer.flush().is_ok());
-
-    // Close the file writer which writes the footer
-    let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.file_metadata().num_rows(), 100);
-
-    // Check that the file was written correctly
-    let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties).unwrap();
-    verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
     let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
