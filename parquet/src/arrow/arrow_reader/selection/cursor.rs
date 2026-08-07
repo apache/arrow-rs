@@ -145,10 +145,6 @@ impl SelectorsCursor {
         self.selectors.is_empty()
     }
 
-    pub(crate) fn selectors_mut(&mut self) -> &mut VecDeque<RowSelector> {
-        &mut self.selectors
-    }
-
     /// Return the next [`RowSelector`]
     pub(crate) fn next_selector(&mut self) -> RowSelector {
         let selector = self.selectors.pop_front().unwrap();
