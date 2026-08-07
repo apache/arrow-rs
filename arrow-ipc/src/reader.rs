@@ -1796,6 +1796,38 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// Upper bound on how much memory a single message length is allowed to reserve before any
+/// of the bytes it promises have been read.
+///
+/// Message lengths come from the stream itself, so they cannot be trusted: a truncated or
+/// corrupted stream can declare a body of arbitrary size. Reserving that up front turns a
+/// malformed input into an allocation failure, which aborts the process rather than
+/// returning an error the caller can handle. Beyond this size the buffer grows as the data
+/// arrives instead, so an implausible length costs one bounded allocation and then fails as
+/// a short read.
+///
+/// The value trades the size of that bounded allocation against how large a body still gets
+/// read in a single allocation: bodies up to this size behave exactly as before, larger ones
+/// start here and the buffer doubles as the data arrives, so a body of `n` bytes costs
+/// `log2(n / MAX_PREALLOC_BYTES)` reallocations and the buffer never runs more than a factor
+/// of two ahead of the bytes actually received.
+const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
+
+/// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
+fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
+    let mut buf = MutableBuffer::from_len_zeroed(len.min(MAX_PREALLOC_BYTES));
+    let mut filled = 0;
+    while filled < len {
+        let target = buf.len();
+        reader.read_exact(&mut buf.as_slice_mut()[filled..target])?;
+        filled = target;
+        if filled < len {
+            buf.resize(len.min(target.saturating_mul(2)), 0);
+        }
+    }
+    Ok(buf)
+}
+
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
@@ -1827,15 +1859,29 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         };
 
-        self.buf.resize(meta_len, 0);
-        self.reader.read_exact(&mut self.buf)?;
+        // `read_to_end` on a `Take` grows with the bytes that arrive, so an implausible
+        // `meta_len` costs a short read rather than the allocation it asks for.
+        self.buf.clear();
+        let read = (&mut self.reader)
+            .take(meta_len as u64)
+            .read_to_end(&mut self.buf)?;
+        if read != meta_len {
+            return Err(ArrowError::ParseError(format!(
+                "Unexpected end of stream: expected {meta_len} metadata bytes, got {read}"
+            )));
+        }
 
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
+        let body_len = usize::try_from(message.bodyLength()).map_err(|_| {
+            ArrowError::ParseError(format!(
+                "Invalid IPC message body length: {}",
+                message.bodyLength()
+            ))
+        })?;
+        let buf = read_body_bounded(&mut self.reader, body_len)?;
 
         Ok(Some((message, buf)))
     }
@@ -3858,5 +3904,81 @@ mod tests {
             assert_eq!(read_batch.num_columns(), 1);
             assert_eq!(read_batch.column(0).as_ref(), &values);
         }
+    }
+
+    /// Builds a stream whose single message declares `body_length` but is followed by only
+    /// `body_bytes` bytes of body. The body length is consumed before the header is
+    /// interpreted, so the header itself is immaterial.
+    fn stream_with_declared_body(body_length: i64, body_bytes: usize) -> Vec<u8> {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let mut message = crate::MessageBuilder::new(&mut fbb);
+        message.add_version(crate::MetadataVersion::V5);
+        message.add_header_type(crate::MessageHeader::NONE);
+        message.add_bodyLength(body_length);
+        let root = message.finish();
+        fbb.finish(root, None);
+        let metadata = fbb.finished_data();
+
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&CONTINUATION_MARKER);
+        stream.extend_from_slice(&(metadata.len() as i32).to_le_bytes());
+        stream.extend_from_slice(metadata);
+        stream.resize(stream.len() + body_bytes, 0xAB);
+        stream
+    }
+
+    /// A message body length is read from the stream before any of the bytes it describes,
+    /// so it cannot be trusted. Declaring an implausible one used to reserve it outright,
+    /// and the resulting allocation failure aborts the process instead of surfacing an error
+    /// the caller can handle.
+    #[test]
+    fn test_stream_reader_rejects_implausible_body_length() {
+        for body_length in [i64::MAX, 1 << 50, -1] {
+            let stream = stream_with_declared_body(body_length, 0);
+            let err = StreamReader::try_new(std::io::Cursor::new(stream), None).expect_err(
+                &format!("a message declaring {body_length} body bytes must not be accepted"),
+            );
+            let err = err.to_string();
+            assert!(
+                err.contains("Invalid IPC message body length")
+                    || err.contains("Unexpected end of stream")
+                    || err.contains("failed to fill whole buffer"),
+                "unexpected error for body_length {body_length}: {err}"
+            );
+        }
+    }
+
+    /// A plausible body length whose bytes end early must fail as a short read: before the
+    /// first read for a small body, and after at least one growth step for a body larger
+    /// than `MAX_PREALLOC_BYTES`.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_stream_reader_rejects_truncated_body() {
+        let over_prealloc = MAX_PREALLOC_BYTES as i64 + 1;
+        for (body_length, body_bytes) in [(1024, 10), (over_prealloc, MAX_PREALLOC_BYTES)] {
+            let stream = stream_with_declared_body(body_length, body_bytes);
+            let err = StreamReader::try_new(std::io::Cursor::new(stream), None)
+                .expect_err("a body backed by fewer bytes than declared must not be accepted");
+            assert!(
+                err.to_string().contains("failed to fill whole buffer"),
+                "unexpected error for body_length {body_length}: {err}"
+            );
+        }
+    }
+
+    /// The metadata length is untrusted for the same reason as the body length.
+    #[test]
+    fn test_stream_reader_rejects_unbacked_metadata_length() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&CONTINUATION_MARKER);
+        stream.extend_from_slice(&i32::MAX.to_le_bytes());
+        stream.extend_from_slice(b"not this many bytes");
+
+        let err = StreamReader::try_new(std::io::Cursor::new(stream), None)
+            .expect_err("metadata length must be backed by the stream");
+        assert!(
+            err.to_string().contains("Unexpected end of stream"),
+            "unexpected error: {err}"
+        );
     }
 }
