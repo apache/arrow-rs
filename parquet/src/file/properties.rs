@@ -350,14 +350,6 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
-    ///
-    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
-    #[deprecated(since = "58.0.0", note = "Use `max_row_group_row_count` instead")]
-    pub fn max_row_group_size(&self) -> usize {
-        self.max_row_group_row_count.unwrap_or(usize::MAX)
-    }
-
     /// Returns maximum number of rows in a row group, or `None` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_row_count`]
@@ -735,18 +727,6 @@ impl WriterPropertiesBuilder {
     /// upper-bound on the enforcement granularity of other limits.
     pub fn set_write_batch_size(mut self, value: usize) -> Self {
         self.write_batch_size = value;
-        self
-    }
-
-    /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`
-    /// via [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]).
-    ///
-    /// # Panics
-    /// If the value is set to 0.
-    #[deprecated(since = "58.0.0", note = "Use `set_max_row_group_row_count` instead")]
-    pub fn set_max_row_group_size(mut self, value: usize) -> Self {
-        assert!(value > 0, "Cannot have a 0 max row group size");
-        self.max_row_group_row_count = Some(value);
         self
     }
 
@@ -2101,17 +2081,6 @@ mod tests {
                 ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_writer_properties_deprecated_max_row_group_size_still_works() {
-        let props = WriterProperties::builder()
-            .set_max_row_group_size(42)
-            .build();
-
-        assert_eq!(props.max_row_group_row_count(), Some(42));
-        assert_eq!(props.max_row_group_size(), 42);
     }
 
     #[test]
