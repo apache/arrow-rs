@@ -17,173 +17,162 @@
   under the License.
 -->
 
-# Native Rust implementation of Apache Arrow and Apache Parquet
+# Apache Parquet ALP benchmark
 
-Welcome to the [Rust][rust] implementation of [Apache Arrow], a popular
-in-memory columnar format and [Apache Parquet], a popular columnar file
-format.
+This arrow-rs branch contains the benchmark used to evaluate the Apache
+Parquet implementation of [ALP (Adaptive Lossless floating-Point encoding)][alp]
+for the [Parquet ALP blog post][blog-pr]. It compares these Parquet choices for
+columns of IEEE-754 `f64` values:
 
-## Community
+- PLAIN encoding without compression
+- PLAIN encoding with ZSTD compression
+- ALP encoding without an additional block compressor
 
-We welcome participation from everyone and encourage you to join us, ask
-questions, help others, and get involved. All participation in the Apache Arrow
-project is governed by the Apache Software Foundation's [code of
-conduct](https://www.apache.org/foundation/policies/conduct.html).
+The benchmark reports compression speed, decompression speed, and compressed
+size for all 30 double-precision datasets from the CWI ALP corpus. It also
+includes a focused random-access comparison using `city_temperature_f`.
 
-We use GitHub [issues] and [pull requests] for all technical discussions, reviews,
-new features, bug fixes and release coordination. This ensures that all communication
-is public and archived for future reference.
+This is a benchmark branch, not the main arrow-rs development branch. See
+[apache/arrow-rs][arrow-rs] for the upstream project documentation.
 
-The `dev@arrow.apache.org` mailing list is the communication channel for the overall Apache Arrow community.
-Instructions for signing up and links to the archives can be found on the [Arrow Community](https://arrow.apache.org/community/) page.
+## Run the complete benchmark
 
-Some community members also use the [Arrow Rust Discord Server](https://discord.gg/YAb2TdazKQ) and the official [ASF Slack](https://s.apache.org/slack-invite) server for informal discussions and coordination.
-This is a great place to meet other contributors and get guidance on where to contribute.
-However, all technical designs should also be recorded and formalized in GitHub issues, so that they are accessible to everyone.
-In Slack, find us in the `#arrow-rust` channel and feel free to ask for an invite via Discord, GitHub issues, or other means.
+Requirements are a Rust toolchain, `curl`, `unzip`, and either `sha256sum` or
+`shasum`.
 
-There is more information in the [contributing] guide and the [security] policy.
-
-## Repository Structure
-
-This repository contains the following crates:
-
-| Crate              | Description                                                                  | Latest API Docs                                  | README                            |
-| ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------- |
-| [`arrow`]          | Core functionality (memory layout, arrays, low level computations)           | [docs.rs](https://docs.rs/arrow/latest)          | [(README)][arrow-readme]          |
-| [`arrow-flight`]   | Support for Arrow-Flight IPC protocol                                        | [docs.rs](https://docs.rs/arrow-flight/latest)   | [(README)][flight-readme]         |
-| [`parquet`]        | Support for the [Apache Parquet] columnar file format                        | [docs.rs](https://docs.rs/parquet/latest)        | [(README)][parquet-readme]        |
-| [`parquet_derive`] | A crate for deriving RecordWriter/RecordReader for arbitrary, simple structs | [docs.rs](https://docs.rs/parquet-derive/latest) | [(README)][parquet-derive-readme] |
-
-The current development version the API documentation can be found [here](https://arrow.apache.org/rust).
-
-Note: previously the [`object_store`] crate was also part of this repository,
-but it has been moved to the [arrow-rs-object-store repository]
-
-[apache arrow]: https://arrow.apache.org/
-[apache parquet]: https://parquet.apache.org/
-[`arrow`]: https://crates.io/crates/arrow
-[`parquet`]: https://crates.io/crates/parquet
-[`parquet_derive`]: https://crates.io/crates/parquet-derive
-[`arrow-flight`]: https://crates.io/crates/arrow-flight
-[arrow-rs-object-store repository]: https://github.com/apache/arrow-rs-object-store
-
-## Release Versioning and Schedule
-
-The Arrow Rust project releases approximately monthly and follows [Semantic
-Versioning].
-
-Due to available maintainer and testing bandwidth, [`arrow`] crates ([`arrow`],
-[`arrow-flight`], etc.) are released on the same schedule with the same versions
-as the [`parquet`] and [`parquet_derive`] crates.
-
-This crate releases every month. We release new major versions (with potentially
-breaking API changes) at most once a quarter, and release incremental minor
-versions in the intervening months. See [ticket #5368] for more details.
-
-To keep our maintenance burden down, we do regularly scheduled releases (major
-and minor) from the `main` branch. How we handle PRs with breaking API changes
-is described in the [contributing] guide.
-
-[contributing]: CONTRIBUTING.md#breaking-changes
-
-Planned Release Schedule
-
-| Approximate Date | Version    | Notes                                   |
-| ---------------- | ---------- | --------------------------------------- |
-| June 2026        | [`59.1.0`] | Minor, NO breaking API changes          |
-| July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
-| August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
-
-[`59.1.0`]: https://github.com/apache/arrow-rs/issues/9878
-[`59.2.0`]: https://github.com/apache/arrow-rs/issues/9879
-[`60.0.0`]: https://github.com/apache/arrow-rs/issues/9880
-[ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
-[semantic versioning]: https://semver.org/
-
-### Rust Version Compatibility Policy
-
-arrow-rs and parquet are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on an as needed basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
-
-Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
-
-### Guidelines for `panic` vs `Result`
-
-In general, use panics for bad states that are unreachable, unrecoverable or harmful.
-For those caused by invalid user input, however, we prefer to report that invalidity
-gracefully as an error result instead of panicking. In general, invalid input should result
-in an `Error` as soon as possible. It _is_ ok for code paths after validation to assume
-validation has already occurred and panic if not. See [ticket #6737] for more nuances.
-
-[ticket #6737]: https://github.com/apache/arrow-rs/issues/6737
-
-### Deprecation Guidelines
-
-Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
-downstream Rust programs to still compile, but generate compiler warnings. This
-gives downstream crates time to migrate prior to API removal.
-
-To deprecate an API:
-
-- Mark the API as deprecated using `#[deprecated]` and specify the exact arrow-rs version in which it was deprecated
-- Concisely describe the preferred API to help the user transition
-
-The deprecated version is the next version which will be released (please
-consult the list above). To mark the API as deprecated, use the
-`#[deprecated(since = "...", note = "...")]` attribute.
-
-For example
-
-```rust
-#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
+```shell
+./parquet/examples/alp_compression_stats.sh \
+  > target/alp-compression-and-speed-results.md
 ```
 
-In general, deprecated APIs will remain in the codebase for at least two major releases after
-they were deprecated (typically between 6 - 9 months later). For example, an API
-deprecated in `51.3.0` can be removed in `54.0.0` (or later). Deprecated APIs
-may be removed earlier or later than these guidelines at the discretion of the
-maintainers.
+The script:
 
-## Related Projects
+1. Checks whether all 30 datasets already exist.
+2. Downloads the 6.7 GiB CWI ALP bundle if necessary, resuming an interrupted
+   download.
+3. Verifies the archive using its pinned SHA-256 digest.
+4. Extracts the 30 `f64` datasets into the durable, gitignored
+   `target/alp-benchmark-data` directory.
+5. Builds the benchmark in release mode with `-C target-cpu=native` and runs it.
 
-There are several related crates in different repositories
+The extracted datasets occupy approximately 15 GiB. Approximately 22 GiB is
+required while both the archive and extracted data are present. The verified
+archive is deleted after successful extraction unless `ALP_KEEP_ARCHIVE=1` is
+set. Later runs reuse the extracted files.
 
-| Crate               | Description                                                  | Documentation                      |
-| ------------------- | ------------------------------------------------------------ | ---------------------------------- |
-| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)][object_store-readme]    |
-| [`datafusion`]      | In-memory query engine with SQL support                      | [(README)][datafusion-readme]      |
-| [`ballista`]        | Distributed query execution                                  | [(README)][ballista-readme]        |
-| [`parquet_opendal`] | Use [`opendal`] for [`parquet`] Arrow IO                     | [(README)][parquet_opendal-readme] |
+Progress is written to stderr and the Markdown result tables are written to
+stdout. The complete run normally produces one 90-row table—three Parquet
+choices for each of 30 datasets—followed by the random-access table.
 
-[`datafusion`]: https://crates.io/crates/datafusion
-[`ballista`]: https://crates.io/crates/ballista
-[`parquet_opendal`]: https://crates.io/crates/parquet_opendal
-[parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
-[object_store-readme]: https://github.com/apache/arrow-rs-object-store/blob/main/README.md
+## Configuration
 
-Collectively, these crates support a wider array of functionality for analytic computations in Rust.
+Store or reuse the complete corpus in a different directory:
 
-For example, you can write SQL queries or a `DataFrame` (using the
-[`datafusion`] crate) to read a parquet file (using the [`parquet`] crate),
-evaluate it in-memory using Arrow's columnar format (using the [`arrow`] crate),
-and send to another process (using the [`arrow-flight`] crate).
+```shell
+ALP_DATASET_DIR=/data/cwi-alp \
+  ./parquet/examples/alp_compression_stats.sh
+```
 
-Generally speaking, the [`arrow`] crate offers functionality for using Arrow
-arrays, and [`datafusion`] offers most operations typically found in SQL,
-including `join`s and window functions.
+Retain the downloaded archive:
 
-You can find more details about each crate in their respective READMEs.
+```shell
+ALP_KEEP_ARCHIVE=1 ./parquet/examples/alp_compression_stats.sh
+```
 
-[rust]: https://www.rust-lang.org/
-[`object_store`]: https://crates.io/crates/object-store
-[arrow-readme]: arrow/README.md
-[contributing]: CONTRIBUTING.md
-[parquet-readme]: parquet/README.md
-[flight-readme]: arrow-flight/README.md
-[datafusion-readme]: https://github.com/apache/datafusion/blob/main/README.md
-[ballista-readme]: https://github.com/apache/datafusion-ballista/blob/main/README.md
-[parquet-derive-readme]: parquet_derive/README.md
-[issues]: https://github.com/apache/arrow-rs/issues
-[pull requests]: https://github.com/apache/arrow-rs/pulls
-[discussions]: https://github.com/apache/arrow-rs/discussions
-[security]: SECURITY.md
+Override the native compiler flags:
+
+```shell
+RUSTFLAGS="-C target-cpu=x86-64-v3" \
+  ./parquet/examples/alp_compression_stats.sh
+```
+
+The Rust example can also run directly on a single file or a directory of
+arbitrary `.bin` and `.csv` inputs:
+
+```shell
+cargo run --quiet --release -p parquet \
+  --example alp_compression_stats \
+  --features arrow,zstd,experimental -- /path/to/data
+```
+
+Binary inputs must contain raw little-endian `f64` values. CSV inputs must
+contain one `f64` value per line. Directories are searched recursively.
+
+The `experimental` Cargo feature exposes arrow-rs's internal page encoder,
+decoder, and compression APIs to this example. ALP itself is not gated by that
+feature.
+
+## Measurements
+
+### Compressed size
+
+Each dataset is streamed through an `ArrowWriter` with dictionary encoding
+disabled. The writer output is discarded, and Parquet metadata supplies the
+compressed column-chunk size. The result includes data-page headers and excludes
+the file footer.
+
+```text
+bits/value = compressed column-chunk bytes × 8 / number of values
+```
+
+### Compression and decompression speed
+
+Every value in every dataset is processed in pages of at most 131,072 values,
+or 1 MiB of uncompressed doubles. File I/O is outside the timed regions.
+
+```text
+GB/s = uncompressed values × 8 / elapsed seconds / 1,000,000,000
+```
+
+PLAIN and ALP time their Parquet page encoders and decoders. PLAIN + ZSTD
+includes both stages: its compression time is PLAIN encoding plus ZSTD
+compression, and its decompression time is ZSTD decompression plus PLAIN
+decoding. ZSTD uses the Parquet default level.
+
+Short final pages are repeated to stabilize timing, and elapsed time is
+normalized to one execution before it is added to the dataset total. ALP's
+initial row-group parameter sampling is performed outside the timed region. The
+`ALL AVG.` rows are arithmetic means of the per-dataset results, so every
+dataset has equal weight regardless of its size.
+
+### Random access
+
+The random-access case study performs 100 independent point lookups on
+`city_temperature_f`. A fixed pseudo-random seed selects the same uniformly
+distributed rows on every run, making the exception mix reproducible.
+
+Each lookup begins with its encoded page already in memory:
+
+- PLAIN resets its decoder, skips directly to the row, and decodes one value.
+- ALP resets its decoder, uses the vector offsets to skip to the relevant
+  vector, and decodes one value.
+- PLAIN + ZSTD first decompresses the complete target page and then performs
+  the PLAIN lookup.
+
+File I/O and page discovery are excluded. The benchmark reports the elapsed
+microseconds for all 100 lookups; lower is better. Measurements are repeated
+adaptively, targeting at least 50 milliseconds of timed execution and a minimum
+of three iterations.
+
+## Reproducibility
+
+Run publication measurements on an otherwise idle machine and record at least:
+
+- CPU model
+- operating system and kernel
+- `rustc --version --verbose`
+- full `RUSTFLAGS`
+- benchmark commit SHA
+
+Wall-clock throughput varies across machines and with CPU frequency, thermal
+state, and background load. Compressed sizes and the selected random row indices
+are deterministic for a fixed benchmark commit and dataset bundle.
+
+The implementation is in
+[`parquet/examples/alp_compression_stats.rs`](parquet/examples/alp_compression_stats.rs),
+and the download/run wrapper is
+[`parquet/examples/alp_compression_stats.sh`](parquet/examples/alp_compression_stats.sh).
+
+[alp]: https://ir.cwi.nl/pub/33334/33334.pdf
+[arrow-rs]: https://github.com/apache/arrow-rs
+[blog-pr]: https://github.com/apache/parquet-site/pull/195
