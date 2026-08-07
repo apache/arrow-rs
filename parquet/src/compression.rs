@@ -283,8 +283,11 @@ mod gzip_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
             let mut decoder = read::MultiGzDecoder::new(input_buf);
             decoder.read_to_end(output_buf).map_err(|e| e.into())
         }
@@ -391,8 +394,10 @@ mod brotli_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let buffer_size = uncompress_size.unwrap_or(BROTLI_DEFAULT_BUFFER_SIZE);
-            brotli::Decompressor::new(input_buf, buffer_size)
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
+            }
+            brotli::Decompressor::new(input_buf, BROTLI_DEFAULT_BUFFER_SIZE)
                 .read_to_end(output_buf)
                 .map_err(|e| e.into())
         }
@@ -448,8 +453,6 @@ mod lz4_codec {
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
 
-    const LZ4_BUFFER_SIZE: usize = 4096;
-
     /// Codec for LZ4 compression algorithm.
     pub struct LZ4Codec {}
 
@@ -465,33 +468,19 @@ mod lz4_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
-            let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
-            let mut total_len = 0;
-            loop {
-                let len = decoder.read(&mut buffer)?;
-                if len == 0 {
-                    break;
-                }
-                total_len += len;
-                output_buf.write_all(&buffer[0..len])?;
+            if let Some(len) = uncompress_size {
+                output_buf.reserve(len);
             }
+            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
+            let total_len = decoder.read_to_end(output_buf)?;
             Ok(total_len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let mut encoder = lz4_flex::frame::FrameEncoder::new(output_buf);
-            let mut from = 0;
-            loop {
-                let to = std::cmp::min(from + LZ4_BUFFER_SIZE, input_buf.len());
-                encoder.write_all(&input_buf[from..to])?;
-                from += LZ4_BUFFER_SIZE;
-                if from >= input_buf.len() {
-                    break;
-                }
-            }
+            encoder.write_all(input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(ParquetError::External(Box::new(e))),
@@ -505,6 +494,8 @@ pub use lz4_codec::*;
 
 #[cfg(any(feature = "zstd", test))]
 mod zstd_codec {
+    use zstd::zstd_safe;
+
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
     use std::io::Cursor;
@@ -514,20 +505,64 @@ mod zstd_codec {
     /// Uses `zstd::bulk` API with reusable compressor/decompressor contexts
     /// to avoid the overhead of reinitializing contexts for each operation.
     pub struct ZSTDCodec {
-        compressor: zstd::bulk::Compressor<'static>,
-        decompressor: zstd::bulk::Decompressor<'static>,
+        cctx: zstd_safe::CCtx<'static>,
+        dctx: zstd_safe::DCtx<'static>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
         pub(crate) fn new(level: ZstdLevel) -> Self {
-            Self {
-                compressor: zstd::bulk::Compressor::new(level.compression_level())
-                    .expect("valid zstd compression level"),
-                decompressor: zstd::bulk::Decompressor::new()
-                    .expect("can create zstd decompressor"),
-            }
+            let mut cctx = zstd_safe::CCtx::create();
+            cctx.set_parameter(zstd_safe::CParameter::CompressionLevel(
+                level.compression_level(),
+            ))
+            .expect("valid zstd compression level");
+
+            let dctx = zstd_safe::DCtx::create();
+
+            Self { cctx, dctx }
         }
+    }
+
+    fn map_error_code(code: zstd_safe::ErrorCode) -> crate::errors::ParquetError {
+        let msg = zstd_safe::get_error_name(code);
+        std::io::Error::other(msg.to_string()).into()
+    }
+
+    /// Avoids zstd crate abstractions to minimize redundant copies;
+    /// [zstd::stream::Encoder] uses a buffered writer which is pointless for Vec.
+    fn compress_to_vec(
+        cctx: &mut zstd_safe::CCtx<'static>,
+        input_buf: &[u8],
+        output_buf: &mut Vec<u8>,
+    ) -> std::result::Result<(), zstd_safe::ErrorCode> {
+        cctx.reset(zstd_safe::ResetDirective::SessionOnly)?;
+        // causes frame header to include size
+        cctx.set_pledged_src_size(Some(input_buf.len() as u64))?;
+        // zstd can avoid allocating and copying into an input window
+        cctx.set_parameter(zstd_safe::CParameter::StableInBuffer(true))?;
+
+        let mut input = zstd_safe::InBuffer::around(input_buf);
+        loop {
+            let mut output = zstd_safe::OutBuffer::around_pos(output_buf, output_buf.len());
+            let end_op = zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_continue;
+            let to_flush = cctx.compress_stream2(&mut output, &mut input, end_op)?;
+            if input.pos == input.src.len() {
+                break; // let the end_stream loop below call reserve_exact with the finalized amount
+            }
+            output_buf.reserve(to_flush);
+        }
+
+        loop {
+            let mut output = zstd_safe::OutBuffer::around_pos(output_buf, output_buf.len());
+            let end_op = zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_end;
+            let to_flush = cctx.compress_stream2(&mut output, &mut input, end_op)?;
+            if to_flush == 0 {
+                break;
+            }
+            output_buf.reserve_exact(to_flush);
+        }
+        Ok(())
     }
 
     impl Codec for ZSTDCodec {
@@ -537,35 +572,30 @@ mod zstd_codec {
             output_buf: &mut Vec<u8>,
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let offset = output_buf.len();
-            let len = uncompress_size
-                .or_else(|| {
-                    // Get the decompressed size from the zstd frame header
-                    zstd::zstd_safe::get_frame_content_size(input_buf)
-                        .ok()
-                        .flatten()
-                        .map(|size| size as usize)
-                })
-                .unwrap_or(input_buf.len().saturating_mul(4));
-            output_buf.reserve(len);
+            if let Some(len) = uncompress_size {
+                output_buf.reserve_exact(len);
+            } else if let Some(len) = zstd_safe::find_decompressed_size(input_buf)
+                .map_err(|err| std::io::Error::other(err.to_string()))?
+            {
+                output_buf.reserve_exact(len as usize);
+            } else {
+                let len = zstd_safe::decompress_bound(input_buf).map_err(map_error_code)?;
+                output_buf.reserve(len as usize);
+            }
 
+            let offset = output_buf.len();
             let mut cursor = Cursor::new(output_buf);
             cursor.set_position(offset as u64);
+
             let len = self
-                .decompressor
-                .decompress_to_buffer(input_buf, &mut cursor)?;
+                .dctx
+                .decompress(&mut cursor, input_buf)
+                .map_err(map_error_code)?;
             Ok(len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let offset = output_buf.len();
-            let len = zstd::zstd_safe::compress_bound(input_buf.len());
-            output_buf.reserve(len);
-
-            let mut cursor = Cursor::new(output_buf);
-            cursor.set_position(offset as u64);
-            let _written = self.compressor.compress_to_buffer(input_buf, &mut cursor)?;
-            Ok(())
+            compress_to_vec(&mut self.cctx, input_buf, output_buf).map_err(map_error_code)
         }
     }
 }
