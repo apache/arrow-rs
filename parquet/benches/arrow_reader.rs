@@ -15,21 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
-use arrow::datatypes::DataType;
+use arrow::array::{Array, StringArray};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use arrow_schema::Field;
+use bytes::Bytes;
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use half::f16;
 use num_bigint::BigInt;
 use num_traits::FromPrimitive;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::array_reader::{
     ListArrayReader, make_byte_array_reader, make_byte_view_array_reader,
     make_fixed_len_byte_array_reader,
 };
-use parquet::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
-use parquet::basic::Type;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, DEFAULT_BATCH_SIZE, ParquetRecordBatchReaderBuilder,
+};
+use parquet::basic::{Compression, Type};
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
+use parquet::file::properties::WriterProperties;
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
 use parquet::{
     arrow::array_reader::ArrayReader,
@@ -2615,15 +2621,6 @@ fn add_benches(c: &mut Criterion) {
 }
 
 fn bench_plain_string_to_dict(c: &mut Criterion) {
-    use arrow::array::StringArray;
-    use arrow::datatypes::{Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use bytes::Bytes;
-    use parquet::arrow::ArrowWriter;
-    use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    use parquet::basic::Compression;
-    use parquet::file::properties::WriterProperties;
-
     fn make_parquet(num_rows: usize, cardinality: usize) -> Bytes {
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
         let values: StringArray = (0..num_rows)
@@ -2642,7 +2639,7 @@ fn bench_plain_string_to_dict(c: &mut Criterion) {
         Bytes::from(buf)
     }
 
-    let num_rows = EXPECTED_VALUE_COUNT;
+    let num_rows = 8192 * 8;
     let dict_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
         "s",
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -2672,6 +2669,7 @@ fn bench_plain_string_to_dict(c: &mut Criterion) {
                         .build()
                         .unwrap();
                 let mut count = 0usize;
+
                 for batch in reader {
                     count += batch.unwrap().num_rows();
                 }
