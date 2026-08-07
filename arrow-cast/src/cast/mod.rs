@@ -269,14 +269,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | LargeUtf8
             | Date32
             | Date64
-            | Time32(Second)
-            | Time32(Millisecond)
-            | Time64(Microsecond)
-            | Time64(Nanosecond)
-            | Timestamp(Second, _)
-            | Timestamp(Millisecond, _)
-            | Timestamp(Microsecond, _)
-            | Timestamp(Nanosecond, _)
+            | Time32(Second | Millisecond)
+            | Time64(Microsecond | Nanosecond)
+            | Timestamp(Second | Millisecond | Microsecond | Nanosecond, _)
             | Interval(_)
             | BinaryView,
         ) => true,
@@ -320,10 +315,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Timestamp(_, _)
             | Date32
             | Date64
-            | Time32(Second)
-            | Time32(Millisecond)
-            | Time64(Microsecond)
-            | Time64(Nanosecond),
+            | Time32(Second | Millisecond)
+            | Time64(Microsecond | Nanosecond),
         ) => true,
         (_, Duration(_)) if from_type.is_numeric() => true,
         (Duration(_), _) if to_type.is_numeric() => true,
@@ -390,7 +383,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
         }
     } else {
@@ -404,7 +397,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
         }
     };
@@ -2704,7 +2697,7 @@ fn cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(
             builder.append_null();
         } else {
             match builder.append_value(array.value(i)) {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(e) => match cast_options.safe {
                     true => builder.append_null(),
                     false => return Err(e),
@@ -5871,12 +5864,12 @@ mod tests {
         test_unsafe_string_to_interval_err!(
             vec![Some("2 months 31 days 1 second")],
             IntervalUnit::YearMonth,
-            r#"Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth. Only year and month fields are allowed."#
+            "Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth. Only year and month fields are allowed."
         );
         test_unsafe_string_to_interval_err!(
             vec![Some("1 day 1.5 milliseconds")],
             IntervalUnit::DayTime,
-            r#"Cast error: Cannot cast 1 day 1.5 milliseconds to IntervalDayTime because the nanos part isn't multiple of milliseconds"#
+            "Cast error: Cannot cast 1 day 1.5 milliseconds to IntervalDayTime because the nanos part isn't multiple of milliseconds"
         );
 
         // overflow
@@ -7618,7 +7611,7 @@ mod tests {
 
         let string_view_array = {
             let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for v in typed_dict.into_iter() {
+            for v in typed_dict {
                 builder.append_option(v);
             }
             builder.finish()
@@ -7635,7 +7628,7 @@ mod tests {
 
         let binary_view_array = {
             let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for v in typed_binary_dict.into_iter() {
+            for v in typed_binary_dict {
                 builder.append_option(v);
             }
             builder.finish()

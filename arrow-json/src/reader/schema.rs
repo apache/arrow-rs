@@ -94,9 +94,8 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
         (DataType::Null, o) | (o, DataType::Null) => o,
         (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
         (DataType::Int64, DataType::Int64) => DataType::Int64,
-        (DataType::Float64, DataType::Float64)
-        | (DataType::Float64, DataType::Int64)
-        | (DataType::Int64, DataType::Float64) => DataType::Float64,
+        (DataType::Float64 | DataType::Int64, DataType::Float64)
+        | (DataType::Float64, DataType::Int64) => DataType::Float64,
         (DataType::List(l), DataType::List(r)) => {
             list_type_of(coerce_data_type(vec![l.data_type(), r.data_type()]))
         }
@@ -388,7 +387,10 @@ fn collect_field_types_from_object(
                 set_object_scalar_field_type(field_types, k, DataType::Utf8)?;
             }
             Value::Object(inner_map) => {
-                if let InferredType::Any = field_types.get(k).unwrap_or(&InferredType::Any) {
+                if matches!(
+                    field_types.get(k).unwrap_or(&InferredType::Any),
+                    InferredType::Any
+                ) {
                     field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {

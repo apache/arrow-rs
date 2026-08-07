@@ -419,7 +419,7 @@ impl ValueFormatter<'_> {
     /// will return an error on formatting issue
     pub fn write(&self, s: &mut dyn Write) -> Result<(), ArrowError> {
         match self.formatter.format.write(self.idx, s) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
             Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
         }
@@ -614,7 +614,7 @@ impl<'a, T: DisplayIndex> DisplayIndexState<'a> for T {
         Ok(())
     }
 
-    fn write(&self, _: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+    fn write(&self, (): &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         DisplayIndex::write(self, idx, f)
     }
 }

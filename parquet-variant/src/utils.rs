@@ -187,7 +187,7 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
     };
 
     let bytes = s.as_bytes();
-    if let Some(b'.') = bytes.first() {
+    if bytes.first() == Some(&b'.') {
         return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
     }
 

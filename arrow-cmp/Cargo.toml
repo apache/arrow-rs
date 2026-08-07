@@ -42,3 +42,6 @@ arrow-schema = { workspace = true }
 
 [dev-dependencies]
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
+
+[lints]
+workspace = true

@@ -1880,7 +1880,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new(
@@ -1890,7 +1890,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "ts_milli",

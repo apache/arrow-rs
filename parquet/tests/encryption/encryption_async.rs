@@ -109,7 +109,7 @@ async fn test_misspecified_encryption_keys() {
         let decryption_properties = builder.build().unwrap();
 
         match verify_encryption_test_file_read_async(&mut file, decryption_properties).await {
-            Ok(_) => {
+            Ok(()) => {
                 panic!("did not get expected error")
             }
             Err(e) => {
@@ -771,7 +771,7 @@ fn spawn_rg_join_and_finalize_task(
     tokio::task::spawn(async move {
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
-        for task in column_writer_tasks.into_iter() {
+        for task in column_writer_tasks {
             let writer = task
                 .await
                 .map_err(|e| ParquetError::General(e.to_string()))??;
@@ -863,7 +863,7 @@ fn spawn_column_parallel_row_group_writer(
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut col_writer in col_writers.into_iter() {
+    for mut col_writer in col_writers {
         let (send_array, mut receive_array) =
             tokio::sync::mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);

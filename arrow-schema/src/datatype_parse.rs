@@ -1429,7 +1429,7 @@ mod test {
                     ),
                 ])),
             ),
-            (r#"Struct()"#, Struct(Fields::empty())),
+            (r"Struct()", Struct(Fields::empty())),
             (
                 "FixedSizeList(4, Int64)",
                 FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
@@ -1461,12 +1461,12 @@ mod test {
             ("", "Error finding next token"),
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
-            (r#"Timestamp(ns, +00:00)"#, "Error unknown token: +00"),
+            (r"Timestamp(ns, +00:00)", "Error unknown token: +00"),
             (
                 r#"Timestamp(ns, "+00:00)"#,
                 r#"Unterminated string at: "+00:00)"#,
             ),
-            (r#"Timestamp(ns, "")"#, r#"empty strings aren't allowed"#),
+            (r#"Timestamp(ns, "")"#, r"empty strings aren't allowed"),
             (
                 r#"Timestamp(ns, "+00:00"")"#,
                 r#"Parser error: Unterminated string at: ")"#,

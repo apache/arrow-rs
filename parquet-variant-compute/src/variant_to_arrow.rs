@@ -1419,7 +1419,7 @@ struct FakeNullBuilder {
 }
 
 impl FakeNullBuilder {
-    fn append_value(&mut self, _: ()) {
+    fn append_value(&mut self, (): ()) {
         self.item_count += 1;
     }
 
