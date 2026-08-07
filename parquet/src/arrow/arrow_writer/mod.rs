@@ -1476,6 +1476,30 @@ impl ArrowColumnWriterFactory {
     }
 }
 
+pub(crate) fn coerce_narrow_integer_to_int32(array: &dyn arrow_array::Array) -> Result<Int32Array> {
+    macro_rules! coerce {
+        ($ty:ty) => {{
+            let array = array.as_any().downcast_ref::<$ty>().ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Arrow array has data type {} but an incompatible representation",
+                    array.data_type()
+                ))
+            })?;
+            Ok(array.unary(|value| value as i32))
+        }};
+    }
+
+    match array.data_type() {
+        ArrowDataType::Int8 => coerce!(arrow_array::Int8Array),
+        ArrowDataType::Int16 => coerce!(arrow_array::Int16Array),
+        ArrowDataType::UInt8 => coerce!(arrow_array::UInt8Array),
+        ArrowDataType::UInt16 => coerce!(arrow_array::UInt16Array),
+        data_type => Err(ParquetError::General(format!(
+            "Cannot coerce Arrow data type {data_type} to Parquet INT32"
+        ))),
+    }
+}
+
 fn write_leaf(
     writer: &mut ColumnWriter<'_>,
     column: &dyn arrow_array::Array,
@@ -1491,23 +1515,15 @@ fn write_leaf(
                     let array = Int32Array::new_null(column.len());
                     write_primitive(typed, array.values(), levels)
                 }
-                ArrowDataType::Int8 => {
-                    let array: Int32Array = column.as_primitive::<Int8Type>().unary(|x| x as i32);
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::Int16 => {
-                    let array: Int32Array = column.as_primitive::<Int16Type>().unary(|x| x as i32);
+                ArrowDataType::Int8 | ArrowDataType::Int16 => {
+                    let array = coerce_narrow_integer_to_int32(column)?;
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Int32 => {
                     write_primitive(typed, column.as_primitive::<Int32Type>().values(), levels)
                 }
-                ArrowDataType::UInt8 => {
-                    let array: Int32Array = column.as_primitive::<UInt8Type>().unary(|x| x as i32);
-                    write_primitive(typed, array.values(), levels)
-                }
-                ArrowDataType::UInt16 => {
-                    let array: Int32Array = column.as_primitive::<UInt16Type>().unary(|x| x as i32);
+                ArrowDataType::UInt8 | ArrowDataType::UInt16 => {
+                    let array = coerce_narrow_integer_to_int32(column)?;
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt32 => {
