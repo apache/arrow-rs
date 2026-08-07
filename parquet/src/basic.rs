@@ -974,8 +974,7 @@ union BloomFilterCompression {
 /// order, and a sort order should be considered when comparing values with statistics
 /// min/max.
 ///
-/// See reference in
-/// <https://github.com/apache/arrow/blob/main/cpp/src/parquet/types.h>
+/// See [`ColumnOrder`] for more information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum SortOrder {
@@ -1004,8 +1003,23 @@ impl SortOrder {
 /// Column order that specifies what method was used to aggregate min/max values for
 /// statistics.
 ///
+/// Prior to version 2.4.0, Parquet used signed comparisons when computing min and max
+/// values for statistics. This caused problems for UTF8 encoded strings, so the
+/// [`ColumnOrder`] union was added, initially with a single variant `TYPE_ORDER`. The
+/// sort order for columns was then defined based on the logical or physical type of
+/// the column, and could use either signed comparison, unsigned comparison, or for some
+/// types be left undefined. Since then several new `ColumnOrder`s have been added to the
+/// specification.
+///
+/// In this crate, the `ColumnOrder` found in the footer is represented by this enum. To
+/// convey what actual sort order to use, this crate maps the `ColumnOrder` along with the
+/// physical and logical type to a [`SortOrder`]. It is this [`SortOrder`] that is used
+/// internally when deciding how to compute the min/max statistics.
+///
 /// If column order is undefined, then it is the legacy behaviour and all values should
 /// be compared as signed values/bytes.
+///
+/// [`ColumnOrder`]: https://github.com/apache/parquet-format/blob/2076361bb64e2de9ca6a8d06eda025a6fa4e9df6/src/main/thrift/parquet.thrift#L1103
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum ColumnOrder {
