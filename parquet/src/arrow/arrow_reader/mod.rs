@@ -1678,7 +1678,7 @@ pub(crate) mod tests {
         virtual_type::{RowGroupIndex, RowNumber},
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
+    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, DoubleType, FixedLenByteArray,
@@ -5306,71 +5306,6 @@ pub(crate) mod tests {
         let r0 = c0arr.value(0);
         let r0arr = r0.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(r0arr, &a);
-    }
-
-    #[test]
-    fn test_map_no_value() {
-        // File schema:
-        // message schema {
-        //   required group my_map (MAP) {
-        //     repeated group key_value {
-        //       required int32 key;
-        //       optional int32 value;
-        //     }
-        //   }
-        //   required group my_map_no_v (MAP) {
-        //     repeated group key_value {
-        //       required int32 key;
-        //     }
-        //   }
-        //   required group my_list (LIST) {
-        //     repeated group list {
-        //       required int32 element;
-        //     }
-        //   }
-        // }
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/map_no_value.parquet");
-        let file = File::open(path).unwrap();
-
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
-        let out = reader.next().unwrap().unwrap();
-        assert_eq!(out.num_rows(), 3);
-        assert_eq!(out.num_columns(), 3);
-        // my_map_no_v and my_list columns should now be equivalent
-        let c0 = out.column(1).as_list::<i32>();
-        let c1 = out.column(2).as_list::<i32>();
-        assert_eq!(c0.len(), c1.len());
-        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
-    }
-
-    #[test]
-    fn test_read_unknown_logical_type() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/unknown-logical-type.parquet");
-        let test_file = File::open(path).unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file)
-            .expect("Error creating reader builder");
-
-        let schema = builder.metadata().file_metadata().schema_descr();
-        assert_eq!(
-            schema.column(0).logical_type_ref(),
-            Some(&LogicalType::String)
-        );
-        assert_eq!(
-            schema.column(1).logical_type_ref(),
-            Some(&LogicalType::_Unknown { field_id: 2555 })
-        );
-        assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
-
-        let mut reader = builder.build().unwrap();
-        let out = reader.next().unwrap().unwrap();
-        assert_eq!(out.num_rows(), 3);
-        assert_eq!(out.num_columns(), 2);
     }
 
     #[test]

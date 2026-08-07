@@ -20,9 +20,10 @@
 //! [parquet-testing]: https://github.com/apache/parquet-testing
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Int64Array, types};
+use arrow_array::{Array, Int64Array, types};
 use arrow_schema::{Field, Schema, TimeUnit};
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::basic::{LogicalType, Type as PhysicalType};
 use std::fs::File;
 use std::sync::Arc;
 
@@ -123,4 +124,69 @@ fn test_int96_from_spark_file_without_provided_schema() {
         .for_each(|(lhs, rhs)| {
             assert_eq!(lhs, rhs);
         });
+}
+
+#[test]
+fn test_map_no_value() {
+    // File schema:
+    // message schema {
+    //   required group my_map (MAP) {
+    //     repeated group key_value {
+    //       required int32 key;
+    //       optional int32 value;
+    //     }
+    //   }
+    //   required group my_map_no_v (MAP) {
+    //     repeated group key_value {
+    //       required int32 key;
+    //     }
+    //   }
+    //   required group my_list (LIST) {
+    //     repeated group list {
+    //       required int32 element;
+    //     }
+    //   }
+    // }
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/map_no_value.parquet");
+    let file = File::open(path).unwrap();
+
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
+    let out = reader.next().unwrap().unwrap();
+    assert_eq!(out.num_rows(), 3);
+    assert_eq!(out.num_columns(), 3);
+    // my_map_no_v and my_list columns should now be equivalent
+    let c0 = out.column(1).as_list::<i32>();
+    let c1 = out.column(2).as_list::<i32>();
+    assert_eq!(c0.len(), c1.len());
+    c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
+}
+
+#[test]
+fn test_read_unknown_logical_type() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/unknown-logical-type.parquet");
+    let test_file = File::open(path).unwrap();
+
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(test_file).expect("Error creating reader builder");
+
+    let schema = builder.metadata().file_metadata().schema_descr();
+    assert_eq!(
+        schema.column(0).logical_type_ref(),
+        Some(&LogicalType::String)
+    );
+    assert_eq!(
+        schema.column(1).logical_type_ref(),
+        Some(&LogicalType::_Unknown { field_id: 2555 })
+    );
+    assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
+
+    let mut reader = builder.build().unwrap();
+    let out = reader.next().unwrap().unwrap();
+    assert_eq!(out.num_rows(), 3);
+    assert_eq!(out.num_columns(), 2);
 }
