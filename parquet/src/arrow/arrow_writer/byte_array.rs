@@ -568,6 +568,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         self.dict_encoder.is_some()
     }
 
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active the data page holds RLE
+        // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
+        // fallback shares prefixes with the preceding value.
+        self.dict_encoder.is_none()
+            && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
+    }
+
     fn estimated_memory_size(&self) -> usize {
         let encoder_size = match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),

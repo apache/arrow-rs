@@ -23,6 +23,52 @@ use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::file::properties::WriterProperties;
 use crate::schema::types::ColumnDescriptor;
 
+/// How [`write_granular_chunk`] should cut mini-batch windows in one chunk.
+///
+/// Cutting on exact value counts is the precise option and the expensive one:
+/// it roughly doubles the number of mini-batches on a nullable column, because
+/// the level:value ratio no longer rounds a window up to cover a second value.
+/// It is used only where that precision buys something.
+///
+/// [`write_granular_chunk`]: super::GenericColumnWriter::write_granular_chunk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubBatch {
+    /// Cut after exactly this many values, walking definition levels to find
+    /// the boundary.
+    ///
+    /// Used against the data page budget for encodings that compress a value
+    /// against its predecessor. There, a page opening with a single value is
+    /// what lets `DELTA_BYTE_ARRAY` keep its prefix deduplication across an
+    /// over-limit value, and the ratio's round-up costs whole values of
+    /// output: 16 MiB rather than 2 MiB for 128 values at one null in 16,
+    /// and 64 MiB rather than 8 MiB once the values are 8 MiB each (#10538).
+    Values(usize),
+    /// Cut after this many levels: the value budget scaled by the chunk's
+    /// level:value ratio, rounded up.
+    ///
+    /// Used everywhere else, because everywhere else the round-up changes no
+    /// bytes:
+    ///
+    /// * Against the *dictionary page* budget, which is the limit minus what
+    ///   the dictionary already holds, so it shrinks toward zero as the
+    ///   dictionary fills. A one-value budget is routine there for ordinary
+    ///   values, and value-exact windows measured +13% on `string/default`
+    ///   and +8% on `string/parquet_2`. The per-mini-batch spill check still
+    ///   bounds the overshoot.
+    /// * For `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY`, whose values cost the
+    ///   same wherever they land. Value-exact windows leave their output byte
+    ///   for byte identical while doubling the page count and costing ~28%
+    ///   throughput.
+    ///
+    /// The round-up is bounded, which is what makes it an acceptable price.
+    /// A window spans `ceil(values * levels / values_in_chunk)` levels, so
+    /// where one value already fills the budget it covers at most two values,
+    /// whatever the null density — and exactly one wherever the ratio is a
+    /// whole number. The page bound #9972 added therefore still holds; it is
+    /// two values per page rather than one.
+    Levels(usize),
+}
+
 /// Picks byte-budget-aware mini-batch sizes for one column.
 ///
 /// The parquet column writer checks the data page byte limit only *after*
@@ -88,12 +134,15 @@ impl ByteBudgetChunker {
         }
     }
 
-    /// Decide how many levels at the start of a chunk belong in one
+    /// Decide how many *values* at the start of a chunk belong in one
     /// mini-batch, so the mini-batch cannot overflow whichever page is
     /// currently accumulating value bytes: the data page when plain-encoding,
-    /// or the *dictionary* page while dictionary-encoding. A returned value
-    /// smaller than `chunk_size` triggers granular sub-batching in
-    /// `write_batch_internal`.
+    /// or the *dictionary* page while dictionary-encoding.
+    ///
+    /// `None` means the whole chunk fits in a single mini-batch — the common
+    /// case. `Some(_)` triggers granular sub-batching in
+    /// `write_batch_internal`; see [`SubBatch`] for why the data page and
+    /// dictionary page budgets get different windowing.
     ///
     /// While dictionary-encoding, the data page holds only small RLE indices,
     /// but the dictionary page accumulates the distinct values themselves —
@@ -101,14 +150,14 @@ impl ByteBudgetChunker {
     /// mini-batch. The per-mini-batch dictionary spill check would otherwise
     /// let one mini-batch of large values balloon the dictionary page.
     ///
-    /// Returns `chunk_size` immediately (no value inspection) when the chunk
-    /// is empty, or when the column is a fixed-width type whose mini-batches
+    /// Returns `None` immediately (no value inspection) when the chunk is
+    /// empty, or when the column is a fixed-width type whose mini-batches
     /// statically cannot overshoot the relevant page.
     ///
     /// `#[inline]`: this is a tiny per-chunk dispatcher; the actual byte
-    /// inspection lives in the out-of-line `byte_budget_sub_batch_size`.
+    /// inspection lives in the out-of-line `byte_budget_sub_batch`.
     #[inline]
-    pub(crate) fn pick_sub_batch_size<E: ColumnValueEncoder>(
+    pub(crate) fn pick_sub_batch<E: ColumnValueEncoder>(
         &self,
         encoder: &E,
         values: &E::Values,
@@ -116,33 +165,40 @@ impl ByteBudgetChunker {
         chunk_def: LevelDataRef<'_>,
         values_offset: usize,
         chunk_size: usize,
-    ) -> usize {
+    ) -> Option<SubBatch> {
         if chunk_size == 0 {
-            return chunk_size;
+            return None;
         }
-        let budget = if encoder.has_dictionary() {
+        // The second element selects the windowing; see [`SubBatch`]. Only a
+        // constant data page budget under an encoding that compresses against
+        // the previous value is worth cutting exactly.
+        let (budget, value_exact) = if encoder.has_dictionary() {
             if self.static_dict_always_fits {
-                return chunk_size;
+                return None;
             }
             // Bound the mini-batch by the dictionary page's *remaining*
             // budget (it accumulates across mini-batches until it spills).
-            match encoder.estimated_dict_page_size() {
-                Some(used) => self.dict_page_byte_limit.saturating_sub(used),
-                None => return chunk_size,
-            }
+            // An encoder that cannot size its dictionary page (`?`) leaves
+            // the chunk unsplit.
+            let used = encoder.estimated_dict_page_size()?;
+            (self.dict_page_byte_limit.saturating_sub(used), false)
         } else {
             if self.static_always_fits {
-                return chunk_size;
+                return None;
             }
-            self.page_byte_limit
+            (
+                self.page_byte_limit,
+                encoder.compresses_against_previous_value(),
+            )
         };
-        self.byte_budget_sub_batch_size::<E>(
+        self.byte_budget_sub_batch::<E>(
             values,
             value_indices,
             chunk_def,
             values_offset,
             chunk_size,
             budget,
+            value_exact,
         )
     }
 
@@ -152,7 +208,8 @@ impl ByteBudgetChunker {
     /// `#[inline(never)]` keeps this slow path out of the hot
     /// `write_batch_internal` loop; numeric and bool columns never reach it.
     #[inline(never)]
-    fn byte_budget_sub_batch_size<E: ColumnValueEncoder>(
+    #[allow(clippy::too_many_arguments)]
+    fn byte_budget_sub_batch<E: ColumnValueEncoder>(
         &self,
         values: &E::Values,
         value_indices: Option<&[usize]>,
@@ -160,14 +217,15 @@ impl ByteBudgetChunker {
         values_offset: usize,
         chunk_size: usize,
         budget: usize,
-    ) -> usize {
+        value_exact: bool,
+    ) -> Option<SubBatch> {
         // How many of this chunk's levels carry an actual value. For a
         // non-nullable, unrepeated column every level is a value, so
         // `value_count` is O(1) (`Absent`/`Uniform` def levels); only
         // nullable or nested columns pay the O(chunk_size) def-level scan.
         let vals_in_chunk = chunk_def.value_count(chunk_size, self.max_def_level);
         if vals_in_chunk == 0 {
-            return chunk_size;
+            return None;
         }
         // Ask the encoder how many of the next values fit in one page byte
         // budget. Dispatch on whether the caller supplied gather indices;
@@ -184,20 +242,28 @@ impl ByteBudgetChunker {
             }
         };
         match fit {
-            None => chunk_size,
+            // The encoder cannot size these values; write the chunk whole.
+            None => None,
+            // All of the chunk's values fit in the budget — no sub-batching.
+            Some(values_per_subbatch) if values_per_subbatch >= vals_in_chunk => None,
             Some(values_per_subbatch) => {
-                // Convert the value count back into a level count. For a
-                // non-nullable column this is a no-op; for nullable/nested
-                // columns scale by the chunk's observed value-to-level
-                // ratio.
-                let levels_per_subbatch = if vals_in_chunk == chunk_size {
-                    values_per_subbatch
+                // `count_values_within_byte_budget` never reports zero, but a
+                // zero-wide window would not advance `write_granular_chunk`.
+                let values_per_subbatch = values_per_subbatch.max(1);
+                Some(if value_exact {
+                    SubBatch::Values(values_per_subbatch)
                 } else {
-                    (values_per_subbatch * chunk_size)
-                        .div_ceil(vals_in_chunk)
-                        .max(1)
-                };
-                chunk_size.min(levels_per_subbatch.max(1))
+                    // Scale to a level count. Inexact on nullable chunks, and
+                    // deliberately so — see `SubBatch::Levels`.
+                    let levels_per_subbatch = if vals_in_chunk == chunk_size {
+                        values_per_subbatch
+                    } else {
+                        (values_per_subbatch * chunk_size)
+                            .div_ceil(vals_in_chunk)
+                            .max(1)
+                    };
+                    SubBatch::Levels(chunk_size.min(levels_per_subbatch))
+                })
             }
         }
     }

@@ -132,6 +132,24 @@ pub trait ColumnValueEncoder {
     /// Returns true if this encoder has a dictionary page
     fn has_dictionary(&self) -> bool;
 
+    /// Returns true if the encoder compresses each value against the value
+    /// before it *within the current page* — today, `DELTA_BYTE_ARRAY` and
+    /// its shared-prefix lengths.
+    ///
+    /// For such encodings a page boundary is not free: flushing discards the
+    /// previous value, so the first value of the next page is stored in full.
+    /// A column of large values that share long prefixes therefore collapses
+    /// to `PLAIN` if every value is cut into its own page. The column writer
+    /// uses this to exempt a page's mandatory first value from the data page
+    /// byte limit; see `should_add_data_page`.
+    ///
+    /// Defaults to `false`: for `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` a
+    /// value costs the same wherever it lands, so there is nothing to
+    /// preserve by keeping values together.
+    fn compresses_against_previous_value(&self) -> bool {
+        false
+    }
+
     /// Returns the estimated total memory usage of the encoder
     ///
     fn estimated_memory_size(&self) -> usize;
@@ -327,6 +345,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active `self.encoder` is unused: the
+        // data page holds RLE indices, which carry no cross-value state.
+        self.dict_encoder.is_none() && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
     }
 
     fn estimated_memory_size(&self) -> usize {
