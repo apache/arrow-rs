@@ -76,8 +76,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
-            offsets_builder,
             value_builder,
+            offsets_builder,
             null_buffer_builder,
         }
     }

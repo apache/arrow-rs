@@ -7,8 +7,27 @@
 
 set -e
 
+CRATES="
+    -p arrow
+    -p arrow-arith
+    -p arrow-array
+    -p arrow-avro
+    -p arrow-buffer
+    -p arrow-cast
+    -p arrow-csv
+    -p arrow-data
+    -p arrow-ipc
+    -p arrow-json
+    -p arrow-ord
+    -p arrow-row
+    -p arrow-schema
+    -p arrow-select
+    -p arrow-string
+"
+
 setup_miri() {
     export MIRIFLAGS="-Zmiri-disable-isolation"
+    export INSTA_WORKSPACE_ROOT="$PWD"
     cargo miri setup
     cargo clean
 }
@@ -20,9 +39,7 @@ case $# in
 
         echo "Starting Arrow MIRI run..."
         cargo miri nextest run \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     2)
@@ -34,9 +51,7 @@ case $# in
         echo "Starting Arrow MIRI run partition ${partition} out of ${total}..."
         cargo miri nextest run \
         --partition slice:"${partition}"/"${total}" \
-        -p arrow-buffer -p arrow-data \
-        -p arrow-schema -p arrow-ord \
-        -p arrow-array -p arrow-arith \
+        $CRATES \
         --features ffi --no-fail-fast
     ;;
     *)

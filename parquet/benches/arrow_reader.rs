@@ -39,7 +39,7 @@ use parquet::{
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::{collections::VecDeque, sync::Arc};
 
 fn build_test_schema() -> SchemaDescPtr {

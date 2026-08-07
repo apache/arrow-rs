@@ -694,9 +694,9 @@ impl From<ArrayData> for FixedSizeBinaryArray {
 
         Self {
             data_type,
+            value_data,
             nulls,
             len,
-            value_data,
             value_size,
         }
     }

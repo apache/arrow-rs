@@ -381,7 +381,7 @@ impl MutableBuffer {
             let byte_count = to_copy * bytes_per_copy;
             unsafe {
                 // Get to the start of the data before we started copying anything
-                let src = self.data.as_ptr().add(length_before) as *const u8;
+                let src = self.data.as_ptr().add(length_before).cast_const();
                 // Go to the current location to copy to (end of current data)
                 let dst = self.data.as_ptr().add(self.len);
                 // SAFETY: the pointers are not overlapping as there is `byte_count` or less between them
@@ -963,10 +963,10 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
 }
 
 impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
-    fn from(value: Vec<T>) -> Self {
+    fn from(mut value: Vec<T>) -> Self {
         // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        // Vec::as_mut_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_mut_ptr().cast()) };
         let len = value.len() * mem::size_of::<T>();
         // Safety
         // Vec guaranteed to have a valid layout matching that of `Layout::array`

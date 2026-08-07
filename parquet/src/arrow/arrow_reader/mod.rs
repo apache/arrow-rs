@@ -261,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
-    /// [`ArrowReaderOptions::with_page_index`].
+    /// [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// # Example
     ///
@@ -315,7 +315,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Row filters are applied after row group selection and row selection
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// See the [blog post on late materialization] for a more technical explanation.
     ///
@@ -362,7 +362,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to limit the final set of rows decoded after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
@@ -376,7 +376,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to skip rows after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
@@ -615,30 +615,13 @@ impl ArrowReaderOptions {
         }
     }
 
-    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
-    /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
-    ///
-    /// If this is enabled, [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
-    /// information is present in the file.
-    ///
-    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
-    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
-    pub fn with_page_index(self, page_index: bool) -> Self {
-        self.with_page_index_policy(PageIndexPolicy::from(page_index))
-    }
-
-    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
-    ///
     /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
     /// This method sets the same policy for both. For fine-grained control, use
     /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
-    ///
-    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
         self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
@@ -800,20 +783,6 @@ impl ArrowReaderOptions {
         })
     }
 
-    #[deprecated(
-        since = "57.2.0",
-        note = "Use `column_index_policy` or `offset_index_policy` instead"
-    )]
-    /// Returns whether page index reading is enabled.
-    ///
-    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
-    ///
-    /// This can be set via [`with_page_index`][Self::with_page_index] or
-    /// [`with_page_index_policy`][Self::with_page_index_policy].
-    pub fn page_index(&self) -> bool {
-        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
-    }
-
     /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
     ///
     /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
@@ -916,9 +885,11 @@ impl ArrowReaderMetadata {
     ///
     /// # Notes
     ///
-    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// If `options` indicates the page index should be read, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
+    ///
+    /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index)
@@ -1695,7 +1666,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng, random, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{

@@ -19,7 +19,7 @@ use arrow_array::BooleanArray;
 use arrow_buffer::BooleanBuffer;
 use criterion::*;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
-use rand::Rng;
+use rand::RngExt;
 use std::hint;
 
 /// Run lengths for the mask conversion benchmarks. Shorter runs mean more
