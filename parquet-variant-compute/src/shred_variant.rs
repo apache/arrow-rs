@@ -3131,101 +3131,44 @@ mod tests {
         fn can_shred_to(v: &Variant, dt: &DataType) -> bool {
             matches!(
                 (v, dt),
-                (Variant::Int8(_), DataType::Int8)
-                    | (Variant::Int8(_), DataType::Int16)
-                    | (Variant::Int8(_), DataType::Int32)
-                    | (Variant::Int8(_), DataType::Int64)
-                    | (Variant::Int8(_), DataType::Decimal32(_, _))
-                    | (Variant::Int8(_), DataType::Decimal64(_, _))
-                    | (Variant::Int8(_), DataType::Decimal128(_, _))
-                    | (Variant::Int16(_), DataType::Int8)
-                    | (Variant::Int16(_), DataType::Int16)
-                    | (Variant::Int16(_), DataType::Int32)
-                    | (Variant::Int16(_), DataType::Int64)
-                    | (Variant::Int16(_), DataType::Decimal32(_, _))
-                    | (Variant::Int16(_), DataType::Decimal64(_, _))
-                    | (Variant::Int16(_), DataType::Decimal128(_, _))
-                    | (Variant::Int32(_), DataType::Int8)
-                    | (Variant::Int32(_), DataType::Int16)
-                    | (Variant::Int32(_), DataType::Int32)
-                    | (Variant::Int32(_), DataType::Int64)
-                    | (Variant::Int32(_), DataType::Decimal32(_, _))
-                    | (Variant::Int32(_), DataType::Decimal64(_, _))
-                    | (Variant::Int32(_), DataType::Decimal128(_, _))
-                    | (Variant::Int64(_), DataType::Int8)
-                    | (Variant::Int64(_), DataType::Int16)
-                    | (Variant::Int64(_), DataType::Int32)
-                    | (Variant::Int64(_), DataType::Int64)
-                    | (Variant::Int64(_), DataType::Decimal32(_, _))
-                    | (Variant::Int64(_), DataType::Decimal64(_, _))
-                    | (Variant::Int64(_), DataType::Decimal128(_, _))
-                    | (Variant::Date(_), DataType::Date32)
+                (
+                    Variant::Int8(_)
+                        | Variant::Int16(_)
+                        | Variant::Int32(_)
+                        | Variant::Int64(_)
+                        | Variant::Decimal4(_)
+                        | Variant::Decimal8(_)
+                        | Variant::Decimal16(_),
+                    DataType::Int8
+                        | DataType::Int16
+                        | DataType::Int32
+                        | DataType::Int64
+                        | DataType::Decimal32(_, _)
+                        | DataType::Decimal64(_, _)
+                        | DataType::Decimal128(_, _)
+                ) | (Variant::Date(_), DataType::Date32)
                     | (
-                        Variant::TimestampMicros(_),
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+                        Variant::TimestampMicros(_) | Variant::TimestampNanos(_),
+                        DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, Some(_))
                     )
                     | (
-                        Variant::TimestampMicros(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(_))
+                        Variant::TimestampNtzMicros(_) | Variant::TimestampNtzNanos(_),
+                        DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, None)
                     )
-                    | (
-                        Variant::TimestampNtzMicros(_),
-                        DataType::Timestamp(TimeUnit::Microsecond, None),
-                    )
-                    | (
-                        Variant::TimestampNtzMicros(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, None)
-                    )
-                    | (
-                        Variant::TimestampNanos(_),
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(_))
-                    )
-                    | (
-                        Variant::TimestampNanos(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)),
-                    )
-                    | (
-                        Variant::TimestampNtzNanos(_),
-                        DataType::Timestamp(TimeUnit::Microsecond, None)
-                    )
-                    | (
-                        Variant::TimestampNtzNanos(_),
-                        DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    )
-                    | (Variant::Decimal4(_), DataType::Decimal32(_, _))
-                    | (Variant::Decimal4(_), DataType::Decimal64(_, _))
-                    | (Variant::Decimal4(_), DataType::Decimal128(_, _))
-                    | (Variant::Decimal4(_), DataType::Int8)
-                    | (Variant::Decimal4(_), DataType::Int16)
-                    | (Variant::Decimal4(_), DataType::Int32)
-                    | (Variant::Decimal4(_), DataType::Int64)
-                    | (Variant::Decimal8(_), DataType::Decimal32(_, _))
-                    | (Variant::Decimal8(_), DataType::Decimal64(_, _))
-                    | (Variant::Decimal8(_), DataType::Decimal128(_, _))
-                    | (Variant::Decimal8(_), DataType::Int8)
-                    | (Variant::Decimal8(_), DataType::Int16)
-                    | (Variant::Decimal8(_), DataType::Int32)
-                    | (Variant::Decimal8(_), DataType::Int64)
-                    | (Variant::Decimal16(_), DataType::Decimal32(_, _))
-                    | (Variant::Decimal16(_), DataType::Decimal64(_, _))
-                    | (Variant::Decimal16(_), DataType::Decimal128(_, _))
-                    | (Variant::Decimal16(_), DataType::Int8)
-                    | (Variant::Decimal16(_), DataType::Int16)
-                    | (Variant::Decimal16(_), DataType::Int32)
-                    | (Variant::Decimal16(_), DataType::Int64)
                     | (Variant::Float(_), DataType::Float32)
                     | (Variant::Double(_), DataType::Float64)
-                    | (Variant::BooleanFalse, DataType::Boolean)
-                    | (Variant::BooleanTrue, DataType::Boolean)
-                    | (Variant::Binary(_), DataType::Binary)
-                    | (Variant::Binary(_), DataType::BinaryView)
-                    | (Variant::Binary(_), DataType::LargeBinary)
-                    | (Variant::ShortString(_), DataType::Utf8)
-                    | (Variant::ShortString(_), DataType::Utf8View)
-                    | (Variant::ShortString(_), DataType::LargeUtf8)
-                    | (Variant::String(_), DataType::Utf8)
-                    | (Variant::String(_), DataType::Utf8View)
-                    | (Variant::String(_), DataType::LargeUtf8)
+                    | (
+                        Variant::BooleanFalse | Variant::BooleanTrue,
+                        DataType::Boolean
+                    )
+                    | (
+                        Variant::Binary(_),
+                        DataType::Binary | DataType::BinaryView | DataType::LargeBinary
+                    )
+                    | (
+                        Variant::ShortString(_) | Variant::String(_),
+                        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+                    )
                     | (Variant::Time(_), DataType::Time64(_))
             )
         }
