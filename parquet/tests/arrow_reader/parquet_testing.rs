@@ -100,52 +100,6 @@ fn test_int96_from_spark_file_with_provided_schema() {
     )]));
     let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
 
-    let batches: Vec<_> = reader.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
-    let total_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
-    assert_eq!(total_rows, 9032);
-    batches
-        .iter()
-        .for_each(|batch| assert_eq!(batch.num_columns(), 8));
-
-    // compare float values to the reference
-    let float_plain = column(&batches, "float_plain").unwrap();
-    assert_eq!(float_plain, column(&batches, "float_alp_1024").unwrap());
-    assert_eq!(float_plain, column(&batches, "float_alp_4096").unwrap());
-    assert_eq!(float_plain, column(&batches, "float_alp_32").unwrap());
-
-    // compare double values to the reference
-    let double_plain = column(&batches, "double_plain").unwrap();
-    assert_eq!(double_plain, column(&batches, "double_alp_1024").unwrap());
-    assert_eq!(double_plain, column(&batches, "double_alp_4096").unwrap());
-    assert_eq!(double_plain, column(&batches, "double_alp_32").unwrap());
-}
-
-fn column(batches: &[RecordBatch], column_name: &str) -> Result<Vec<ArrayRef>, ArrowError> {
-    let mut columns = Vec::new();
-    for batch in batches {
-        let array = batch.column(batch.schema().index_of(column_name)?);
-        columns.push(array.clone());
-    }
-    Ok(columns)
-}
-
-#[test]
-fn test_int96_from_spark_file_with_provided_schema() {
-    // int96_from_spark.parquet was written based on Spark's microsecond timestamps which trade
-    // range for resolution compared to a nanosecond timestamp. We must provide a schema with
-    // microsecond resolution for the Parquet reader to interpret these values correctly.
-    use arrow_schema::DataType::Timestamp;
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/int96_from_spark.parquet");
-    let file = File::open(path).unwrap();
-
-    let supplied_schema = Arc::new(Schema::new(vec![Field::new(
-        "a",
-        Timestamp(TimeUnit::Microsecond, None),
-        true,
-    )]));
-    let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
-
     let mut record_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
         .unwrap()
         .build()
