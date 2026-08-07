@@ -1287,9 +1287,13 @@ mod tests {
         "#;
         let map = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new_list(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                Field::new("element", DataType::Utf8, true),
+                true,
+            ),
             false,
             true,
         );
@@ -1325,9 +1329,9 @@ mod tests {
     fn test_map_non_nullable_value() {
         let map = Field::new_map(
             "map",
-            "entries",
-            Field::new("keys", DataType::Utf8, false),
-            Field::new("values", DataType::Utf8, false),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
             false,
             false,
         );
@@ -1342,7 +1346,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"values\""
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"value\""
         );
     }
 
@@ -1567,6 +1571,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_timestamps() {
         test_timestamp::<TimestampSecondType>();
         test_timestamp::<TimestampMillisecondType>();
@@ -3061,9 +3066,9 @@ mod tests {
             Field::new("b", DataType::new_list(DataType::Int32, true), true),
             Field::new_map(
                 "c",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),
@@ -3251,10 +3256,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3509,10 +3514,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3570,10 +3575,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),

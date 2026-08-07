@@ -2367,13 +2367,13 @@ unsafe fn decode_column(
                         let null_row_bytes: &[u8] = &null_rows[field_idx].data;
 
                         for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
-                                if *next_idx == idx {
-                                    sparse_data.push(*bytes);
+                            if let Some((next_idx, bytes)) = field_row_iter.peek()
+                                && *next_idx == idx
+                            {
+                                sparse_data.push(*bytes);
 
-                                    field_row_iter.next();
-                                    continue;
-                                }
+                                field_row_iter.next();
+                                continue;
                             }
                             sparse_data.push(null_row_bytes);
                         }
@@ -2434,7 +2434,7 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -4426,7 +4426,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_values() {
         // Use `with_values_field` on `MapBuilder` to set the values are not nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, false));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
         // Entry 0: {"a": 1, "b": 2}
@@ -4464,7 +4468,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_map_but_with_nullable_values() {
         // Map column is non-nullable, but values are nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, true));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            true,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
 
@@ -4575,7 +4583,7 @@ mod tests {
     }
 
     fn generate_primitive_array<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> PrimitiveArray<K>
@@ -4588,10 +4596,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_all_unique_primitive_array<K>(
-        rng: &mut impl RngCore,
-        len: usize,
-    ) -> PrimitiveArray<K>
+    fn generate_all_unique_primitive_array<K>(rng: &mut StdRng, len: usize) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         K::Native: Hash + Eq,
@@ -4620,18 +4625,14 @@ mod tests {
             .collect()
     }
 
-    fn generate_boolean_array(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BooleanArray {
+    fn generate_boolean_array(rng: &mut StdRng, len: usize, valid_percent: f64) -> BooleanArray {
         (0..len)
             .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
             .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
@@ -4646,11 +4647,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> StringViewArray {
+    fn generate_string_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4662,11 +4659,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BinaryViewArray {
+    fn generate_byte_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4707,7 +4700,7 @@ mod tests {
     }
 
     fn generate_dictionary<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         values: ArrayRef,
         len: usize,
         valid_percent: f64,
@@ -4740,7 +4733,7 @@ mod tests {
     }
 
     fn generate_fixed_size_binary(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> FixedSizeBinaryArray {
@@ -4761,7 +4754,7 @@ mod tests {
         builder.finish()
     }
 
-    fn generate_struct(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StructArray {
+    fn generate_struct(rng: &mut StdRng, len: usize, valid_percent: f64) -> StructArray {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let a = generate_primitive_array::<Int32Type>(rng, len, valid_percent);
         let b = generate_strings::<i32>(rng, len, valid_percent);
@@ -4773,14 +4766,9 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<R: RngCore, F>(
-        rng: &mut R,
-        len: usize,
-        valid_percent: f64,
-        values: F,
-    ) -> ListArray
+    fn generate_list<F>(rng: &mut StdRng, len: usize, valid_percent: f64, values: F) -> ListArray
     where
-        F: FnOnce(&mut R, usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let values_len = offsets.last().unwrap().to_usize().unwrap();
@@ -4791,18 +4779,18 @@ mod tests {
     }
 
     fn generate_list_view<F>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         values: F,
     ) -> ListViewArray
     where
-        F: FnOnce(usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         // Generate sizes first, then create a values array large enough
         let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
         let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
-        let values = values(values_len);
+        let values = values(rng, values_len);
 
         // Generate offsets that can overlap, be non-monotonic, or share ranges
         let offsets: Vec<i32> = sizes
@@ -4827,16 +4815,16 @@ mod tests {
         )
     }
 
-    fn generate_map<R: RngCore, KeysFn, ValuesFn>(
-        rng: &mut R,
+    fn generate_map<KeysFn, ValuesFn>(
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         gen_keys: KeysFn,
         gen_values: ValuesFn,
     ) -> MapArray
     where
-        KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
-        ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
+        KeysFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
+        ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let entries_len = offsets.last().unwrap().to_usize().unwrap();
@@ -4845,9 +4833,17 @@ mod tests {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_map(
             "",
-            "entries",
-            Field::new("keys", keys.data_type().clone(), false),
-            Field::new("values", values.data_type().clone(), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                keys.data_type().clone(),
+                false,
+            ),
+            Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                values.data_type().clone(),
+                true,
+            ),
             false,
             true,
         ));
@@ -4881,7 +4877,7 @@ mod tests {
         let keys_arrow_row_converter =
             RowConverter::new(vec![SortField::new(array.key_type().clone())]).unwrap();
 
-        array.iter().enumerate().flat_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
+        array.iter().enumerate().filter_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
             let keys_as_rows = keys_arrow_row_converter.convert_columns(&[Arc::clone(&keys)]).expect("should be able to convert keys");
 
             for i in 0..keys_as_rows.num_rows() {
@@ -4897,7 +4893,7 @@ mod tests {
         })
     }
 
-    fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
+    fn generate_nulls(rng: &mut StdRng, len: usize) -> Option<NullBuffer> {
         Some(NullBuffer::from_iter(
             (0..len).map(|_| rng.random_bool(0.8)),
         ))
@@ -5083,7 +5079,7 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+    fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
         match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
@@ -5123,32 +5119,23 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
+                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
-            19 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
-            )),
-            20 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
-            )),
-            21 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
-            )),
+            19 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+            })),
+            20 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_strings::<i32>(rng, values_len, 0.8))
+            })),
+            21 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_struct(rng, values_len, 0.8))
+            })),
             22 => Arc::new(
-                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                generate_list_view(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
@@ -6355,11 +6342,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6386,11 +6381,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6416,11 +6419,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0i32].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6444,11 +6455,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6474,11 +6493,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 0, 0, 0].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6507,11 +6534,19 @@ mod tests {
         let inner_null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let inner_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let inner_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(inner_entries_fields.clone().into()),
             false,
         ));
@@ -6535,11 +6570,19 @@ mod tests {
 
         let inner_map_type = DataType::Map(inner_struct_field.clone(), false);
         let outer_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", inner_map_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                inner_map_type,
+                true,
+            )),
         ];
         let outer_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(outer_entries_fields.clone().into()),
             false,
         ));
@@ -6574,11 +6617,19 @@ mod tests {
         let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6625,11 +6676,19 @@ mod tests {
 
         let list_type = list_array.data_type().clone();
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", list_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                list_type,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));

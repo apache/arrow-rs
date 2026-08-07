@@ -146,14 +146,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len();
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ListViewArray, expected {len} got {}",
-                    OffsetSize::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ListViewArray, expected {len} got {}",
+                OffsetSize::PREFIX,
+                n.len(),
+            )));
         }
         if len != sizes.len() {
             return Err(ArrowError::InvalidArgumentError(format!(

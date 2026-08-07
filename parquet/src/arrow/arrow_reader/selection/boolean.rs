@@ -26,6 +26,7 @@
 use super::RowSelector;
 use arrow_buffer::bit_iterator::BitSliceIterator;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, Buffer};
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Mask-backed [`RowSelection`] storage.
@@ -91,6 +92,22 @@ impl MaskSelection {
         self.selectors
             .get_or_init(|| mask_to_selectors(&self.mask))
             .as_slice()
+    }
+
+    /// Borrows the cached RLE form, converting into a temporary if not cached.
+    pub(super) fn borrowed_selectors(&self) -> Cow<'_, [RowSelector]> {
+        match self.selectors.get() {
+            Some(selectors) => Cow::Borrowed(selectors.as_slice()),
+            None => Cow::Owned(mask_to_selectors(&self.mask)),
+        }
+    }
+
+    /// The RLE form, taking the cache if it was populated.
+    pub(crate) fn into_selectors(self) -> Vec<RowSelector> {
+        match self.selectors.into_inner() {
+            Some(selectors) => selectors,
+            None => mask_to_selectors(&self.mask),
+        }
     }
 }
 
@@ -179,7 +196,7 @@ impl Iterator for MaskRunIter<'_> {
 }
 
 /// Materialize a [`BooleanBuffer`] into its RLE form.
-pub(crate) fn mask_to_selectors(mask: &BooleanBuffer) -> Vec<RowSelector> {
+pub(super) fn mask_to_selectors(mask: &BooleanBuffer) -> Vec<RowSelector> {
     let total_rows = mask.len();
     if total_rows == 0 {
         return Vec::new();
@@ -339,7 +356,7 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::selection::{RowSelection, RowSelectionInner};
     use arrow_array::BooleanArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_mask_iter_yields_borrowed_selectors() {
@@ -389,6 +406,87 @@ mod tests {
                 RowSelector::skip(2),
             ]
         );
+    }
+
+    /// Enough runs that the RLE form is a real allocation, so the cache reuse
+    /// tests can track its pointer across the conversion.
+    fn interleaved_mask() -> BooleanBuffer {
+        BooleanBuffer::from((0..256).map(|i| i % 3 == 0).collect::<Vec<bool>>())
+    }
+
+    fn cached_selectors_ptr(selection: &RowSelection) -> Option<*const RowSelector> {
+        match &selection.inner {
+            RowSelectionInner::Mask(m) => m.selectors.get().map(|s| s.as_ptr()),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_into_selectors_takes_the_iter_cache() {
+        let selection = RowSelection::from_boolean_buffer(interleaved_mask());
+        let expected: Vec<RowSelector> = selection.iter().copied().collect();
+
+        let cached_ptr = cached_selectors_ptr(&selection).expect("iter populates the cache");
+        let selectors: Vec<RowSelector> = selection.into();
+
+        assert_eq!(selectors, expected);
+        // Moved out of the cache rather than re-encoded from the bitmap.
+        assert_eq!(selectors.as_ptr(), cached_ptr);
+    }
+
+    #[test]
+    fn test_into_selectors_without_cache_still_converts() {
+        let selection = RowSelection::from_boolean_buffer(interleaved_mask());
+        assert!(cached_selectors_ptr(&selection).is_none());
+
+        let selectors: Vec<RowSelector> = selection.into();
+        assert_eq!(selectors, mask_to_selectors(&interleaved_mask()));
+
+        // `VecDeque` goes through the same path.
+        let selection = RowSelection::from_boolean_buffer(interleaved_mask());
+        let _ = selection.iter().count();
+        let deque: std::collections::VecDeque<RowSelector> = selection.into();
+        assert_eq!(Vec::from(deque), selectors);
+    }
+
+    #[test]
+    fn test_borrowed_selectors_reuses_cache_without_populating_it() {
+        let selection = RowSelection::from_boolean_buffer(interleaved_mask());
+        let mask = match &selection.inner {
+            RowSelectionInner::Mask(m) => m,
+            _ => unreachable!(),
+        };
+
+        // Uncached: converts into a temporary, leaving the cache empty.
+        assert!(matches!(mask.borrowed_selectors(), Cow::Owned(_)));
+        assert!(mask.selectors.get().is_none());
+
+        let expected: Vec<RowSelector> = selection.iter().copied().collect();
+        let mask = match &selection.inner {
+            RowSelectionInner::Mask(m) => m,
+            _ => unreachable!(),
+        };
+        match mask.borrowed_selectors() {
+            Cow::Borrowed(selectors) => assert_eq!(selectors, expected.as_slice()),
+            Cow::Owned(_) => panic!("expected the cached selectors to be reused"),
+        }
+    }
+
+    #[test]
+    fn test_set_algebra_agrees_whether_or_not_the_cache_is_populated() {
+        let bits: Vec<bool> = (0..256).map(|i| i % 3 == 0).collect();
+        let other: RowSelection = RowSelection::from_filters(&[BooleanArray::from(
+            (0..256).map(|i| i % 5 != 0).collect::<Vec<bool>>(),
+        )]);
+
+        let cold = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits.clone()));
+        let warm = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        let _ = warm.iter().count();
+
+        assert_eq!(cold.intersection(&other), warm.intersection(&other));
+        assert_eq!(other.intersection(&cold), other.intersection(&warm));
+        assert_eq!(cold.union(&other), warm.union(&other));
+        assert_eq!(other.union(&cold), other.union(&warm));
     }
 
     #[test]

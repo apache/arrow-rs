@@ -90,7 +90,7 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
@@ -165,10 +165,6 @@ required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
 
 [[test]]
-name = "arrow_writer_layout"
-required-features = ["arrow"]
-
-[[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
@@ -176,7 +172,12 @@ path = "./tests/arrow_reader/mod.rs"
 [[test]]
 name = "arrow_writer"
 required-features = ["arrow"]
-path = "./tests/arrow_writer.rs"
+path = "./tests/arrow_writer/mod.rs"
+
+[[test]]
+name = "ieee754_nan_interop"
+required-features = ["arrow"]
+path = "./tests/ieee754_nan_interop.rs"
 
 [[test]]
 name = "encryption"
@@ -314,3 +315,6 @@ harness = false
 
 [lib]
 bench = false
+
+[lints]
+workspace = true

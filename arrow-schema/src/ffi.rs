@@ -110,9 +110,9 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     let schema = unsafe { &mut *schema };
 
     // take ownership back to release it.
-    drop(unsafe { CString::from_raw(schema.format as *mut c_char) });
+    drop(unsafe { CString::from_raw(schema.format.cast_mut()) });
     if !schema.name.is_null() {
-        drop(unsafe { CString::from_raw(schema.name as *mut c_char) });
+        drop(unsafe { CString::from_raw(schema.name.cast_mut()) });
     }
     if !schema.private_data.is_null() {
         let private_data = unsafe { Box::from_raw(schema.private_data as *mut SchemaPrivateData) };
@@ -937,7 +937,7 @@ mod tests {
             Field::new("address", DataType::Utf8, false),
             Field::new("priority", DataType::UInt8, false),
         ])
-        .with_metadata([("hello".to_string(), "world".to_string())].into());
+        .with_metadata([("hello", "world")]);
 
         round_trip_schema(schema);
 
@@ -958,13 +958,19 @@ mod tests {
 
     #[test]
     fn test_map_keys_sorted() {
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false);
+        let values = Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::UInt32, false);
         let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
-        let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entry_struct,
+                false,
+            )),
+            true,
+        );
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

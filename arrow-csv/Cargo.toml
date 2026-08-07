@@ -51,3 +51,6 @@ futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
 half = { version = "2.1", default-features = false }
+
+[lints]
+workspace = true

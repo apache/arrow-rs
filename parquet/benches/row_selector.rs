@@ -16,10 +16,15 @@
 // under the License.
 
 use arrow_array::BooleanArray;
+use arrow_buffer::BooleanBuffer;
 use criterion::*;
-use parquet::arrow::arrow_reader::RowSelection;
-use rand::Rng;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+use rand::RngExt;
 use std::hint;
+
+/// Run lengths for the mask conversion benchmarks. Shorter runs mean more
+/// [`RowSelector`]s per row, so the RLE encoding dominates.
+const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
 
 /// Generates a random RowSelection with a specified selection ratio.
 ///
@@ -37,6 +42,65 @@ fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> Boo
         .map(|_| rng.random_bool(selection_ratio))
         .collect();
     BooleanArray::from(bools)
+}
+
+/// Generates a mask alternating between selected and skipped runs of `run_len` rows.
+fn generate_run_length_mask(total_rows: usize, run_len: usize) -> BooleanBuffer {
+    BooleanBuffer::from_iter((0..total_rows).map(|row| (row / run_len).is_multiple_of(2)))
+}
+
+/// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.
+///
+/// `RowSelection::iter` caches the RLE form, so a caller that iterates before
+/// consuming should reuse that cache rather than encode the bitmap twice.
+/// `mask_consume` is the same conversion with a cold cache.
+fn bench_mask_backed_conversion(c: &mut Criterion, total_rows: usize, selection_ratio: f64) {
+    let mut cases: Vec<(String, BooleanBuffer)> = MASK_RUN_LENGTHS
+        .iter()
+        .map(|&run_len| {
+            (
+                format!("run{run_len:02}"),
+                generate_run_length_mask(total_rows, run_len),
+            )
+        })
+        .collect();
+    cases.push((
+        "random".to_string(),
+        generate_random_row_selection(total_rows, selection_ratio)
+            .values()
+            .clone(),
+    ));
+
+    for (label, mask) in cases {
+        let selection = RowSelection::from_boolean_buffer(mask);
+
+        c.bench_with_input(
+            BenchmarkId::new("mask_iterate_then_consume", &label),
+            &selection,
+            |b, selection| {
+                b.iter(|| {
+                    // `clone` drops the selector cache, so each iteration
+                    // starts from an unconverted selection.
+                    let selection = selection.clone();
+                    let rows: usize = selection.iter().map(|s| s.row_count).sum();
+                    hint::black_box(rows);
+                    let selectors: Vec<RowSelector> = selection.into();
+                    hint::black_box(selectors);
+                })
+            },
+        );
+
+        c.bench_with_input(
+            BenchmarkId::new("mask_consume", &label),
+            &selection,
+            |b, selection| {
+                b.iter(|| {
+                    let selectors: Vec<RowSelector> = selection.clone().into();
+                    hint::black_box(selectors);
+                })
+            },
+        );
+    }
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -82,6 +146,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             hint::black_box(result);
         })
     });
+
+    bench_mask_backed_conversion(c, total_rows, selection_ratio);
 }
 
 criterion_group!(benches, criterion_benchmark);
