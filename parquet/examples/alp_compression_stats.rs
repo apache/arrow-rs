@@ -15,346 +15,369 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Measures what the ALP encoding costs per value, against `PLAIN` and
-//! `BYTE_STREAM_SPLIT`, on columns of doubles.
+//! Compares the on-disk size of three Parquet choices for columns of doubles:
+//! `PLAIN`, `PLAIN + ZSTD`, and `ALP` without a block compressor.
 //!
 //! # Reproducing the numbers
 //!
-//! The datasets are the ones the ALP paper is evaluated on, published by the
-//! authors as one double per line:
+//! The companion script downloads and verifies the complete CWI ALP corpus,
+//! extracts the 30 `f64` datasets used by the paper into a durable, gitignored
+//! directory, and runs this example:
 //!
 //! ```shell
-//! git clone https://github.com/cwida/ALP /tmp/ALP
-//! cargo run --release --example alp_compression_stats --features arrow,zstd -- /tmp/ALP/data/samples
+//! ./parquet/examples/alp_compression_stats.sh
 //! ```
 //!
-//! Any directory of `.csv` files holding one double per line will do.
+//! Set `ALP_DATASET_DIR` to use a different dataset directory, or
+//! `ALP_KEEP_ARCHIVE=1` to retain the downloaded 6.7 GiB archive after a
+//! successful extraction. Downloads resume if the script is interrupted. The
+//! extracted inputs occupy roughly 15 GiB, with roughly 22 GiB needed while
+//! both the archive and extracted inputs are present.
+//!
+//! These CWI files are raw little-endian IEEE-754 `f64` values. The remaining
+//! archive entries are `f32` datasets or a dummy fixture and are outside this
+//! double-only benchmark. A directory of one-double-per-line CSV files, such as
+//! `CWI/ALP/data/samples`, also works. Directories are searched recursively for
+//! `.bin` and `.csv` files.
 //!
 //! # What is measured
 //!
-//! For each column, the values are written to an in-memory Parquet file under
-//! each encoding and the *encoded page* is measured, excluding the file's
-//! footer and page headers, so the number reflects the encoding alone.
-//!
-//! ALP's headline property is that it compresses *without* a block compressor
-//! standing between the reader and the data: an ALP page can be decoded a
-//! 1024-value vector at a time, so a reader can seek to one vector and decode
-//! only it. Running a compressor over the page takes that away - the whole page
-//! must be inflated before any value can be touched. The uncompressed columns
-//! are therefore the interesting comparison, and `--zstd` is offered only to
-//! show what the heavyweight alternative buys and costs.
-//!
-//! Note that a compressed measurement of a small column flatters ALP: zstd has
-//! little to model in a few kilobytes. Prefer full-size columns before drawing
-//! conclusions from the `--zstd` output.
+//! Each input is streamed through a Parquet writer whose output is discarded.
+//! The returned Parquet metadata supplies the compressed column
+//! chunk size, including data-page headers but excluding the file footer. Using
+//! that same boundary for all three choices makes the bits/value figures
+//! directly comparable without retaining a potentially multi-gigabyte Parquet
+//! file in memory.
 
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, sink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow_array::{Float64Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use bytes::Bytes;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, Encoding};
-use parquet::column::page::Page;
-use parquet::errors::Result;
+use parquet::basic::{Compression, Encoding, ZstdLevel};
+use parquet::errors::{ParquetError, Result};
 use parquet::file::properties::WriterProperties;
-use parquet::file::reader::{FileReader, SerializedFileReader};
 
-/// The spec's default ALP vector size, and the unit a reader can seek to.
-const VECTOR_SIZE: usize = 1024;
+/// Keeps input and Arrow writer memory bounded for the full CWI corpus.
+const INPUT_BATCH_VALUES: usize = 128 * 1024;
 
-/// One column's measurements, in bits per value.
 struct Row {
     name: String,
     num_values: usize,
-    alp: f64,
-    plain: f64,
-    byte_stream_split: f64,
-    /// Share of values ALP could not encode as integers, in percent.
-    exception_rate: f64,
-    /// Bit width of the first vector's packed deltas.
-    bit_width: u8,
-    /// The first vector's decimal parameters.
-    exponent: u8,
-    factor: u8,
-    /// Only populated with `--zstd`.
-    compressed: Option<Compressed>,
+    plain: u64,
+    plain_zstd: u64,
+    alp: u64,
 }
 
-struct Compressed {
-    alp: f64,
-    plain: f64,
-    byte_stream_split: f64,
+struct Measurement {
+    num_values: usize,
+    compressed_bytes: u64,
 }
 
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let mut dir = None;
-    let mut zstd = false;
-    for arg in args.by_ref() {
-        match arg.as_str() {
-            "--zstd" => zstd = true,
-            other => dir = Some(PathBuf::from(other)),
-        }
-    }
-    let Some(dir) = dir else {
-        eprintln!(
-            "usage: alp_compression_stats <dir of csvs, one double per line> [--zstd]\n\n\
-             The ALP paper's datasets:\n  \
-             git clone https://github.com/cwida/ALP /tmp/ALP\n  \
-             cargo run --release --example alp_compression_stats --features arrow,zstd -- /tmp/ALP/data/samples"
-        );
-        std::process::exit(2);
-    };
+    let input = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            eprintln!(
+                "usage: alp_compression_stats <CWI complete_binaries directory or dataset file>\n\n\
+             Download complete_binaries.zip as described in:\n  \
+             https://github.com/cwida/ALP/blob/main/BENCHMARKING.md"
+            );
+            std::process::exit(2);
+        });
 
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "csv"))
-        .collect();
+    let mut paths = Vec::new();
+    collect_datasets(&input, &mut paths)
+        .unwrap_or_else(|e| panic!("cannot discover datasets in {}: {e}", input.display()));
     paths.sort();
-    assert!(!paths.is_empty(), "no .csv files in {}", dir.display());
+    assert!(
+        !paths.is_empty(),
+        "no .bin or .csv files in {}",
+        input.display()
+    );
 
-    let mut rows = Vec::with_capacity(paths.len());
-    for path in &paths {
-        rows.push(measure(path, zstd)?);
-    }
-    // Best compression first.
-    rows.sort_by(|a, b| a.alp.total_cmp(&b.alp));
-
-    print_uncompressed(&rows);
-    if zstd {
-        print_compressed(&rows);
-    }
-    print_summary(&rows);
-    Ok(())
-}
-
-fn measure(path: &Path, zstd: bool) -> Result<Row> {
-    let text = std::fs::read_to_string(path).unwrap();
-    let values: Vec<f64> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            line.parse::<f64>()
-                .unwrap_or_else(|e| panic!("{}: cannot parse {line:?}: {e}", path.display()))
-        })
-        .collect();
-    assert!(!values.is_empty(), "{} is empty", path.display());
-
-    let none = Compression::UNCOMPRESSED;
-    let alp_file = write(&values, Encoding::ALP, none)?;
-    let (exception_rate, bit_width, exponent, factor) = alp_vector_stats(&alp_file)?;
-
-    let bits = |file: &Bytes| -> Result<f64> {
-        Ok(encoded_bytes(file)? as f64 * 8.0 / values.len() as f64)
-    };
-
-    let compressed = if zstd {
-        let zstd = Compression::ZSTD(Default::default());
-        Some(Compressed {
-            // The encoded page is no longer what lands on disk once a compressor
-            // runs over it, so measure the column chunk as written.
-            alp: chunk_bits(&write(&values, Encoding::ALP, zstd)?, values.len())?,
-            plain: chunk_bits(&write(&values, Encoding::PLAIN, zstd)?, values.len())?,
-            byte_stream_split: chunk_bits(
-                &write(&values, Encoding::BYTE_STREAM_SPLIT, zstd)?,
-                values.len(),
-            )?,
-        })
-    } else {
-        None
-    };
-
-    Ok(Row {
-        name: path.file_stem().unwrap().to_string_lossy().into_owned(),
-        num_values: values.len(),
-        alp: bits(&alp_file)?,
-        plain: bits(&write(&values, Encoding::PLAIN, none)?)?,
-        byte_stream_split: bits(&write(&values, Encoding::BYTE_STREAM_SPLIT, none)?)?,
-        exception_rate,
-        bit_width,
-        exponent,
-        factor,
-        compressed,
-    })
-}
-
-/// Write one column of doubles to an in-memory Parquet file.
-///
-/// The dictionary is disabled so the requested encoding is the one actually used.
-fn write(values: &[f64], encoding: Encoding, compression: Compression) -> Result<Bytes> {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "value",
         DataType::Float64,
         false,
     )]));
-    let batch = RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(values.to_vec()))])?;
+    let mut rows = Vec::with_capacity(paths.len());
+    for (idx, path) in paths.iter().enumerate() {
+        eprintln!("[{}/{}] measuring {}", idx + 1, paths.len(), path.display());
+        rows.push(measure(path, &schema)?);
+    }
+
+    print_table(&rows);
+    print_summary(&rows);
+    Ok(())
+}
+
+fn collect_datasets(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if path.is_file() {
+        if is_dataset(path) {
+            out.push(path.to_owned());
+        }
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(path)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_datasets(&path, out)?;
+        } else if is_dataset(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_dataset(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("bin") || ext.eq_ignore_ascii_case("csv"))
+}
+
+fn measure(path: &Path, schema: &SchemaRef) -> Result<Row> {
+    let plain = write(path, schema, Encoding::PLAIN, Compression::UNCOMPRESSED)?;
+    let plain_zstd = write(
+        path,
+        schema,
+        Encoding::PLAIN,
+        Compression::ZSTD(ZstdLevel::default()),
+    )?;
+    let alp = write(path, schema, Encoding::ALP, Compression::UNCOMPRESSED)?;
+
+    if plain.num_values != plain_zstd.num_values || plain.num_values != alp.num_values {
+        return Err(ParquetError::General(format!(
+            "{} changed length between encodings",
+            path.display()
+        )));
+    }
+
+    Ok(Row {
+        name: path.file_stem().unwrap().to_string_lossy().into_owned(),
+        num_values: plain.num_values,
+        plain: plain.compressed_bytes,
+        plain_zstd: plain_zstd.compressed_bytes,
+        alp: alp.compressed_bytes,
+    })
+}
+
+fn write(
+    path: &Path,
+    schema: &SchemaRef,
+    encoding: Encoding,
+    compression: Compression,
+) -> Result<Measurement> {
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
         .set_encoding(encoding)
         .set_compression(compression)
         .build();
+    let mut writer = ArrowWriter::try_new(sink(), schema.clone(), Some(props))?;
 
-    let mut buf = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))?;
-    writer.write(&batch)?;
-    writer.close()?;
-    Ok(buf.into())
+    let num_values = for_each_batch(path, |values| {
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Float64Array::from(values))])?;
+        writer.write(&batch)
+    })?;
+    let metadata = writer.close()?;
+    if num_values == 0 {
+        return Err(ParquetError::General(format!(
+            "{} contains no values",
+            path.display()
+        )));
+    }
+    let compressed_bytes = metadata
+        .row_groups()
+        .iter()
+        .map(|row_group| row_group.column(0).compressed_size())
+        .try_fold(0u64, |total, bytes| {
+            let bytes = u64::try_from(bytes).map_err(|_| {
+                ParquetError::General(format!("negative column size for {}", path.display()))
+            })?;
+            total.checked_add(bytes).ok_or_else(|| {
+                ParquetError::General(format!("column size overflow for {}", path.display()))
+            })
+        })?;
+
+    Ok(Measurement {
+        num_values,
+        compressed_bytes,
+    })
 }
 
-/// Size of the encoded data pages, excluding footer and page headers.
-///
-/// Page buffers are already decompressed when read back, so this is the size of
-/// the encoding itself and is only meaningful for an uncompressed file.
-fn encoded_bytes(file: &Bytes) -> Result<usize> {
-    let reader = SerializedFileReader::new(file.clone())?;
-    let mut total = 0;
-    for row_group in 0..reader.metadata().num_row_groups() {
-        let mut pages = reader.get_row_group(row_group)?.get_column_page_reader(0)?;
-        while let Some(page) = pages.get_next_page()? {
-            if let Page::DataPage { buf, .. } = &page {
-                total += buf.len();
+fn for_each_batch(path: &Path, consume: impl FnMut(Vec<f64>) -> Result<()>) -> Result<usize> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("bin") => read_binary(path, consume),
+        Some(ext) if ext.eq_ignore_ascii_case("csv") => read_csv(path, consume),
+        _ => Err(ParquetError::General(format!(
+            "unsupported dataset file {}",
+            path.display()
+        ))),
+    }
+}
+
+fn read_binary(path: &Path, mut consume: impl FnMut(Vec<f64>) -> Result<()>) -> Result<usize> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut bytes = vec![0u8; INPUT_BATCH_VALUES * std::mem::size_of::<f64>()];
+    let mut total = 0usize;
+
+    loop {
+        let mut filled = 0;
+        while filled < bytes.len() {
+            let read = reader.read(&mut bytes[filled..])?;
+            if read == 0 {
+                break;
             }
+            filled += read;
+        }
+        if filled == 0 {
+            break;
+        }
+        if filled % std::mem::size_of::<f64>() != 0 {
+            return Err(ParquetError::General(format!(
+                "{} has {} trailing bytes; expected raw little-endian f64 values",
+                path.display(),
+                filled % std::mem::size_of::<f64>()
+            )));
+        }
+
+        let values: Vec<f64> = bytes[..filled]
+            .chunks_exact(std::mem::size_of::<f64>())
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        total += values.len();
+        consume(values)?;
+
+        if filled < bytes.len() {
+            break;
         }
     }
     Ok(total)
 }
 
-/// Bits per value actually written to disk, taken from the column chunk metadata.
-fn chunk_bits(file: &Bytes, num_values: usize) -> Result<f64> {
-    let reader = SerializedFileReader::new(file.clone())?;
-    let bytes: i64 = (0..reader.metadata().num_row_groups())
-        .map(|rg| reader.metadata().row_group(rg).column(0).compressed_size())
-        .sum();
-    Ok(bytes as f64 * 8.0 / num_values as f64)
-}
+fn read_csv(path: &Path, mut consume: impl FnMut(Vec<f64>) -> Result<()>) -> Result<usize> {
+    let reader = BufReader::new(File::open(path)?);
+    let mut values = Vec::with_capacity(INPUT_BATCH_VALUES);
+    let mut total = 0usize;
 
-/// Exception rate over every vector, plus the first vector's bit width and
-/// decimal parameters, read straight out of the ALP page.
-///
-/// The page is `[header][vector offsets][vectors...]`, and each vector starts
-/// with `[exponent, factor, num_exceptions(u16)][frame_of_reference(u64), bit_width]`.
-fn alp_vector_stats(file: &Bytes) -> Result<(f64, u8, u8, u8)> {
-    const ALP_HEADER_SIZE: usize = 7;
-    const ALP_INFO_SIZE: usize = 4;
-    const FRAME_OF_REFERENCE_SIZE: usize = 8; // f64
-
-    let reader = SerializedFileReader::new(file.clone())?;
-    let mut pages = reader.get_row_group(0)?.get_column_page_reader(0)?;
-
-    let mut exceptions = 0u64;
-    let mut total_values = 0usize;
-    let mut first = None;
-
-    while let Some(page) = pages.get_next_page()? {
-        let Page::DataPage {
-            buf,
-            num_values,
-            encoding: Encoding::ALP,
-            ..
-        } = &page
-        else {
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() {
             continue;
-        };
-        // The column is required, so the page holds no levels and the ALP page
-        // starts at byte 0.
-        let page = buf.as_ref();
-        let num_values = *num_values as usize;
-        total_values += num_values;
-
-        let vector_size = 1usize << page[2];
-        let body = &page[ALP_HEADER_SIZE..];
-        for vector in 0..num_values.div_ceil(vector_size) {
-            let at = vector * std::mem::size_of::<u32>();
-            let offset = u32::from_le_bytes(body[at..at + 4].try_into().unwrap()) as usize;
-            let vector = &body[offset..];
-            exceptions += u64::from(u16::from_le_bytes([vector[2], vector[3]]));
-            first.get_or_insert((
-                vector[0],
-                vector[1],
-                vector[ALP_INFO_SIZE + FRAME_OF_REFERENCE_SIZE],
-            ));
+        }
+        let value = line.parse::<f64>().map_err(|e| {
+            ParquetError::General(format!(
+                "{}:{}: cannot parse {line:?} as f64: {e}",
+                path.display(),
+                idx + 1
+            ))
+        })?;
+        values.push(value);
+        if values.len() == INPUT_BATCH_VALUES {
+            total += values.len();
+            consume(std::mem::take(&mut values))?;
+            values = Vec::with_capacity(INPUT_BATCH_VALUES);
         }
     }
 
-    let (exponent, factor, bit_width) = first.expect("no ALP page found");
-    let rate = 100.0 * exceptions as f64 / total_values as f64;
-    Ok((rate, bit_width, exponent, factor))
+    if !values.is_empty() {
+        total += values.len();
+        consume(values)?;
+    }
+    Ok(total)
 }
 
-fn print_uncompressed(rows: &[Row]) {
-    println!("\n## Bits per value, no compressor\n");
-    println!(
-        "| dataset | values | ALP | vs PLAIN | PLAIN | BYTE_STREAM_SPLIT | exceptions | bit width | (exponent, factor) |"
-    );
-    println!("|---|---|---|---|---|---|---|---|---|");
+fn bits_per_value(bytes: u64, num_values: usize) -> f64 {
+    bytes as f64 * 8.0 / num_values as f64
+}
+
+fn print_table(rows: &[Row]) {
+    println!("\n## Parquet bits per value\n");
+    println!("| dataset | values | input MiB | PLAIN | PLAIN + ZSTD | ALP | ALP / PLAIN+ZSTD |");
+    println!("|---|---:|---:|---:|---:|---:|---:|");
     for row in rows {
+        let plain = bits_per_value(row.plain, row.num_values);
+        let plain_zstd = bits_per_value(row.plain_zstd, row.num_values);
+        let alp = bits_per_value(row.alp, row.num_values);
         println!(
-            "| {} | {} | **{:.2}** | {:.2}x | {:.2} | {:.2} | {:.2}% | {} | ({}, {}) |",
+            "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2}x |",
             row.name,
             row.num_values,
-            row.alp,
-            row.plain / row.alp,
-            row.plain,
-            row.byte_stream_split,
-            row.exception_rate,
-            row.bit_width,
-            row.exponent,
-            row.factor,
+            row.num_values as f64 * 8.0 / (1024.0 * 1024.0),
+            plain,
+            plain_zstd,
+            alp,
+            alp / plain_zstd,
         );
     }
-}
 
-fn print_compressed(rows: &[Row]) {
-    println!("\n## Bits per value, zstd\n");
-    println!("| dataset | ALP+zstd | PLAIN+zstd | BYTE_STREAM_SPLIT+zstd | ALP alone |");
-    println!("|---|---|---|---|---|");
-    for row in rows {
-        let Some(c) = &row.compressed else { continue };
-        println!(
-            "| {} | {:.2} | {:.2} | {:.2} | **{:.2}** |",
-            row.name, c.alp, c.plain, c.byte_stream_split, row.alp,
-        );
-    }
+    let (plain, plain_zstd, alp) = arithmetic_means(rows);
     println!(
-        "\nThe last column repeats ALP without a compressor: the operating point that keeps \
-         random access to a {VECTOR_SIZE}-value vector."
+        "| **ALL AVG.** | — | — | **{plain:.2}** | **{plain_zstd:.2}** | **{alp:.2}** | **{:.2}x** |",
+        alp / plain_zstd,
     );
 }
 
 fn print_summary(rows: &[Row]) {
-    let mut sorted: Vec<f64> = rows.iter().map(|r| r.alp).collect();
-    sorted.sort_by(f64::total_cmp);
-    let median = sorted[sorted.len() / 2];
+    let (plain_mean, plain_zstd_mean, alp_mean) = arithmetic_means(rows);
+    let mut alp_bits: Vec<f64> = rows
+        .iter()
+        .map(|row| bits_per_value(row.alp, row.num_values))
+        .collect();
+    alp_bits.sort_by(f64::total_cmp);
+    let median_alp = alp_bits[alp_bits.len() / 2];
 
-    // Ratios are a spread of scales, so the geometric mean is the honest average.
-    let geomean =
-        (rows.iter().map(|r| (r.plain / r.alp).ln()).sum::<f64>() / rows.len() as f64).exp();
+    let alp_vs_plain_geomean = (rows
+        .iter()
+        .map(|row| (row.alp as f64 / row.plain as f64).ln())
+        .sum::<f64>()
+        / rows.len() as f64)
+        .exp();
+    let alp_vs_zstd_geomean = (rows
+        .iter()
+        .map(|row| (row.alp as f64 / row.plain_zstd as f64).ln())
+        .sum::<f64>()
+        / rows.len() as f64)
+        .exp();
+    let beats_zstd = rows.iter().filter(|row| row.alp < row.plain_zstd).count();
 
-    let losses: Vec<&Row> = rows.iter().filter(|r| r.alp >= r.plain).collect();
     println!(
-        "\n{} columns. Median ALP {median:.2} bits/value, geometric mean {geomean:.2}x smaller than PLAIN.",
+        "\n{} datasets. Arithmetic mean: PLAIN {plain_mean:.2}, PLAIN + ZSTD {plain_zstd_mean:.2}, ALP {alp_mean:.2} bits/value.",
+        rows.len(),
+    );
+    println!(
+        "Median ALP: {median_alp:.2} bits/value. ALP is {:.2}x the size of PLAIN and {:.2}x the size of PLAIN + ZSTD by geometric mean.",
+        alp_vs_plain_geomean, alp_vs_zstd_geomean,
+    );
+    println!(
+        "ALP is smaller than PLAIN + ZSTD on {beats_zstd}/{} datasets.",
         rows.len()
     );
-    if losses.is_empty() {
-        return;
-    }
-    println!(
-        "\nALP is larger than PLAIN on {}: {}. These columns hold real doubles rather than \
-         decimals, so nearly every value becomes an exception, costing its 8 bytes plus a 2-byte \
-         position. The ALP paper handles them with a second scheme, ALP-RD; Parquet deliberately \
-         left it out in favour of BYTE_STREAM_SPLIT + ZSTD as the fallback, a substitution the \
-         ALP author endorsed on dev@parquet.apache.org (2025-11-24), with the caveat that only \
-         the first two byte streams are worth compressing - the low mantissa bytes are noise.",
-        losses.len(),
-        losses
-            .iter()
-            .map(|r| format!("{} ({:.0}% exceptions)", r.name, r.exception_rate))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
+}
+
+fn arithmetic_means(rows: &[Row]) -> (f64, f64, f64) {
+    let count = rows.len() as f64;
+    let plain = rows
+        .iter()
+        .map(|row| bits_per_value(row.plain, row.num_values))
+        .sum::<f64>()
+        / count;
+    let plain_zstd = rows
+        .iter()
+        .map(|row| bits_per_value(row.plain_zstd, row.num_values))
+        .sum::<f64>()
+        / count;
+    let alp = rows
+        .iter()
+        .map(|row| bits_per_value(row.alp, row.num_values))
+        .sum::<f64>()
+        / count;
+    (plain, plain_zstd, alp)
 }

@@ -158,7 +158,7 @@ path = "./examples/write_parquet.rs"
 
 [[example]]
 name = "alp_compression_stats"
-required-features = ["arrow"]
+required-features = ["arrow", "zstd"]
 path = "./examples/alp_compression_stats.rs"
 
 [[example]]
