@@ -136,5 +136,6 @@ fi
 
 echo "Running the ALP compression benchmark" >&2
 cd "$REPO_ROOT"
+export RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}"
 exec cargo run --quiet --release -p parquet \
-  --example alp_compression_stats --features arrow,zstd -- "$DATA_DIR"
+  --example alp_compression_stats --features arrow,zstd,experimental -- "$DATA_DIR"

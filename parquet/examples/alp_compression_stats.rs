@@ -48,21 +48,38 @@
 //! that same boundary for all three choices makes the bits/value figures
 //! directly comparable without retaining a potentially multi-gigabyte Parquet
 //! file in memory.
+//!
+//! Speed processes every value in every dataset in 131,072-value (1 MiB) pages.
+//! Short pages are repeated to stabilize the elapsed-time measurement and
+//! normalized back to one page before being added to the dataset total. The
+//! reported GB/s uses the uncompressed input size (eight bytes per value). The
+//! companion script builds with `-C target-cpu=native` unless `RUSTFLAGS` is
+//! already set.
 
 use std::fs::File;
+use std::hint::black_box;
 use std::io::{BufRead, BufReader, Read, sink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Type as PhysicalType;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
+use parquet::compression::create_codec;
+use parquet::data_type::DoubleType;
+use parquet::decoding::{Decoder, get_decoder};
+use parquet::encoding::get_encoder;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::properties::WriterProperties;
+use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 
 /// Keeps input and Arrow writer memory bounded for the full CWI corpus.
 const INPUT_BATCH_VALUES: usize = 128 * 1024;
+/// The page size used by all three speed comparisons.
+const SPEED_PAGE_VALUES: usize = 128 * 1024;
 
 struct Row {
     name: String,
@@ -75,6 +92,42 @@ struct Row {
 struct Measurement {
     num_values: usize,
     compressed_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+struct Speed {
+    compression: f64,
+    decompression: f64,
+}
+
+struct SpeedRow {
+    name: String,
+    plain: Speed,
+    plain_zstd: Speed,
+    alp: Speed,
+}
+
+#[derive(Default)]
+struct TimingTotals {
+    values: usize,
+    compression: f64,
+    decompression: f64,
+}
+
+impl TimingTotals {
+    fn add(&mut self, values: usize, compression: f64, decompression: f64) {
+        self.values += values;
+        self.compression += compression;
+        self.decompression += decompression;
+    }
+
+    fn speed(&self) -> Speed {
+        let input_gb = self.values as f64 * std::mem::size_of::<f64>() as f64 / 1_000_000_000.0;
+        Speed {
+            compression: input_gb / self.compression,
+            decompression: input_gb / self.decompression,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -111,8 +164,9 @@ fn main() -> Result<()> {
         rows.push(measure(path, &schema)?);
     }
 
-    print_table(&rows);
-    print_summary(&rows);
+    let speed_rows = measure_speed(&paths)?;
+    print_table(&rows, &speed_rows);
+    print_summary(&rows, &speed_rows);
     Ok(())
 }
 
@@ -298,35 +352,63 @@ fn bits_per_value(bytes: u64, num_values: usize) -> f64 {
     bytes as f64 * 8.0 / num_values as f64
 }
 
-fn print_table(rows: &[Row]) {
-    println!("\n## Parquet bits per value\n");
-    println!("| dataset | values | input MiB | PLAIN | PLAIN + ZSTD | ALP | ALP / PLAIN+ZSTD |");
-    println!("|---|---:|---:|---:|---:|---:|---:|");
-    for row in rows {
-        let plain = bits_per_value(row.plain, row.num_values);
-        let plain_zstd = bits_per_value(row.plain_zstd, row.num_values);
-        let alp = bits_per_value(row.alp, row.num_values);
-        println!(
-            "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2}x |",
-            row.name,
-            row.num_values,
-            row.num_values as f64 * 8.0 / (1024.0 * 1024.0),
-            plain,
-            plain_zstd,
-            alp,
-            alp / plain_zstd,
+fn print_table(rows: &[Row], speed_rows: &[SpeedRow]) {
+    assert_eq!(rows.len(), speed_rows.len());
+    println!("\n## Parquet compression results\n");
+    println!(
+        "| Dataset | Parquet choice | Compression (GB/s) | Decompression (GB/s) | Compressed size (bits/value) |"
+    );
+    println!("|---|---|---:|---:|---:|");
+    for (row, speed) in rows.iter().zip(speed_rows) {
+        assert_eq!(row.name, speed.name);
+        print_result_row(
+            &row.name,
+            "PLAIN",
+            speed.plain,
+            bits_per_value(row.plain, row.num_values),
+        );
+        print_result_row(
+            &row.name,
+            "PLAIN + ZSTD",
+            speed.plain_zstd,
+            bits_per_value(row.plain_zstd, row.num_values),
+        );
+        print_result_row(
+            &row.name,
+            "ALP",
+            speed.alp,
+            bits_per_value(row.alp, row.num_values),
         );
     }
 
-    let (plain, plain_zstd, alp) = arithmetic_means(rows);
+    let (plain_bits, plain_zstd_bits, alp_bits) = arithmetic_means(rows);
+    let (plain_speed, plain_zstd_speed, alp_speed) = speed_arithmetic_means(speed_rows);
+    print_average_row("PLAIN", plain_speed, plain_bits);
+    print_average_row("PLAIN + ZSTD", plain_zstd_speed, plain_zstd_bits);
+    print_average_row("ALP", alp_speed, alp_bits);
+
     println!(
-        "| **ALL AVG.** | — | — | **{plain:.2}** | **{plain_zstd:.2}** | **{alp:.2}** | **{:.2}x** |",
-        alp / plain_zstd,
+        "\nGB/s is decimal billions of uncompressed input bytes processed per second; higher is better. Compressed size includes Parquet data-page headers but excludes the file footer. Speed processes every value in pages of up to {SPEED_PAGE_VALUES} values and excludes file I/O. PLAIN + ZSTD includes both stages: PLAIN encoding plus ZSTD compression, and ZSTD decompression plus PLAIN decoding. Short pages are repeated for timing stability and normalized to one page."
     );
 }
 
-fn print_summary(rows: &[Row]) {
+fn print_result_row(dataset: &str, choice: &str, speed: Speed, bits: f64) {
+    println!(
+        "| {dataset} | {choice} | {:.3} | {:.3} | {bits:.2} |",
+        speed.compression, speed.decompression
+    );
+}
+
+fn print_average_row(choice: &str, speed: Speed, bits: f64) {
+    println!(
+        "| **ALL AVG.** | **{choice}** | **{:.3}** | **{:.3}** | **{bits:.2}** |",
+        speed.compression, speed.decompression
+    );
+}
+
+fn print_summary(rows: &[Row], speed_rows: &[SpeedRow]) {
     let (plain_mean, plain_zstd_mean, alp_mean) = arithmetic_means(rows);
+    let (plain_speed, plain_zstd_speed, alp_speed) = speed_arithmetic_means(speed_rows);
     let mut alp_bits: Vec<f64> = rows
         .iter()
         .map(|row| bits_per_value(row.alp, row.num_values))
@@ -360,6 +442,15 @@ fn print_summary(rows: &[Row]) {
         "ALP is smaller than PLAIN + ZSTD on {beats_zstd}/{} datasets.",
         rows.len()
     );
+    println!(
+        "Arithmetic mean compression/decompression speed in GB/s: PLAIN {:.3}/{:.3}, PLAIN + ZSTD {:.3}/{:.3}, ALP {:.3}/{:.3}.",
+        plain_speed.compression,
+        plain_speed.decompression,
+        plain_zstd_speed.compression,
+        plain_zstd_speed.decompression,
+        alp_speed.compression,
+        alp_speed.decompression,
+    );
 }
 
 fn arithmetic_means(rows: &[Row]) -> (f64, f64, f64) {
@@ -380,4 +471,210 @@ fn arithmetic_means(rows: &[Row]) -> (f64, f64, f64) {
         .sum::<f64>()
         / count;
     (plain, plain_zstd, alp)
+}
+
+fn speed_arithmetic_means(rows: &[SpeedRow]) -> (Speed, Speed, Speed) {
+    let average = |select: fn(&SpeedRow) -> Speed| Speed {
+        compression: rows.iter().map(|row| select(row).compression).sum::<f64>()
+            / rows.len() as f64,
+        decompression: rows
+            .iter()
+            .map(|row| select(row).decompression)
+            .sum::<f64>()
+            / rows.len() as f64,
+    };
+    (
+        average(|row| row.plain),
+        average(|row| row.plain_zstd),
+        average(|row| row.alp),
+    )
+}
+
+fn measure_speed(paths: &[PathBuf]) -> Result<Vec<SpeedRow>> {
+    let descriptor = double_column_descriptor()?;
+    let mut rows = Vec::with_capacity(paths.len());
+
+    eprintln!("Measuring full-dataset page speed");
+    for (idx, path) in paths.iter().enumerate() {
+        eprintln!("[{}/{}] timing {}", idx + 1, paths.len(), path.display());
+        rows.push(benchmark_dataset(path, &descriptor)?);
+    }
+
+    Ok(rows)
+}
+
+fn double_column_descriptor() -> Result<ColumnDescPtr> {
+    let primitive = Type::primitive_type_builder("value", PhysicalType::DOUBLE).build()?;
+    Ok(Arc::new(ColumnDescriptor::new(
+        Arc::new(primitive),
+        0,
+        0,
+        ColumnPath::new(vec!["value".into()]),
+    )))
+}
+
+fn benchmark_dataset(path: &Path, descriptor: &ColumnDescPtr) -> Result<SpeedRow> {
+    let mut plain_encoder = get_encoder::<DoubleType>(Encoding::PLAIN, descriptor)?;
+    let mut plain_decoder: Box<dyn Decoder<DoubleType>> =
+        get_decoder(descriptor.clone(), Encoding::PLAIN)?;
+    let mut alp_encoder = get_encoder::<DoubleType>(Encoding::ALP, descriptor)?;
+    let mut alp_decoder: Box<dyn Decoder<DoubleType>> =
+        get_decoder(descriptor.clone(), Encoding::ALP)?;
+    let mut codec = create_codec(Compression::ZSTD(ZstdLevel::default()), &Default::default())?
+        .expect("ZSTD is a compressed codec");
+    let mut plain_totals = TimingTotals::default();
+    let mut zstd_totals = TimingTotals::default();
+    let mut alp_totals = TimingTotals::default();
+    let mut alp_preset_ready = false;
+
+    let num_values = for_each_batch(path, |values| {
+        if !alp_preset_ready {
+            // Build the row-group preset outside the timed region, matching the
+            // paper's exclusion of first-level sampling from compression speed.
+            alp_encoder.put(&values)?;
+            black_box(alp_encoder.flush_buffer()?);
+            alp_preset_ready = true;
+        }
+
+        let repetitions = SPEED_PAGE_VALUES.div_ceil(values.len());
+        let (plain_page, compression, decompression) = benchmark_encoded_page(
+            &values,
+            &mut plain_encoder,
+            &mut plain_decoder,
+            Encoding::PLAIN,
+            repetitions,
+        )?;
+        plain_totals.add(values.len(), compression, decompression);
+
+        let (zstd_compression, zstd_decompression) =
+            benchmark_zstd_page(&plain_page, &mut codec, repetitions)?;
+        zstd_totals.add(
+            values.len(),
+            compression + zstd_compression,
+            zstd_decompression + decompression,
+        );
+
+        let (_, compression, decompression) = benchmark_encoded_page(
+            &values,
+            &mut alp_encoder,
+            &mut alp_decoder,
+            Encoding::ALP,
+            repetitions,
+        )?;
+        alp_totals.add(values.len(), compression, decompression);
+        Ok(())
+    })?;
+
+    if num_values == 0 {
+        return Err(ParquetError::General(format!(
+            "{} contains no values",
+            path.display()
+        )));
+    }
+
+    Ok(SpeedRow {
+        name: path.file_stem().unwrap().to_string_lossy().into_owned(),
+        plain: plain_totals.speed(),
+        plain_zstd: zstd_totals.speed(),
+        alp: alp_totals.speed(),
+    })
+}
+
+fn benchmark_encoded_page(
+    values: &[f64],
+    encoder: &mut Box<dyn parquet::encoding::Encoder<DoubleType>>,
+    decoder: &mut Box<dyn Decoder<DoubleType>>,
+    encoding: Encoding,
+    repetitions: usize,
+) -> Result<(bytes::Bytes, f64, f64)> {
+    let start = Instant::now();
+    let mut page = bytes::Bytes::new();
+    for _ in 0..repetitions {
+        encoder.put(black_box(values))?;
+        page = encoder.flush_buffer()?;
+        black_box(page.len());
+    }
+    let compression = elapsed_seconds(start, repetitions)?;
+
+    let mut decoded = vec![0.0; values.len()];
+    let start = Instant::now();
+    for _ in 0..repetitions {
+        decoder.set_data(page.clone(), values.len())?;
+        let read = decoder.get(&mut decoded)?;
+        if read != values.len() {
+            return Err(ParquetError::General(format!(
+                "{encoding} decoded {read} of {} values",
+                values.len()
+            )));
+        }
+        black_box(decoded[0]);
+    }
+    let decompression = elapsed_seconds(start, repetitions)?;
+    assert_f64_bits_eq(values, &decoded, encoding)?;
+
+    Ok((page, compression, decompression))
+}
+
+fn benchmark_zstd_page(
+    plain: &bytes::Bytes,
+    codec: &mut Box<dyn parquet::compression::Codec>,
+    repetitions: usize,
+) -> Result<(f64, f64)> {
+    let mut compressed = Vec::new();
+    let start = Instant::now();
+    for _ in 0..repetitions {
+        compressed.clear();
+        codec.compress(black_box(plain.as_ref()), &mut compressed)?;
+        black_box(compressed.len());
+    }
+    let compression = elapsed_seconds(start, repetitions)?;
+
+    let mut decompressed = Vec::with_capacity(plain.len());
+    let start = Instant::now();
+    for _ in 0..repetitions {
+        decompressed.clear();
+        let read = codec.decompress(
+            black_box(compressed.as_slice()),
+            &mut decompressed,
+            Some(plain.len()),
+        )?;
+        if read != plain.len() {
+            return Err(ParquetError::General(format!(
+                "ZSTD decompressed {read} of {} bytes",
+                plain.len()
+            )));
+        }
+        black_box(decompressed[0]);
+    }
+    let decompression = elapsed_seconds(start, repetitions)?;
+    if decompressed != plain.as_ref() {
+        return Err(ParquetError::General(
+            "ZSTD did not reproduce the PLAIN page".into(),
+        ));
+    }
+
+    Ok((compression, decompression))
+}
+
+fn elapsed_seconds(start: Instant, repetitions: usize) -> Result<f64> {
+    let seconds = start.elapsed().as_secs_f64() / repetitions as f64;
+    if seconds == 0.0 {
+        return Err(ParquetError::General(
+            "elapsed-time clock did not advance".into(),
+        ));
+    }
+    Ok(seconds)
+}
+
+fn assert_f64_bits_eq(expected: &[f64], actual: &[f64], encoding: Encoding) -> Result<()> {
+    if expected
+        .iter()
+        .zip(actual)
+        .all(|(left, right)| left.to_bits() == right.to_bits())
+    {
+        return Ok(());
+    }
+    Err(ParquetError::General(format!(
+        "{encoding} speed fixture failed to round-trip"
+    )))
 }
