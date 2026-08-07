@@ -329,7 +329,10 @@ fn decode_range<Value: AlpFloat>(
     let hi = cur.delivered + out.len();
     // Both buffers were sliced to exactly `num_exceptions` whole entries at
     // parse time. A mismatch here would make `zip` silently drop exceptions.
-    debug_assert_eq!(cur.exception_positions.len() % std::mem::size_of::<u16>(), 0);
+    debug_assert_eq!(
+        cur.exception_positions.len() % std::mem::size_of::<u16>(),
+        0
+    );
     debug_assert_eq!(cur.exception_values.len() % Value::Exact::WIDTH, 0);
     debug_assert_eq!(
         cur.exception_positions.len() / std::mem::size_of::<u16>(),

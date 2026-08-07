@@ -677,8 +677,7 @@ where
                 * (std::mem::size_of::<u32>()
                     + AlpInfo::STORED_SIZE
                     + ForInfo::<<T::T as AlpFloat>::Exact>::stored_size())
-            + len
-                * (2 * <T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
+            + len * (2 * <T::T as AlpFloat>::Exact::WIDTH + std::mem::size_of::<u16>())
     }
 
     fn estimated_memory_size(&self) -> usize {
@@ -1034,13 +1033,8 @@ mod tests {
         let page = encoder.flush_buffer().unwrap();
 
         let vector_start = ALP_HEADER_SIZE + std::mem::size_of::<u32>();
-        let num_exceptions = u16::from_le_bytes([
-            page[vector_start + 2],
-            page[vector_start + 3],
-        ]);
-        let bit_width = page[
-            vector_start + AlpInfo::STORED_SIZE + <f64 as AlpFloat>::Exact::WIDTH
-        ];
+        let num_exceptions = u16::from_le_bytes([page[vector_start + 2], page[vector_start + 3]]);
+        let bit_width = page[vector_start + AlpInfo::STORED_SIZE + <f64 as AlpFloat>::Exact::WIDTH];
         assert_eq!(num_exceptions as usize, VECTOR_SIZE - 2);
         assert_eq!(bit_width, 64);
         assert!(
