@@ -75,4 +75,4 @@ jobs:
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 4
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 6
