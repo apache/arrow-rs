@@ -207,7 +207,7 @@ impl FFI_ArrowSchema {
             })?;
             metadata_serialized.extend(num_entries.to_ne_bytes());
 
-            for (key, value) in metadata.into_iter() {
+            for (key, value) in metadata {
                 let key_len: i32 = key.as_ref().len().try_into().map_err(|_| {
                     ArrowError::CDataInterface(format!(
                         "metadata key can only have {} bytes, but {} were provided",
@@ -813,7 +813,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             Flags::empty()
         };
 
-        if let Some(true) = field.dict_is_ordered() {
+        if field.dict_is_ordered() == Some(true) {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
@@ -1001,9 +1001,9 @@ mod tests {
             [].into(),
             [("key".to_string(), "value".to_string())].into(),
             [
-                ("key".to_string(), "".to_string()),
+                ("key".to_string(), String::new()),
                 ("ascii123".to_string(), "你好".to_string()),
-                ("".to_string(), "value".to_string()),
+                (String::new(), "value".to_string()),
             ]
             .into(),
         ];

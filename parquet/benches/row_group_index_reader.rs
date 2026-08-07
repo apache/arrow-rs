@@ -74,7 +74,7 @@ impl ExtensionType for RowGroupIndex {
         data_type: &ArrowDataType,
         _metadata: Self::Metadata,
     ) -> Result<Self, arrow_schema::ArrowError> {
-        RowGroupIndex.supports_data_type(data_type).map(|_| Self)
+        RowGroupIndex.supports_data_type(data_type).map(|()| Self)
     }
 }
 

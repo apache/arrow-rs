@@ -4828,7 +4828,7 @@ mod tests {
 
         // Verify data is as expected
 
-        let expected = r#"
+        let expected = r"
             +-------------------------------------------------------------------------------------------------------+
             | struct_b                                                                                              |
             +-------------------------------------------------------------------------------------------------------+
@@ -4840,7 +4840,7 @@ mod tests {
             | {list: [{leaf_a: 6, leaf_b: }, {leaf_a: 7, leaf_b: }, {leaf_a: 8, leaf_b: }, {leaf_a: 9, leaf_b: 1}]} |
             | {list: [{leaf_a: 10, leaf_b: }]}                                                                      |
             +-------------------------------------------------------------------------------------------------------+
-        "#.trim().split('\n').map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+        ".trim().split('\n').map(|x| x.trim()).collect::<Vec<_>>().join("\n");
 
         let actual = pretty_format_batches(batches).unwrap().to_string();
         assert_eq!(actual, expected);

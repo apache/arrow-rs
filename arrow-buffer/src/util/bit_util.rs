@@ -809,7 +809,7 @@ fn get_remainder_bits(remainder: &[u8], remainder_len: usize) -> u64 {
         .iter()
         .enumerate()
         .fold(0_u64, |acc, (index, &byte)| {
-            acc | (byte as u64) << (index * 8)
+            acc | ((byte as u64) << (index * 8))
         });
 
     bits & ((1 << remainder_len) - 1)
