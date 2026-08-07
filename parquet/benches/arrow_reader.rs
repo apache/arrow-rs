@@ -2614,5 +2614,80 @@ fn add_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, add_benches, decimal_benches, float16_benches,);
+fn bench_plain_string_to_dict(c: &mut Criterion) {
+    use arrow::array::StringArray;
+    use arrow::datatypes::{Schema, SchemaRef};
+    use arrow::record_batch::RecordBatch;
+    use bytes::Bytes;
+    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
+
+    fn make_parquet(num_rows: usize, cardinality: usize) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let values: StringArray = (0..num_rows)
+            .map(|i| Some(format!("{:032}", i % cardinality)))
+            .collect();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values) as _]).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    let num_rows = EXPECTED_VALUE_COUNT;
+    let dict_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]));
+
+    let high_card = make_parquet(num_rows, num_rows); // every value unique
+    let med_card_1 = make_parquet(num_rows, 1_000); // 1 000 distinct values
+    let med_card_2 = make_parquet(num_rows, 100); //  100 distinct values
+    let low_card = make_parquet(num_rows, 10); // 10 distinct values
+
+    let mut group = c.benchmark_group("arrow_array_reader/PlainStringToDictionary");
+
+    for (name, data) in [
+        ("high cardinality", high_card),
+        ("medium cardinality 1", med_card_1),
+        ("medium cardinality 2", med_card_2),
+        ("low cardinality", low_card),
+    ] {
+        let schema = Arc::clone(&dict_schema);
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let opts = ArrowReaderOptions::new().with_schema(Arc::clone(&schema));
+                let reader =
+                    ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), opts)
+                        .unwrap()
+                        .build()
+                        .unwrap();
+                let mut count = 0usize;
+                for batch in reader {
+                    count += batch.unwrap().num_rows();
+                }
+                assert_eq!(count, num_rows);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    add_benches,
+    decimal_benches,
+    float16_benches,
+    bench_plain_string_to_dict,
+);
 criterion_main!(benches);
