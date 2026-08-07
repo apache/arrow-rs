@@ -351,8 +351,12 @@ impl RowGroupReaderBuilder {
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
-    pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.buffers.push_ranges(ranges, buffers);
+    pub fn push_data(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+        buffers: Vec<Bytes>,
+    ) -> Result<(), ParquetError> {
+        self.buffers.push_ranges(ranges, buffers)
     }
 
     /// True iff the inner state is `Finished`. This is the only state in

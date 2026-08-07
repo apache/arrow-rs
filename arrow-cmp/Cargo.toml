@@ -16,43 +16,29 @@
 # under the License.
 
 [package]
-name = "parquet-variant-compute"
+name = "arrow-cmp"
 version = { workspace = true }
-license = { workspace = true }
-description = "Apache Parquet Variant Batch Processing"
+description = "Basic comparator/ordering building blocks for Apache Arrow, shared by crates that need slot-wise comparison without pulling in the full arrow-ord kernels"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-keywords = ["arrow", "parquet", "variant"]
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
 
-[dependencies]
-arrow = { workspace = true, features = ["canonical_extension_types"] }
-arrow-schema = { workspace = true }
-half = { version = "2.1", default-features = false }
-indexmap = "2.10.0"
-parquet-variant = { workspace = true }
-parquet-variant-json = { workspace = true }
-chrono = { workspace = true }
-uuid = { version = "1.18.0", features = ["v4"] }
-serde_json = "1.0"
-
-# uuid requires the `js` feature to run on wasm
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-uuid = { version = "1.18.0", features = ["v4", "js"] }
-
 [lib]
-name = "parquet_variant_compute"
+name = "arrow_cmp"
 bench = false
 
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
+
 [dev-dependencies]
-rand = "0.10.1"
-criterion = { workspace = true, default-features = false }
-
-[[bench]]
-name = "variant_kernels"
-harness = false
-
-[lints]
-workspace = true
+half = { version = "2.1", default-features = false, features = ["num-traits"] }

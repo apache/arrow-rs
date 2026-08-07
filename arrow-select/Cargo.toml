@@ -37,6 +37,7 @@ all-features = true
 
 [dependencies]
 arrow-buffer = { workspace = true }
+arrow-cmp = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }

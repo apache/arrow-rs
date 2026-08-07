@@ -254,7 +254,7 @@ dependencies = [
  "num-bigint 0.5.1",
  "object_store",
  "once_cell",
- "rand 0.9.5",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "sha2",
@@ -299,6 +299,16 @@ dependencies = [
  "num-traits",
  "rand 0.10.2",
  "ryu",
+]
+
+[[package]]
+name = "arrow-cmp"
+version = "59.2.0"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "half",
 ]
 
 [[package]]
@@ -460,6 +470,7 @@ version = "59.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-cmp",
  "arrow-data",
  "arrow-schema",
  "arrow-select",
@@ -489,7 +500,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "half",
- "rand 0.9.5",
+ "rand 0.10.2",
 ]
 
 [[package]]
@@ -512,6 +523,7 @@ dependencies = [
  "ahash",
  "arrow-array",
  "arrow-buffer",
+ "arrow-cmp",
  "arrow-data",
  "arrow-schema",
  "num-traits",
@@ -2433,7 +2445,7 @@ dependencies = [
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
- "rand 0.9.5",
+ "rand 0.10.2",
  "ring",
  "seq-macro",
  "serde",
@@ -2470,7 +2482,7 @@ dependencies = [
  "half",
  "indexmap",
  "num-traits",
- "rand 0.9.5",
+ "rand 0.10.2",
  "simdutf8",
  "uuid",
 ]
@@ -2487,7 +2499,7 @@ dependencies = [
  "indexmap",
  "parquet-variant",
  "parquet-variant-json",
- "rand 0.9.5",
+ "rand 0.10.2",
  "serde_json",
  "uuid",
 ]
@@ -2744,6 +2756,7 @@ dependencies = [
  "portable-atomic",
  "pyo3-build-config",
  "pyo3-ffi",
+ "pyo3-macros",
 ]
 
 [[package]]
@@ -2763,6 +2776,30 @@ checksum = "3160087aa5733bce7d9a729f8c55f85a2a53b74742a09613178eeebff0722253"
 dependencies = [
  "libc",
  "pyo3-build-config",
+]
+
+[[package]]
+name = "pyo3-macros"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91f9d455db760a9a0b0ddeaac25f1390b8a36ba73dfbda9f127cac6fc340d4d5"
+dependencies = [
+ "proc-macro2",
+ "pyo3-macros-backend",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "pyo3-macros-backend"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e343bcec300ff262f5806a33a4e51b6d097a8a46435f512fcb83e95592581625"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

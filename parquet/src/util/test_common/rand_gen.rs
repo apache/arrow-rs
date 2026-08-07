@@ -19,7 +19,7 @@ use crate::basic::Encoding;
 use crate::column::page::Page;
 use bytes::Bytes;
 use rand::{
-    Rng,
+    RngExt,
     distr::{Distribution, StandardUniform, uniform::SampleUniform},
     rng,
 };
