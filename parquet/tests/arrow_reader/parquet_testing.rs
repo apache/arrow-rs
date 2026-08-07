@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for ALP data files
+//! Tests with interoperability files in [parquet-testing]
+//!
+//! [parquet-testing]: https://github.com/apache/parquet-testing
 
 use arrow::util::test_util::parquet_test_data;
 use arrow_array::{ArrayRef, RecordBatch};
@@ -39,8 +41,9 @@ use std::path::PathBuf;
 /// | `float_alp_4096`, `double_alp_4096` | `ALP`, 4096-value vectors | Readers must honor `log_vector_size` from the page header rather than assume 1024 |
 /// | `float_alp_32`, `double_alp_32`     | `ALP`, 32-value vectors   | Many vectors per page, stresses the per-vector metadata loop                      |
 #[test]
-fn test_alp() {
-    let file = File::open(alp_test_file()).unwrap();
+fn test_alp_extended() {
+    let alp_extended = PathBuf::from(parquet_test_data()).join("alp_extended.zstd.parquet");
+    let file = File::open(alp_extended).unwrap();
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)
         .unwrap()
         .build()
@@ -73,8 +76,4 @@ fn column(batches: &[RecordBatch], column_name: &str) -> Result<Vec<ArrayRef>, A
         columns.push(array.clone());
     }
     Ok(columns)
-}
-
-fn alp_test_file() -> PathBuf {
-    PathBuf::from(parquet_test_data()).join("alp_extended.zstd.parquet")
 }
