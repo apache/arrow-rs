@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use rand::{
-    Rng,
+    Rng, RngExt,
     distr::uniform::{SampleRange, SampleUniform},
 };
 
@@ -92,7 +92,7 @@ pub fn create_random_array(
         UInt16 => Arc::new(create_primitive_array::<UInt16Type>(size, null_density)),
         UInt32 => Arc::new(create_primitive_array::<UInt32Type>(size, null_density)),
         UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
-        Float16 => Arc::new(create_primitive_array::<Float16Type>(size, null_density)),
+        Float16 => Arc::new(create_nullable_f16_array(size, null_density)),
         Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),
         Float64 => Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
         Timestamp(unit, tz) => match unit {

@@ -343,7 +343,7 @@ impl ParquetMetaDataPushDecoder {
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
             ));
         }
-        self.buffers.push_ranges(ranges, buffers);
+        self.buffers.push_ranges(ranges, buffers)?;
         Ok(())
     }
 
@@ -354,7 +354,7 @@ impl ParquetMetaDataPushDecoder {
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
             ));
         }
-        self.buffers.push_range(range, buffer);
+        self.buffers.push_range(range, buffer)?;
         Ok(())
     }
 

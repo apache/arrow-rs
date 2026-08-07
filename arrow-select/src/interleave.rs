@@ -2034,6 +2034,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_interleave_bytes_offset_overflow() {
         let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX >> 4) as usize];
         let text = ('a'..='z').collect::<String>();
@@ -2045,6 +2046,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_interleave_list_offset_overflow() {
         // Build a ListArray<i32> with a single row containing many elements
         let mut builder = GenericListBuilder::<i32, _>::new(Int32Builder::new());

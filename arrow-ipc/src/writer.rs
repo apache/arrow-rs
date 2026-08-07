@@ -3401,6 +3401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn truncate_ipc_record_batch() {
         fn create_batch(rows: usize) -> RecordBatch {
             let schema = Schema::new(vec![
@@ -3600,6 +3601,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string() {
         let strings: Vec<_> = (0..8000)
             .map(|i| {
@@ -3615,6 +3617,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string_list() {
         let mut ls = ListBuilder::new(StringBuilder::new());
 
@@ -3637,6 +3640,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string_list_of_lists() {
         // The reason for the special test is to verify reencode_offsets which looks both at
         // the starting offset and the data offset.  So need a dataset where the starting_offset
@@ -3925,6 +3929,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn reencode_offsets_when_first_offset_is_not_zero() {
         let original_list = generate_list_data::<i32>();
         let original_data = original_list.into_data();
@@ -3979,6 +3984,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_lists() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
@@ -3991,6 +3997,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_empty_list() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
@@ -4006,6 +4013,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4020,6 +4028,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4031,6 +4040,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists_string_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::Utf8, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4042,6 +4052,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_list_string_view_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::Utf8View, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4063,6 +4074,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_lists() {
         let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new_list_field(DataType::List(inner_int), true));
@@ -4076,6 +4088,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_lists_starting_at_zero() {
         let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
@@ -4089,6 +4102,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_map_array() {
         let keys = Arc::new(Field::new(
             Field::MAP_KEY_FIELD_DEFAULT_NAME,
@@ -4134,6 +4148,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_field = Field::new("val", DataType::ListView(Arc::new(val_inner)), true);
@@ -4147,6 +4162,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_field = Field::new("val", DataType::LargeListView(Arc::new(val_inner)), true);
@@ -4160,6 +4176,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn check_sliced_list_view_array() {
         let inner = Field::new_list_field(DataType::UInt32, true);
         let field = Field::new("val", DataType::ListView(Arc::new(inner)), true);
@@ -4176,6 +4193,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn check_sliced_large_list_view_array() {
         let inner = Field::new_list_field(DataType::UInt32, true);
         let field = Field::new("val", DataType::LargeListView(Arc::new(inner)), true);
@@ -4215,6 +4233,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_list_views() {
         let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new_list_field(DataType::ListView(inner_int), true));
@@ -4604,7 +4623,7 @@ mod tests {
 
             let out: Vec<u8> = writer.into_inner().unwrap();
 
-            let buffer = Buffer::from_vec(out);
+            let buffer = Buffer::from_slice_ref(out);
             let trailer_start = buffer.len() - 10;
             let footer_len =
                 read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
@@ -4659,7 +4678,7 @@ mod tests {
 
         let out: Vec<u8> = writer.into_inner().unwrap();
 
-        let buffer = Buffer::from_vec(out);
+        let buffer = Buffer::from_slice_ref(out);
         let trailer_start = buffer.len() - 10;
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();

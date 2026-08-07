@@ -23,7 +23,7 @@ use rand::distr::StandardUniform;
 use arrow::array::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::i256;
-use rand::Rng;
+use rand::RngExt;
 use std::hint;
 
 // Build arrays with 512k elements.

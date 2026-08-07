@@ -356,7 +356,7 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::selection::{RowSelection, RowSelectionInner};
     use arrow_array::BooleanArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_mask_iter_yields_borrowed_selectors() {

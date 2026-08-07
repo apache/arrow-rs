@@ -585,6 +585,7 @@ mod tests {
         assert_eq!(Ordering::Less, cmp(0, 0));
     }
 
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     #[test]
     fn test_f16() {
         let array = Float16Array::from(vec![f16::from_f32(1.0), f16::from_f32(2.0)]);

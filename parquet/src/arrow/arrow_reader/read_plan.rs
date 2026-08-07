@@ -29,7 +29,6 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
@@ -447,16 +446,6 @@ pub struct ReadPlan {
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection selectors, if any
-    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
-    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
-        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
-            Some(selectors_cursor.selectors_mut())
-        } else {
-            None
-        }
-    }
-
     /// Returns a mutable reference to the row selection cursor
     pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
         &mut self.row_selection_cursor
@@ -559,7 +548,7 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_mask_matches_selector_backing() {
-        use rand::{Rng, rng};
+        use rand::{RngExt, rng};
 
         let mut rand = rng();
         for _ in 0..200 {
