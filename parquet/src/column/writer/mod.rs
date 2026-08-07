@@ -1447,6 +1447,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     }
                 };
 
+                // Shrink the buffer to fit its exact contents before converting
+                // to `Bytes`. The buffer has grown incrementally (rep levels, def
+                // levels, then compressed/uncompressed values) and may hold
+                // significant excess capacity. Without this, pages buffered for
+                // dictionary-encoded columns or held by the page writer retain
+                // that over-allocation for their entire lifetime — see #10448.
+                buffer.shrink_to_fit();
+
                 let data_page = Page::DataPageV2 {
                     buf: buffer.into(),
                     num_values: self.page_metrics.num_buffered_values,
