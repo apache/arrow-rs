@@ -377,7 +377,8 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         .iter()
         // BooleanBuffer words are little-endian
         .map(|word| deposit_word(word, &mut other_bits).to_le());
-    // Soundness: `BitChunks::iter` correctly reports its upper bound
+    // Soundness: `BitChunkIterator` is an `ExactSizeIterator`, so the upper
+    // bound reported through `map` is exact
     let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(words) };
 
     let remainder_bytes = mask_chunks.remainder_len().div_ceil(8);
@@ -394,15 +395,15 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
 /// should platform-specific acceleration ever be worthwhile.
 fn deposit_word<I: Iterator<Item = u64>>(mask: u64, bits: &mut BitStream<I>) -> u64 {
     let mut mask = mask;
-    let mut bits = bits.take(mask.count_ones() as usize);
+    let mut value = bits.take(mask.count_ones() as usize);
     let mut out = 0u64;
-    // Once `bits` is exhausted the remaining set positions all deposit zeros
-    while bits != 0 {
+    // Once `value` is exhausted the remaining set positions all deposit zeros
+    while value != 0 {
         let lowest = mask & mask.wrapping_neg();
-        if bits & 1 == 1 {
+        if value & 1 == 1 {
             out |= lowest;
         }
-        bits >>= 1;
+        value >>= 1;
         mask &= mask - 1;
     }
     out
