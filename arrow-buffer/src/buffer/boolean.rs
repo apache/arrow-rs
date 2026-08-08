@@ -555,6 +555,84 @@ impl BooleanBuffer {
         self.buffer
     }
 
+    /// Try to convert self into a [`BooleanBufferBuilder`] without copying.
+    ///
+    /// Reuses the underlying [`Buffer`] allocation if
+    /// 1. it is not shared (no other references to it exist) and
+    /// 2. the bit offset is zero
+    ///
+    /// Returns `Err(self)` if the allocation cannot be reused. See
+    /// [`Self::into_builder_or_clone`] for a variant that copies the bits in
+    /// this case instead.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let buffer = BooleanBuffer::from(vec![true, false, true]);
+    /// // The buffer is not shared, so the builder reuses its allocation
+    /// let mut builder = buffer.try_into_builder().expect("buffer was not shared");
+    /// builder.append(false);
+    /// assert_eq!(builder.finish(), BooleanBuffer::from(vec![true, false, true, false]));
+    ///
+    /// // Conversion fails if the buffer is shared
+    /// let buffer = BooleanBuffer::from(vec![true, false, true]);
+    /// let shared = buffer.clone();
+    /// let buffer = buffer.try_into_builder().expect_err("buffer was shared");
+    /// # assert_eq!(buffer, shared);
+    /// ```
+    pub fn try_into_builder(self) -> Result<BooleanBufferBuilder, Self> {
+        if self.bit_offset != 0 {
+            return Err(self);
+        }
+
+        let Self {
+            buffer,
+            bit_offset,
+            bit_len,
+        } = self;
+
+        match buffer.into_mutable() {
+            Ok(mutable_buffer) => Ok(BooleanBufferBuilder::new_from_buffer(
+                mutable_buffer,
+                bit_len,
+            )),
+            Err(buffer) => Err(Self {
+                buffer,
+                bit_offset,
+                bit_len,
+            }),
+        }
+    }
+
+    /// Converts self into a [`BooleanBufferBuilder`], reusing the existing
+    /// allocation if possible, and copying the bits otherwise.
+    ///
+    /// This is a convenience wrapper around [`Self::try_into_builder`] that
+    /// always succeeds. If the allocation cannot be reused (for example, the
+    /// underlying [`Buffer`] is shared, or the bit offset is non zero), the
+    /// bits are copied into a new allocation.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let buffer = BooleanBuffer::from(vec![true, false, true]);
+    /// // holding a second reference forces a copy
+    /// let shared = buffer.clone();
+    /// let mut builder = buffer.into_builder_or_clone();
+    /// builder.append(false);
+    /// assert_eq!(builder.finish(), BooleanBuffer::from(vec![true, false, true, false]));
+    /// // the original buffer is unchanged
+    /// assert_eq!(shared, BooleanBuffer::from(vec![true, false, true]));
+    /// ```
+    pub fn into_builder_or_clone(self) -> BooleanBufferBuilder {
+        self.try_into_builder().unwrap_or_else(|buffer| {
+            //  copy needed
+            let mut builder = BooleanBufferBuilder::new(buffer.len());
+            builder.append_buffer(&buffer);
+            builder
+        })
+    }
+
     /// Claim memory used by this buffer in the provided memory pool.
     ///
     /// See [`Buffer::claim`] for details.
@@ -824,6 +902,74 @@ mod tests {
         assert_eq!(buf, boolean_buf.clone().into_inner());
 
         assert!(!boolean_buf.is_empty())
+    }
+
+    #[test]
+    fn test_try_into_builder_reuses_allocation() {
+        let buffer = BooleanBuffer::from(vec![true, false, true]);
+        let ptr = buffer.values().as_ptr();
+        let mut builder = buffer.try_into_builder().unwrap();
+        builder.append(true);
+        let buffer = builder.finish();
+        assert_eq!(buffer, BooleanBuffer::from(vec![true, false, true, true]));
+        // same allocation: no copy was made
+        assert_eq!(buffer.values().as_ptr(), ptr);
+    }
+
+    #[test]
+    fn test_try_into_builder_shared() {
+        let buffer = BooleanBuffer::from(vec![true, false, true]);
+        let shared = buffer.clone();
+        let buffer = buffer.try_into_builder().unwrap_err();
+        assert_eq!(buffer, shared);
+    }
+
+    #[test]
+    fn test_try_into_builder_non_zero_offset() {
+        // an unshared buffer with a non zero bit offset cannot be converted
+        let buffer = BooleanBuffer::new(Buffer::from(vec![0b0000_0101u8]), 1, 2);
+        assert!(buffer.try_into_builder().is_err());
+    }
+
+    #[test]
+    fn test_try_into_builder_clears_padding() {
+        // bits between the logical length and the end of the last byte are
+        // cleared so subsequent appends see zeroed padding
+        let buffer = BooleanBuffer::new(Buffer::from(vec![0xFFu8]), 0, 3);
+        let mut builder = buffer.try_into_builder().unwrap();
+        builder.append(false);
+        builder.append(true);
+        assert_eq!(builder.finish().values(), &[0b0001_0111]);
+    }
+
+    #[test]
+    fn test_into_builder_or_clone() {
+        // unshared: reuses the allocation
+        let buffer = BooleanBuffer::from(vec![true, false]);
+        let ptr = buffer.values().as_ptr();
+        let mut builder = buffer.into_builder_or_clone();
+        builder.append(true);
+        let result = builder.finish();
+        assert_eq!(result, BooleanBuffer::from(vec![true, false, true]));
+        assert_eq!(result.values().as_ptr(), ptr);
+
+        // shared: copies, leaving the other reference intact
+        let shared = result.clone();
+        let mut builder = result.into_builder_or_clone();
+        builder.append(false);
+        let copied = builder.finish();
+        assert_eq!(copied, BooleanBuffer::from(vec![true, false, true, false]));
+        assert_eq!(shared, BooleanBuffer::from(vec![true, false, true]));
+
+        // non zero offset: copies, producing an offset 0 builder
+        let sliced = shared.slice(1, 2);
+        drop(shared);
+        let mut builder = sliced.into_builder_or_clone();
+        builder.append(true);
+        assert_eq!(
+            builder.finish(),
+            BooleanBuffer::from(vec![false, true, true])
+        );
     }
 
     #[test]
