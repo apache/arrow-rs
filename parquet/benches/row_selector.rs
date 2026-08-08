@@ -142,6 +142,37 @@ fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
             |b, (outer, other)| b.iter(|| hint::black_box(outer.and_then(other))),
         );
     }
+
+    // Sparse or clustered inner masks: once every set bit of `other` has been
+    // deposited the rest of the output is all zeros, so these shapes bound how
+    // much of the outer mask actually needs to be walked.
+    let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01);
+    let selected = outer.row_count();
+    let inner_cases: Vec<(&str, RowSelection)> = vec![
+        (
+            "inner_first_only",
+            RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
+                (0..selected).map(|i| i == 0),
+            )),
+        ),
+        (
+            "inner_front_cluster",
+            RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
+                (0..selected).map(|i| i < selected / 100),
+            )),
+        ),
+        (
+            "inner_sparse_0_1pct",
+            mask_algebra_operand(selected, 0, 0.001),
+        ),
+    ];
+    for (label, other) in inner_cases {
+        c.bench_with_input(
+            BenchmarkId::new("mask_and_then", format!("sparse_1pct/{label}")),
+            &(&outer, &other),
+            |b, (outer, other)| b.iter(|| hint::black_box(outer.and_then(other))),
+        );
+    }
 }
 
 /// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.

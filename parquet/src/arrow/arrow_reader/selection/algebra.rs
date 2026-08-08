@@ -373,17 +373,23 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     // next `k` bits of `other`.
     let mut other_bits = bit_stream(other);
     let mask_chunks = mask.bit_chunks();
-    let words = mask_chunks
-        .iter()
+    let mut buffer = MutableBuffer::from_len_zeroed(mask_chunks.num_u64s() * 8);
+    // Once every set bit of `other` has been deposited the rest of the output
+    // is all zeros, so stop walking `mask` and leave the pre-zeroed tail as is.
+    let mut remaining = other_true_count;
+    // `iter_padded` always pads a trailing word; `zip` drops it when
+    // `num_u64s` has no remainder word
+    let out_words = buffer.typed_data_mut::<u64>().iter_mut();
+    for (out, word) in out_words.zip(mask_chunks.iter_padded()) {
+        let deposited = deposit_word(word, &mut other_bits);
+        remaining -= deposited.count_ones() as usize;
         // BooleanBuffer words are little-endian
-        .map(|word| deposit_word(word, &mut other_bits).to_le());
-    // Soundness: `BitChunkIterator` is an `ExactSizeIterator`, so the upper
-    // bound reported through `map` is exact
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(words) };
-
-    let remainder_bytes = mask_chunks.remainder_len().div_ceil(8);
-    let remainder = deposit_word(mask_chunks.remainder_bits(), &mut other_bits);
-    buffer.extend_from_slice(&remainder.to_le_bytes()[..remainder_bytes]);
+        *out = deposited.to_le();
+        if remaining == 0 {
+            break;
+        }
+    }
+    buffer.truncate(mask_chunks.num_bytes());
 
     BooleanBuffer::new(buffer.into(), 0, mask.len())
 }
@@ -793,6 +799,34 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_mask_and_then_mask_sparse_inner_early_exit() {
+        // All of `other`'s set bits sit at the front, so the deposit loop
+        // stops early and the multi-word tail is bulk zero-filled.
+        let len = 1000;
+        let outer_bits: Vec<bool> = (0..len).map(|i| i % 7 == 0).collect();
+        let selected = outer_bits.iter().filter(|&&bit| bit).count();
+
+        for true_count in [1, 2, 64, selected - 1, selected] {
+            let inner_bits: Vec<bool> = (0..selected).map(|i| i < true_count).collect();
+
+            let outer = RowSelection::from_boolean_buffer(BooleanBuffer::from(outer_bits.clone()));
+            let inner = RowSelection::from_boolean_buffer(BooleanBuffer::from(inner_bits.clone()));
+
+            let result = outer.and_then(&inner);
+            let result = result.as_mask().expect("mask backing");
+            let actual: Vec<_> = (0..result.len()).map(|i| result.value(i)).collect();
+
+            let mut inner_iter = inner_bits.into_iter();
+            let expected: Vec<_> = outer_bits
+                .iter()
+                .map(|&selected| selected && inner_iter.next().expect("matching inner length"))
+                .collect();
+
+            assert_eq!(actual, expected, "true_count={true_count}");
         }
     }
 
