@@ -604,10 +604,22 @@ impl BooleanArray {
             return self;
         };
 
-        let mut builder = BooleanBufferBuilder::new(len);
-        builder.append_buffer(&self.values.slice(0, end));
-        builder.append_n(len - end, false);
-        BooleanArray::new(builder.finish(), self.nulls)
+        let mut_buffer_result = self.values.into_inner().into_mutable();
+        match mut_buffer_result {
+            Ok(mut mutable_buffer) => {
+                for i in end..len {
+                    bit_util::unset_bit(mutable_buffer.as_slice_mut(), i);
+                }
+                let boolean_buf = BooleanBuffer::new(mutable_buffer.into(), 0, len);
+                BooleanArray::new(boolean_buf, self.nulls)
+            }
+            Err(buf) => {
+                let mut builder = BooleanBufferBuilder::new(len);
+                builder.append_buffer(&BooleanBuffer::new(buf, 0, end));
+                builder.append_n(len - end, false);
+                BooleanArray::new(builder.finish(), self.nulls)
+            }
+        }
     }
 
     /// Deconstruct this array into its constituent parts
