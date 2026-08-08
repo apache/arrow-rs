@@ -352,18 +352,13 @@ where
     builder.finish()
 }
 
-/// Applies `other` to the selected rows of `mask`, both mask-backed.
-///
-/// After validation and the trivial fast paths, dispatches between two
-/// kernels on the operands' set-bit counts:
+/// Applies `other` to the selected rows of `mask`, dispatching between two
+/// kernels by estimated cost:
 ///
 /// - [`and_then_masks_sparse`] visits only set bits: ~`selected_count`
 ///   set-index steps plus an append per `other` set bit.
 /// - [`and_then_masks_dense`] visits every 64-bit word of `mask` exactly
 ///   once, regardless of how many bits are set.
-///
-/// Each is the faster choice in its own regime; the dispatch compares their
-/// cost models.
 fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let selected_count = mask.count_set_bits();
     match other.len().cmp(&selected_count) {
@@ -380,14 +375,11 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
-    // Cost model fitted from kernel sweeps over regular, random and
-    // clustered bit patterns: relative to a sparse set-index step, a sparse
-    // append costs ~16x and the dense kernel ~`len / 20` in total. Ties favor
-    // the sparse kernel: its wins over the dense kernel are pattern-dependent
-    // while its losses are bounded, so this never regresses the shapes it
-    // replaced while keeping the dense kernel's larger wins.
-    let sparse_cost = selected_count + 16 * other_true_count;
-    if 20 * sparse_cost < mask.len() {
+    // Empirically a sparse append costs ~16 set-index steps and the dense
+    // kernel ~`len / 20` steps; ties go sparse. Saturation guards 32-bit
+    // overflow.
+    let sparse_cost = selected_count.saturating_add(other_true_count.saturating_mul(16));
+    if sparse_cost <= mask.len() / 20 {
         and_then_masks_sparse(mask, other)
     } else {
         and_then_masks_dense(mask, other, other_true_count)
@@ -422,9 +414,8 @@ fn and_then_masks_sparse(mask: &BooleanBuffer, other: &BooleanBuffer) -> Boolean
     builder.finish()
 }
 
-/// Dense kernel of [`and_then_masks`]: deposits the bits of `other` onto the
-/// set positions of `mask`, one 64-bit word of `mask` at a time — a word with
-/// `k` set bits consumes the next `k` bits of `other`.
+/// Dense kernel of [`and_then_masks`]: a word of `mask` with `k` set bits
+/// consumes and deposits the next `k` bits of `other`.
 fn and_then_masks_dense(
     mask: &BooleanBuffer,
     other: &BooleanBuffer,
@@ -433,11 +424,10 @@ fn and_then_masks_dense(
     let mut other_bits = bit_stream(other);
     let mask_chunks = mask.bit_chunks();
     let mut buffer = MutableBuffer::from_len_zeroed(mask_chunks.num_u64s() * 8);
-    // Once every set bit of `other` has been deposited the rest of the output
-    // is all zeros, so stop walking `mask` and leave the pre-zeroed tail as is.
+    // The pre-zeroed tail is already correct once every set bit of `other`
+    // has been deposited
     let mut remaining = other_true_count;
-    // `iter_padded` always pads a trailing word; `zip` drops it when
-    // `num_u64s` has no remainder word
+    // `zip` drops `iter_padded`'s trailing pad word when there is no remainder
     let out_words = buffer.typed_data_mut::<u64>().iter_mut();
     for (out, word) in out_words.zip(mask_chunks.iter_padded()) {
         // A zero word selects nothing and its output is already zeroed
@@ -458,10 +448,7 @@ fn and_then_masks_dense(
 }
 
 /// Scatter the next `mask.count_ones()` bits of `bits` onto the set positions
-/// of `mask`, preserving order.
-///
-/// This is the software equivalent of the x86_64 BMI2 `_pdep_u64` instruction,
-/// should platform-specific acceleration ever be worthwhile.
+/// of `mask`, preserving order — a software `_pdep_u64`.
 fn deposit_word<I: Iterator<Item = u64>>(mask: u64, bits: &mut BitStream<I>) -> u64 {
     let mut mask = mask;
     let mut value = bits.take(mask.count_ones() as usize);
@@ -901,7 +888,7 @@ mod tests {
         let outer_bits: Vec<bool> = (0..len).map(|i| i % 997 == 0).collect();
         let selected = outer_bits.iter().filter(|&&bit| bit).count();
         assert!(
-            20 * (selected + 16 * selected) < len,
+            selected + 16 * selected <= len / 20,
             "must take sparse path"
         );
 
