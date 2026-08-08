@@ -46,6 +46,7 @@ mod int96_stats_roundtrip;
 mod invalid_utf8;
 mod io;
 mod large_string_overflow;
+mod parquet_testing;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;

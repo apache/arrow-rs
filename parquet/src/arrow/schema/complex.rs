@@ -85,9 +85,11 @@ impl ParquetField {
         list_data_type: Option<DataType>,
     ) -> Result<Self, ParquetError> {
         let arrow_field = match &list_data_type {
-            Some(DataType::List(field_hint))
-            | Some(DataType::LargeList(field_hint))
-            | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
+            Some(
+                DataType::List(field_hint)
+                | DataType::LargeList(field_hint)
+                | DataType::FixedSizeList(field_hint, _),
+            ) => Some(field_hint.as_ref()),
             Some(_) => {
                 return Err(general_err!(
                     "Internal error: should be validated earlier that list_data_type is only a type of list"

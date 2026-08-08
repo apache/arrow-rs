@@ -1716,7 +1716,7 @@ mod tests {
     impl Default for Test {
         fn default() -> Self {
             Self {
-                name: "".to_string(),
+                name: String::new(),
                 input_batches: vec![],
                 filters: vec![],
                 schema: None,

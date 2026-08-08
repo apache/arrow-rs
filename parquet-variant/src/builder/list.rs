@@ -222,7 +222,7 @@ where
     V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = V>>(&mut self, iter: T) {
-        for v in iter.into_iter() {
+        for v in iter {
             self.append_value(v);
         }
     }

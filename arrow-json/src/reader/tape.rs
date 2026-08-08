@@ -413,7 +413,7 @@ impl TapeDecoder {
                     iter.skip_whitespace();
                     *state = match next!(iter) {
                         b'"' => DecoderState::String,
-                        b @ b'-' | b @ b'0'..=b'9' => {
+                        b @ (b'-' | b'0'..=b'9') => {
                             self.bytes.push(b);
                             DecoderState::Number
                         }

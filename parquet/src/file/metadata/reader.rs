@@ -930,7 +930,7 @@ mod tests {
         let mut bytes = bytes_for_range(452505..len);
         loop {
             match reader.try_parse_sized(&bytes, len) {
-                Ok(_) => break,
+                Ok(()) => break,
                 Err(ParquetError::NeedMoreData(needed)) => {
                     bytes = bytes_for_range(len - needed as u64..len);
                     if reader.has_metadata() {

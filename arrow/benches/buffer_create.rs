@@ -19,7 +19,7 @@
 extern crate criterion;
 use arrow::util::test_util::seedable_rng;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Uniform;
 
 use arrow::{
