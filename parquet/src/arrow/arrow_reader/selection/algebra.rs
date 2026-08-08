@@ -23,7 +23,7 @@
 //! [`BooleanBuffer`] masks.
 
 use super::{MaskRunIter, RowSelection, RowSelectionInner, RowSelector};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
@@ -368,29 +368,94 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
-    let mut builder = BooleanBufferBuilder::new(mask.len());
-    let mut outer_set_indices = mask.set_indices();
-    let mut next_selected_ordinal = 0usize;
-    let mut cursor = 0usize;
+    // Deposit the bits of `other` into the set positions of `mask`, one
+    // 64-bit word of `mask` at a time: a word with `k` set bits consumes the
+    // next `k` bits of `other`.
+    let mut other_bits = BitStream::new(other);
+    let mask_chunks = mask.bit_chunks();
+    let words = mask_chunks
+        .iter()
+        .map(|word| deposit_word(word, &mut other_bits));
+    // Soundness: `BitChunks::iter` correctly reports its upper bound
+    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(words) };
 
-    for selected_ordinal in other.set_indices() {
-        let skip = selected_ordinal - next_selected_ordinal;
-        let set_idx = outer_set_indices
-            .nth(skip)
-            .expect("validated other length matches selected row count");
-        if set_idx > cursor {
-            builder.append_n(set_idx - cursor, false);
+    let remainder_bytes = mask_chunks.remainder_len().div_ceil(8);
+    let remainder = deposit_word(mask_chunks.remainder_bits(), &mut other_bits);
+    buffer.extend_from_slice(&remainder.to_le_bytes()[..remainder_bytes]);
+
+    BooleanBuffer::new(buffer.into(), 0, mask.len())
+}
+
+/// Scatter the next `mask.count_ones()` bits of `bits` onto the set positions
+/// of `mask`, preserving order.
+fn deposit_word<I: Iterator<Item = u64>>(mask: u64, bits: &mut BitStream<I>) -> u64 {
+    let mut mask = mask;
+    let mut bits = bits.take(mask.count_ones() as usize);
+    let mut out = 0u64;
+    // Once `bits` is exhausted the remaining set positions all deposit zeros
+    while bits != 0 {
+        let lowest = mask & mask.wrapping_neg();
+        if bits & 1 == 1 {
+            out |= lowest;
         }
-        builder.append(true);
-        cursor = set_idx + 1;
-        next_selected_ordinal = selected_ordinal + 1;
+        bits >>= 1;
+        mask &= mask - 1;
     }
+    out
+}
 
-    if cursor < mask.len() {
-        builder.append_n(mask.len() - cursor, false);
+/// Sequential little-endian reader of the bits of a [`BooleanBuffer`].
+struct BitStream<I: Iterator<Item = u64>> {
+    words: I,
+    /// Low `available` bits are the next unconsumed bits; higher bits are zero
+    current: u64,
+    available: usize,
+}
+
+impl<'a>
+    BitStream<
+        std::iter::Chain<
+            arrow_buffer::bit_chunk_iterator::BitChunkIterator<'a>,
+            std::iter::Once<u64>,
+        >,
+    >
+{
+    fn new(buffer: &'a BooleanBuffer) -> Self {
+        let chunks = buffer.bit_chunks();
+        let remainder = chunks.remainder_bits();
+        Self {
+            words: chunks.iter().chain(std::iter::once(remainder)),
+            current: 0,
+            available: 0,
+        }
     }
+}
 
-    builder.finish()
+impl<I: Iterator<Item = u64>> BitStream<I> {
+    /// Consume the next `k` bits (`k <= 64`), returned in the low bits
+    fn take(&mut self, k: usize) -> u64 {
+        debug_assert!(k <= 64);
+        if k == 0 {
+            return 0;
+        }
+        let mut value = self.current;
+        if k <= self.available {
+            self.available -= k;
+            self.current = if k == 64 { 0 } else { self.current >> k };
+        } else {
+            let have = self.available;
+            let next = self.words.next().unwrap_or(0);
+            // `have < k <= 64` keeps this shift in range
+            value |= next << have;
+            let used = k - have;
+            self.current = if used == 64 { 0 } else { next >> used };
+            self.available = 64 - used;
+        }
+        if k < 64 {
+            value &= (1u64 << k) - 1;
+        }
+        value
+    }
 }
 
 #[cfg(test)]
