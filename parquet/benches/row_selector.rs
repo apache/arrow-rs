@@ -192,9 +192,8 @@ fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
         &inner,
     );
 
-    // Family 2: inner shape sweep, outer sparse 1%. Once every set bit of
-    // `inner` has been deposited the rest of the output is all zeros, so
-    // these shapes bound how much of the outer mask needs to be walked.
+    // Family 2: inner shape sweep, outer sparse 1% — all route to the sparse
+    // kernel.
     let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01);
     let selected = outer.row_count();
     let inner_cases: Vec<(&str, RowSelection)> = vec![
@@ -224,27 +223,43 @@ fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
         );
     }
 
-    // Family 3: dense outer, sparse inner
+    // Family 3: dense outer, sparse inners — all route to the dense kernel.
+    // Front-loaded inners exercise its early exit; a trailing bit forces a
+    // full walk.
     let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.9);
     let selected = outer.row_count();
-    let inner = single_row_selection(selected, selected - 1);
-    bench_and_then_case(
-        c,
-        GROUP,
-        "outer_dense_90pct/inner_last_only".to_string(),
-        &outer,
-        &inner,
-    );
+    let inner_cases: Vec<(&str, RowSelection)> = vec![
+        ("inner_first_only", single_row_selection(selected, 0)),
+        (
+            "inner_front_cluster",
+            RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
+                (0..selected).map(|i| i < selected / 100),
+            )),
+        ),
+        (
+            "inner_last_only",
+            single_row_selection(selected, selected - 1),
+        ),
+    ];
+    for (label, inner) in &inner_cases {
+        bench_and_then_case(
+            c,
+            GROUP,
+            format!("outer_dense_90pct/{label}"),
+            &outer,
+            inner,
+        );
+    }
 }
 
 /// Benchmarks shapes near the sparse/dense kernel dispatch boundary of
 /// mask-backed `and_then`.
 ///
-/// The dispatch estimates `20 * (selected + 16 * other_true_count)` against
-/// `len`, so with a single-bit inner the boundary sits at an outer density of
-/// 1/20 words (`every_20`), and with a random ~33% inner at an outer period
-/// of ~126. A discontinuity across adjacent cases would indicate a misplaced
-/// threshold.
+/// The dispatch estimates `selected + 16 * other_true_count` against
+/// `len / 20`, so with a single-bit inner the boundary sits at an outer
+/// density of 1/20 words (`every_20`), and with a random ~33% inner at an
+/// outer period of ~126. A discontinuity across adjacent cases would indicate
+/// a misplaced threshold.
 fn bench_mask_backed_and_then_boundary(c: &mut Criterion, selection_ratio: f64) {
     const GROUP: &str = "mask_and_then_boundary";
 
