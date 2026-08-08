@@ -234,6 +234,7 @@ name = "arrow-avro"
 version = "59.2.0"
 dependencies = [
  "apache-avro",
+ "arrow",
  "arrow-array",
  "arrow-buffer",
  "arrow-data",
@@ -426,6 +427,7 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "tempfile",
+ "tokio",
  "zstd",
 ]
 
