@@ -28,7 +28,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float16Type, Float32Type,
     Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
-    TimestampMicrosecondType, TimestampNanosecondType,
+    TimestampMicrosecondType, TimestampNanosecondType, UInt8Type, UInt16Type, UInt32Type,
 };
 use arrow::error::Result;
 use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
@@ -1029,6 +1029,23 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
         DataType::Int64 => {
             primitive_conversion_single_value!(Int64Type, typed_value, index)
         }
+        DataType::UInt8 => {
+            generic_conversion_single_value!(UInt8Type, as_primitive, i16::from, typed_value, index)
+        }
+        DataType::UInt16 => generic_conversion_single_value!(
+            UInt16Type,
+            as_primitive,
+            i32::from,
+            typed_value,
+            index
+        ),
+        DataType::UInt32 => generic_conversion_single_value!(
+            UInt32Type,
+            as_primitive,
+            i64::from,
+            typed_value,
+            index
+        ),
         DataType::Float16 => {
             primitive_conversion_single_value!(Float16Type, typed_value, index)
         }
@@ -1174,10 +1191,10 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
     let new_data_type = match data_type {
         // Primitive arrow types that have a direct variant counterpart are allowed
         Null | Boolean => borrow!(),
-        Int8 | Int16 | Int32 | Int64 | Float32 | Float64 => borrow!(),
+        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | Float32 | Float64 => borrow!(),
 
-        // Unsigned integers and half-float are not allowed
-        UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
+        // UInt64 and half-float have no canonical Variant mapping
+        UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
         //

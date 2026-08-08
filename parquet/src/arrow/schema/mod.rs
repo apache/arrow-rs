@@ -39,6 +39,8 @@ pub mod virtual_type;
 
 use super::PARQUET_FIELD_ID_META_KEY;
 use crate::arrow::ProjectionMask;
+#[cfg(feature = "variant_experimental")]
+use crate::arrow::schema::extension::validate_variant_type;
 use crate::arrow::schema::extension::{
     has_extension_type, logical_type_for_binary, logical_type_for_binary_view,
     logical_type_for_fixed_size_binary, logical_type_for_string, logical_type_for_struct,
@@ -802,17 +804,33 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             if fields.is_empty() {
                 return Err(arrow_err!("Parquet does not support writing empty structs",));
             }
+            let logical_type = logical_type_for_struct(field);
+            #[cfg(feature = "variant_experimental")]
+            let is_variant = matches!(&logical_type, Some(LogicalType::Variant(_)));
+            #[cfg(feature = "variant_experimental")]
+            let variant_fields = if is_variant {
+                Some(variant_fields_for_parquet(fields)?)
+            } else {
+                None
+            };
+            #[cfg(feature = "variant_experimental")]
+            let fields = variant_fields.as_ref().unwrap_or(fields);
             // recursively convert children to types/nodes
             let fields = fields
                 .iter()
                 .map(|f| arrow_to_parquet_type(f, coerce_types).map(Arc::new))
                 .collect::<Result<_>>()?;
-            Type::group_type_builder(name)
+            let parquet_type = Type::group_type_builder(name)
                 .with_fields(fields)
                 .with_repetition(repetition)
                 .with_id(id)
-                .with_logical_type(logical_type_for_struct(field))
-                .build()
+                .with_logical_type(logical_type)
+                .build()?;
+            #[cfg(feature = "variant_experimental")]
+            if is_variant {
+                validate_variant_type(&parquet_type)?;
+            }
+            Ok(parquet_type)
         }
         DataType::Map(field, _) => {
             if let DataType::Struct(struct_fields) = field.data_type() {
@@ -865,6 +883,63 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             arrow_to_parquet_type(&ree_value_field, coerce_types)
         }
     }
+}
+
+#[cfg(feature = "variant_experimental")]
+fn variant_fields_for_parquet(fields: &Fields) -> Result<Fields> {
+    fields
+        .iter()
+        .map(|field| {
+            if field.name() == "typed_value" {
+                variant_typed_value_for_parquet(field)
+            } else {
+                Ok(field.clone())
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "variant_experimental")]
+fn variant_node_for_parquet(field: &FieldRef) -> Result<FieldRef> {
+    let DataType::Struct(fields) = field.data_type() else {
+        return Err(arrow_err!(
+            "Invalid shredded Variant field: expected Struct, got {}",
+            field.data_type()
+        ));
+    };
+    let fields = variant_fields_for_parquet(fields)?;
+    Ok(Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Struct(fields)),
+    ))
+}
+
+#[cfg(feature = "variant_experimental")]
+fn variant_typed_value_for_parquet(field: &FieldRef) -> Result<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::UInt8 => DataType::Int16,
+        DataType::UInt16 => DataType::Int32,
+        DataType::UInt32 => DataType::Int64,
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(variant_node_for_parquet)
+                .collect::<Result<_>>()?,
+        ),
+        DataType::List(element) => DataType::List(variant_node_for_parquet(element)?),
+        DataType::LargeList(element) => DataType::LargeList(variant_node_for_parquet(element)?),
+        DataType::ListView(element) => DataType::ListView(variant_node_for_parquet(element)?),
+        DataType::LargeListView(element) => {
+            DataType::LargeListView(variant_node_for_parquet(element)?)
+        }
+        DataType::FixedSizeList(element, size) => {
+            DataType::FixedSizeList(variant_node_for_parquet(element)?, *size)
+        }
+        data_type => data_type.clone(),
+    };
+    Ok(Arc::new(field.as_ref().clone().with_data_type(data_type)))
 }
 
 fn field_id(field: &Field) -> Option<i32> {
@@ -2367,6 +2442,87 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "variant_experimental")]
+    fn variant_nested_unsigned() -> Result<()> {
+        use parquet_variant_compute::VariantType;
+
+        let node = |data_type| {
+            DataType::Struct(Fields::from(vec![
+                Field::new("value", DataType::Binary, true),
+                Field::new("typed_value", data_type, true),
+            ]))
+        };
+        let list_element = Arc::new(Field::new("element", node(DataType::UInt8), false));
+        let typed_value = DataType::Struct(Fields::from(vec![
+            Field::new("number", node(DataType::UInt32), false),
+            Field::new("items", node(DataType::List(list_element)), false),
+        ]));
+        let variant = Field::new(
+            "variant",
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+                Field::new("typed_value", typed_value, true),
+            ])),
+            true,
+        )
+        .with_extension_type(VariantType);
+
+        let parquet_schema = ArrowSchemaConverter::new().convert(&Schema::new(vec![variant]))?;
+        let number = parquet_schema.column(3);
+        let item = parquet_schema.column(6);
+
+        assert_eq!(number.physical_type(), PhysicalType::INT64);
+        assert_eq!(number.logical_type_ref(), None);
+        assert_eq!(item.physical_type(), PhysicalType::INT32);
+        assert_eq!(
+            item.logical_type_ref(),
+            Some(&LogicalType::integer(16, true))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "variant_experimental")]
+    fn reject_unsigned_variant_with_hint() {
+        use parquet_variant_compute::VariantType;
+
+        let parquet_type = parse_message_type(
+            "message schema {
+                optional group variant (VARIANT) {
+                    required binary metadata;
+                    optional binary value;
+                    optional int32 typed_value (INTEGER(32, false));
+                }
+            }",
+        )
+        .unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+        let variant = Field::new(
+            "variant",
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+                Field::new("typed_value", DataType::UInt32, true),
+            ])),
+            true,
+        )
+        .with_extension_type(VariantType);
+        let metadata = vec![KeyValue::new(
+            crate::arrow::ARROW_SCHEMA_META_KEY.to_string(),
+            Some(encode_arrow_schema(&Schema::new(vec![variant]))),
+        )];
+
+        let error = parquet_to_arrow_schema(&parquet_schema, Some(&metadata)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Illegal shredded value type: UInt32")
+        );
     }
 
     #[test]

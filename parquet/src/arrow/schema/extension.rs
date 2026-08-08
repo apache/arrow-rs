@@ -49,6 +49,7 @@ pub(crate) fn try_add_extension_type(
     Ok(match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
         LogicalType::Variant(_) => {
+            validate_variant_type(parquet_type)?;
             let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
             arrow_field
@@ -97,6 +98,39 @@ pub(crate) fn try_add_extension_type(
         }
         _ => arrow_field,
     })
+}
+
+#[cfg(feature = "variant_experimental")]
+pub(crate) fn validate_variant_type(parquet_type: &Type) -> Result<(), ParquetError> {
+    use crate::basic::ConvertedType;
+
+    match parquet_type {
+        Type::PrimitiveType { basic_info, .. } => {
+            let bit_width = match basic_info.logical_type_ref() {
+                Some(LogicalType::Integer(integer)) if !integer.is_signed => {
+                    Some(integer.bit_width)
+                }
+                _ => match basic_info.converted_type() {
+                    ConvertedType::UINT_8 => Some(8),
+                    ConvertedType::UINT_16 => Some(16),
+                    ConvertedType::UINT_32 => Some(32),
+                    ConvertedType::UINT_64 => Some(64),
+                    _ => None,
+                },
+            };
+            if let Some(bit_width) = bit_width {
+                return Err(ParquetError::General(format!(
+                    "Illegal shredded value type: UInt{bit_width}"
+                )));
+            }
+        }
+        Type::GroupType { fields, .. } => {
+            for field in fields {
+                validate_variant_type(field)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Returns true if [`try_add_extension_type`] would add an extension type

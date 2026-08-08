@@ -144,20 +144,69 @@ pub use parquet_variant_compute::*;
 mod tests {
     use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::ArrowReaderBuilder;
+    use crate::basic::{LogicalType, Type as PhysicalType};
     use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
     use crate::file::reader::ChunkReader;
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{ArrayRef, RecordBatch};
-    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Schema};
     use bytes::Bytes;
     use parquet_variant::{Variant, VariantBuilderExt};
-    use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType};
+    use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType, shred_variant};
     use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
     fn roundtrip_basic() {
         roundtrip(variant_array());
+    }
+
+    #[test]
+    fn roundtrip_unsigned() {
+        let cases = [
+            (
+                vec![Variant::Int16(0), Variant::Int16(i16::from(u8::MAX))],
+                DataType::UInt8,
+                DataType::Int16,
+                PhysicalType::INT32,
+                Some(LogicalType::integer(16, true)),
+            ),
+            (
+                vec![Variant::Int32(0), Variant::Int32(i32::from(u16::MAX))],
+                DataType::UInt16,
+                DataType::Int32,
+                PhysicalType::INT32,
+                None,
+            ),
+            (
+                vec![Variant::Int64(0), Variant::Int64(i64::from(u32::MAX))],
+                DataType::UInt32,
+                DataType::Int64,
+                PhysicalType::INT64,
+                None,
+            ),
+        ];
+
+        for (expected, data_type, read_type, physical_type, logical_type) in cases {
+            let input = VariantArray::from_iter(expected.iter().cloned());
+            let array = shred_variant(&input, &data_type).unwrap();
+            assert_eq!(array.typed_value_column().unwrap().data_type(), &data_type);
+
+            let batch = variant_array_to_batch(array);
+            let bytes = Bytes::from(write_to_buffer(&batch));
+            let metadata = read_metadata(&bytes);
+            let typed_value = metadata.file_metadata().schema_descr().column(2);
+            assert_eq!(typed_value.physical_type(), physical_type);
+            assert_eq!(typed_value.logical_type_ref(), logical_type.as_ref());
+
+            let batch = read_to_batch(bytes);
+            let column = batch.column_by_name("data").unwrap();
+            let result = VariantArray::try_new(column).unwrap();
+            assert_eq!(result.typed_value_column().unwrap().data_type(), &read_type);
+            for (index, expected) in expected.into_iter().enumerate() {
+                assert_eq!(result.value(index), expected);
+            }
+        }
     }
 
     /// Ensure a file with Variant LogicalType, written by another writer in
