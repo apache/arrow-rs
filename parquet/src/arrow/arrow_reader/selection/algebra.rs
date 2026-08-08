@@ -352,6 +352,18 @@ where
     builder.finish()
 }
 
+/// Applies `other` to the selected rows of `mask`, both mask-backed.
+///
+/// After validation and the trivial fast paths, dispatches between two
+/// kernels on the operands' set-bit counts:
+///
+/// - [`and_then_masks_sparse`] visits only set bits: ~`selected_count`
+///   set-index steps plus an append per `other` set bit.
+/// - [`and_then_masks_dense`] visits every 64-bit word of `mask` exactly
+///   once, regardless of how many bits are set.
+///
+/// Each is the faster choice in its own regime; the dispatch compares their
+/// cost models.
 fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let selected_count = mask.count_set_bits();
     match other.len().cmp(&selected_count) {
@@ -368,9 +380,56 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
-    // Deposit the bits of `other` into the set positions of `mask`, one
-    // 64-bit word of `mask` at a time: a word with `k` set bits consumes the
-    // next `k` bits of `other`.
+    // Cost model fitted from kernel sweeps over regular, random and
+    // clustered bit patterns: relative to a sparse set-index step, a sparse
+    // append costs ~16x and the dense kernel ~`len / 20` in total. Ties favor
+    // the sparse kernel: its wins over the dense kernel are pattern-dependent
+    // while its losses are bounded, so this never regresses the shapes it
+    // replaced while keeping the dense kernel's larger wins.
+    let sparse_cost = selected_count + 16 * other_true_count;
+    if 20 * sparse_cost < mask.len() {
+        and_then_masks_sparse(mask, other)
+    } else {
+        and_then_masks_dense(mask, other, other_true_count)
+    }
+}
+
+/// Sparse kernel of [`and_then_masks`]: iterates the set bits of both sides
+/// instead of every word of `mask`, bulk-filling the unset gaps.
+fn and_then_masks_sparse(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    let mut builder = BooleanBufferBuilder::new(mask.len());
+    let mut outer_set_indices = mask.set_indices();
+    let mut next_selected_ordinal = 0usize;
+    let mut cursor = 0usize;
+
+    for selected_ordinal in other.set_indices() {
+        let skip = selected_ordinal - next_selected_ordinal;
+        let set_idx = outer_set_indices
+            .nth(skip)
+            .expect("validated other length matches selected row count");
+        if set_idx > cursor {
+            builder.append_n(set_idx - cursor, false);
+        }
+        builder.append(true);
+        cursor = set_idx + 1;
+        next_selected_ordinal = selected_ordinal + 1;
+    }
+
+    if cursor < mask.len() {
+        builder.append_n(mask.len() - cursor, false);
+    }
+
+    builder.finish()
+}
+
+/// Dense kernel of [`and_then_masks`]: deposits the bits of `other` onto the
+/// set positions of `mask`, one 64-bit word of `mask` at a time — a word with
+/// `k` set bits consumes the next `k` bits of `other`.
+fn and_then_masks_dense(
+    mask: &BooleanBuffer,
+    other: &BooleanBuffer,
+    other_true_count: usize,
+) -> BooleanBuffer {
     let mut other_bits = bit_stream(other);
     let mask_chunks = mask.bit_chunks();
     let mut buffer = MutableBuffer::from_len_zeroed(mask_chunks.num_u64s() * 8);
@@ -381,6 +440,10 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     // `num_u64s` has no remainder word
     let out_words = buffer.typed_data_mut::<u64>().iter_mut();
     for (out, word) in out_words.zip(mask_chunks.iter_padded()) {
+        // A zero word selects nothing and its output is already zeroed
+        if word == 0 {
+            continue;
+        }
         let deposited = deposit_word(word, &mut other_bits);
         remaining -= deposited.count_ones() as usize;
         // BooleanBuffer words are little-endian
@@ -827,6 +890,42 @@ mod tests {
                 .collect();
 
             assert_eq!(actual, expected, "true_count={true_count}");
+        }
+    }
+
+    #[test]
+    fn test_mask_and_then_mask_sparse_fallback() {
+        // Sparse mask over a large domain with few `other` set bits routes to
+        // the per-set-bit fallback path.
+        let len = 200_000;
+        let outer_bits: Vec<bool> = (0..len).map(|i| i % 997 == 0).collect();
+        let selected = outer_bits.iter().filter(|&&bit| bit).count();
+        assert!(
+            20 * (selected + 16 * selected) < len,
+            "must take sparse path"
+        );
+
+        let inner_patterns: Vec<Vec<bool>> = vec![
+            (0..selected).map(|i| i == 0).collect(),
+            (0..selected).map(|i| i + 1 == selected).collect(),
+            (0..selected).map(|i| i % 79 == 3).collect(),
+        ];
+
+        for (case, inner_bits) in inner_patterns.into_iter().enumerate() {
+            let outer = RowSelection::from_boolean_buffer(BooleanBuffer::from(outer_bits.clone()));
+            let inner = RowSelection::from_boolean_buffer(BooleanBuffer::from(inner_bits.clone()));
+
+            let result = outer.and_then(&inner);
+            let result = result.as_mask().expect("mask backing");
+            let actual: Vec<_> = (0..result.len()).map(|i| result.value(i)).collect();
+
+            let mut inner_iter = inner_bits.into_iter();
+            let expected: Vec<_> = outer_bits
+                .iter()
+                .map(|&selected| selected && inner_iter.next().expect("matching inner length"))
+                .collect();
+
+            assert_eq!(actual, expected, "case={case}");
         }
     }
 
