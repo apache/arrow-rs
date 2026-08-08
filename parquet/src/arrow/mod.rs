@@ -180,9 +180,13 @@
 //! ```
 
 experimental!(mod array_reader);
+// Re-exported (beyond the `experimental` feature) so `file::metadata::dictionary`
+// can PLAIN-decode a raw dictionary page without duplicating this logic.
+pub(crate) use array_reader::ByteArrayDecoderPlain;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
+pub(crate) use buffer::offset_buffer::OffsetBuffer;
 mod decoder;
 
 #[cfg(feature = "async")]

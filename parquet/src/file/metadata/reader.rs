@@ -19,6 +19,8 @@
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
+#[cfg(feature = "arrow")]
+use crate::file::metadata::dictionary::decode_dictionary_page;
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
@@ -26,6 +28,8 @@ use crate::file::metadata::{
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
+#[cfg(feature = "arrow")]
+use arrow_array::ArrayRef;
 use bytes::Bytes;
 use std::sync::Arc;
 use std::{io::Read, ops::Range};
@@ -470,6 +474,48 @@ impl ParquetMetaDataReader {
         self.load_page_index_with_remainder(fetch, None).await
     }
 
+    /// Reads and decodes the dictionary page of a column chunk into an Arrow array.
+    ///
+    /// Returns `Ok(None)` if the column chunk has no dictionary page, or if
+    /// its physical type is not `BYTE_ARRAY` (the only physical type
+    /// currently supported).
+    ///
+    /// Note this does not verify that the *entire* column chunk is
+    /// dictionary-encoded (i.e. that the dictionary contains every value in
+    /// the chunk) -- callers that need that guarantee should check
+    /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`] themselves.
+    #[cfg(feature = "arrow")]
+    pub fn read_column_dictionary<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        let Some((start, end)) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)?
+        else {
+            return Ok(None);
+        };
+        let length = usize::try_from(end - start)?;
+        let buffer = reader.get_bytes(start, length)?;
+        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
+    }
+
+    /// Asynchronous version of [`Self::read_column_dictionary`].
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn read_column_dictionary_async<F: MetadataFetch>(
+        mut fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        let Some((start, end)) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)?
+        else {
+            return Ok(None);
+        };
+        let buffer = fetch.fetch(start..end).await?;
+        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
+    }
+
     #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
@@ -838,6 +884,41 @@ fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<Par
         DecodeResult::Data(metadata) => Ok(metadata),
         DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
     }
+}
+
+/// Returns the `[start, end)` byte range of a column chunk's dictionary
+/// page, or `None` if the column chunk has no dictionary page or is not a
+/// `BYTE_ARRAY` column (the only physical type [`decode_dictionary_page`]
+/// currently supports).
+#[cfg(feature = "arrow")]
+fn dictionary_page_byte_range(
+    metadata: &ParquetMetaData,
+    row_group_idx: usize,
+    column_idx: usize,
+) -> Result<Option<(u64, u64)>> {
+    let column_metadata = metadata.row_group(row_group_idx).column(column_idx);
+    let column_descriptor = column_metadata.column_descr();
+
+    if column_descriptor.physical_type() != crate::basic::Type::BYTE_ARRAY {
+        return Ok(None);
+    }
+    let Some(start) = column_metadata.dictionary_page_offset() else {
+        return Ok(None);
+    };
+    let start: u64 = start
+        .try_into()
+        .map_err(|_| ParquetError::General("Dictionary page offset is invalid".to_string()))?;
+    let end: u64 = column_metadata
+        .data_page_offset()
+        .try_into()
+        .map_err(|_| ParquetError::General("Data page offset is invalid".to_string()))?;
+    if end < start {
+        return Err(ParquetError::General(
+            "Data page offset precedes dictionary page offset".to_string(),
+        ));
+    }
+
+    Ok(Some((start, end)))
 }
 
 #[cfg(test)]
