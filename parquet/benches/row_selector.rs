@@ -104,57 +104,101 @@ fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
     }
 }
 
-/// Benchmarks mask-backed `and_then`, taken when both operands are mask-backed.
+/// Registers one mask-backed `and_then` case under `group/label`.
+fn bench_and_then_case(
+    c: &mut Criterion,
+    group: &str,
+    label: String,
+    outer: &RowSelection,
+    inner: &RowSelection,
+) {
+    c.bench_with_input(
+        BenchmarkId::new(group, label),
+        &(outer, inner),
+        |b, (outer, inner)| b.iter(|| hint::black_box(outer.and_then(inner))),
+    );
+}
+
+/// A mask-backed selection over `len` rows selecting only the row at `index`.
+fn single_row_selection(len: usize, index: usize) -> RowSelection {
+    RowSelection::from_boolean_buffer(BooleanBuffer::from_iter((0..len).map(|i| i == index)))
+}
+
+/// A mask-backed selection over [`MASK_ALGEBRA_ROWS`] selecting every
+/// `period`-th row.
+fn periodic_selection(period: usize) -> RowSelection {
+    RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
+        (0..MASK_ALGEBRA_ROWS).map(|i| i % period == 0),
+    ))
+}
+
+/// Benchmarks mask-backed `and_then`, grouped into three case families:
 ///
-/// `and_then` deposits the bits of `other` onto the set positions of the outer
-/// mask, so its cost depends on the outer mask's density and clustering.
-/// `other` must have exactly `outer.row_count()` rows, so operands are built
+/// 1. `outer_*/inner_random_third` — outer shape sweep against the inner
+///    produced by a moderately selective filter.
+/// 2. `outer_sparse_1pct/inner_*` — inner shape sweep over a sparse outer;
+///    sparse and front-clustered inners exercise the early exit.
+/// 3. `outer_dense_90pct/inner_*` — dense outer with a sparse inner, where
+///    the word-wise kernel wins the most over per-set-bit iteration.
+///
+/// `inner` must have exactly `outer.row_count()` rows, so operands are built
 /// per case rather than shared with the other algebra benchmarks.
 fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
-    let cases: Vec<(&str, RowSelection)> = vec![
+    const GROUP: &str = "mask_and_then";
+
+    // Family 1: outer shape sweep, inner random ~33%
+    let outer_cases: Vec<(&str, RowSelection)> = vec![
         (
-            "sparse_1pct",
+            "outer_sparse_1pct",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01),
         ),
         (
-            "random_third",
+            "outer_random_third",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, selection_ratio),
         ),
         (
-            "random_third_offset3",
+            "outer_random_third_offset3",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 3, selection_ratio),
         ),
         (
-            "dense_90pct",
+            "outer_dense_90pct",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.9),
         ),
         (
-            "run32",
+            "outer_run32",
             RowSelection::from_boolean_buffer(generate_run_length_mask(MASK_ALGEBRA_ROWS, 32)),
         ),
     ];
-
-    for (label, outer) in cases {
-        let other = mask_algebra_operand(outer.row_count(), 3, selection_ratio);
-        c.bench_with_input(
-            BenchmarkId::new("mask_and_then", label),
-            &(&outer, &other),
-            |b, (outer, other)| b.iter(|| hint::black_box(outer.and_then(other))),
+    for (label, outer) in &outer_cases {
+        let inner = mask_algebra_operand(outer.row_count(), 3, selection_ratio);
+        bench_and_then_case(
+            c,
+            GROUP,
+            format!("{label}/inner_random_third"),
+            outer,
+            &inner,
         );
     }
 
-    // Sparse or clustered inner masks: once every set bit of `other` has been
-    // deposited the rest of the output is all zeros, so these shapes bound how
-    // much of the outer mask actually needs to be walked.
+    // A weakly selective inner: the densest shape that still avoids the
+    // all-ones fast path, maximizing per-word deposit work.
+    let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, selection_ratio);
+    let inner = mask_algebra_operand(outer.row_count(), 3, 0.9);
+    bench_and_then_case(
+        c,
+        GROUP,
+        "outer_random_third/inner_dense_90pct".to_string(),
+        &outer,
+        &inner,
+    );
+
+    // Family 2: inner shape sweep, outer sparse 1%. Once every set bit of
+    // `inner` has been deposited the rest of the output is all zeros, so
+    // these shapes bound how much of the outer mask needs to be walked.
     let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01);
     let selected = outer.row_count();
     let inner_cases: Vec<(&str, RowSelection)> = vec![
-        (
-            "inner_first_only",
-            RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
-                (0..selected).map(|i| i == 0),
-            )),
-        ),
+        ("inner_first_only", single_row_selection(selected, 0)),
         (
             "inner_front_cluster",
             RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
@@ -165,12 +209,68 @@ fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
             "inner_sparse_0_1pct",
             mask_algebra_operand(selected, 0, 0.001),
         ),
+        (
+            "inner_last_only",
+            single_row_selection(selected, selected - 1),
+        ),
     ];
-    for (label, other) in inner_cases {
-        c.bench_with_input(
-            BenchmarkId::new("mask_and_then", format!("sparse_1pct/{label}")),
-            &(&outer, &other),
-            |b, (outer, other)| b.iter(|| hint::black_box(outer.and_then(other))),
+    for (label, inner) in &inner_cases {
+        bench_and_then_case(
+            c,
+            GROUP,
+            format!("outer_sparse_1pct/{label}"),
+            &outer,
+            inner,
+        );
+    }
+
+    // Family 3: dense outer, sparse inner
+    let outer = mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.9);
+    let selected = outer.row_count();
+    let inner = single_row_selection(selected, selected - 1);
+    bench_and_then_case(
+        c,
+        GROUP,
+        "outer_dense_90pct/inner_last_only".to_string(),
+        &outer,
+        &inner,
+    );
+}
+
+/// Benchmarks shapes near the sparse/dense kernel dispatch boundary of
+/// mask-backed `and_then`.
+///
+/// The dispatch estimates `20 * (selected + 16 * other_true_count)` against
+/// `len`, so with a single-bit inner the boundary sits at an outer density of
+/// 1/20 words (`every_20`), and with a random ~33% inner at an outer period
+/// of ~126. A discontinuity across adjacent cases would indicate a misplaced
+/// threshold.
+fn bench_mask_backed_and_then_boundary(c: &mut Criterion, selection_ratio: f64) {
+    const GROUP: &str = "mask_and_then_boundary";
+
+    // Family 1: periodic outer, single-bit inner; boundary at `every_20`
+    for period in [32, 24, 20, 16, 8] {
+        let outer = periodic_selection(period);
+        let inner = single_row_selection(outer.row_count(), outer.row_count() - 1);
+        bench_and_then_case(
+            c,
+            GROUP,
+            format!("outer_every_{period}/inner_last_only"),
+            &outer,
+            &inner,
+        );
+    }
+
+    // Family 2: periodic outer, random ~33% inner; boundary at ~`every_126`
+    for period in [200, 133, 100, 50] {
+        let outer = periodic_selection(period);
+        let inner = mask_algebra_operand(outer.row_count(), 3, selection_ratio);
+        bench_and_then_case(
+            c,
+            GROUP,
+            format!("outer_every_{period}/inner_random_third"),
+            &outer,
+            &inner,
         );
     }
 }
@@ -275,6 +375,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     bench_mask_backed_algebra(c, selection_ratio);
     bench_mask_backed_and_then(c, selection_ratio);
+    bench_mask_backed_and_then_boundary(c, selection_ratio);
     bench_mask_backed_conversion(c, total_rows, selection_ratio);
 }
 
