@@ -145,6 +145,41 @@ pub fn zip(
     zip_impl(mask, &truthy, truthy_is_scalar, &falsy, falsy_is_scalar)
 }
 
+fn count_true_runs(mask: &BooleanBuffer) -> usize {
+    let mut slices = 0;
+    let mut previous = 0;
+    for chunk in mask.bit_chunks().iter_padded() {
+        let starts = chunk & !(chunk << 1 | previous);
+        slices += starts.count_ones() as usize;
+        previous = chunk >> 63;
+    }
+    slices
+}
+
+fn should_use_interleave(mask: &BooleanBuffer) -> bool {
+    const MIN_LEN: usize = 1024;
+
+    // Interleave's fixed dispatch and index construction costs are not competitive
+    // for small arrays. For larger arrays, use the run count that determines the
+    // amount of work performed by the MutableArrayData implementation.
+    mask.len() >= MIN_LEN && count_true_runs(mask) > mask.len() / 8
+}
+
+fn interleave_arrays(
+    mask: &BooleanBuffer,
+    truthy: &ArrayData,
+    falsy: &ArrayData,
+) -> Result<ArrayRef, ArrowError> {
+    let truthy = make_array(truthy.clone());
+    let falsy = make_array(falsy.clone());
+    let indices: Vec<_> = mask
+        .iter()
+        .enumerate()
+        .map(|(idx, selected)| (usize::from(!selected), idx))
+        .collect();
+    crate::interleave::interleave(&[truthy.as_ref(), falsy.as_ref()], &indices)
+}
+
 fn zip_impl(
     mask: &BooleanArray,
     truthy: &ArrayData,
@@ -152,6 +187,11 @@ fn zip_impl(
     falsy: &ArrayData,
     falsy_is_scalar: bool,
 ) -> Result<ArrayRef, ArrowError> {
+    let mask_buffer = maybe_prep_null_mask_filter(mask);
+    if !truthy_is_scalar && !falsy_is_scalar && should_use_interleave(&mask_buffer) {
+        return interleave_arrays(&mask_buffer, truthy, falsy);
+    }
+
     let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
@@ -160,7 +200,6 @@ fn zip_impl(
     // keep track of how much is filled
     let mut filled = 0;
 
-    let mask_buffer = maybe_prep_null_mask_filter(mask);
     for (start, end) in SlicesIterator::from(&mask_buffer) {
         // the gap needs to be filled with falsy values
         if start > filled {
@@ -845,6 +884,96 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
 mod test {
     use super::*;
     use arrow_array::types::Int32Type;
+
+    #[test]
+    fn test_count_true_runs() {
+        let assert_runs = |values: &[bool], expected| {
+            let mask: BooleanBuffer = values.iter().copied().collect();
+            assert_eq!(count_true_runs(&mask), expected, "mask: {values:?}");
+        };
+
+        assert_runs(&[], 0);
+        assert_runs(&[false, false, false], 0);
+        assert_runs(&[true, true, true], 1);
+        assert_runs(&[true, false, true, true, false, true], 3);
+
+        // Exercise runs crossing 64-bit chunk boundaries and trailing padding.
+        let mut values = vec![false; 130];
+        values[0] = true;
+        values[63..66].fill(true);
+        values[128..].fill(true);
+        assert_runs(&values, 3);
+
+        // Exercise a non-zero bit offset, as masks may be sliced.
+        let mut offset_values = vec![false; 135];
+        offset_values[3..133].copy_from_slice(&values);
+        let offset_mask: BooleanBuffer = offset_values.into_iter().collect();
+        assert_eq!(count_true_runs(&offset_mask.slice(3, 130)), 3);
+    }
+
+    #[test]
+    fn test_should_use_interleave() {
+        let short: BooleanBuffer = (0..64).map(|i| i % 2 == 0).collect();
+        assert!(!should_use_interleave(&short));
+
+        let fragmented: BooleanBuffer = (0..8192).map(|i| i % 2 == 0).collect();
+        assert!(should_use_interleave(&fragmented));
+
+        let long_runs: BooleanBuffer = (0..8192).map(|i| i < 4096).collect();
+        assert!(!should_use_interleave(&long_runs));
+
+        let sparse: BooleanBuffer = (0..8192).map(|i| i % 10 == 0).collect();
+        assert!(!should_use_interleave(&sparse));
+
+        let dense: BooleanBuffer = (0..8192).map(|i| i % 10 != 0).collect();
+        assert!(!should_use_interleave(&dense));
+
+        let fragmented_head: BooleanBuffer = (0..8192).map(|i| i < 256 && i % 2 == 0).collect();
+        assert!(!should_use_interleave(&fragmented_head));
+
+        let fragmented_edges: BooleanBuffer = (0..8192)
+            .map(|i| !(256..7936).contains(&i) && i % 2 == 0)
+            .collect();
+        assert!(!should_use_interleave(&fragmented_edges));
+
+        // Exercise arbitrary bit offsets as masks may be sliced
+        let offset: BooleanBuffer = (0..8195).map(|i| i >= 3 && i % 2 == 1).collect();
+        assert!(should_use_interleave(&offset.slice(3, 8192)));
+    }
+
+    #[test]
+    fn test_interleave_arrays() {
+        let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let mask = maybe_prep_null_mask_filter(&mask);
+        let truthy = Int32Array::from(vec![Some(1), None, Some(3), Some(4)]).to_data();
+        let falsy = Int32Array::from(vec![Some(10), Some(20), None, Some(40)]).to_data();
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(3), Some(40)]);
+
+        let actual = interleave_arrays(&mask, &truthy, &falsy).unwrap();
+        assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
+    }
+
+    #[test]
+    fn test_zip_fragmented_array_mask() {
+        let mask: BooleanArray = (0..8192)
+            .map(|i| match i % 3 {
+                0 => Some(true),
+                1 => Some(false),
+                _ => None,
+            })
+            .collect();
+        let truthy: Int32Array = (0..8192).map(|i| (i % 7 != 0).then_some(i)).collect();
+        let falsy: Int32Array = (0..8192).map(|i| (i % 11 != 0).then_some(-i)).collect();
+        let expected: Int32Array = (0..8192)
+            .map(|i| {
+                let array = if i % 3 == 0 { &truthy } else { &falsy };
+                array.is_valid(i).then(|| array.value(i))
+            })
+            .collect();
+
+        let actual = zip(&mask, &truthy, &falsy).unwrap();
+        assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
+    }
 
     #[test]
     fn test_zip_kernel_one() {
