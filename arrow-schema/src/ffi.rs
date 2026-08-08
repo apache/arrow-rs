@@ -75,25 +75,35 @@ bitflags! {
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
+    // Fields are private so safe code can't set them to values that break the
+    // release callback (e.g. a `format`/`name` that isn't a `CString`, or a bad
+    // pointer). Read them with the getters; write the callback fields with the
+    // unsafe setters.
     /// Null-terminated, UTF8-encoded string describing the data type
-    pub format: *const c_char,
+    format: *const c_char,
     /// Null-terminated, UTF8-encoded string of the field or array name
-    pub name: *const c_char,
+    name: *const c_char,
     /// Binary string describing the type’s metadata
-    pub metadata: *const c_char,
+    metadata: *const c_char,
     /// A bitfield of flags enriching the type description
     /// Refer to [Arrow Flags](https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.flags)
-    pub flags: i64,
+    flags: i64,
     /// The number of children this type has
-    pub n_children: i64,
+    n_children: i64,
     /// C array of pointers to each child type of this type
-    pub children: *mut *mut FFI_ArrowSchema,
+    children: *mut *mut FFI_ArrowSchema,
     /// Pointer to the type of dictionary values
-    pub dictionary: *mut FFI_ArrowSchema,
-    /// Pointer to a producer-provided release callback
-    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    /// Opaque pointer to producer-provided private data
-    pub private_data: *mut c_void,
+    dictionary: *mut FFI_ArrowSchema,
+    /// Producer-provided release callback.
+    ///
+    /// Private so safe code can't install a callback that [`Drop`] would invoke.
+    /// Use [`FFI_ArrowSchema::release`] and [`FFI_ArrowSchema::set_release`].
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    /// Opaque producer-provided private data, owned by the release callback.
+    ///
+    /// Private for the same reason as `release`. Use
+    /// [`FFI_ArrowSchema::private_data`] and [`FFI_ArrowSchema::set_private_data`].
+    private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {
@@ -274,6 +284,48 @@ impl FFI_ArrowSchema {
             release: None,
             private_data: std::ptr::null_mut(),
         }
+    }
+
+    /// Returns the producer-provided release callback, if any.
+    ///
+    /// Lets a consumer wrap release: save this callback, install its own with
+    /// [`FFI_ArrowSchema::set_release`], and chain back to it on drop. See
+    /// <https://github.com/apache/arrow-rs/issues/9771>.
+    pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)> {
+        self.release
+    }
+
+    /// Returns the opaque producer-provided private data pointer.
+    ///
+    /// See [`FFI_ArrowSchema::release`] for the intended use.
+    pub fn private_data(&self) -> *mut c_void {
+        self.private_data
+    }
+
+    /// Replaces the release callback, returning the previous one.
+    ///
+    /// # Safety
+    ///
+    /// [`Drop`] calls this callback with a pointer to `self`. The new callback
+    /// must correctly release this schema (usually by chaining to the returned
+    /// one) and must match the [`FFI_ArrowSchema::private_data`] it reads. A
+    /// wrong callback is undefined behavior on drop.
+    pub unsafe fn set_release(
+        &mut self,
+        release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)> {
+        std::mem::replace(&mut self.release, release)
+    }
+
+    /// Replaces the private data pointer, returning the previous one.
+    ///
+    /// # Safety
+    ///
+    /// The old pointer is returned without being freed; the caller owns it from
+    /// here. The new pointer must match what the current
+    /// [`FFI_ArrowSchema::release`] callback expects.
+    pub unsafe fn set_private_data(&mut self, private_data: *mut c_void) -> *mut c_void {
+        std::mem::replace(&mut self.private_data, private_data)
     }
 
     /// Returns the format of this schema.
@@ -862,6 +914,7 @@ impl TryFrom<Schema> for FFI_ArrowSchema {
 mod tests {
     use super::*;
     use crate::Fields;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn round_trip_type(dtype: DataType) {
         let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
@@ -1033,5 +1086,42 @@ mod tests {
         assert!(c_schema.name().is_none());
         let field = Field::try_from(&c_schema).unwrap();
         assert_eq!(field.name(), "");
+    }
+
+    // A consumer wraps the release callback with its own, then chains back to
+    // the original on drop. This is the cross-thread use case from #9771 and is
+    // what the release/private_data accessors exist for.
+    static WRAPPER_RAN: AtomicBool = AtomicBool::new(false);
+
+    struct WrapperData {
+        original_release: Option<unsafe extern "C" fn(*mut FFI_ArrowSchema)>,
+        original_private_data: *mut c_void,
+    }
+
+    unsafe extern "C" fn wrapping_release(schema: *mut FFI_ArrowSchema) {
+        let schema = unsafe { &mut *schema };
+        let data = unsafe { Box::from_raw(schema.private_data() as *mut WrapperData) };
+        WRAPPER_RAN.store(true, Ordering::SeqCst);
+        // restore the originals, then let the original callback free everything
+        unsafe { schema.set_release(data.original_release) };
+        unsafe { schema.set_private_data(data.original_private_data) };
+        if let Some(release) = schema.release() {
+            unsafe { release(schema) };
+        }
+    }
+
+    #[test]
+    fn test_wrap_release_callback() {
+        let mut schema = FFI_ArrowSchema::try_from(&DataType::Int32).unwrap();
+
+        let data = Box::new(WrapperData {
+            original_release: schema.release(),
+            original_private_data: schema.private_data(),
+        });
+        unsafe { schema.set_release(Some(wrapping_release)) };
+        unsafe { schema.set_private_data(Box::into_raw(data) as *mut c_void) };
+
+        drop(schema); // runs wrapping_release, which chains to the original
+        assert!(WRAPPER_RAN.load(Ordering::SeqCst));
     }
 }
