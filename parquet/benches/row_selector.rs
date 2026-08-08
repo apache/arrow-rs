@@ -111,7 +111,7 @@ fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
 /// `other` must have exactly `outer.row_count()` rows, so operands are built
 /// per case rather than shared with the other algebra benchmarks.
 fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
-    let mut cases: Vec<(&str, RowSelection)> = vec![
+    let cases: Vec<(&str, RowSelection)> = vec![
         (
             "sparse_1pct",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01),
@@ -128,11 +128,11 @@ fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
             "dense_90pct",
             mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.9),
         ),
+        (
+            "run32",
+            RowSelection::from_boolean_buffer(generate_run_length_mask(MASK_ALGEBRA_ROWS, 32)),
+        ),
     ];
-    cases.push((
-        "run32",
-        RowSelection::from_boolean_buffer(generate_run_length_mask(MASK_ALGEBRA_ROWS, 32)),
-    ));
 
     for (label, outer) in cases {
         let other = mask_algebra_operand(outer.row_count(), 3, selection_ratio);

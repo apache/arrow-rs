@@ -371,7 +371,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     // Deposit the bits of `other` into the set positions of `mask`, one
     // 64-bit word of `mask` at a time: a word with `k` set bits consumes the
     // next `k` bits of `other`.
-    let mut other_bits = BitStream::new(other);
+    let mut other_bits = bit_stream(other);
     let mask_chunks = mask.bit_chunks();
     let words = mask_chunks
         .iter()
@@ -388,6 +388,9 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
 
 /// Scatter the next `mask.count_ones()` bits of `bits` onto the set positions
 /// of `mask`, preserving order.
+///
+/// This is the software equivalent of the x86_64 BMI2 `_pdep_u64` instruction,
+/// should platform-specific acceleration ever be worthwhile.
 fn deposit_word<I: Iterator<Item = u64>>(mask: u64, bits: &mut BitStream<I>) -> u64 {
     let mut mask = mask;
     let mut bits = bits.take(mask.count_ones() as usize);
@@ -412,22 +415,12 @@ struct BitStream<I: Iterator<Item = u64>> {
     available: usize,
 }
 
-impl<'a>
-    BitStream<
-        std::iter::Chain<
-            arrow_buffer::bit_chunk_iterator::BitChunkIterator<'a>,
-            std::iter::Once<u64>,
-        >,
-    >
-{
-    fn new(buffer: &'a BooleanBuffer) -> Self {
-        let chunks = buffer.bit_chunks();
-        let remainder = chunks.remainder_bits();
-        Self {
-            words: chunks.iter().chain(std::iter::once(remainder)),
-            current: 0,
-            available: 0,
-        }
+/// Creates a [`BitStream`] over the bits of `buffer`.
+fn bit_stream(buffer: &BooleanBuffer) -> BitStream<impl Iterator<Item = u64> + '_> {
+    BitStream {
+        words: buffer.bit_chunks().iter_padded(),
+        current: 0,
+        available: 0,
     }
 }
 
