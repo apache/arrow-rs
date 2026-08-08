@@ -7639,6 +7639,316 @@ mod tests {
         assert_eq!(casted_binary_array.as_ref(), &binary_view_array);
     }
 
+    /// Casting a dictionary to a view type has two implementations: building one view per row
+    /// directly against the values buffer, and `unpack_dictionary`. Which one runs depends on
+    /// how the row count compares to the dictionary size, so these helpers pin both branches of
+    /// that choice for each arm.
+    ///
+    /// `values` must have 6 entries; the returned key sets sit either side of the threshold.
+    fn keys_taking_direct_path() -> Int32Array {
+        // 2 keys < 6/2 values -> views are built directly per row
+        Int32Array::from_iter([Some(0), Some(3)])
+    }
+
+    fn keys_taking_unpack_path() -> Int32Array {
+        // 6 keys >= 6/2 values -> unpack_dictionary
+        Int32Array::from_iter([Some(0), Some(3), None, Some(1), Some(2), Some(0)])
+    }
+
+    fn cast_dict(values: ArrayRef, keys: Int32Array, to_type: &DataType) -> ArrayRef {
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        assert!(can_cast_types(dict.data_type(), to_type));
+        let casted = cast(&dict, to_type).unwrap();
+        assert_eq!(casted.data_type(), to_type);
+        casted
+    }
+
+    #[test]
+    fn test_dict_to_view_both_paths_agree() {
+        // Every arm, exercised through both implementations.
+        let long = "a value over twelve bytes";
+        let expect_direct = vec![Some("aa"), Some("dd")];
+        let expect_unpack = vec![
+            Some("aa"),
+            Some("dd"),
+            None,
+            Some("bb"),
+            Some(long),
+            Some("aa"),
+        ];
+        fn as_bytes<'a>(v: &[Option<&'a str>]) -> Vec<Option<&'a [u8]>> {
+            v.iter().map(|s| s.map(|s| s.as_bytes())).collect()
+        }
+
+        let utf8: ArrayRef = Arc::new(StringArray::from(vec!["aa", "bb", long, "dd", "ee", "ff"]));
+        let large_utf8: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            "aa", "bb", long, "dd", "ee", "ff",
+        ]));
+        let binary: ArrayRef = Arc::new(BinaryArray::from_iter_values([
+            b"aa".as_slice(),
+            b"bb",
+            long.as_bytes(),
+            b"dd",
+            b"ee",
+            b"ff",
+        ]));
+        let large_binary: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values([
+            b"aa".as_slice(),
+            b"bb",
+            long.as_bytes(),
+            b"dd",
+            b"ee",
+            b"ff",
+        ]));
+
+        // every source type that can reach Utf8View
+        for (label, values, to_type) in [
+            ("Utf8->Utf8View", utf8.clone(), DataType::Utf8View),
+            (
+                "LargeUtf8->Utf8View",
+                large_utf8.clone(),
+                DataType::Utf8View,
+            ),
+            ("Binary->Utf8View", binary.clone(), DataType::Utf8View),
+            (
+                "LargeBinary->Utf8View",
+                large_binary.clone(),
+                DataType::Utf8View,
+            ),
+        ] {
+            let direct = cast_dict(values.clone(), keys_taking_direct_path(), &to_type);
+            assert_eq!(
+                direct.as_string_view().iter().collect::<Vec<_>>(),
+                expect_direct,
+                "{label} (direct path)"
+            );
+            let unpacked = cast_dict(values, keys_taking_unpack_path(), &to_type);
+            assert_eq!(
+                unpacked.as_string_view().iter().collect::<Vec<_>>(),
+                expect_unpack,
+                "{label} (unpack path)"
+            );
+        }
+
+        // every source type that can reach BinaryView
+        for (label, values, to_type) in [
+            ("Utf8->BinaryView", utf8, DataType::BinaryView),
+            ("LargeUtf8->BinaryView", large_utf8, DataType::BinaryView),
+            ("Binary->BinaryView", binary, DataType::BinaryView),
+            (
+                "LargeBinary->BinaryView",
+                large_binary,
+                DataType::BinaryView,
+            ),
+        ] {
+            let direct = cast_dict(values.clone(), keys_taking_direct_path(), &to_type);
+            assert_eq!(
+                direct.as_binary_view().iter().collect::<Vec<_>>(),
+                as_bytes(&expect_direct),
+                "{label} (direct path)"
+            );
+            let unpacked = cast_dict(values, keys_taking_unpack_path(), &to_type);
+            assert_eq!(
+                unpacked.as_binary_view().iter().collect::<Vec<_>>(),
+                as_bytes(&expect_unpack),
+                "{label} (unpack path)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dict_binary_to_utf8view_invalid_utf8_both_paths() {
+        // Invalid UTF-8 must behave identically whichever implementation runs, for both
+        // Binary and LargeBinary sources.
+        let mut b32 = BinaryBuilder::new();
+        let mut b64 = GenericBinaryBuilder::<i64>::new();
+        for v in [b"aa".as_slice(), b"bb", &[0xFF, 0xFE], b"dd", b"ee", b"ff"] {
+            b32.append_value(v);
+            b64.append_value(v);
+        }
+        let binary: ArrayRef = Arc::new(b32.finish());
+        let large_binary: ArrayRef = Arc::new(b64.finish());
+
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let safe = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        for values in [binary, large_binary] {
+            for keys in [keys_taking_direct_path(), keys_taking_unpack_path()] {
+                let dict = DictionaryArray::<Int32Type>::try_new(keys, values.clone()).unwrap();
+
+                let err = cast_with_options(&dict, &DataType::Utf8View, &strict).unwrap_err();
+                assert!(
+                    matches!(err, ArrowError::InvalidArgumentError(_)),
+                    "expected InvalidArgumentError, got {err:?}"
+                );
+
+                let casted = cast_with_options(&dict, &DataType::Utf8View, &safe).unwrap();
+                let got: Vec<_> = casted.as_string_view().iter().collect();
+                // only rows whose key points at the invalid value are nullified
+                assert!(got.iter().all(|v| *v != Some("\u{FFFD}")));
+                assert_eq!(got[0], Some("aa"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_dict_large_utf8_to_utf8view() {
+        // Dict<Int8, LargeUtf8> -> Utf8View, exercising the offset-fit check
+        let values = LargeStringArray::from(vec![
+            Some("hello"),
+            Some("large payload over 12 bytes"),
+            Some("hello"),
+        ]);
+        let keys = Int8Array::from_iter([Some(0), Some(1), None, Some(0), Some(1)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        assert!(can_cast_types(dict_array.data_type(), &DataType::Utf8View));
+        let casted = cast(&dict_array, &DataType::Utf8View).unwrap();
+        assert_eq!(casted.data_type(), &DataType::Utf8View);
+
+        let expected = StringViewArray::from(vec![
+            Some("hello"),
+            Some("large payload over 12 bytes"),
+            None,
+            Some("hello"),
+            Some("large payload over 12 bytes"),
+        ]);
+        assert_eq!(casted.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_dict_large_binary_to_binary_view() {
+        // Dict<Int8, LargeBinary> -> BinaryView, exercising the offset-fit check
+        let mut builder = GenericBinaryBuilder::<i64>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"world");
+        let values = builder.finish();
+
+        let keys = Int8Array::from_iter([Some(0), Some(1), None, Some(0)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        assert!(can_cast_types(
+            dict_array.data_type(),
+            &DataType::BinaryView
+        ));
+        let casted = cast(&dict_array, &DataType::BinaryView).unwrap();
+        assert_eq!(casted.data_type(), &DataType::BinaryView);
+
+        let expected = BinaryViewArray::from_iter(vec![
+            Some(b"hello".as_slice()),
+            Some(b"world".as_slice()),
+            None,
+            Some(b"hello".as_slice()),
+        ]);
+        assert_eq!(casted.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_dict_utf8_to_binary_view() {
+        // Dict<Int8, Utf8> -> BinaryView cross cast: UTF-8 strings are always valid binary
+        let values = StringArray::from(VIEW_TEST_DATA.to_vec());
+        let keys = Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        assert!(can_cast_types(
+            dict_array.data_type(),
+            &DataType::BinaryView
+        ));
+        let casted = cast(&dict_array, &DataType::BinaryView).unwrap();
+        assert_eq!(casted.data_type(), &DataType::BinaryView);
+
+        let expected = BinaryViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+        assert_eq!(casted.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_dict_binary_to_utf8view_valid() {
+        // Dict<Int8, Binary> -> Utf8View cross cast: all values are valid UTF-8
+        let values = BinaryArray::from_iter_values([b"hello".as_slice(), b"world", b"foo"]);
+        let keys = Int8Array::from_iter([Some(0), Some(1), None, Some(0), Some(2)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        assert!(can_cast_types(dict_array.data_type(), &DataType::Utf8View));
+        let casted = cast(&dict_array, &DataType::Utf8View).unwrap();
+        assert_eq!(casted.data_type(), &DataType::Utf8View);
+
+        let result: Vec<_> = casted.as_string_view().iter().collect();
+        assert_eq!(
+            result,
+            vec![
+                Some("hello"),
+                Some("world"),
+                None,
+                Some("hello"),
+                Some("foo")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_dict_binary_to_utf8view_invalid_utf8_strict() {
+        // Dict<Int8, Binary> -> Utf8View with invalid UTF-8: safe=false returns an error
+        let mut builder = BinaryBuilder::new();
+        builder.append_value(b"valid");
+        builder.append_value([0xFF]); // invalid UTF-8
+        builder.append_value(b"also valid");
+        let values = builder.finish();
+
+        let keys = Int8Array::from_iter([Some(0), Some(1), Some(2)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let err = cast_with_options(&dict_array, &DataType::Utf8View, &strict).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected InvalidArgumentError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_dict_binary_to_utf8view_invalid_utf8_safe() {
+        // Dict<Int8, Binary> -> Utf8View with invalid UTF-8: safe=true nullifies affected rows
+        let mut builder = BinaryBuilder::new();
+        builder.append_value(b"valid");
+        builder.append_value([0xFF]); // invalid UTF-8 - dict index 1
+        builder.append_value(b"also valid");
+        let values = builder.finish();
+
+        // keys: 0, 1, 2, 1, 0  -> "valid", INVALID, "also valid", INVALID, "valid"
+        let keys = Int8Array::from_iter([Some(0), Some(1), Some(2), Some(1), Some(0)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        let safe = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+        let casted = cast_with_options(&dict_array, &DataType::Utf8View, &safe).unwrap();
+        assert_eq!(casted.data_type(), &DataType::Utf8View);
+
+        let result: Vec<_> = casted.as_string_view().iter().collect();
+        assert_eq!(
+            result,
+            vec![Some("valid"), None, Some("also valid"), None, Some("valid")]
+        );
+    }
+
     #[test]
     fn test_dict_to_view_null_dictionary_value_is_null() {
         // Ensure we preserve nulls in the values
