@@ -375,7 +375,8 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     let mask_chunks = mask.bit_chunks();
     let words = mask_chunks
         .iter()
-        .map(|word| deposit_word(word, &mut other_bits));
+        // BooleanBuffer words are little-endian
+        .map(|word| deposit_word(word, &mut other_bits).to_le());
     // Soundness: `BitChunks::iter` correctly reports its upper bound
     let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(words) };
 
@@ -747,6 +748,51 @@ mod tests {
             actual_bits,
             vec![false, false, true, false, false, false, true, false]
         );
+    }
+
+    #[test]
+    fn test_mask_and_then_mask_word_boundaries_and_offsets() {
+        for len in [0, 1, 7, 8, 9, 63, 64, 65, 127, 128, 129] {
+            for outer_offset in 0..8 {
+                for inner_offset in 0..8 {
+                    let outer_storage: Vec<_> = (0..len + outer_offset)
+                        .map(|i| (i * 17 + len * 3 + outer_offset) % 11 < 6)
+                        .collect();
+                    let outer_bits = outer_storage[outer_offset..].to_vec();
+                    let selected_count = outer_bits.iter().filter(|&&bit| bit).count();
+
+                    let inner_storage: Vec<_> = (0..selected_count + inner_offset)
+                        .map(|i| (i * 13 + len + inner_offset * 5) % 7 < 3)
+                        .collect();
+                    let inner_bits = inner_storage[inner_offset..].to_vec();
+
+                    let outer = RowSelection::from_boolean_buffer(
+                        BooleanBuffer::from(outer_storage).slice(outer_offset, len),
+                    );
+                    let inner = RowSelection::from_boolean_buffer(
+                        BooleanBuffer::from(inner_storage).slice(inner_offset, selected_count),
+                    );
+
+                    let result = outer.and_then(&inner);
+                    let result = result.as_mask().expect("mask backing");
+                    let actual: Vec<_> = (0..result.len()).map(|i| result.value(i)).collect();
+
+                    let mut inner_bits = inner_bits.into_iter();
+                    let expected: Vec<_> = outer_bits
+                        .into_iter()
+                        .map(|selected| {
+                            selected && inner_bits.next().expect("matching inner length")
+                        })
+                        .collect();
+                    assert!(inner_bits.next().is_none());
+
+                    assert_eq!(
+                        actual, expected,
+                        "len={len}, outer_offset={outer_offset}, inner_offset={inner_offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
