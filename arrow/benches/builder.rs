@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-extern crate criterion;
-extern crate rand;
-
 use std::mem::size_of;
 
 use criterion::*;
@@ -27,7 +23,7 @@ use rand::distr::StandardUniform;
 use arrow::array::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::i256;
-use rand::Rng;
+use rand::RngExt;
 use std::hint;
 
 // Build arrays with 512k elements.
@@ -35,6 +31,10 @@ const BATCH_SIZE: usize = 8 << 10;
 const NUM_BATCHES: usize = 64;
 
 fn bench_primitive(c: &mut Criterion) {
+    #[expect(
+        clippy::large_stack_arrays,
+        reason = "kept on the stack so the benchmark measures what it always has"
+    )]
     let data: [i64; BATCH_SIZE] = [100; BATCH_SIZE];
 
     let mut group = c.benchmark_group("bench_primitive");

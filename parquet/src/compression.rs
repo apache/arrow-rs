@@ -20,9 +20,11 @@
 //! See [`Compression`](crate::basic::Compression) enum for all available compression
 //! algorithms.
 //!
-#[cfg_attr(
+// NOTE: this must be an inner attribute so that the example is attached to the module (and
+// therefore actually run as a doc test) rather than to the `use` statement below.
+#![cfg_attr(
     feature = "experimental",
-    doc = r##"
+    doc = r"
 # Example
 
 ```no_run
@@ -45,7 +47,7 @@ codec.decompress(&compressed[..], &mut output, None).unwrap();
 
 assert_eq!(output, data);
 ```
-"##
+"
 )]
 use crate::basic::Compression as CodecType;
 use crate::errors::{ParquetError, Result};
@@ -348,7 +350,7 @@ impl GzipLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`flate2::Compression`]).
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -430,7 +432,7 @@ impl BrotliLevel {
     ///
     /// Compression levels must be valid.
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -586,7 +588,7 @@ impl ZstdLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`zstd::compression_level_range`]).
     pub fn try_new(level: i32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.

@@ -67,6 +67,18 @@ use super::{MutableBuffer, ScalarBuffer};
 /// let bytes = bytes::Bytes::from("hello");
 /// let buffer = Buffer::from(bytes);
 ///```
+///
+/// # Example: Create a [`bytes::Bytes`] from a `Buffer` (without copying)
+///
+/// [`bytes::Bytes::from_owner`] can also wrap a `Buffer` again without copying.
+/// This made generically available via a `From` implementation.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let bytes = bytes::Bytes::from("hello");
+/// # let buffer = Buffer::from(bytes);
+/// let bytes = bytes::Bytes::from(buffer);
+///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
@@ -209,19 +221,19 @@ impl Buffer {
             // For realloc to work, we cannot free the elements before the offset
             offset + self.len()
         };
-        if desired_capacity < self.capacity() {
-            if let Some(bytes) = Arc::get_mut(&mut self.data) {
-                if bytes.try_realloc(desired_capacity).is_ok() {
-                    // Realloc complete - update our pointer into `bytes`:
-                    self.ptr = if is_empty {
-                        bytes.as_ptr()
-                    } else {
-                        // SAFETY: we kept all elements leading up to the offset
-                        unsafe { bytes.as_ptr().add(offset) }
-                    }
+        if desired_capacity < self.capacity()
+            && let Some(bytes) = Arc::get_mut(&mut self.data)
+        {
+            if bytes.try_realloc(desired_capacity).is_ok() {
+                // Realloc complete - update our pointer into `bytes`:
+                self.ptr = if is_empty {
+                    bytes.as_ptr()
                 } else {
-                    // Failure to reallocate is fine; we just failed to free up memory.
+                    // SAFETY: we kept all elements leading up to the offset
+                    unsafe { bytes.as_ptr().add(offset) }
                 }
+            } else {
+                // Failure to reallocate is fine; we just failed to free up memory.
             }
         }
     }
@@ -328,7 +340,7 @@ impl Buffer {
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
-        if offset % 8 == 0 {
+        if offset.is_multiple_of(8) {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
@@ -534,6 +546,13 @@ impl From<bytes::Bytes> for Buffer {
     }
 }
 
+/// Convert a `Buffer` into a [`bytes::Bytes`]
+impl From<Buffer> for bytes::Bytes {
+    fn from(buffer: Buffer) -> Self {
+        Self::from_owner(buffer)
+    }
+}
+
 /// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
@@ -552,7 +571,7 @@ impl std::ops::Deref for Buffer {
     }
 }
 
-impl AsRef<[u8]> for &Buffer {
+impl AsRef<[u8]> for Buffer {
     fn as_ref(&self) -> &[u8] {
         self.as_slice()
     }
@@ -692,12 +711,12 @@ mod tests {
 
         assert_eq!([6, 8, 10], buf2.as_slice());
         assert_eq!(3, buf2.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(2) }, buf2.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(2) }, buf2.as_ptr());
 
         let buf3 = buf2.slice_with_length(1, 2);
         assert_eq!([8, 10], buf3.as_slice());
         assert_eq!(2, buf3.len());
-        assert_eq!(unsafe { buf.as_ptr().offset(3) }, buf3.as_ptr());
+        assert_eq!(unsafe { buf.as_ptr().add(3) }, buf3.as_ptr());
 
         let buf4 = buf.slice(5);
         let empty_slice: [u8; 0] = [];
@@ -1047,7 +1066,7 @@ mod tests {
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
             // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
             // want to make sure it doesn't unnecessarily create a deep copy.
-            if offset % 8 == 0 {
+            if offset.is_multiple_of(8) {
                 assert_eq!(new_buf.ptr_offset(), offset / 8);
             } else {
                 assert_eq!(new_buf.ptr_offset(), 0);

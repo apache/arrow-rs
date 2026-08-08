@@ -499,11 +499,11 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // boolean field has no data
             FieldType::BooleanFalse | FieldType::BooleanTrue => Ok(()),
             FieldType::Byte => self.read_i8().map(|_| ()),
-            FieldType::I16 => self.skip_vlq().map(|_| ()),
-            FieldType::I32 => self.skip_vlq().map(|_| ()),
-            FieldType::I64 => self.skip_vlq().map(|_| ()),
-            FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => self.skip_binary().map(|_| ()),
+            FieldType::I16 => self.skip_vlq(),
+            FieldType::I32 => self.skip_vlq(),
+            FieldType::I64 => self.skip_vlq(),
+            FieldType::Double => self.skip_bytes(8),
+            FieldType::Binary => self.skip_binary(),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
                 loop {
@@ -541,7 +541,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 Ok(())
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
-            FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
+            FieldType::Uuid => self.skip_bytes(16),
             _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
@@ -754,6 +754,7 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
     write_path_in_schema: bool,
+    write_rg_ordinal: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
@@ -762,6 +763,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         Self {
             writer,
             write_path_in_schema: true,
+            write_rg_ordinal: true,
         }
     }
 
@@ -776,6 +778,21 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Indicate whether or not to emit `path_in_schema`.
     pub(crate) fn write_path_in_schema(&self) -> bool {
         self.write_path_in_schema
+    }
+
+    /// Control the writing of the `ordinal` element of the `RowGroup` struct.
+    ///
+    /// The Thrift `ordinal` field on the `RowGroup` struct is `i16`, but the
+    /// Thrift compact protocol allows for up to 2^31 elements in a list. If
+    /// more than 2^15 row groups are to be written, this can be set to `false`
+    /// to prevent writing the ordinal for some row groups but not others.
+    pub(crate) fn set_write_row_group_ordinal(&mut self, val: bool) {
+        self.write_rg_ordinal = val;
+    }
+
+    /// Indicate whether or not to emit `ordinal`.
+    pub(crate) fn write_row_group_ordinal(&self) -> bool {
+        self.write_rg_ordinal
     }
 
     /// Write a single byte to the output stream.
@@ -812,7 +829,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     ) -> Result<()> {
         let delta = field_id.wrapping_sub(last_field_id);
         if delta > 0 && delta <= 0xf {
-            self.write_byte((delta as u8) << 4 | field_type as u8)
+            self.write_byte(((delta as u8) << 4) | field_type as u8)
         } else {
             self.write_byte(field_type as u8)?;
             self.write_i16(field_id)
@@ -822,7 +839,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Used to indicate the start of a list of `element_type` elements.
     pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
         if len < 15 {
-            self.write_byte((len as u8) << 4 | element_type as u8)
+            self.write_byte(((len as u8) << 4) | element_type as u8)
         } else {
             self.write_byte(0xf0u8 | element_type as u8)?;
             self.write_vlq(len as _)
@@ -876,7 +893,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 
     /// Write a zig-zag encoded `i64` value.
     pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
-        self.write_zig_zag(val as _)
+        self.write_zig_zag(val)
     }
 
     /// Write a double value.
@@ -1007,7 +1024,7 @@ impl WriteThrift for String {
 /// ```
 ///
 /// which becomes in Rust
-/// ```no_run
+/// ```ignore
 /// # struct OtherStruct {}
 /// struct MyStruct {
 ///   field1: i32,

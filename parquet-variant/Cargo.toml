@@ -34,7 +34,6 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"
-num-traits = { version = "0.2", default-features = false }
 uuid = { version = "1.18.0", features = ["v4"] }
 simdutf8 = { workspace = true, optional = true }
 
@@ -48,7 +47,7 @@ bench = false
 
 [dev-dependencies]
 criterion = { workspace = true, default-features = false }
-rand = { version = "0.9", default-features = false, features = [
+rand = { version = "0.10", default-features = false, features = [
     "std",
     "std_rng",
     "thread_rng",
@@ -66,3 +65,6 @@ harness = false
 [[bench]]
 name = "variant_validation"
 harness = false
+
+[lints]
+workspace = true

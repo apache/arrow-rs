@@ -18,13 +18,6 @@
 //! Benchmarks for `arrow‑avro` **Decoder**
 //!
 
-extern crate apache_avro;
-extern crate arrow_avro;
-extern crate criterion;
-extern crate num_bigint;
-extern crate once_cell;
-extern crate uuid;
-
 use apache_avro::types::Value;
 use apache_avro::{Decimal, Schema as ApacheSchema, to_avro_datum};
 use arrow_avro::schema::{CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC};

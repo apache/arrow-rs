@@ -314,12 +314,19 @@ impl<'a> PrimitiveTypeBuilder<'a> {
     /// Creates a new `PrimitiveType` instance from the collected attributes.
     /// Returns `Err` in case of any building conditions are not met.
     pub fn build(self) -> Result<Type> {
+        let sort_order = ColumnOrder::column_order_for_type(
+            self.logical_type.as_ref(),
+            self.converted_type,
+            self.physical_type,
+        )
+        .sort_order();
         let mut basic_info = BasicTypeInfo {
             name: String::from(self.name),
             repetition: Some(self.repetition),
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
+            sort_order,
         };
 
         // Check length before logical type, since it is used for logical type validation.
@@ -349,7 +356,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             }
             // Check that logical type and physical type are compatible
             match (logical_type, self.physical_type) {
-                (LogicalType::Map, _) | (LogicalType::List, _) => {
+                (LogicalType::Map | LogicalType::List, _) => {
                     return Err(general_err!(
                         "{:?} cannot be applied to a primitive type for field '{}'",
                         logical_type,
@@ -651,6 +658,7 @@ impl<'a> GroupTypeBuilder<'a> {
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
+            sort_order: SortOrder::UNDEFINED,
         };
         // Populate the converted type if only the logical type is populated
         if self.logical_type.is_some() && self.converted_type == ConvertedType::NONE {
@@ -672,6 +680,7 @@ pub struct BasicTypeInfo {
     converted_type: ConvertedType,
     logical_type: Option<LogicalType>,
     id: Option<i32>,
+    sort_order: SortOrder,
 }
 
 impl HeapSize for BasicTypeInfo {
@@ -705,19 +714,6 @@ impl BasicTypeInfo {
         self.converted_type
     }
 
-    /// Returns [`LogicalType`] value for the type.
-    ///
-    /// Note that this function will clone the `LogicalType`. If performance is a concern,
-    /// use [`Self::logical_type_ref`] instead.
-    #[deprecated(
-        since = "57.1.0",
-        note = "use `BasicTypeInfo::logical_type_ref` instead (LogicalType cloning is non trivial)"
-    )]
-    pub fn logical_type(&self) -> Option<LogicalType> {
-        // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
-        self.logical_type.clone()
-    }
-
     /// Return a reference to the [`LogicalType`] value for the type.
     pub fn logical_type_ref(&self) -> Option<&LogicalType> {
         self.logical_type.as_ref()
@@ -732,6 +728,11 @@ impl BasicTypeInfo {
     pub fn id(&self) -> i32 {
         assert!(self.id.is_some());
         self.id.unwrap()
+    }
+
+    /// Returns [`SortOrder`] for the type.
+    pub fn sort_order(&self) -> SortOrder {
+        self.sort_order
     }
 }
 
@@ -928,6 +929,11 @@ impl ColumnDescriptor {
         self.primitive_type.clone()
     }
 
+    /// Returns [`BasicTypeInfo`] information for this leaf column.
+    pub fn get_basic_info(&self) -> &BasicTypeInfo {
+        self.primitive_type.get_basic_info()
+    }
+
     /// Returns column name.
     pub fn name(&self) -> &str {
         self.primitive_type.name()
@@ -936,21 +942,6 @@ impl ColumnDescriptor {
     /// Returns [`ConvertedType`] for this column.
     pub fn converted_type(&self) -> ConvertedType {
         self.primitive_type.get_basic_info().converted_type()
-    }
-
-    /// Returns [`LogicalType`] for this column.
-    ///
-    /// Note that this function will clone the `LogicalType`. If performance is a concern,
-    /// use [`Self::logical_type_ref`] instead.
-    #[deprecated(
-        since = "57.1.0",
-        note = "use `ColumnDescriptor::logical_type_ref` instead (LogicalType cloning is non trivial)"
-    )]
-    pub fn logical_type(&self) -> Option<LogicalType> {
-        self.primitive_type
-            .get_basic_info()
-            .logical_type_ref()
-            .cloned()
     }
 
     /// Returns a reference to the [`LogicalType`] for this column.
@@ -994,13 +985,12 @@ impl ColumnDescriptor {
         }
     }
 
-    /// Returns the sort order for this column
+    /// Returns the sort order for this column as currently defined for the logical or
+    /// physical type.
+    ///
+    /// Returns `SortOrder::UNDEFINED` for non-primitive types.
     pub fn sort_order(&self) -> SortOrder {
-        ColumnOrder::sort_order_for_type(
-            self.logical_type_ref(),
-            self.converted_type(),
-            self.physical_type(),
-        )
+        self.primitive_type.get_basic_info().sort_order()
     }
 }
 
@@ -1279,12 +1269,15 @@ fn build_tree<'a>(
 
 /// Checks if the logical type is valid.
 fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
-    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type {
-        if *bit_width != 8 && *bit_width != 16 && *bit_width != 32 && *bit_width != 64 {
-            return Err(general_err!(
-                "Bit width must be 8, 16, 32, or 64 for Integer logical type"
-            ));
-        }
+    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
+        && *bit_width != 8
+        && *bit_width != 16
+        && *bit_width != 32
+        && *bit_width != 64
+    {
+        return Err(general_err!(
+            "Bit width must be 8, 16, 32, or 64 for Integer logical type"
+        ));
     }
     Ok(())
 }

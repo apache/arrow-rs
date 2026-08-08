@@ -223,7 +223,7 @@ impl ArrowJson {
             return Ok(false);
         }
 
-        for json_batch in self.get_record_batches()?.into_iter() {
+        for json_batch in self.get_record_batches()? {
             let batch = reader.next();
             match batch {
                 Some(Ok(batch)) => {
@@ -1272,9 +1272,6 @@ impl ArrowJsonBatch {
 mod tests {
     use super::*;
 
-    use std::fs::File;
-    use std::io::Read;
-
     #[test]
     fn test_schema_equality() {
         let json = r#"
@@ -1341,18 +1338,10 @@ mod tests {
         let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
-            Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(
-                [("k".to_string(), "v".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
-            Field::new("bools-with-metadata-vec", DataType::Boolean, true).with_metadata(
-                [("k2".to_string(), "v2".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
+            Field::new("bools-with-metadata-map", DataType::Boolean, true)
+                .with_metadata([("k", "v")]),
+            Field::new("bools-with-metadata-vec", DataType::Boolean, true)
+                .with_metadata([("k2", "v2")]),
             Field::new("bools", DataType::Boolean, true),
             Field::new("int8s", DataType::Int8, true),
             Field::new("int16s", DataType::Int16, true),
@@ -1604,9 +1593,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut file = File::open("data/integration.json").unwrap();
-        let mut json = String::new();
-        file.read_to_string(&mut json).unwrap();
+        let json = std::fs::read_to_string("data/integration.json").unwrap();
         let arrow_json: ArrowJson = serde_json::from_str(&json).unwrap();
         // test schemas
         assert!(arrow_json.schema.equals_schema(&schema));

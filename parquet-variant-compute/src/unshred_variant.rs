@@ -270,13 +270,13 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
             DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s))
             }
             DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s))
             }
             DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s))
             }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)

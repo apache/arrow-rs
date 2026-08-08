@@ -20,7 +20,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy, mask_to_selectors,
+    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -29,7 +29,6 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
@@ -259,11 +258,11 @@ impl ReadPlanBuilder {
         // reader would have produced — rows past the early break are marked
         // "not selected". When no limit is set the loop always exhausts and
         // no padding is needed.
-        if let Some(expected) = expected_rows {
-            if processed_rows < expected {
-                let pad_len = expected - processed_rows;
-                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
-            }
+        if let Some(expected) = expected_rows
+            && processed_rows < expected
+        {
+            let pad_len = expected - processed_rows;
+            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
         }
 
         // If the predicate selected all rows, applying it is a no-op. With no
@@ -335,7 +334,7 @@ fn build_cursor(
             RowSelectionCursor::new_selectors(selectors)
         }
         (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors(mask_to_selectors(mask.mask()))
+            RowSelectionCursor::new_selectors((*mask).into_selectors())
         }
     }
 }
@@ -447,16 +446,6 @@ pub struct ReadPlan {
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection selectors, if any
-    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
-    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
-        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
-            Some(selectors_cursor.selectors_mut())
-        } else {
-            None
-        }
-    }
-
     /// Returns a mutable reference to the row selection cursor
     pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
         &mut self.row_selection_cursor
@@ -559,7 +548,7 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_mask_matches_selector_backing() {
-        use rand::{Rng, rng};
+        use rand::{RngExt, rng};
 
         let mut rand = rng();
         for _ in 0..200 {

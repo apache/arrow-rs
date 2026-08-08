@@ -29,7 +29,7 @@ use parquet::arrow::arrow_reader::{
     ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionPolicy, RowSelector,
 };
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
