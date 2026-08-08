@@ -104,6 +104,46 @@ fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
     }
 }
 
+/// Benchmarks mask-backed `and_then`, taken when both operands are mask-backed.
+///
+/// `and_then` deposits the bits of `other` onto the set positions of the outer
+/// mask, so its cost depends on the outer mask's density and clustering.
+/// `other` must have exactly `outer.row_count()` rows, so operands are built
+/// per case rather than shared with the other algebra benchmarks.
+fn bench_mask_backed_and_then(c: &mut Criterion, selection_ratio: f64) {
+    let mut cases: Vec<(&str, RowSelection)> = vec![
+        (
+            "sparse_1pct",
+            mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.01),
+        ),
+        (
+            "random_third",
+            mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, selection_ratio),
+        ),
+        (
+            "random_third_offset3",
+            mask_algebra_operand(MASK_ALGEBRA_ROWS, 3, selection_ratio),
+        ),
+        (
+            "dense_90pct",
+            mask_algebra_operand(MASK_ALGEBRA_ROWS, 0, 0.9),
+        ),
+    ];
+    cases.push((
+        "run32",
+        RowSelection::from_boolean_buffer(generate_run_length_mask(MASK_ALGEBRA_ROWS, 32)),
+    ));
+
+    for (label, outer) in cases {
+        let other = mask_algebra_operand(outer.row_count(), 3, selection_ratio);
+        c.bench_with_input(
+            BenchmarkId::new("mask_and_then", label),
+            &(&outer, &other),
+            |b, (outer, other)| b.iter(|| hint::black_box(outer.and_then(other))),
+        );
+    }
+}
+
 /// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.
 ///
 /// `RowSelection::iter` caches the RLE form, so a caller that iterates before
@@ -203,6 +243,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     bench_mask_backed_algebra(c, selection_ratio);
+    bench_mask_backed_and_then(c, selection_ratio);
     bench_mask_backed_conversion(c, total_rows, selection_ratio);
 }
 
