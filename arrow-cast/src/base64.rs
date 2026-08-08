@@ -103,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_b64() {
         let mut rng = rng();
         let len = rng.random_range(1024..1050);

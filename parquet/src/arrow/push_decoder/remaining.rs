@@ -290,8 +290,12 @@ impl RemainingRowGroups {
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
-    pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.row_group_reader_builder.push_data(ranges, buffers);
+    pub fn push_data(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+        buffers: Vec<Bytes>,
+    ) -> Result<(), ParquetError> {
+        self.row_group_reader_builder.push_data(ranges, buffers)
     }
 
     /// Return the total number of bytes buffered so far

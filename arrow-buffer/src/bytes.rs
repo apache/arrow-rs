@@ -231,7 +231,9 @@ impl From<bytes::Bytes> for Bytes {
         let len = value.len();
         Self {
             len,
-            ptr: NonNull::new(value.as_ptr() as _).unwrap(),
+            // `bytes::Bytes` is shared and immutable, so the buffer is never written
+            // through this pointer; the cast only changes constness.
+            ptr: NonNull::new(value.as_ptr().cast_mut()).unwrap(),
             deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
             #[cfg(feature = "pool")]
             reservation: Mutex::new(None),

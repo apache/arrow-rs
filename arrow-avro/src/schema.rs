@@ -177,7 +177,7 @@ pub(crate) enum Schema<'a> {
     /// A direct type name (primitive or reference)
     #[serde(borrow)]
     TypeName(TypeName<'a>),
-    /// A union of multiple schemas (e.g., ["null", "string"])
+    /// A union of multiple schemas (e.g., `["null", "string"]`)
     #[serde(borrow)]
     Union(Vec<Schema<'a>>),
     /// A complex type such as record, array, map, etc.

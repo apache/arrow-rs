@@ -370,7 +370,7 @@ where
         let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
             f_fallible(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
             })
         })?
     };
@@ -671,7 +671,9 @@ where
                                 T::DATA_TYPE,
                             ))
                         })
-                        .and_then(|v| T::validate_decimal_precision(v, precision, scale).map(|_| v))
+                        .and_then(|v| {
+                            T::validate_decimal_precision(v, precision, scale).map(|()| v)
+                        })
                 })
                 .transpose()
             })
@@ -801,7 +803,7 @@ where
                             v
                         ))
                     })
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)

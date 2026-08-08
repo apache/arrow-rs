@@ -208,9 +208,9 @@ impl AvroDataType {
         resolution: Option<ResolutionInfo>,
     ) -> Self {
         Self {
-            codec,
-            metadata,
             nullability,
+            metadata,
+            codec,
             resolution,
         }
     }
@@ -600,7 +600,7 @@ impl AvroField {
     /// converted to use `Utf8View` instead of `Utf8`.
     pub(crate) fn with_utf8view(&self) -> Self {
         let mut field = self.clone();
-        if let Codec::Utf8 = field.data_type.codec {
+        if field.data_type.codec == Codec::Utf8 {
             field.data_type.codec = Codec::Utf8View;
         }
         field

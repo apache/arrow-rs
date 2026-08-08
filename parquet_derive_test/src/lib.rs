@@ -28,6 +28,10 @@ use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
 use std::sync::Arc;
 
 #[derive(ParquetRecordWriter)]
+#[expect(
+    clippy::ref_option_ref,
+    reason = "the point of this struct is to cover every field type the derive supports, including `&Option<&T>`"
+)]
 struct ACompleteRecord<'a> {
     pub a_bool: bool,
     pub a_str: &'a str,

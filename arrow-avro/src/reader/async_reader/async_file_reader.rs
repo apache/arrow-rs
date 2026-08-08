@@ -96,7 +96,7 @@ pub trait AsyncFileReader: Send {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
-            for range in ranges.into_iter() {
+            for range in ranges {
                 let data = self.get_bytes(range).await?;
                 result.push(data);
             }
