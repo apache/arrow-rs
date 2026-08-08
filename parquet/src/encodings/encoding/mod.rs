@@ -31,9 +31,11 @@ use crate::util::prefix::common_prefix_length;
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
+use fsst_encoder::FsstEncoder;
 
 mod byte_stream_split_encoder;
 mod dict_encoder;
+pub(crate) mod fsst_encoder;
 
 // ----------------------------------------------------------------------
 // Encoders
@@ -102,6 +104,7 @@ pub fn get_encoder<T: DataType>(
             )),
             _ => Box::new(ByteStreamSplitEncoder::new()),
         },
+        Encoding::FSST => Box::new(FsstEncoder::new()),
         e => return Err(nyi_err!("Encoding {} is not supported", e)),
     };
     Ok(encoder)

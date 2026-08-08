@@ -17,5 +17,6 @@
 
 pub mod decoding;
 pub mod encoding;
+pub(crate) mod fsst;
 pub mod levels;
 experimental!(pub(crate) mod rle);
