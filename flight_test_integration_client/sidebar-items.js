@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Scenario"],"fn":["main"],"struct":["Args"],"type":["Error","Result"]};

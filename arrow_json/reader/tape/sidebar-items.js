@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DecoderState","Literal","TapeElement"],"fn":["char_from_surrogate_pair","err","json_whitespace","parse_hex","write_char"],"macro":[["next",1]],"struct":["BufIter","Tape","TapeDecoder"]};

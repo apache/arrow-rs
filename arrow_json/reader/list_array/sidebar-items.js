@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["FixedSizeListArrayDecoder","ListLikeArrayDecoder"],"type":["ListArrayDecoder","ListViewArrayDecoder"]};

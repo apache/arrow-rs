@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["is_incomplete_data","read_header_info"],"mod":["async_reader","block","cursor","header","record","vlq"],"struct":["Decoder","HeaderInfo","Reader","ReaderBuilder"]};

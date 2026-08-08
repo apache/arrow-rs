@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":[["native_float",1],["native_integer",1]],"mod":["private"],"trait":["ArrowNativeType","ToByteSlice"]};
