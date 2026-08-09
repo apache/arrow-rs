@@ -20,6 +20,7 @@
 //! [Geometry and Geography Encoding]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 //! [Apache Parquet]: https://parquet.apache.org/
 
+#![deny(clippy::allow_attributes)]
 pub mod bounding;
 pub mod interval;
 pub mod testing;
