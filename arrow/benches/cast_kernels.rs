@@ -210,29 +210,19 @@ fn dict_keys(size: usize, distinct: usize) -> UInt64Array {
     UInt64Array::from_iter_values((0..size).map(|_| rng.sample(range)))
 }
 
-// `Dictionary<UInt64, Utf8>` of `size` rows over `distinct` values, each longer than 12
-// bytes so the resulting views reference the values buffer rather than inlining.
+// `Dictionary<UInt64, Utf8>` of `size` rows over `distinct` values, alternating between
+// values short enough to inline into a view and longer ones that reference the buffer.
 //
-// The ratio of rows to distinct values is what matters when casting to a view: the cast
-// can either build one view per dictionary value and gather those with `take`, or build
-// one view per row directly against the values buffer. Which of the two is cheaper depends
-// on that ratio, so both a dense and a sparse shape are benchmarked below.
+// Different implementation paths may be taken based on the ratio of rows to distinct
+// values.
 fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
-    let values =
-        StringArray::from_iter_values((0..distinct).map(|i| format!("dictionary value {i:07}")));
-
-    Arc::new(DictionaryArray::new(
-        dict_keys(size, distinct),
-        Arc::new(values),
-    ))
-}
-
-// As `build_string_dict_array`, but with `Binary` values. Casting those to `Utf8View` has
-// to validate the dictionary values as UTF-8, which a `Utf8` source does not.
-fn build_binary_dict_array(size: usize, distinct: usize) -> ArrayRef {
-    let values = BinaryArray::from_iter_values(
-        (0..distinct).map(|i| format!("dictionary value {i:07}").into_bytes()),
-    );
+    let values = StringArray::from_iter_values((0..distinct).map(|i| {
+        if i % 2 == 0 {
+            format!("val {i}")
+        } else {
+            format!("dictionary value {i:07}")
+        }
+    }));
 
     Arc::new(DictionaryArray::new(
         dict_keys(size, distinct),
@@ -275,7 +265,11 @@ fn add_benchmark(c: &mut Criterion) {
     // the dictionary is far larger than the array is long, as after a selective filter.
     // `dict_array` above is the opposite shape, many rows over few dictionary values.
     let sparse_dict_array = build_string_dict_array(1_024, 32_768);
-    let sparse_binary_dict_array = build_binary_dict_array(1_024, 32_768);
+    let sparse_binary_dict_array = cast(
+        &sparse_dict_array,
+        &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Binary)),
+    )
+    .unwrap();
 
     let string_float_array_normal = build_string_float_array(5_000, 0.1);
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
