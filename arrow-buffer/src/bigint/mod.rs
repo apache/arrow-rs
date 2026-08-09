@@ -768,7 +768,7 @@ impl i256 {
             .wrapping_add(rhs.high as u128)
             .wrapping_add(carry as u128) as i128;
 
-        let result = Self { high, low };
+        let result = Self { low, high };
 
         // Signed overflow occurs when:
         // - both operands have the same sign, and
@@ -792,7 +792,7 @@ impl i256 {
             .wrapping_sub(rhs.high as u128)
             .wrapping_sub(borrow as u128) as i128;
 
-        let result = Self { high, low };
+        let result = Self { low, high };
 
         // Signed overflow occurs when:
         // - operands have opposite signs, and
@@ -1331,7 +1331,7 @@ impl Not for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1478,7 +1478,7 @@ mod tests {
         }
 
         // Exponentiation
-        for exp in vec![0, 1, 2, 3, 8, 100].into_iter() {
+        for exp in [0, 1, 2, 3, 8, 100] {
             let actual = il.wrapping_pow(exp);
             let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone().pow(exp));
             assert_eq!(actual.to_string(), expected.to_string());
@@ -1812,7 +1812,7 @@ mod tests {
         assert_eq!(v.to_f64().unwrap(), 42.0);
 
         let v = i256::from_i128(-123456789012345678i128);
-        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+        assert_eq!(v.to_f64().unwrap(), -123_456_789_012_345_680.0);
 
         let v = i256::from_string("0").unwrap();
         assert_eq!(v.to_f64().unwrap(), 0.0);
@@ -1948,7 +1948,7 @@ mod tests {
         assert_eq!(!i256::ONE, i256::from_parts(u128::MAX - 1, -1));
     }
 
-    #[should_panic]
+    #[should_panic(expected = "rhs overflow for shift")]
     #[test]
     fn test_shl_panic_on_arg_overflow() {
         let value = i256::from(123);

@@ -43,7 +43,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::{CompressionCodec, DecompressionContext};
-use crate::r#gen::Message::{self};
+use crate::r#gen::Message;
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
@@ -534,7 +534,8 @@ impl<'a> RecordBatchDecoder<'a> {
     /// - Offset bounds (e.g. list/string offsets pointing past the end of their value buffer)
     /// - UTF-8 validity of string columns (`Utf8` / `LargeUtf8`)
     /// - Null count consistency and buffer length checks
-    /// # Safety
+    ///
+    /// # Undefined behavior
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
     /// certain that the data is valid. Invalid data that bypasses these checks
@@ -1259,7 +1260,7 @@ impl FileReaderBuilder {
 
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
-            for kv in fb_custom_metadata.into_iter() {
+            for kv in fb_custom_metadata {
                 custom_metadata.insert(
                     kv.key().unwrap().to_string(),
                     kv.value().unwrap().to_string(),
@@ -1385,7 +1386,7 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if:
+    /// An [`Err`] may be returned if:
     /// - the file does not meet the Arrow Format footer requirements, or
     /// - file endianness does not match the target endianness.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
@@ -1569,7 +1570,7 @@ impl<R: Read> StreamReader<R> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
+    /// An [`Err`] may be returned if the reader does not encounter a schema
     /// as the first message in the stream.
     pub fn try_new(
         reader: R,
@@ -1614,15 +1615,6 @@ impl<R: Read> StreamReader<R> {
             projection,
             skip_validation: UnsafeFlag::new(),
         })
-    }
-
-    /// Deprecated, use [`StreamReader::try_new`] instead.
-    #[deprecated(since = "53.0.0", note = "use `try_new` instead")]
-    pub fn try_new_unbuffered(
-        reader: R,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
-        Self::try_new(reader, projection)
     }
 
     /// Return the schema of the stream
@@ -1804,6 +1796,38 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// Upper bound on how much memory a single message length is allowed to reserve before any
+/// of the bytes it promises have been read.
+///
+/// Message lengths come from the stream itself, so they cannot be trusted: a truncated or
+/// corrupted stream can declare a body of arbitrary size. Reserving that up front turns a
+/// malformed input into an allocation failure, which aborts the process rather than
+/// returning an error the caller can handle. Beyond this size the buffer grows as the data
+/// arrives instead, so an implausible length costs one bounded allocation and then fails as
+/// a short read.
+///
+/// The value trades the size of that bounded allocation against how large a body still gets
+/// read in a single allocation: bodies up to this size behave exactly as before, larger ones
+/// start here and the buffer doubles as the data arrives, so a body of `n` bytes costs
+/// `log2(n / MAX_PREALLOC_BYTES)` reallocations and the buffer never runs more than a factor
+/// of two ahead of the bytes actually received.
+const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
+
+/// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
+fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
+    let mut buf = MutableBuffer::from_len_zeroed(len.min(MAX_PREALLOC_BYTES));
+    let mut filled = 0;
+    while filled < len {
+        let target = buf.len();
+        reader.read_exact(&mut buf.as_slice_mut()[filled..target])?;
+        filled = target;
+        if filled < len {
+            buf.resize(len.min(target.saturating_mul(2)), 0);
+        }
+    }
+    Ok(buf)
+}
+
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
@@ -1835,15 +1859,29 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         };
 
-        self.buf.resize(meta_len, 0);
-        self.reader.read_exact(&mut self.buf)?;
+        // `read_to_end` on a `Take` grows with the bytes that arrive, so an implausible
+        // `meta_len` costs a short read rather than the allocation it asks for.
+        self.buf.clear();
+        let read = (&mut self.reader)
+            .take(meta_len as u64)
+            .read_to_end(&mut self.buf)?;
+        if read != meta_len {
+            return Err(ArrowError::ParseError(format!(
+                "Unexpected end of stream: expected {meta_len} metadata bytes, got {read}"
+            )));
+        }
 
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
+        let body_len = usize::try_from(message.bodyLength()).map_err(|_| {
+            ArrowError::ParseError(format!(
+                "Invalid IPC message body length: {}",
+                message.bodyLength()
+            ))
+        })?;
+        let buf = read_body_bounded(&mut self.reader, body_len)?;
 
         Ok(Some((message, buf)))
     }
@@ -1869,7 +1907,7 @@ impl<R: Read> MessageReader<R> {
     pub fn read_meta_len(&mut self) -> Result<Option<usize>, ArrowError> {
         let mut meta_len: [u8; 4] = [0; 4];
         match self.reader.read_exact(&mut meta_len) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) => {
                 return if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     // Handle EOF without the "0xFFFFFFFF 0x00000000"
@@ -3116,7 +3154,103 @@ mod tests {
         );
     }
 
+    /// Verify that misaligned IPC buffers are caught by `require_alignment = true`.
+    ///
+    /// For each array type we shift the IPC body by every byte offset in 0..OFFSET_RANGE and
+    /// assert that the decoder errors exactly when the offset violates the type's
+    /// minimum alignment requirement.  The Arrow columnar spec permits alignment to
+    /// any multiple of 8 or 64 bytes, so multiples of 8 (which include every multiple
+    /// of 64) must succeed; everything else must return a "Misaligned buffers" error.
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding>.
     #[test]
+    fn test_misaligned_buffers_error() {
+        const OFFSET_RANGE: usize = 128;
+
+        // (array, minimum required alignment in bytes)
+        // Fixed-width: alignment == element byte width.
+        // Variable-width (e.g. StringArray): the offsets buffer drives alignment (Int32 → 4).
+        let cases: Vec<(ArrayRef, usize)> = vec![
+            (Arc::new(Int32Array::from_iter(0i32..100)) as _, 4),
+            (Arc::new(Int64Array::from_iter(0i64..100)) as _, 8),
+            (
+                Arc::new(StringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )) as _,
+                4,
+            ),
+            (
+                Arc::new(LargeStringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )) as _,
+                8,
+            ),
+        ];
+
+        for (array, alignment) in cases {
+            let batch = RecordBatch::try_from_iter(vec![("col", Arc::clone(&array))]).unwrap();
+            let encoder = IpcDataGenerator {};
+            let mut dict_tracker = DictionaryTracker::new(false);
+            let (_, encoded) = encoder
+                .encode(
+                    &batch,
+                    &mut dict_tracker,
+                    &Default::default(),
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let message = root_as_message(&encoded.ipc_message).unwrap();
+            let ipc_batch = message.header_as_record_batch().unwrap();
+
+            for offset in 0..OFFSET_RANGE {
+                // MutableBuffer always allocates at a 64-byte aligned base address.
+                // Slicing by `offset` bytes yields a pointer at `base_ptr + offset`,
+                // whose alignment is gcd(64, offset).  That makes `offset` the sole
+                // determinant of the resulting alignment — without this guarantee the
+                // test would be non-deterministic depending on what the allocator returns.
+                let mut storage = MutableBuffer::with_capacity(encoded.arrow_data.len() + offset);
+                for _ in 0..offset {
+                    storage.push(0_u8);
+                }
+                storage.extend_from_slice(&encoded.arrow_data);
+                let buf = Buffer::from(storage).slice(offset);
+
+                let result = RecordBatchDecoder::try_new(
+                    &buf,
+                    ipc_batch,
+                    batch.schema(),
+                    &Default::default(),
+                    &message.version(),
+                )
+                .unwrap()
+                .with_require_alignment(true)
+                .read_record_batch();
+
+                if offset % alignment == 0 {
+                    assert!(
+                        result.is_ok(),
+                        "type={} offset={offset}: expected Ok but got {:?}",
+                        array.data_type(),
+                        result.unwrap_err(),
+                    );
+                } else {
+                    let err = result
+                        .expect_err(&format!(
+                            "type={} offset={offset}: expected Err for misaligned buffer",
+                            array.data_type()
+                        ))
+                        .to_string();
+                    assert!(
+                        err.contains("Misaligned buffers"),
+                        "type={} offset={offset}: unexpected error: {err}",
+                        array.data_type(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_with_massive_column_count() {
         // 499_999 is upper limit for default settings (1_000_000)
         let limit = 600_000;
@@ -3684,7 +3818,7 @@ mod tests {
         use std::sync::Arc;
 
         use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
-        use arrow_buffer::Buffer;
+        use arrow_buffer::{Buffer, MutableBuffer};
         use arrow_data::ArrayData;
         use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 
@@ -3702,7 +3836,7 @@ mod tests {
             let width = data_type.primitive_width().unwrap();
             let data = ArrayData::builder(data_type)
                 .len(len)
-                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .add_buffer(Buffer::from(MutableBuffer::from_len_zeroed(len * width)))
                 .build()
                 .unwrap();
 
@@ -3770,5 +3904,81 @@ mod tests {
             assert_eq!(read_batch.num_columns(), 1);
             assert_eq!(read_batch.column(0).as_ref(), &values);
         }
+    }
+
+    /// Builds a stream whose single message declares `body_length` but is followed by only
+    /// `body_bytes` bytes of body. The body length is consumed before the header is
+    /// interpreted, so the header itself is immaterial.
+    fn stream_with_declared_body(body_length: i64, body_bytes: usize) -> Vec<u8> {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let mut message = crate::MessageBuilder::new(&mut fbb);
+        message.add_version(crate::MetadataVersion::V5);
+        message.add_header_type(crate::MessageHeader::NONE);
+        message.add_bodyLength(body_length);
+        let root = message.finish();
+        fbb.finish(root, None);
+        let metadata = fbb.finished_data();
+
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&CONTINUATION_MARKER);
+        stream.extend_from_slice(&(metadata.len() as i32).to_le_bytes());
+        stream.extend_from_slice(metadata);
+        stream.resize(stream.len() + body_bytes, 0xAB);
+        stream
+    }
+
+    /// A message body length is read from the stream before any of the bytes it describes,
+    /// so it cannot be trusted. Declaring an implausible one used to reserve it outright,
+    /// and the resulting allocation failure aborts the process instead of surfacing an error
+    /// the caller can handle.
+    #[test]
+    fn test_stream_reader_rejects_implausible_body_length() {
+        for body_length in [i64::MAX, 1 << 50, -1] {
+            let stream = stream_with_declared_body(body_length, 0);
+            let err = StreamReader::try_new(std::io::Cursor::new(stream), None).expect_err(
+                &format!("a message declaring {body_length} body bytes must not be accepted"),
+            );
+            let err = err.to_string();
+            assert!(
+                err.contains("Invalid IPC message body length")
+                    || err.contains("Unexpected end of stream")
+                    || err.contains("failed to fill whole buffer"),
+                "unexpected error for body_length {body_length}: {err}"
+            );
+        }
+    }
+
+    /// A plausible body length whose bytes end early must fail as a short read: before the
+    /// first read for a small body, and after at least one growth step for a body larger
+    /// than `MAX_PREALLOC_BYTES`.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_stream_reader_rejects_truncated_body() {
+        let over_prealloc = MAX_PREALLOC_BYTES as i64 + 1;
+        for (body_length, body_bytes) in [(1024, 10), (over_prealloc, MAX_PREALLOC_BYTES)] {
+            let stream = stream_with_declared_body(body_length, body_bytes);
+            let err = StreamReader::try_new(std::io::Cursor::new(stream), None)
+                .expect_err("a body backed by fewer bytes than declared must not be accepted");
+            assert!(
+                err.to_string().contains("failed to fill whole buffer"),
+                "unexpected error for body_length {body_length}: {err}"
+            );
+        }
+    }
+
+    /// The metadata length is untrusted for the same reason as the body length.
+    #[test]
+    fn test_stream_reader_rejects_unbacked_metadata_length() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&CONTINUATION_MARKER);
+        stream.extend_from_slice(&i32::MAX.to_le_bytes());
+        stream.extend_from_slice(b"not this many bytes");
+
+        let err = StreamReader::try_new(std::io::Cursor::new(stream), None)
+            .expect_err("metadata length must be backed by the stream");
+        assert!(
+            err.to_string().contains("Unexpected end of stream"),
+            "unexpected error: {err}"
+        );
     }
 }

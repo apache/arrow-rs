@@ -29,6 +29,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # Check workspace wide compile and test with default features for
   # mac
@@ -116,11 +119,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install cargo-msrv (if needed)
-        # cargo-msrv binary may be cached by the cargo cache step in setup-builder, and cargo install will error if it is already installed
-        # --locked uses cargo-msrv's pinned Cargo.lock; without it an unpinned transitive
-        # dep (aws-runtime) resolves to a version that fails to compile (E0282)
-        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv --locked ; fi
+      - name: Install cargo-msrv
+        uses: taiki-e/install-action@1beb33eee6d086258184383af9a538940be190ed  # v2.85.6
+        with:
+          tool: cargo-msrv
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

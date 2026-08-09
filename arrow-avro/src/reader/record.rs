@@ -281,19 +281,20 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, AvroError> {
-        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-            if info.writer_is_union && !info.reader_is_union {
-                let mut clone = data_type.clone();
-                clone.resolution = None; // Build target base decoder without Union resolution
-                let target = Self::try_new_internal(&clone)?;
-                let decoder = Self::Union(
-                    UnionDecoderBuilder::new()
-                        .with_resolved_union(info.clone())
-                        .with_target(target)
-                        .build()?,
-                );
-                return Ok(decoder);
-            }
+        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+            && info.writer_is_union
+            && !info.reader_is_union
+        {
+            let mut clone = data_type.clone();
+            clone.resolution = None; // Build target base decoder without Union resolution
+            let target = Self::try_new_internal(&clone)?;
+            let decoder = Self::Union(
+                UnionDecoderBuilder::new()
+                    .with_resolved_union(info.clone())
+                    .with_target(target)
+                    .build()?,
+            );
+            return Ok(decoder);
         }
         Self::try_new_internal(data_type)
     }
@@ -323,8 +324,7 @@ impl Decoder {
             (Codec::Float64, Some(Promotion::FloatToDouble)) => {
                 Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Utf8, Some(Promotion::BytesToString))
-            | (Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
+            (Codec::Utf8 | Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
@@ -554,10 +554,10 @@ impl Decoder {
                 let mut builder = UnionDecoderBuilder::new()
                     .with_fields(fields.clone())
                     .with_branches(decoders);
-                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-                    if info.reader_is_union {
-                        builder = builder.with_resolved_union(info.clone());
-                    }
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+                    && info.reader_is_union
+                {
+                    builder = builder.with_resolved_union(info.clone());
                 }
                 Self::Union(builder.build()?)
             }
@@ -1635,13 +1635,13 @@ impl Decoder {
                     )));
                 }
                 let final_len = moff.len() - 1;
-                if let Some(n) = &nulls {
-                    if n.len() != final_len {
-                        return Err(AvroError::InvalidArgument(format!(
-                            "Map array null buffer length {} != final map length {final_len}",
-                            n.len()
-                        )));
-                    }
+                if let Some(n) = &nulls
+                    && n.len() != final_len
+                {
+                    return Err(AvroError::InvalidArgument(format!(
+                        "Map array null buffer length {} != final map length {final_len}",
+                        n.len()
+                    )));
                 }
                 let entries_fields = match map_field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
@@ -2329,7 +2329,10 @@ fn process_block_items(
     total: usize,
     on_item: &mut impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
 ) -> Result<usize, AvroError> {
-    let Some(new_total) = total.checked_add(count).filter(|&t| t <= i32::MAX as usize) else {
+    let Some(new_total) = total
+        .checked_add(count)
+        .filter(|&t| i32::try_from(t).is_ok())
+    else {
         return Err(AvroError::ParseError(
             "Capacity overflow when decoding array/map item blocks".to_string(),
         ));
@@ -4426,7 +4429,7 @@ mod tests {
     ) -> AvroDataType {
         let mut avro_children: Vec<AvroDataType> = Vec::with_capacity(children.len());
         let mut fields: Vec<arrow_schema::Field> = Vec::with_capacity(children.len());
-        for (codec, name, dt) in children.into_iter() {
+        for (codec, name, dt) in children {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));
         }

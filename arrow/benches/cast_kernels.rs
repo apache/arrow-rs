@@ -18,14 +18,12 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::cast;
@@ -137,7 +135,7 @@ fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
             builder.append_null()
         } else {
             builder.append_value(
-                rng.random_range(-999_999_999f32..999_999_999f32)
+                rng.random_range(-1_000_000_000_f32..1_000_000_000_f32)
                     .to_string(),
             )
         }
@@ -214,6 +212,7 @@ fn add_benchmark(c: &mut Criterion) {
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
+    let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
 
     let f64_array = build_array::<Float64Type>(512);
     let date64_array = build_array::<Date64Type>(512);
@@ -299,6 +298,9 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast utf8 to f32", |b| {
         b.iter(|| cast_array(&f32_utf8_array, DataType::Float32))
+    });
+    c.bench_function("cast utf8 to i32", |b| {
+        b.iter(|| cast_array(&i32_utf8_array, DataType::Int32))
     });
     c.bench_function("cast i64 to string 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Utf8))

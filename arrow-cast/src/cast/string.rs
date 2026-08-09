@@ -26,7 +26,7 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
     let nulls = array.nulls();
     for i in 0..array.len() {
-        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+        match nulls.is_some_and(|x| x.is_null(i)) {
             true => builder.append_null(),
             false => {
                 formatter.value(i).write(&mut builder)?;
@@ -49,7 +49,7 @@ pub(crate) fn value_to_string_view(
     // TODO: replace with write to builder after https://github.com/apache/arrow-rs/issues/6373
     let mut buffer = String::new();
     for i in 0..array.len() {
-        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+        match nulls.is_some_and(|x| x.is_null(i)) {
             true => builder.append_null(),
             false => {
                 // write to buffer first and then copy into target array

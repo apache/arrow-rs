@@ -1227,7 +1227,7 @@ impl Date64Type {
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
+        d.sub(epoch).num_milliseconds()
     }
 
     /// Adds the given IntervalYearMonthType to an arrow Date64Type

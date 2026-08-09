@@ -54,8 +54,8 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-half = { version = "2.1", default-features = false, features = ["rand_distr"], optional = true }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
+half = { version = "2.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -74,6 +74,9 @@ prettyprint = ["arrow-cast/prettyprint"]
 # target without assuming an environment containing JavaScript.
 test_utils = ["dep:rand", "dep:half"]
 pyarrow = ["ffi", "dep:arrow-pyarrow"]
+# Record the Python type of each pyarrow conversion in PyO3's introspection data, so that stub
+# generators emit e.g. `pyarrow.Array` rather than `_typeshed.Incomplete`. Implies `pyarrow`.
+pyarrow-experimental-inspect = ["pyarrow", "arrow-pyarrow/experimental-inspect"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
@@ -88,8 +91,8 @@ pool = ["arrow-array/pool"]
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true, default-features = false }
-half = { version = "2.1", default-features = false, features = ["rand_distr"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+half = { version = "2.1", default-features = false }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 # used in examples
 memmap2 = "0.9.3"
@@ -338,3 +341,6 @@ required-features = ["chrono-tz"]
 [[test]]
 name = "arithmetic"
 required-features = ["chrono-tz"]
+
+[lints]
+workspace = true

@@ -420,7 +420,7 @@ pub struct ArrowSchemaConverter<'a> {
     schema_root: &'a str,
     /// Should we coerce Arrow types to compatible Parquet types?
     ///
-    /// See docs on [Self::with_coerce_types]`
+    /// See docs on [`Self::with_coerce_types`]
     coerce_types: bool,
 }
 
@@ -1880,7 +1880,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new(
@@ -1890,7 +1890,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "ts_milli",
