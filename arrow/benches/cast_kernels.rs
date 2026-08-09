@@ -202,6 +202,44 @@ fn build_nested_dict_array(size: usize) -> ArrayRef {
     Arc::new(DictionaryArray::new(outer_keys, Arc::new(inner)))
 }
 
+// Keys for a `size` row dictionary, spread over `distinct` values so a cast has to touch
+// the whole values buffer rather than a contiguous prefix of it.
+fn dict_keys(size: usize, distinct: usize) -> UInt64Array {
+    let mut rng = seedable_rng();
+    let range = Uniform::new(0, distinct as u64).unwrap();
+    UInt64Array::from_iter_values((0..size).map(|_| rng.sample(range)))
+}
+
+// `Dictionary<UInt64, Utf8>` of `size` rows over `distinct` values, each longer than 12
+// bytes so the resulting views reference the values buffer rather than inlining.
+//
+// The ratio of rows to distinct values is what matters when casting to a view: the cast
+// can either build one view per dictionary value and gather those with `take`, or build
+// one view per row directly against the values buffer. Which of the two is cheaper depends
+// on that ratio, so both a dense and a sparse shape are benchmarked below.
+fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
+    let values =
+        StringArray::from_iter_values((0..distinct).map(|i| format!("dictionary value {i:07}")));
+
+    Arc::new(DictionaryArray::new(
+        dict_keys(size, distinct),
+        Arc::new(values),
+    ))
+}
+
+// As `build_string_dict_array`, but with `Binary` values. Casting those to `Utf8View` has
+// to validate the dictionary values as UTF-8, which a `Utf8` source does not.
+fn build_binary_dict_array(size: usize, distinct: usize) -> ArrayRef {
+    let values = BinaryArray::from_iter_values(
+        (0..distinct).map(|i| format!("dictionary value {i:07}").into_bytes()),
+    );
+
+    Arc::new(DictionaryArray::new(
+        dict_keys(size, distinct),
+        Arc::new(values),
+    ))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -233,6 +271,11 @@ fn add_benchmark(c: &mut Criterion) {
     let nested_dict_array = build_nested_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+
+    // the dictionary is far larger than the array is long, as after a selective filter.
+    // `dict_array` above is the opposite shape, many rows over few dictionary values.
+    let sparse_dict_array = build_string_dict_array(1_024, 32_768);
+    let sparse_binary_dict_array = build_binary_dict_array(1_024, 32_768);
 
     let string_float_array_normal = build_string_float_array(5_000, 0.1);
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
@@ -351,6 +394,12 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast dict to string view", |b| {
         b.iter(|| cast_array(&dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast binary dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_binary_dict_array, DataType::Utf8View))
     });
     c.bench_function("cast nested dict to dict", |b| {
         b.iter(|| {
