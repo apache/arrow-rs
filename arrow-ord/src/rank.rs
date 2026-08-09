@@ -106,16 +106,230 @@ fn byte_view_rank<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
     options: SortOptions,
 ) -> Vec<u32> {
-    let to_sort: Vec<(&[u8], u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
+    // An inline view already contains the complete value. Convert it once to
+    // a key whose integer ordering matches the byte ordering, as is done by
+    // `sort_byte_view`.
+    if array.data_buffers().is_empty() {
+        let to_sort: Vec<(u128, u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
+            Some(n) => n
+                .valid_indices()
+                .map(|idx| {
+                    // SAFETY: `valid_indices` only yields indices in the array.
+                    let raw = unsafe { *array.views().get_unchecked(idx) };
+                    (GenericByteViewArray::<T>::inline_key_fast(raw), idx as u32)
+                })
+                .collect(),
+            None => array
+                .views()
+                .iter()
+                .enumerate()
+                .map(|(idx, raw)| (GenericByteViewArray::<T>::inline_key_fast(*raw), idx as u32))
+                .collect(),
+        };
+        return rank_impl(
+            array.len(),
+            to_sort,
+            options,
+            |a, b| a.cmp(&b),
+            |a, b| a == b,
+        );
+    }
+
+    if has_high_byte_view_key_collision_rate(array) {
+        let to_sort: Vec<(&[u8], u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
+            Some(n) => n
+                .valid_indices()
+                .map(|idx| (array.value(idx).as_ref(), idx as u32))
+                .collect(),
+            None => (0..array.len())
+                .map(|idx| (array.value(idx).as_ref(), idx as u32))
+                .collect(),
+        };
+        return rank_impl(array.len(), to_sort, options, Ord::cmp, PartialEq::eq);
+    }
+
+    // Cache a wider prefix than the 4 bytes stored in a non-inline view. This
+    // pays for the backing-buffer access once per value instead of once per
+    // comparison, and only resolves the complete value when two keys collide.
+    let to_sort: Vec<(u128, u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
         Some(n) => n
             .valid_indices()
-            .map(|idx| (array.value(idx).as_ref(), idx as u32))
+            .map(|idx| {
+                // SAFETY: `valid_indices` only yields indices in the array.
+                let value: &[u8] = unsafe { array.value_unchecked(idx).as_ref() };
+                (byte_view_key(value), idx as u32)
+            })
             .collect(),
         None => (0..array.len())
-            .map(|idx| (array.value(idx).as_ref(), idx as u32))
+            .map(|idx| {
+                // SAFETY: `idx` is in `0..array.len()`.
+                let value: &[u8] = unsafe { array.value_unchecked(idx).as_ref() };
+                (byte_view_key(value), idx as u32)
+            })
             .collect(),
     };
-    rank_impl(array.len(), to_sort, options, Ord::cmp, PartialEq::eq)
+    rank_impl_by(
+        array.len(),
+        to_sort,
+        options,
+        |a, b| compare_view_key(array, a, b),
+        |a, b| equal_view_key(array, a, b),
+    )
+}
+
+const BYTE_VIEW_KEY_LEN: usize = 16;
+const BYTE_VIEW_KEY_SAMPLES_PER_WINDOW: usize = 4;
+const BYTE_VIEW_KEY_SAMPLE_SIZE: usize = 8;
+const BYTE_VIEW_KEY_MAX_PROBES_PER_WINDOW: usize = 32;
+const BYTE_VIEW_KEY_FALLBACK_COLLISION_RATIO: usize = 3;
+
+fn has_high_byte_view_key_collision_rate<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+    if array.len() < 2 {
+        return false;
+    }
+
+    let mut keys = [0_u128; BYTE_VIEW_KEY_SAMPLE_SIZE];
+    let mut sample_len = 0;
+    let midpoint = array.len() / 2;
+
+    // Probe small local windows in both halves. Keeping each probe local avoids
+    // turning collision detection itself into scattered backing-buffer reads.
+    for (start, end) in [(0, midpoint), (midpoint, array.len())] {
+        let probe_end = end.min(start.saturating_add(BYTE_VIEW_KEY_MAX_PROBES_PER_WINDOW));
+        let window_start = sample_len;
+        let mut window_samples = 0;
+
+        for idx in start..probe_end {
+            if array.is_null(idx) {
+                continue;
+            }
+
+            // SAFETY: `idx` is within a window bounded by `array.len()`.
+            let value: &[u8] = unsafe { array.value_unchecked(idx).as_ref() };
+            keys[sample_len] = byte_view_key(value);
+            sample_len += 1;
+            window_samples += 1;
+            if window_samples == BYTE_VIEW_KEY_SAMPLES_PER_WINDOW {
+                break;
+            }
+        }
+
+        // Four equal keys already contribute three collisions. Even if every
+        // sample in the other window is distinct, that satisfies the final
+        // one-third threshold, so avoid touching the second backing-buffer
+        // window in the common all-collision case.
+        if window_samples == BYTE_VIEW_KEY_SAMPLES_PER_WINDOW
+            && keys[window_start..sample_len]
+                .windows(2)
+                .all(|w| w[0] == w[1])
+        {
+            return true;
+        }
+    }
+
+    if sample_len < 2 {
+        return false;
+    }
+
+    let keys = &mut keys[..sample_len];
+    keys.sort_unstable();
+    let unique_keys = 1 + keys.windows(2).filter(|w| w[0] != w[1]).count();
+
+    // If at least roughly one third of sampled keys collide, comparing the
+    // wider key before every full-value comparison is likely more expensive
+    // than sorting slices directly.
+    let colliding_keys = sample_len - unique_keys;
+    colliding_keys * BYTE_VIEW_KEY_FALLBACK_COLLISION_RATIO >= sample_len
+}
+
+#[inline(always)]
+fn byte_view_key(value: &[u8]) -> u128 {
+    let mut key = [0_u8; BYTE_VIEW_KEY_LEN];
+    let key_len = value.len().min(key.len());
+    key[..key_len].copy_from_slice(&value[..key_len]);
+
+    // Big-endian conversion makes integer comparison equivalent to comparing
+    // these bytes lexicographically. Equal keys fall back to the full values,
+    // covering values that differ after 16 bytes and prefixes containing zero.
+    u128::from_be_bytes(key)
+}
+
+#[inline(always)]
+fn compare_view_key<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    a: &(u128, u32),
+    b: &(u128, u32),
+) -> Ordering {
+    match a.0.cmp(&b.0) {
+        Ordering::Equal => {
+            // SAFETY: both indices were produced from this array above.
+            let full_a: &[u8] = unsafe { array.value_unchecked(a.1 as usize).as_ref() };
+            let full_b: &[u8] = unsafe { array.value_unchecked(b.1 as usize).as_ref() };
+            full_a.cmp(full_b)
+        }
+        ordering => ordering,
+    }
+}
+
+#[inline(always)]
+fn equal_view_key<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    a: &(u128, u32),
+    b: &(u128, u32),
+) -> bool {
+    if a.0 != b.0 {
+        return false;
+    }
+
+    // SAFETY: both indices were produced from this array above.
+    let full_a: &[u8] = unsafe { array.value_unchecked(a.1 as usize).as_ref() };
+    let full_b: &[u8] = unsafe { array.value_unchecked(b.1 as usize).as_ref() };
+    full_a == full_b
+}
+
+fn rank_impl_by<T, C, E>(
+    len: usize,
+    mut valid: Vec<(T, u32)>,
+    options: SortOptions,
+    compare: C,
+    eq: E,
+) -> Vec<u32>
+where
+    C: Fn(&(T, u32), &(T, u32)) -> Ordering,
+    E: Fn(&(T, u32), &(T, u32)) -> bool,
+{
+    // We can use an unstable sort as we combine equal values later
+    valid.sort_unstable_by(compare);
+    if options.descending {
+        valid.reverse();
+    }
+
+    let (mut valid_rank, null_rank) = match options.nulls_first {
+        true => (len as u32, (len - valid.len()) as u32),
+        false => (valid.len() as u32, len as u32),
+    };
+
+    let mut out: Vec<_> = vec![null_rank; len];
+    if let Some(v) = valid.last() {
+        out[v.1 as usize] = valid_rank;
+    }
+
+    let mut count = 1; // Number of values in rank
+    for w in valid.windows(2).rev() {
+        match eq(&w[0], &w[1]) {
+            true => {
+                count += 1;
+                out[w[0].1 as usize] = valid_rank;
+            }
+            false => {
+                valid_rank -= count;
+                count = 1;
+                out[w[0].1 as usize] = valid_rank
+            }
+        }
+    }
+
+    out
 }
 
 fn rank_impl<T, C, E>(
@@ -246,6 +460,21 @@ fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
 mod tests {
     use super::*;
     use arrow_array::*;
+
+    fn assert_same_rank(left: &dyn Array, right: &dyn Array) {
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                assert_eq!(
+                    rank(left, Some(options)).unwrap(),
+                    rank(right, Some(options)).unwrap()
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_primitive() {
@@ -412,5 +641,96 @@ mod tests {
         ]);
         let res = rank(&values, None).unwrap();
         assert_eq!(res, &[3, 4, 1, 3]);
+    }
+
+    #[test]
+    fn test_string_view_key_collisions() {
+        let values = vec![
+            Some("abcdefghijklmnop"),
+            Some("abcdefghijklmnopA"),
+            Some("abcdefghijklmnopB"),
+            Some("abcdefghijklmnopA"),
+            Some("abcdefghijklmno"),
+            Some("short"),
+            None,
+        ];
+        let expected = StringArray::from(values.clone());
+        let actual = StringViewArray::from(values);
+
+        assert_same_rank(&actual, &expected);
+    }
+
+    #[test]
+    fn test_binary_view_key_collisions() {
+        let zeroes_16 = [0_u8; 16];
+        let zeroes_17 = [0_u8; 17];
+        let mut zeroes_then_one = [0_u8; 17];
+        zeroes_then_one[16] = 1;
+        let mut zeroes_then_two = [0_u8; 17];
+        zeroes_then_two[16] = 2;
+
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b""),
+            Some(b"\0"),
+            Some(&zeroes_16),
+            Some(&zeroes_17),
+            Some(&zeroes_then_one),
+            Some(&zeroes_then_two),
+            Some(&zeroes_then_one),
+            None,
+        ];
+        let expected = BinaryArray::from_opt_vec(values.clone());
+        let actual = BinaryViewArray::from_iter(values);
+
+        assert_same_rank(&actual, &expected);
+    }
+
+    #[test]
+    fn test_byte_view_high_key_collision_detection() {
+        const SIZE: u32 = 64;
+
+        let same_key: StringViewArray = (0..SIZE)
+            .map(|i| {
+                let suffix = i.wrapping_mul(2_654_435_761);
+                Some(format!("abcdefghijklmnop{suffix:08x}"))
+            })
+            .collect();
+
+        assert_eq!(
+            byte_view_key(same_key.value(0).as_bytes()),
+            byte_view_key(same_key.value(1).as_bytes())
+        );
+        assert!(has_high_byte_view_key_collision_rate(&same_key));
+
+        let clustered: StringViewArray = (0..SIZE)
+            .map(|i| {
+                let suffix = i.wrapping_mul(2_654_435_761);
+                let value = if i < SIZE / 2 {
+                    format!("{suffix:016x}abcdefgh")
+                } else {
+                    format!("abcdefghijklmnop{suffix:08x}")
+                };
+                Some(value)
+            })
+            .collect();
+        assert!(has_high_byte_view_key_collision_rate(&clustered));
+
+        let with_nulls: StringViewArray = (0..SIZE)
+            .map(|i| {
+                (i % 2 == 0).then(|| {
+                    let suffix = i.wrapping_mul(2_654_435_761);
+                    format!("abcdefghijklmnop{suffix:08x}")
+                })
+            })
+            .collect();
+        assert!(has_high_byte_view_key_collision_rate(&with_nulls));
+
+        let distinct: StringViewArray = (0..SIZE)
+            .map(|i| {
+                let suffix = i.wrapping_mul(2_654_435_761);
+                Some(format!("{suffix:016x}abcdefgh"))
+            })
+            .collect();
+        assert!(!has_high_byte_view_key_collision_rate(&distinct));
     }
 }
