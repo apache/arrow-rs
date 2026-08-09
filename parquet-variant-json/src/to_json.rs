@@ -887,7 +887,7 @@ mod tests {
         JsonTest {
             variant: Variant::from(""),
             expected_json: "\"\"",
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 
@@ -917,7 +917,7 @@ mod tests {
         JsonTest {
             variant: Variant::Binary(b""),
             expected_json: "\"\"", // empty base64
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 

@@ -18,6 +18,7 @@ CRATES="
     -p arrow-data
     -p arrow-ipc
     -p arrow-json
+    -p arrow-cmp
     -p arrow-ord
     -p arrow-row
     -p arrow-schema
@@ -33,7 +34,7 @@ setup_miri() {
 }
 
 
-case $# in 
+case $# in
     0)
         setup_miri
 

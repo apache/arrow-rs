@@ -331,7 +331,7 @@ where
     V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
-        for (key, value) in iter.into_iter() {
+        for (key, value) in iter {
             self.insert(key.as_ref(), value);
         }
     }

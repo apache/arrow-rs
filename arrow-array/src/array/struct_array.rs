@@ -168,7 +168,7 @@ impl StructArray {
 
             if !f.is_nullable()
                 && let Some(a) = a.logical_nulls()
-                && !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
                 && a.null_count() > 0
             {
                 return Err(ArrowError::InvalidArgumentError(format!(

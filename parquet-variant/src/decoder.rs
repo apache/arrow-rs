@@ -589,14 +589,14 @@ mod tests {
     #[test]
     fn test_short_string_exact_length() {
         let data = b"Helloo";
-        let result = decode_short_string(1 | 5 << 2, data).unwrap();
+        let result = decode_short_string(1 | (5 << 2), data).unwrap();
         assert_eq!(result.0, "Hello");
     }
 
     #[test]
     fn test_short_string_truncated_length() {
         let data = b"Hel";
-        let result = decode_short_string(1 | 5 << 2, data);
+        let result = decode_short_string(1 | (5 << 2), data);
         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 

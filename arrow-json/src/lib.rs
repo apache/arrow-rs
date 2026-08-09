@@ -101,7 +101,7 @@ use serde_json::{Number, Value};
 /// Writer will produce. For example, if the RecordBatch Schema is
 /// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
-/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
+/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with [`StructMode::ListOnly`]
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
 /// rows formatted similarly.
 ///
