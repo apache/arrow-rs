@@ -445,6 +445,10 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(f16::from_f32(raw_float));
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes())
             .ok()
             .map(f16::from_f32)
@@ -453,13 +457,35 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(raw_float);
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(raw_float);
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
+    }
+}
+
+/// this is a no-op if the string starts and ends with a digit, otherwise it will trim whitespace from the start and end of the string.
+#[inline]
+fn trim_pre_and_post_whitespace(string: &str) -> &str {
+    let bytes = string.as_bytes();
+    let prefix = bytes.first().is_some_and(|b| !b.is_ascii_digit());
+    let suffix = bytes.last().is_some_and(|b| !b.is_ascii_digit());
+    match (prefix, suffix) {
+        (false, false) => string,
+        (true, false) => string.trim_ascii_start(),
+        (false, true) => string.trim_ascii_end(),
+        (true, true) => string.trim_ascii(),
     }
 }
 
@@ -467,14 +493,23 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
-                    return None;
+                let mut raw_bytes = string.as_bytes();
+                if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                    raw_bytes = raw_bytes.trim_ascii_end();
+                    if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                        return None;
+                    }
                 }
-                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
-                    string.as_bytes(),
-                ) {
-                    (Some(n), x) if x == string.len() => Some(n),
-                    _ => None,
+                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(raw_bytes) {
+                    (Some(n), x) if x == raw_bytes.len() => Some(n),
+                    _ => {
+                        let trimmed = raw_bytes.trim_ascii_start();
+                        match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(trimmed)
+                        {
+                            (Some(n), x) if x == trimmed.len() => Some(n),
+                            _ => None,
+                        }
+                    }
                 }
             }
         }
@@ -585,6 +620,32 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+/// Parse the ISO 8601 signed extended-year form (`±YYYY[Y...]-MM-DD`) into
+/// raw `(year, month, day)` components, without validating the calendar date.
+///
+/// The caller must have already verified that `string` begins with `+` or `-`;
+/// the year must have at least 4 digits. Returns `None` if the shape is
+/// malformed or any component fails to parse numerically.
+fn parse_extended_ymd(string: &str) -> Option<(i32, u32, u32)> {
+    debug_assert!(string.starts_with('+') || string.starts_with('-'));
+    // Skip the sign and look for the hyphen that terminates the year digits.
+    // Per ISO 8601 the unsigned year part must be at least 4 digits.
+    let rest = &string[1..];
+    let hyphen = rest.find('-')?;
+    if hyphen < 4 {
+        return None;
+    }
+    // The year substring is the sign and the digits (but not the separator),
+    // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999".
+    let year: i32 = string[..hyphen + 1].parse().ok()?;
+    // The remainder should begin with a '-' which we strip off, leaving the month-day part.
+    let remainder = string[hyphen + 1..].strip_prefix('-')?;
+    let mut parts = remainder.splitn(2, '-');
+    let month: u32 = parts.next()?.parse().ok()?;
+    let day: u32 = parts.next()?.parse().ok()?;
+    Some((year, month, day))
+}
+
 fn parse_date(string: &str) -> Option<NaiveDate> {
     // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
     //
@@ -594,21 +655,7 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
     //
     // [ISO 8601]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/time/format/DateTimeFormatter.html#ISO_LOCAL_DATE
     if string.starts_with('+') || string.starts_with('-') {
-        // Skip the sign and look for the hyphen that terminates the year digits.
-        // According to ISO 8601 the unsigned part must be at least 4 digits.
-        let rest = &string[1..];
-        let hyphen = rest.find('-')?;
-        if hyphen < 4 {
-            return None;
-        }
-        // The year substring is the sign and the digits (but not the separator)
-        // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999"
-        let year: i32 = string[..hyphen + 1].parse().ok()?;
-        // The remainder should begin with a '-' which we strip off, leaving the month-day part.
-        let remainder = string[hyphen + 1..].strip_prefix('-')?;
-        let mut parts = remainder.splitn(2, '-');
-        let month: u32 = parts.next()?.parse().ok()?;
-        let day: u32 = parts.next()?.parse().ok()?;
+        let (year, month, day) = parse_extended_ymd(string)?;
         return NaiveDate::from_ymd_opt(year, month, day);
     }
 
@@ -679,10 +726,30 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year as _, month as _, day as _)
 }
 
+/// Parse a date string into days since 1970-01-01, covering the full
+/// `Date32` range (years ≈ ±5,881,580) for the signed extended-year form.
+///
+/// The Gregorian calendar repeats exactly every 400 years (146,097 days), so
+/// we fold the year into `[0, 400)`, validate the folded date, and add
+/// `era * 146_097` to recover the absolute day count.
+///
+/// For all other inputs, behavior matches [`parse_date`].
+fn parse_date_to_days(string: &str) -> Option<i32> {
+    if string.starts_with('+') || string.starts_with('-') {
+        let (year, month, day) = parse_extended_ymd(string)?;
+        let y = year as i64;
+        let era = y.div_euclid(400);
+        let yoe = y.rem_euclid(400) as i32;
+        let nd = NaiveDate::from_ymd_opt(yoe, month, day)?;
+        let in_era = (nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
+        return i32::try_from(era * 146_097 + in_era).ok();
+    }
+    parse_date(string).map(|nd| nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+}
+
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
-        let date = parse_date(string)?;
-        Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+        parse_date_to_days(string)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
@@ -1281,7 +1348,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} centuries as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1297,7 +1364,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} decades as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1312,7 +1379,7 @@ impl Interval {
                     .map_err(|_| {
                         ArrowError::ParseError(format!(
                             "Unable to represent {} years as months in a signed 32-bit integer",
-                            &amount.integer
+                            amount.integer
                         ))
                     })?;
 
@@ -1322,7 +1389,7 @@ impl Interval {
                 let months = amount.integer.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} months in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 
@@ -1344,7 +1411,7 @@ impl Interval {
                 let days = amount.integer.mul_checked(7)?.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} weeks as days in a signed 32-bit integer",
-                        &amount.integer
+                        amount.integer
                     ))
                 })?;
 
@@ -1795,6 +1862,32 @@ mod tests {
         for case in err_cases {
             assert_eq!(Date32Type::parse(case), None);
         }
+    }
+
+    #[test]
+    fn parse_date32_extended_year() {
+        // `Date32` covers any i32 days-from-epoch, verify we can parse it
+        let cases: &[(&str, i32)] = &[
+            ("+1970-01-01", 0),
+            ("+2024-01-01", 19_723),
+            ("-0001-01-01", -719_893),
+            ("+29349-01-26", 10_000_000),
+            ("+2739877-01-03", 1_000_000_000),
+            // Extremes of the Date32 representable range.
+            ("+5881580-07-11", i32::MAX),
+            ("-5877641-06-23", i32::MIN),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(Date32Type::parse(input), Some(*expected), "input: {input}");
+        }
+
+        // One past Date32::MAX / MIN overflows i32 days-from-epoch.
+        assert_eq!(Date32Type::parse("+5881580-07-12"), None);
+        assert_eq!(Date32Type::parse("-5877641-06-22"), None);
+        // Invalid calendar dates still rejected regardless of year magnitude.
+        assert_eq!(Date32Type::parse("+2739877-02-30"), None);
+        assert_eq!(Date32Type::parse("+2739877-13-01"), None);
+        assert_eq!(Date32Type::parse("-2739877-02-30"), None);
     }
 
     #[test]
@@ -2813,5 +2906,51 @@ mod tests {
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
+    }
+    #[test]
+    fn test_parse_prefix_white_space() {
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n2.5"), Some(2.5));
+        assert_eq!(Float64Type::parse("\n-942.5423"), Some(-942.5423));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n40.5123"), Some(40.5123));
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n-40.5123"), Some(-40.5123));
+        assert_eq!(Float64Type::parse(" -1.5"), Some(-1.5));
+        assert_eq!(Int32Type::parse(" 3"), Some(3));
+        assert_eq!(Int32Type::parse("          30"), Some(30));
+        assert_eq!(Int32Type::parse("\n \n 100"), Some(100));
+        assert_eq!(Int32Type::parse(" \n25"), Some(25));
+        assert_eq!(Int32Type::parse("\t800"), Some(800));
+        assert_eq!(Int32Type::parse("\t  \n \t 851"), Some(851));
+        assert_eq!(Int32Type::parse("\t\n\t\n\n\n\t1"), Some(1));
+        assert_eq!(Int32Type::parse(" \n-25"), Some(-25));
+        assert_eq!(Int32Type::parse("\t-800"), Some(-800));
+
+        // suffix whitespace
+        assert_eq!(Float64Type::parse("1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("40.5123\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("40.5123\n\t\n\t\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("-942.5423\t"), Some(-942.5423));
+        assert_eq!(Int32Type::parse("3 "), Some(3));
+        assert_eq!(Int32Type::parse("30          "), Some(30));
+        assert_eq!(Int32Type::parse("-25 \n"), Some(-25));
+        assert_eq!(Int32Type::parse("800\t"), Some(800));
+        // whitespace on both sides
+        assert_eq!(Float64Type::parse(" 1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54 \t"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n-942.5423\n"), Some(-942.5423));
+        assert_eq!(Int32Type::parse(" 3 "), Some(3));
+        assert_eq!(Int32Type::parse("\n \n 100 \n"), Some(100));
+        assert_eq!(Int32Type::parse("\t-800\t\n"), Some(-800));
+
+        // trailing non-whitespace chars should not parse
+        assert_eq!(Float64Type::parse("1.5abc"), None);
+        assert_eq!(Float64Type::parse("40.5123x"), None);
+        assert_eq!(Int32Type::parse("30x"), None);
+        assert_eq!(Int32Type::parse("100px"), None);
+        assert_eq!(Int32Type::parse("-25!"), None);
+        assert_eq!(Int32Type::parse("3j"), None);
+        assert_eq!(Int32Type::parse("3"), Some(3));
     }
 }

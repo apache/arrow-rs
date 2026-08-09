@@ -1378,8 +1378,8 @@ mod tests {
         let keys = StringArray::from(vec!["key1", "key2", "key3"]);
         let values = Int32Array::from(vec![1, 2, 3]);
         let entries_fields = Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Int32, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
         ]);
         let entries = StructArray::new(
             entries_fields.clone(),
@@ -1399,7 +1399,7 @@ mod tests {
 
         // Create the map field
         let map_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields),
             false, // Keys are non-nullable
         ));

@@ -46,6 +46,7 @@ mod int96_stats_roundtrip;
 mod invalid_utf8;
 mod io;
 mod large_string_overflow;
+mod parquet_testing;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;
@@ -559,7 +560,8 @@ fn make_bytearray_batch(
         .iter()
         .map(|value| Some(value.as_slice()))
         .collect::<Vec<_>>()
-        .into();
+        .try_into()
+        .unwrap();
     let service_large_binary: LargeBinaryArray = large_binary_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![

@@ -56,32 +56,26 @@ pub fn encode<R: RunEndIndexType>(
     array: &RunArray<R>,
 ) {
     let run_ends = array.run_ends().sliced_values();
-
     let mut logical_idx = 0;
     let mut offset_idx = 1; // Skip first offset
 
     // Iterate over each run
     for (physical_idx, run_end) in run_ends.enumerate() {
         let run_end = run_end.as_usize();
+        let iteration_count = run_end - logical_idx;
 
-        // Process all elements in this run
-        while logical_idx < run_end && offset_idx < offsets.len() {
-            let offset = &mut offsets[offset_idx];
-            let out = &mut data[*offset..];
-
-            // Use variable-length encoding to make the data self-describing
-            let row = rows.row(physical_idx);
-            let bytes_written = variable::encode_one(out, Some(row.data), opts);
-            *offset += bytes_written;
-
-            logical_idx += 1;
-            offset_idx += 1;
+        let first_offset = offsets[offset_idx];
+        let out = &mut data[first_offset..];
+        let bytes_written = variable::encode_one(out, Some(rows.row(physical_idx).data), opts);
+        offsets[offset_idx] += bytes_written;
+        // now if there are multiple logical positions in this run, we can just copy the same encoded data to the next offsets without re-encoding
+        for i in 1..iteration_count {
+            let dst = offsets[offset_idx + i];
+            data.copy_within(first_offset..first_offset + bytes_written, dst);
+            offsets[offset_idx + i] += bytes_written;
         }
-
-        // Break if we've processed all offsets
-        if offset_idx >= offsets.len() {
-            break;
-        }
+        logical_idx = run_end;
+        offset_idx += iteration_count;
     }
 }
 

@@ -23,7 +23,7 @@
 use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
 use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, IntervalMonthDayNano, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num_integer::Integer;
@@ -45,9 +45,10 @@ mod variable_size;
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
 // this is dynamic because different data_types influence how buffers and children are extended.
-type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
+type Extend<'a> =
+    Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) -> Result<(), ArrowError> + 'a>;
 
-type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize)>;
+type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize) -> Result<(), ArrowError>>;
 
 /// A mutable [ArrayData] that knows how to freeze itself into an [ArrayData].
 /// This is just a data container.
@@ -117,7 +118,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 /// use arrow_data::transform::MutableArrayData;
 /// use arrow_schema::DataType;
 /// fn i32_array(values: &[i32]) -> ArrayData {
-///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
+///   ArrayData::try_new(DataType::Int32, values.len(), None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
 /// }
 /// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
 /// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
@@ -127,7 +128,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 /// // Copy the first 3 elements from arr1
 /// mutable.extend(0, 0, 3);
 /// // Copy the last 3 elements from arr2
-/// mutable.extend(1, 2, 4);
+/// mutable.extend(1, 2, 5);
 /// // Complete the MutableArrayData into a new ArrayData
 /// let frozen = mutable.freeze();
 /// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
@@ -194,7 +195,10 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
-            let _: $dt = max.try_into().ok()?;
+            // `max` is the merged dictionary length; the largest key index is
+            // `max - 1`, so the key type only needs to hold `max - 1` (e.g. 256
+            // values use keys 0..=255, which fit in u8).
+            let _: $dt = max.saturating_sub(1).try_into().ok()?;
             let offset: $dt = offset.try_into().ok()?;
             Some(primitive::build_extend_with_offset(array, offset))
         }};
@@ -230,7 +234,8 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
                     let mut view = ByteView::from(*v);
                     view.buffer_index += buffer_offset;
                     view.into()
-                }))
+                }));
+            Ok(())
         },
     )
 }
@@ -257,7 +262,9 @@ fn build_extend(array: &ArrayData) -> Extend<'_> {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::build_extend::<IntervalMonthDayNano>(array)
+        }
         DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
         DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
@@ -304,7 +311,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::extend_nulls::<IntervalMonthDayNano>
+        }
         DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
         DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
@@ -391,13 +400,12 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// # Arguments
     /// * `arrays` - the source arrays to copy from
-    /// * `use_nulls` - a flag used to optimize insertions
-    ///   - `false` if the only source of nulls are the arrays themselves
-    ///   - `true` if the user plans to call [MutableArrayData::extend_nulls].
-    /// * capacity - the preallocated capacity of the output array, in bytes
+    /// * `use_nulls` - a flag indicating whether the caller intends to call `extend_nulls`.
+    ///   Note: null-handling is enabled automatically if any source array contains nulls.
+    /// * `capacity` - the preallocated capacity of the output array, in slots (number of elements)
     ///
-    /// Thus, if `use_nulls` is `false`, calling
-    /// [MutableArrayData::extend_nulls] should not be used.
+    /// if `use_nulls` is `false` and no source arrays contains nulls, calling
+    /// [MutableArrayData::extend_nulls] or [MutableArrayData::try_extend_nulls] will panic.
     pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
@@ -628,7 +636,10 @@ impl<'a> MutableArrayData<'a> {
                         let mut mutable = MutableArrayData::new(dictionaries, false, capacity);
 
                         for (i, len) in lengths.iter().enumerate() {
-                            mutable.extend(i, 0, *len)
+                            mutable.try_extend(i, 0, *len).expect(
+                                "extend failed while building dictionary; \
+                                 this is a bug in MutableArrayData",
+                            )
                         }
 
                         (Some(mutable.freeze()), true)
@@ -716,36 +727,87 @@ impl<'a> MutableArrayData<'a> {
         }
     }
 
-    /// Extends the in progress array with a region of the input arrays
+    /// Extends the in progress array with a region of the input arrays, returning an error on
+    /// overflow.
     ///
     /// # Arguments
-    /// * `index` - the index of array that you what to copy values from
+    /// * `index` - the index of array that you want to copy values from
     /// * `start` - the start index of the chunk (inclusive)
     /// * `end` - the end index of the chunk (exclusive)
+    ///
+    /// # Errors
+    /// Returns an error if offset arithmetic overflows the underlying integer type.
     ///
     /// # Panic
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
-    pub fn extend(&mut self, index: usize, start: usize, end: usize) {
+    pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
-        (self.extend_values[index])(&mut self.data, index, start, len);
+        // Snapshot buffer lengths before attempting the extend so we can roll
+        // back to a consistent state if it fails.
+        let buf1_len = self.data.buffer1.len();
+        let buf2_len = self.data.buffer2.len();
+        if let Err(e) = (self.extend_values[index])(&mut self.data, index, start, len) {
+            // Restore buffers to their pre-call lengths so the array remains
+            // in a valid state for the caller to inspect or retry.
+            self.data.buffer1.truncate(buf1_len);
+            self.data.buffer2.truncate(buf2_len);
+            return Err(e);
+        }
         self.data.len += len;
+        Ok(())
+    }
+
+    /// Extends the in progress array with a region of the input arrays.
+    ///
+    /// # Panic
+    /// This function panics if there is an invalid index,
+    /// i.e. `index` >= the number of source arrays,
+    /// `end` > the length of the `index`th array,
+    /// or the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
+    #[deprecated(
+        since = "59.0.0",
+        note = "Use `try_extend` which returns an error on overflow instead of panicking"
+    )]
+    pub fn extend(&mut self, index: usize, start: usize, end: usize) {
+        self.try_extend(index, start, end)
+            .expect("extend failed due to offset overflow")
+    }
+
+    /// Extends the in progress array with null elements, ignoring the input arrays, returning an
+    /// error on overflow.
+    ///
+    /// Prefer this over [`extend_nulls`](Self::extend_nulls) to handle cases where the run-end
+    /// counter overflows (relevant for `RunEndEncoded` arrays).
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
+        self.data.len += len;
+        let bit_len = bit_util::ceil(self.data.len, 8);
+        let nulls = self.data.null_buffer();
+        nulls.resize(bit_len, 0);
+        self.data.null_count += len;
+        (self.extend_nulls)(&mut self.data, len)?;
+        Ok(())
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
     ///
     /// # Panics
     ///
-    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays,
+    /// or if the run-end counter overflows for `RunEndEncoded` arrays.
+    #[deprecated(
+        since = "59.0.0",
+        note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
+    )]
     pub fn extend_nulls(&mut self, len: usize) {
-        self.data.len += len;
-        let bit_len = bit_util::ceil(self.data.len, 8);
-        let nulls = self.data.null_buffer();
-        nulls.resize(bit_len, 0);
-        self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len);
+        self.try_extend_nulls(len)
+            .expect("extend_nulls failed due to overflow")
     }
 
     /// Returns the current length

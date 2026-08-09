@@ -1028,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float16_display() {
         let values = vec![
             Some(f16::from_f32(f32::NAN)),
@@ -1486,7 +1487,7 @@ mod tests {
             Int32Builder::new(),
         )
         .with_values_field(
-            Field::new("values", DataType::Int32, true).with_metadata(money_metadata.clone()),
+            Field::new("my_values", DataType::Int32, true).with_metadata(money_metadata.clone()),
         );
         array
             .keys()

@@ -24,7 +24,7 @@ use crate::{
 use arrow_schema::ArrowError;
 
 fn array_header(large: bool, offset_size: u8) -> u8 {
-    let large_bit = if large { 1 } else { 0 };
+    let large_bit = u8::from(large);
     (large_bit << (BASIC_TYPE_BITS + 2))
         | ((offset_size - 1) << BASIC_TYPE_BITS)
         | VariantBasicType::Array as u8
@@ -222,7 +222,7 @@ where
     V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = V>>(&mut self, iter: T) {
-        for v in iter.into_iter() {
+        for v in iter {
             self.append_value(v);
         }
     }

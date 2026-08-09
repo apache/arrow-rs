@@ -133,7 +133,10 @@ impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(pos.len(), self.len);
         // Preallocate for the decoded byte width (FixedSizeBinary len), not the hex string length.
-        let mut scratch = Vec::with_capacity(self.len as usize);
+        let capacity: usize = self.len.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", self.len))
+        })?;
+        let mut scratch = Vec::with_capacity(capacity);
 
         for p in pos {
             match tape.get(*p) {

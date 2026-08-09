@@ -15,27 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, StructArray, make_array},
+    array::{
+        self, Array, ArrayRef, GenericListArray, GenericListViewArray, ListLikeArray, StructArray,
+        UInt64Array, make_array,
+    },
     buffer::NullBuffer,
-    compute::CastOptions,
+    compute::{CastOptions, take},
     datatypes::Field,
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
-use crate::VariantArray;
-use crate::variant_array::BorrowedShreddingState;
+use crate::ShreddingState;
+use crate::variant_array::all_null_value_column;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
+use crate::{VariantArray, VariantType, unshred_variant};
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep<'a> {
+pub(crate) enum ShreddedPathStep {
     /// Path step succeeded, return the new shredding state
-    Success(BorrowedShreddingState<'a>),
-    /// The path element is not present in the `typed_value` column and there is no `value` column,
-    /// so we know it does not exist. It, and all paths under it, are all-NULL.
+    Success(ShreddingState),
+    /// The path element is not present in the `typed_value` column and the `value` column is
+    /// all-null, so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
     /// The path element is not present in the `typed_value` column and must be retrieved from the `value`
     /// column instead. The caller should be prepared to handle any value, including the requested
@@ -43,25 +47,85 @@ pub(crate) enum ShreddedPathStep<'a> {
     NotShredded,
 }
 
+/// Build the next shredding state by taking one list-like element (at `index`) per input row.
+///
+fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
+    typed_value: &dyn Array,
+    index: usize,
+) -> Result<Option<ShreddingState>> {
+    let list_array = typed_value.as_any().downcast_ref::<L>().ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Expected array type '{}' while handling list-like path step, got '{}'",
+            std::any::type_name::<L>(),
+            typed_value.data_type()
+        ))
+    })?;
+
+    let values = list_array.values();
+
+    let Some(struct_array) = values.as_struct_opt() else {
+        return Ok(None);
+    };
+    let shredding_state = ShreddingState::try_from(struct_array)?;
+
+    let value_array = shredding_state.value_column();
+    let typed_array = shredding_state.typed_value_column();
+
+    // If list elements have neither typed nor fallback values, this path step is missing.
+    if typed_array.is_none() && value_array.null_count() == value_array.len() {
+        return Ok(None);
+    }
+
+    let mut take_indices = Vec::with_capacity(list_array.len());
+    for row in 0..list_array.len() {
+        let row_range = list_array.element_range(row);
+        let take_index = (index < row_range.len()).then(|| (row_range.start + index) as u64);
+        take_indices.push(take_index);
+    }
+
+    let index_array = UInt64Array::from(take_indices);
+
+    // Gather both typed and fallback values at the requested element index.
+    let taken_value = take(value_array, &index_array, None)?;
+    let taken_typed = typed_array
+        .map(|typed| take(typed, &index_array, None))
+        .transpose()?;
+
+    Ok(Some(ShreddingState::new(taken_value, taken_typed)))
+}
+
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
 /// deeper. For a `VariantPathElement::Field`, if there is no `typed_value` at this level, if
 /// `typed_value` is not a struct, or if the requested field name does not exist, traversal returns
 /// a missing-path step (`Missing` or `NotShredded` depending on whether `value` exists).
 ///
-/// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element<'a>(
-    shredding_state: &BorrowedShreddingState<'a>,
+/// Safe-cast behavior (`cast_options.safe = true`):
+/// - Type mismatch during path traversal (for example field access on non-struct, index access on
+///   non-list) returns [`ShreddedPathStep::Missing`] or [`ShreddedPathStep::NotShredded`], allowing
+///   the caller to continue with null/fallback semantics.
+/// - List index out-of-bounds produces nulls for the corresponding rows.
+///
+/// Unsafe-cast behavior (`cast_options.safe = false`):
+/// - Field access on non-struct returns [`ArrowError::CastError`].
+/// - List index path steps follow JSONPath semantics and return missing/null for non-list or
+///   out-of-bounds rows.
+pub(crate) fn follow_shredded_path_element(
+    shredding_state: &ShreddingState,
     path_element: &VariantPathElement<'_>,
     _cast_options: &CastOptions,
-) -> Result<ShreddedPathStep<'a>> {
-    // If the requested path element is not present in `typed_value`, and `value` is missing, then
+) -> Result<ShreddedPathStep> {
+    // If the requested path element is not present in `typed_value`, and `value` is all-null, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
-    let missing_path_step = || match shredding_state.value_field() {
-        Some(_) => ShreddedPathStep::NotShredded,
-        None => ShreddedPathStep::Missing,
+    let missing_path_step = || {
+        let value = shredding_state.value_column();
+        if value.null_count() == value.len() {
+            ShreddedPathStep::Missing
+        } else {
+            ShreddedPathStep::NotShredded
+        }
     };
 
-    let Some(typed_value) = shredding_state.typed_value_field() else {
+    let Some(typed_value) = shredding_state.typed_value_column() else {
         return Ok(missing_path_step());
     };
 
@@ -69,7 +133,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
         VariantPathElement::Field { name } => {
             // Try to step into the requested field name of a struct.
             // First, try to downcast to StructArray
-            let Some(struct_array) = typed_value.as_any().downcast_ref::<StructArray>() else {
+            let Some(struct_array) = typed_value.as_struct_opt() else {
                 // Object field path step follows JSONPath semantics and returns missing path step (NotShredded/Missing) on non-struct path
                 return Ok(missing_path_step());
             };
@@ -90,15 +154,33 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 ))
             })?;
 
-            let state = BorrowedShreddingState::try_from(struct_array)?;
+            let state = ShreddingState::try_from(struct_array)?;
             Ok(ShreddedPathStep::Success(state))
         }
-        VariantPathElement::Index { .. } => {
-            // TODO: Support array indexing. Among other things, it will require slicing not
-            // only the array we have here, but also the corresponding metadata and null masks.
-            Err(ArrowError::NotYetImplemented(
-                "Pathing into shredded variant array index".into(),
-            ))
+        VariantPathElement::Index { index } => {
+            let state = match typed_value.data_type() {
+                DataType::List(_) => take_list_like_index_as_shredding_state::<
+                    GenericListArray<i32>,
+                >(typed_value.as_ref(), *index)?,
+                DataType::LargeList(_) => take_list_like_index_as_shredding_state::<
+                    GenericListArray<i64>,
+                >(typed_value.as_ref(), *index)?,
+                DataType::ListView(_) => take_list_like_index_as_shredding_state::<
+                    GenericListViewArray<i32>,
+                >(typed_value.as_ref(), *index)?,
+                DataType::LargeListView(_) => take_list_like_index_as_shredding_state::<
+                    GenericListViewArray<i64>,
+                >(typed_value.as_ref(), *index)?,
+                _ => {
+                    // JSONPath semantics: indexing a non-list yields no match.
+                    return Ok(missing_path_step());
+                }
+            };
+
+            match state {
+                Some(state) => Ok(ShreddedPathStep::Success(state)),
+                None => Ok(missing_path_step()),
+            }
         }
     }
 }
@@ -115,19 +197,53 @@ fn shredded_get_path(
     // Helper that creates a new VariantArray from the given nested value and typed_value columns,
     // properly accounting for accumulated nulls from path traversal
     let make_target_variant =
-        |value: Option<ArrayRef>,
-         typed_value: Option<ArrayRef>,
-         accumulated_nulls: Option<NullBuffer>| {
-            let metadata = input.metadata_field().clone();
+        |value: ArrayRef, typed_value: Option<ArrayRef>, accumulated_nulls: Option<NullBuffer>| {
+            let metadata = input.metadata_column().clone();
             VariantArray::from_parts(metadata, value, typed_value, accumulated_nulls)
         };
 
-    // Helper that shreds a VariantArray to a specific type.
+    // Helper that extracts the value at `path` and casts it to the requested type, or returns it as
+    // an unshredded binary variant when `Variant` output is requested.
     let shred_basic_variant =
         |target: VariantArray, path: VariantPath<'_>, as_field: Option<&Field>| {
-            let as_type = as_field.map(|f| f.data_type());
+            // A `VariantType` extension on `as_field` requests `Variant` output: return an
+            // unshredded binary variant instead of casting to a concrete Arrow type.
+            let requested_variant =
+                as_field.is_some_and(Field::has_valid_extension_type::<VariantType>);
+
+            // A `typed_value` in that field requests shredded output -- a `VariantArray` with
+            // `typed_value` columns. We produce only unshredded variant output. Shredded output is
+            // tracked in https://github.com/apache/arrow-rs/issues/8153. Reject such a request
+            // instead of silently dropping the shredding it asked for.
+            if requested_variant && requested_field_is_shredded(as_field) {
+                return Err(ArrowError::NotYetImplemented(
+                    "variant_get with shredded `Variant` output is not yet supported".to_string(),
+                ));
+            }
+
+            // Collapse any shredding back to binary. Only the `NotShredded` step below passes a
+            // non-empty `path`, and there `target` is already a plain `value` column (no
+            // `typed_value`) -- so `unshred_variant` hits its clone fast-path, with nothing deeper
+            // to shred. The builder then walks any remaining path per-row, emitting variant output
+            // because `as_type` is `None`.
+            let target = if requested_variant {
+                unshred_variant(&target)?
+            } else {
+                target
+            };
+
+            // Path exhausted, variant requested: return the target directly.
+            if requested_variant && path.is_empty() {
+                return Ok(ArrayRef::from(target));
+            }
+
+            let as_type = if requested_variant {
+                None
+            } else {
+                as_field.map(|f| f.data_type())
+            };
             let mut builder = make_variant_to_arrow_row_builder(
-                target.metadata_field(),
+                target.metadata_column(),
                 path,
                 as_type,
                 cast_options,
@@ -154,14 +270,14 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().borrow();
+    let mut shredding_state = input.shredding_state().clone();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
         match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
-                if let Some(typed_value) = shredding_state.typed_value_field() {
+                if let Some(typed_value) = shredding_state.typed_value_column() {
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
@@ -171,6 +287,18 @@ fn shredded_get_path(
             }
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
+                if as_field.is_some_and(Field::has_valid_extension_type::<VariantType>) {
+                    let all_nulls = Some(arrow::buffer::NullBuffer::from(vec![false; num_rows]));
+                    // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
+                    // a new empty metadata array. (n * 3 bytes vs Arc bump)
+                    let metadata = input.metadata_column().clone();
+                    let arr = VariantArray::from_parts_unshredded(
+                        metadata,
+                        all_null_value_column(num_rows),
+                        all_nulls,
+                    );
+                    return Ok(ArrayRef::from(arr));
+                }
                 let arr = match as_field.map(|f| f.data_type()) {
                     Some(data_type) => array::new_null_array(data_type, num_rows),
                     None => Arc::new(array::NullArray::new(num_rows)) as _,
@@ -179,7 +307,7 @@ fn shredded_get_path(
             }
             ShreddedPathStep::NotShredded => {
                 let target = make_target_variant(
-                    shredding_state.value_field().cloned(),
+                    shredding_state.value_column().clone(),
                     None,
                     accumulated_nulls,
                 );
@@ -190,8 +318,8 @@ fn shredded_get_path(
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
     let target = make_target_variant(
-        shredding_state.value_field().cloned(),
-        shredding_state.typed_value_field().cloned(),
+        shredding_state.value_column().clone(),
+        shredding_state.typed_value_column().cloned(),
         accumulated_nulls,
     );
 
@@ -214,29 +342,25 @@ fn shredded_get_path(
     //
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
-    if let DataType::Struct(fields) = as_field.data_type() {
-        if target.typed_value_field().is_none() {
+    if !as_field.has_valid_extension_type::<VariantType>()
+        && let DataType::Struct(fields) = as_field.data_type()
+    {
+        if target.typed_value_column().is_none() {
             return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
 
         let children = fields
             .iter()
             .map(|field| {
-                shredded_get_path(
-                    &target,
-                    &[VariantPathElement::from(field.name().as_str())],
-                    Some(field),
-                    cast_options,
-                )
+                let path = &[VariantPathElement::from(field.name().as_str())];
+                shredded_get_path(&target, path, Some(field), cast_options)
             })
             .collect::<Result<Vec<_>>>()?;
-
-        let struct_nulls = target.nulls().cloned();
 
         return Ok(Arc::new(StructArray::try_new(
             fields.clone(),
             children,
-            struct_nulls,
+            target.nulls().cloned(),
         )?));
     }
 
@@ -244,21 +368,29 @@ fn shredded_get_path(
     shred_basic_variant(target, VariantPath::default(), Some(as_field))
 }
 
+/// Returns true if `as_field` requests *shredded* `Variant` output.
+///
+/// Its struct carries a `typed_value` field naming the type to shred to.
+/// A plain variant request has only `metadata` and `value`.
+fn requested_field_is_shredded(as_field: Option<&Field>) -> bool {
+    as_field.is_some_and(|f| match f.data_type() {
+        DataType::Struct(fields) => fields.iter().any(|field| field.name() == "typed_value"),
+        _ => false,
+    })
+}
+
 fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Option<ArrayRef> {
     // Try to return the typed value directly when we have a perfect shredding match.
     if matches!(as_field.data_type(), DataType::Struct(_)) {
         return None;
     }
-    let typed_value = variant_array.typed_value_field()?;
+    let typed_value = variant_array.typed_value_column()?;
 
-    if typed_value.data_type() == as_field.data_type()
-        && variant_array
-            .value_field()
-            .is_none_or(|v| v.null_count() == v.len())
-    {
-        // Here we need to gate against the case where the `typed_value` is null but data is in the `value` column.
-        // 1. If the `value` column is null, or
-        // 2. If every row in the `value` column is null
+    let value = variant_array.value_column();
+    if typed_value.data_type() == as_field.data_type() && value.null_count() == value.len() {
+        // Here we need to gate against the case where the `typed_value` is null
+        // but data is in the `value` column: only an all-null `value` column
+        // qualifies as perfect shredding.
 
         // This is a perfect shredding, where the value is entirely shredded out,
         // so we can just return the typed value after merging the accumulated nulls.
@@ -290,6 +422,26 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
 /// 1. `as_type: None`: a VariantArray is returned. The values in this new VariantArray will point
 ///    to the specified path.
 /// 2. `as_type: Some(<specific field>)`: an array of the specified type is returned.
+///
+/// # Casting Semantics
+///
+/// Scalar conversion semantics intentionally follow Arrow cast behavior where applicable.
+/// Conversions in this module delegate to Arrow compute cast helpers such as
+/// `num_cast`, `cast_num_to_bool`, `single_bool_to_numeric`, and
+/// `cast_single_string_to_boolean_default`.
+///
+/// - Getting `DataType::Boolean` accepts boolean, numeric, and string variants.
+///   Numeric zero maps to `false`; non-zero maps to `true`. String parsing follows
+///   Arrow UTF8-to-boolean cast rules.
+/// - Getting numeric datatypes such as `DataType::Int8`, `DataType::Int16`, `DataType::Int32`,
+///   `DataType::Int64`, `DataType::UInt8`, `DataType::UInt16`, `DataType::UInt32`, `DataType::UInt64`,
+///   `DataType::Float16`, `DataType::Float32`, `DataType::Float64` accept
+///   boolean and numeric variants (integers, floating-point, and decimals).
+///   They return `None` when conversion is not possible.
+/// - Getting decimals such as `DataType::Decimal32`, `DataType::Decimal64`, `DataType::Decimal128`,
+///   `DataType::Decimal256` accept compatible decimal variants, integer variants,
+///   float variants and string variants.
+///   They return `None` when conversion is not possible.
 ///
 /// TODO: How would a caller request a struct or list type where the fields/elements can be any
 /// variant? Caller can pass None as the requested type to fetch a specific path, but it would
@@ -353,24 +505,29 @@ mod test {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{GetOptions, variant_get};
-    use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use super::{GetOptions, requested_field_is_shredded, variant_get};
+    use crate::variant_array::{
+        ShreddedVariantFieldArray, StructArrayBuilder, all_null_value_column,
+    };
     use crate::{
-        VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant, shred_variant,
+        ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant,
+        shred_variant,
     };
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
+        LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
+        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::compute::CastOptions;
+    use arrow::compute::{CastOptions, cast};
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
     use arrow::util::display::FormatOptions;
+    use arrow_schema::ArrowError;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
     use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
@@ -447,7 +604,7 @@ mod test {
     fn get_primitive_variant_inside_object_of_list() {
         single_variant_get_test(
             r#"{"some_field": [1234]}"#,
-            VariantPath::try_from("some_field").unwrap().join(0),
+            VariantPath::try_from("some_field[0]").unwrap(),
             "1234",
         );
     }
@@ -1065,7 +1222,7 @@ mod test {
                     EMPTY_VARIANT_METADATA_BYTES,
                     typed_value.len(),
                 ));
-                VariantArray::from_parts(Arc::new(metadata), None, Some(typed_value), None).into()
+                VariantArray::perfectly_shredded(Arc::new(metadata), typed_value, None).into()
             }
         };
     }
@@ -1735,11 +1892,12 @@ mod test {
 
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata),
-            None,
+            all_null_value_column(3),
             None,
             Some(nulls),
         ))
     }
+
     /// This test manually constructs a shredded variant array representing objects
     /// like {"x": 1, "y": "foo"} and {"x": 42} and tests extracting the "x" field
     /// as VariantArray using variant_get.
@@ -1774,6 +1932,210 @@ mod test {
         // Should get Int32Array
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
+    }
+
+    type ShreddedListLikeArrayGen = fn() -> ArrayRef;
+    type ShreddedListLikeCase = (&'static str, ShreddedListLikeArrayGen);
+
+    fn shredded_list_like_cases() -> [ShreddedListLikeCase; 4] {
+        [
+            ("list", shredded_list_variant_array),
+            ("large_list", shredded_large_list_variant_array),
+            ("list_view", shredded_list_view_variant_array),
+            ("large_list_view", shredded_large_list_view_variant_array),
+        ]
+    }
+
+    #[test]
+    fn test_shredded_list_like_index_access_from_value_field() {
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let array = array_gen();
+            let result = variant_get(&array, options.clone()).unwrap();
+            let result_variant = VariantArray::try_new(&result).unwrap();
+
+            assert_eq!(result_variant.value(0), Variant::from("drama"), "{case}");
+            assert_eq!(result_variant.value(1).as_int64(), Some(123), "{case}");
+        }
+    }
+
+    #[test]
+    fn test_shredded_list_like_index_out_of_bounds_unsafe_cast_returns_null() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            let result_variant = VariantArray::try_new(&result).unwrap();
+            assert_eq!(result_variant.value(0), Variant::Null, "{case}");
+            assert_eq!(result_variant.value(1), Variant::Null, "{case}");
+        }
+    }
+
+    /// Test extracting shredded list-like field with type conversion.
+    #[test]
+    fn test_shredded_list_like_as_string() {
+        let field = Field::new("typed_value", DataType::Utf8, false);
+        let options = GetOptions::new_with_path(VariantPath::from(0))
+            .with_as_type(Some(FieldRef::from(field)));
+        let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("horror")]));
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            assert_eq!(&result, &expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn test_shredded_list_like_index_access_from_value_field_as_int64() {
+        let field = Field::new("typed_value", DataType::Int64, true);
+        let options = GetOptions::new_with_path(VariantPath::from(1))
+            .with_as_type(Some(FieldRef::from(field)));
+        let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            // "drama" -> NULL, 123 -> 123.
+            assert_eq!(&result, &expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn test_shredded_list_in_struct_index_access() {
+        let array = shredded_struct_with_list_variant_array();
+        let options = GetOptions::new_with_path(VariantPath::try_from("a[1]").unwrap());
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+    }
+
+    #[test]
+    fn test_shredded_struct_in_list_field_access() {
+        let array = shredded_list_of_struct_variant_array();
+        let field = Field::new("x", DataType::Int32, true);
+        let path = VariantPath::from(0).join("x");
+        let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(3)]));
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn test_shredded_list_of_lists_index_access() {
+        let array = shredded_list_of_lists_variant_array();
+        let path = VariantPath::from(0).join(1);
+
+        let result = variant_get(&array, GetOptions::new_with_path(path.clone())).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+        assert_eq!(result_variant.value(0), Variant::from("b"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+
+        let field = Field::new("typed_value", DataType::Int64, true);
+        let casted = variant_get(
+            &array,
+            GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field))),
+        )
+        .unwrap();
+        let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
+        assert_eq!(&casted, &expected);
+    }
+
+    /// Helper to create a shredded list-like variant array used by list index tests.
+    ///
+    /// Rows:
+    /// 1. `["comedy", "drama"]` (fully shred-able as `Utf8`)
+    /// 2. `["horror", 123]` (partially shredded, with fallback for the numeric element)
+    fn shredded_list_like_variant_array(list_schema: DataType) -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"["comedy", "drama"]"#),
+            Some(r#"["horror", 123]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_of_lists_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"[["a", "b"], ["c", "d"]]"#),
+            Some(r#"[["x", 123], ["y", "z"]]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let inner_list = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let outer_list = DataType::List(Arc::new(Field::new("item", inner_list, true)));
+        let shredded = shred_variant(&input, &outer_list).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_large_list_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::LargeList(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_list_view_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::ListView(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_large_list_view_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::LargeListView(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_struct_with_list_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": ["comedy", "drama"]}"#),
+            Some(r#"{"a": ["horror", 123]}"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredding_schema = ShreddedSchemaBuilder::default()
+            .with_path("a", &list_schema)
+            .unwrap()
+            .build();
+        let shredded = shred_variant(&input, &shredding_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_of_struct_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"[{"x": 1}, {"x": 2}]"#),
+            Some(r#"[{"x": 3}, {"y": 4}]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, true)]));
+        let list_schema = DataType::List(Arc::new(Field::new("item", struct_type, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
     }
 
     /// Helper function to create a shredded variant array representing objects
@@ -1823,11 +2185,9 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(1), Some(42)]);
 
         // For perfect shredding of the x field, no "value" column, only typed_value
-        let x_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(x_field_typed_value) as ArrayRef),
-            None,
-        );
+        let x_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            x_field_typed_value,
+        ) as ArrayRef);
 
         // Create the main typed_value as a struct containing the "x" field
         let typed_value_fields = Fields::from(vec![Field::new(
@@ -1845,7 +2205,7 @@ mod test {
         // Create the main VariantArray
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata_array),
-            Some(Arc::new(value_array)),
+            Arc::new(value_array),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -1987,7 +2347,7 @@ mod test {
         println!("Depth 1 (shredded) passed");
     }
 
-    /// Test depth 2: Double nested field access "a.b.x" with Int32 conversion  
+    /// Test depth 2: Double nested field access "a.b.x" with Int32 conversion
     /// Covers shredded vs non-shredded VariantArrays for deeply nested field access
     #[test]
     fn test_depth_2_int32_conversion() {
@@ -2051,6 +2411,104 @@ mod test {
         let result = variant_get(&array, options).unwrap();
 
         println!("Nested path 'a.x' result: {:?}", result);
+    }
+
+    #[test]
+    fn test_variant_get_as_variant_from_unshredded_input() {
+        let (unshredded, _) = create_variant_get_as_variant_test_data();
+        let unshredded_field = VariantArray::try_new(&unshredded).unwrap().field("result");
+        assert_variant_field_extraction_returns_unshredded_variant(&unshredded, &unshredded_field);
+    }
+
+    #[test]
+    fn test_variant_get_as_variant_from_shredded_input() {
+        let (unshredded, shredded) = create_variant_get_as_variant_test_data();
+        let unshredded_field = VariantArray::try_new(&unshredded).unwrap().field("result");
+        assert_variant_field_extraction_returns_unshredded_variant(&shredded, &unshredded_field);
+    }
+
+    #[test]
+    fn test_variant_get_as_shredded_variant_is_not_yet_supported() {
+        let (_, shredded) = create_variant_get_as_variant_test_data();
+        // Deriving the request field from the shredded array yields a `VariantType` field whose
+        // struct carries a `typed_value` -- a request to shred the output. That is unsupported
+        // (https://github.com/apache/arrow-rs/issues/8153) and must error, not silently return a
+        // plain binary variant.
+        let shredded_field = VariantArray::try_new(&shredded).unwrap().field("result");
+        assert!(requested_field_is_shredded(Some(&shredded_field)));
+
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name").unwrap())
+            .with_as_type(Some(FieldRef::from(shredded_field)));
+        let err = variant_get(&shredded, options).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::NotYetImplemented(_)),
+            "expected NotYetImplemented, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_variant_get_missing_path_as_variant_annotates_value_non_nullable() {
+        let (unshredded, shredded) = create_variant_get_as_variant_test_data();
+        let variant_field = VariantArray::try_new(&unshredded).unwrap().field("result");
+
+        // indexing into a struct typed_value can never match: all-null variant output
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name[0]").unwrap())
+            .with_as_type(Some(FieldRef::from(variant_field)));
+        let result = variant_get(&shredded, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.inner().null_count(), result_variant.len());
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
+        assert!(!value_field.is_nullable());
+    }
+
+    fn create_variant_get_as_variant_test_data() -> (ArrayRef, ArrayRef) {
+        let input_json: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"field_name": {"k": 100000}}"#),
+            Some(r#"{"field_name": {"k": "s"}}"#),
+        ]));
+
+        let unshredded = ArrayRef::from(json_to_variant(&input_json).unwrap());
+        let unshredded_variant = VariantArray::try_new(&unshredded).unwrap();
+
+        let as_type = DataType::Struct(Fields::from(vec![Field::new(
+            "field_name",
+            DataType::Struct(Fields::from(vec![Field::new("k", DataType::Int32, true)])),
+            true,
+        )]));
+        let shredded = ArrayRef::from(shred_variant(&unshredded_variant, &as_type).unwrap());
+
+        (unshredded, shredded)
+    }
+
+    fn assert_variant_field_extraction_returns_unshredded_variant(
+        input: &ArrayRef,
+        variant_field: &Field,
+    ) {
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name").unwrap())
+            .with_as_type(Some(FieldRef::from(variant_field.clone())));
+
+        let result = variant_get(input, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert!(result_variant.typed_value_column().is_none());
+        assert!(result_variant.value_column().null_count() < result_variant.len());
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
+        assert!(!value_field.is_nullable());
+
+        let expected_json: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"k":100000}"#),
+            Some(r#"{"k":"s"}"#),
+        ]));
+        let expected = json_to_variant(&expected_json).unwrap();
+
+        assert_eq!(result_variant.len(), expected.len());
+        for i in 0..result_variant.len() {
+            assert_eq!(result_variant.is_null(i), expected.is_null(i));
+            if !result_variant.is_null(i) {
+                assert_eq!(result_variant.value(i), expected.value(i));
+            }
+        }
     }
 
     /// Create test data for depth 0 (direct field access)
@@ -2200,11 +2658,9 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(42), None]);
 
         // For the x field, only typed_value (perfect shredding when possible)
-        let x_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(x_field_typed_value) as ArrayRef),
-            None,
-        );
+        let x_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            x_field_typed_value,
+        ) as ArrayRef);
 
         // Create the main typed_value as a struct containing the "x" field
         let typed_value_fields = Fields::from(vec![Field::new(
@@ -2222,7 +2678,7 @@ mod test {
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata_array),
-            Some(Arc::new(value_array)),
+            Arc::new(value_array),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2280,11 +2736,8 @@ mod test {
         // Create the nested shredded structure
         // Level 2: x field (the deepest level)
         let x_typed_value = Int32Array::from(vec![Some(55), None]);
-        let x_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(x_typed_value) as ArrayRef),
-            None,
-        );
+        let x_field_shredded =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(x_typed_value) as ArrayRef);
 
         // Level 1: a field containing x field + value field for fallbacks
         // The "a" field needs both typed_value (for shredded x) and value (for fallback cases)
@@ -2312,7 +2765,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(a_value_array)),
+            Arc::new(a_value_array),
             Some(a_inner_typed_value),
             None,
         );
@@ -2333,7 +2786,7 @@ mod test {
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata_array),
-            Some(Arc::new(value_array)),
+            Arc::new(value_array),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2384,11 +2837,8 @@ mod test {
 
         // Level 3: x field (deepest level)
         let x_typed_value = Int32Array::from(vec![Some(100), None, None]);
-        let x_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(x_typed_value) as ArrayRef),
-            None,
-        );
+        let x_field_shredded =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(x_typed_value) as ArrayRef);
 
         // Level 2: b field containing x field + value field
         let b_value_data = {
@@ -2414,7 +2864,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let b_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(b_value_array)),
+            Arc::new(b_value_array),
             Some(b_inner_typed_value),
             None,
         );
@@ -2443,7 +2893,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(a_value_array)),
+            Arc::new(a_value_array),
             Some(a_inner_typed_value),
             None,
         );
@@ -2464,7 +2914,7 @@ mod test {
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata_array),
-            Some(Arc::new(value_array)),
+            Arc::new(value_array),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2491,6 +2941,33 @@ mod test {
             assert!(result_array.is_null(1));
             assert!(result_array.is_null(2));
         }
+    }
+
+    #[test]
+    fn test_strict_cast_options_index_on_non_list_returns_null() {
+        use arrow::compute::CastOptions;
+        use arrow::datatypes::{DataType, Field};
+        use parquet_variant::VariantPath;
+        use std::sync::Arc;
+
+        // Use existing test data that has Int32 typed_value at the top level.
+        let variant_array = perfectly_shredded_int32_variant_array();
+        let options = GetOptions {
+            path: VariantPath::from(0),
+            as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let variant_array_ref: Arc<dyn Array> = variant_array.clone();
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.is_null(0));
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
     }
 
     #[test]
@@ -3189,27 +3666,21 @@ mod test {
         // Create shredded fields with different null patterns
         // Field "a": present in rows 0,3 (missing in rows 1,2,4)
         let a_field_typed_value = Int32Array::from(vec![Some(1), None, None, Some(1), None]);
-        let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(a_field_typed_value) as ArrayRef),
-            None,
-        );
+        let a_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            a_field_typed_value,
+        ) as ArrayRef);
 
         // Field "b": present in rows 0,2 (missing in rows 1,3,4)
         let b_field_typed_value = Int32Array::from(vec![Some(2), None, Some(2), None, None]);
-        let b_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(b_field_typed_value) as ArrayRef),
-            None,
-        );
+        let b_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            b_field_typed_value,
+        ) as ArrayRef);
 
         // Field "c": present in row 0 only (missing in all other rows)
         let c_field_typed_value = Int32Array::from(vec![Some(3), None, None, None, None]);
-        let c_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(c_field_typed_value) as ArrayRef),
-            None,
-        );
+        let c_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            c_field_typed_value,
+        ) as ArrayRef);
 
         // Create main typed_value struct
         let typed_value_fields = Fields::from(vec![
@@ -3229,10 +3700,9 @@ mod test {
         .unwrap();
 
         // Build final VariantArray with top-level nulls
-        ArrayRef::from(VariantArray::from_parts(
+        ArrayRef::from(VariantArray::perfectly_shredded(
             Arc::new(metadata_array),
-            None,
-            Some(Arc::new(typed_value_struct)),
+            Arc::new(typed_value_struct),
             Some(nulls),
         ))
     }
@@ -3245,11 +3715,8 @@ mod test {
         // Create the inner level: contains typed_value with Int32 values
         // Row 0: has value 42, Row 1: inner null, Row 2: outer null, Row 3: top-level null
         let inner_typed_value = Int32Array::from(vec![Some(42), None, None, None]); // dummy value for row 2
-        let inner = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(inner_typed_value) as ArrayRef),
-            None,
-        );
+        let inner =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(inner_typed_value) as ArrayRef);
 
         let outer_typed_value_nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
@@ -3262,11 +3729,8 @@ mod test {
             .with_nulls(outer_typed_value_nulls)
             .build();
 
-        let outer = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(outer_typed_value) as ArrayRef),
-            None,
-        );
+        let outer =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(outer_typed_value) as ArrayRef);
 
         let typed_value_nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
@@ -3288,10 +3752,9 @@ mod test {
             true,  // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        ArrayRef::from(VariantArray::from_parts(
+        ArrayRef::from(VariantArray::perfectly_shredded(
             Arc::new(metadata_array),
-            None,
-            Some(Arc::new(typed_value)),
+            Arc::new(typed_value),
             Some(nulls),
         ))
     }
@@ -3343,11 +3806,9 @@ mod test {
         // Create shredded field "x" (globally shredded - never appears in value field)
         // For top-level null row, the field still needs valid content (not null)
         let x_field_typed_value = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(0)]);
-        let x_field_shredded = ShreddedVariantFieldArray::from_parts(
-            None,
-            Some(Arc::new(x_field_typed_value) as ArrayRef),
-            None,
-        );
+        let x_field_shredded = ShreddedVariantFieldArray::perfectly_shredded(Arc::new(
+            x_field_typed_value,
+        ) as ArrayRef);
 
         // Create main typed_value struct (only contains shredded fields)
         let typed_value_struct = StructArrayBuilder::new()
@@ -3359,7 +3820,7 @@ mod test {
         let variant_nulls = NullBuffer::from(vec![true, true, true, false]); // Row 3 is top-level null
         ArrayRef::from(VariantArray::from_parts(
             Arc::new(metadata_array),
-            Some(Arc::new(value_array)),
+            Arc::new(value_array),
             Some(Arc::new(typed_value_struct)),
             Some(variant_nulls),
         ))
@@ -3910,6 +4371,242 @@ mod test {
         }
     }
 
+    #[test]
+    fn get_variant_as_dictionary() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from("apple")),
+            Some(Variant::from("banana")),
+            None,
+            Some(Variant::from("apple")),
+        ]));
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "dict",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Utf8).unwrap();
+        let expected = StringArray::from(vec![Some("apple"), Some("banana"), None, Some("apple")]);
+        assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_numeric_dictionary() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from(42)),
+            Some(Variant::from(7)),
+            None,
+            Some(Variant::from(42)),
+        ]));
+        let data_type = DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Int32));
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "dict",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Int32).unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(7), None, Some(42)]);
+        assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_run_end_encoded() {
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(vec![
+            Some(Variant::from("apple")),
+            Some(Variant::from("apple")),
+            None,
+            Some(Variant::from("banana")),
+            Some(Variant::from("banana")),
+        ]));
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::Utf8, true));
+        let data_type = DataType::RunEndEncoded(run_ends, values);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "ree",
+            data_type.clone(),
+            true,
+        ))));
+
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let decoded = cast(result.as_ref(), &DataType::Utf8).unwrap();
+        let expected = StringArray::from(vec![
+            Some("apple"),
+            Some("apple"),
+            None,
+            Some("banana"),
+            Some("banana"),
+        ]);
+        assert_eq!(decoded.as_ref(), &expected);
+    }
+
+    /// Map data type with `MapBuilder`'s default field names, so results can be
+    /// compared against arrays built by `MapBuilder`.
+    fn map_data_type(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("keys", DataType::Utf8, false),
+                    Field::new("values", value_type, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    fn map_get_options(data_type: &DataType) -> GetOptions<'static> {
+        GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "map",
+            data_type.clone(),
+            true,
+        ))))
+    }
+
+    #[test]
+    fn get_variant_as_map() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": 1, "b": 2}"#),
+            Some(r#"{"c": 3}"#),
+            None,
+            Some("{}"),
+            Some(r#"{"d": null}"#),
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        let data_type = map_data_type(DataType::Int64);
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let mut expected = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        expected.keys().append_value("a");
+        expected.values().append_value(1);
+        expected.keys().append_value("b");
+        expected.values().append_value(2);
+        expected.append(true).unwrap();
+        expected.keys().append_value("c");
+        expected.values().append_value(3);
+        expected.append(true).unwrap();
+        expected.append(false).unwrap(); // null row
+        expected.append(true).unwrap(); // empty object -> empty map
+        expected.keys().append_value("d");
+        expected.values().append_null(); // variant null -> null map value
+        expected.append(true).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_map_of_lists() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": [1, 2], "b": []}"#),
+            Some(r#"{"c": [3]}"#),
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        let data_type = map_data_type(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Int64,
+            true,
+        ))));
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        assert_eq!(result.data_type(), &data_type);
+
+        let mut expected = MapBuilder::new(
+            None,
+            StringBuilder::new(),
+            ListBuilder::new(Int64Builder::new()),
+        );
+        expected.keys().append_value("a");
+        expected.values().append_value([Some(1), Some(2)]);
+        expected.keys().append_value("b");
+        expected.values().append_value([]);
+        expected.append(true).unwrap();
+        expected.keys().append_value("c");
+        expected.values().append_value([Some(3)]);
+        expected.append(true).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+    }
+
+    #[test]
+    fn get_variant_as_map_non_object_rows() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": 1}"#),
+            Some("42"), // not an object
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+        let data_type = map_data_type(DataType::Int64);
+
+        // With safe casting (the default), non-object rows become null
+        let result = variant_get(&variant_array, map_get_options(&data_type)).unwrap();
+        let mut expected = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        expected.keys().append_value("a");
+        expected.values().append_value(1);
+        expected.append(true).unwrap();
+        expected.append(false).unwrap();
+        let expected = expected.finish();
+        assert_eq!(result.as_ref(), &expected);
+
+        // With strict casting, non-object rows are an error
+        let options = map_get_options(&data_type).with_cast_options(CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to extract object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn get_variant_as_map_invalid_entries() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![Some(r#"{"a": 1}"#)]));
+        let variant_array = ArrayRef::from(json_to_variant(&input).unwrap());
+
+        // Entries type is not a struct
+        let data_type = DataType::Map(
+            Arc::new(Field::new("entries", DataType::Int32, false)),
+            false,
+        );
+        let err = variant_get(&variant_array, map_get_options(&data_type)).unwrap_err();
+        assert!(
+            err.to_string().contains("Map entries must be Struct"),
+            "unexpected error: {err}"
+        );
+
+        // Entries struct does not have exactly two fields
+        let data_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "keys",
+                    DataType::Utf8,
+                    false,
+                )])),
+                false,
+            )),
+            false,
+        );
+        let err = variant_get(&variant_array, map_get_options(&data_type)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Map entries must have exactly two fields"),
+            "unexpected error: {err}"
+        );
+    }
+
     fn invalid_time_variant_array() -> ArrayRef {
         let mut builder = VariantArrayBuilder::new(3);
         // 86401000000 is invalid for Time64Microsecond (max is 86400000000)
@@ -3965,7 +4662,7 @@ mod test {
         let variant_array = perfectly_shredded_int32_variant_array();
 
         let variant_array_ref = VariantArray::try_new(&variant_array).unwrap();
-        let typed_value_arc = variant_array_ref.typed_value_field().unwrap().clone();
+        let typed_value_arc = variant_array_ref.typed_value_column().unwrap().clone();
 
         let field = Field::new("result", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
@@ -3984,7 +4681,7 @@ mod test {
         ]));
         let all_nulls_erased: ArrayRef = all_nulls_values.clone();
         let all_nulls_field =
-            ShreddedVariantFieldArray::from_parts(None, Some(all_nulls_erased.clone()), None);
+            ShreddedVariantFieldArray::perfectly_shredded(all_nulls_erased.clone());
         let all_nulls_type = all_nulls_field.data_type().clone();
         let all_nulls_struct: ArrayRef = ArrayRef::from(all_nulls_field);
 
@@ -3993,7 +4690,7 @@ mod test {
             Arc::new(Int32Array::from(vec![Some(10), None, Some(30)]));
         let some_nulls_erased: ArrayRef = some_nulls_values.clone();
         let some_nulls_field =
-            ShreddedVariantFieldArray::from_parts(None, Some(some_nulls_erased.clone()), None);
+            ShreddedVariantFieldArray::perfectly_shredded(some_nulls_erased.clone());
         let some_nulls_type = some_nulls_field.data_type().clone();
         let some_nulls_struct: ArrayRef = ArrayRef::from(some_nulls_field);
 
@@ -4001,8 +4698,7 @@ mod test {
         let inner_values: Arc<Int32Array> =
             Arc::new(Int32Array::from(vec![Some(111), None, Some(333)]));
         let inner_erased: ArrayRef = inner_values.clone();
-        let inner_field =
-            ShreddedVariantFieldArray::from_parts(None, Some(inner_erased.clone()), None);
+        let inner_field = ShreddedVariantFieldArray::perfectly_shredded(inner_erased.clone());
         let inner_field_type = inner_field.data_type().clone();
         let inner_struct_array: ArrayRef = ArrayRef::from(inner_field);
 
@@ -4016,7 +4712,7 @@ mod test {
         );
         let nested_struct_erased: ArrayRef = nested_struct.clone();
         let struct_field =
-            ShreddedVariantFieldArray::from_parts(None, Some(nested_struct_erased.clone()), None);
+            ShreddedVariantFieldArray::perfectly_shredded(nested_struct_erased.clone());
         let struct_field_type = struct_field.data_type().clone();
         let struct_field_struct: ArrayRef = ArrayRef::from(struct_field);
 
@@ -4036,10 +4732,9 @@ mod test {
             EMPTY_VARIANT_METADATA_BYTES,
             all_nulls_values.len(),
         ));
-        let variant_array: ArrayRef = VariantArray::from_parts(
+        let variant_array: ArrayRef = VariantArray::perfectly_shredded(
             Arc::new(metadata),
-            None,
-            Some(Arc::new(typed_value_struct)),
+            Arc::new(typed_value_struct),
             None,
         )
         .into();
@@ -4138,10 +4833,26 @@ mod test {
             (
                 DataType::LargeListView(field.clone()),
                 Arc::new(LargeListViewArray::new(
-                    field,
+                    field.clone(),
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
                     element_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::FixedSizeList(field.clone(), 3),
+                Arc::new(FixedSizeListArray::new(
+                    field,
+                    3,
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        Some(3),
+                        None,
+                        None,
+                        None,
+                    ])),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
@@ -4188,7 +4899,7 @@ mod test {
         use arrow::datatypes::Int64Type;
 
         let string_array: ArrayRef = Arc::new(StringArray::from(vec![
-            r#"[[1, 2], [3]]"#,
+            "[[1, 2], [3]]",
             r#"[[4], "not a list", [5, 6]]"#,
         ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
@@ -4266,7 +4977,7 @@ mod test {
 
     #[test]
     fn test_variant_get_list_like_unsafe_cast_preserves_null_elements() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec![r#"[1, null, 3]"#]));
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, null, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let cast_options = CastOptions {
             safe: false,
@@ -4307,7 +5018,8 @@ mod test {
             DataType::List(item_field.clone()),
             DataType::LargeList(item_field.clone()),
             DataType::ListView(item_field.clone()),
-            DataType::LargeListView(item_field),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field, 2),
         ];
 
         for data_type in data_types {
@@ -4324,28 +5036,47 @@ mod test {
     }
 
     #[test]
-    fn test_variant_get_fixed_size_list_not_implemented() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+    fn test_variant_get_fixed_size_list_wrong_size() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
-        for safe in [true, false] {
-            let options = GetOptions::new()
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    DataType::FixedSizeList(item_field.clone(), 2),
-                    true,
-                ))))
-                .with_cast_options(CastOptions {
-                    safe,
-                    ..Default::default()
-                });
 
-            let err = variant_get(&variant_array, options).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
-            );
-        }
+        // With `safe` set to true, size mismatch should return Null.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: true,
+                ..Default::default()
+            });
+        let result = variant_get(&variant_array, options).unwrap();
+        let fixed_size_list = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+        assert_eq!(fixed_size_list.len(), 1);
+        assert!(fixed_size_list.is_null(0));
+
+        // With `safe` set to false, error should be raised on wrong sized fixed list.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
+        );
     }
 
     macro_rules! perfectly_shredded_preserves_top_level_nulls_test {
@@ -4367,8 +5098,7 @@ mod test {
                 )));
                 let typed_value: ArrayRef = Arc::new($typed_value);
                 let variant_array: ArrayRef =
-                    VariantArray::from_parts(metadata, None, Some(typed_value), $parent_nulls)
-                        .into();
+                    VariantArray::perfectly_shredded(metadata, typed_value, $parent_nulls).into();
 
                 let result = variant_get(
                     &variant_array,

@@ -346,5 +346,14 @@ mod tests {
             err.to_string(),
             "Parser error: Invalid token in bracket request: `abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
         );
+
+        // Out-of-range integer indexes are invalid path tokens.
+        let too_large_index = (usize::MAX as u128) + 1;
+        let err = VariantPath::try_from(format!("[{too_large_index}]").as_str()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Parser error: Invalid token in bracket request"),
+            "{err}"
+        );
     }
 }

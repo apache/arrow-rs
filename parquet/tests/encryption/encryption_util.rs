@@ -26,83 +26,78 @@ use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
+use ring::aead::AES_256_GCM;
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
-pub(crate) fn verify_encryption_double_test_data(
-    record_batches: Vec<RecordBatch>,
-    metadata: &ParquetMetaData,
-) {
-    let file_metadata = metadata.file_metadata();
-    assert_eq!(file_metadata.num_rows(), 100);
-    assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+pub(crate) const AES_128_FOOTER_KEY: &[u8; 16] = b"0123456789012345"; // 128bit/16
+pub(crate) const BAD_AES_128_FOOTER_KEY: &[u8; 16] = b"0000000000000000";
+pub(crate) const AES_128_FOOTER_KEY_NAME: &str = "kf";
+pub(crate) const AES_128_KEY_NAMES: [&str; 2] = ["kc1", "kc2"];
+pub(crate) const AES_128_COLUMN_NAMES: [&str; 2] = ["double_field", "float_field"];
+pub(crate) const AES_128_COLUMN_KEYS: [&[u8; 16]; 2] = [b"1234567890123450", b"1234567890123451"];
 
-    metadata.row_groups().iter().for_each(|rg| {
-        assert_eq!(rg.num_columns(), 8);
-        assert_eq!(rg.num_rows(), 50);
-    });
+pub(crate) const AES_128_COLUMN_NAME_KEYS: &[(&str, &[u8]); 2] = &[
+    (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+    (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
+];
 
-    let mut row_count = 0;
-    let wrap_at = 50;
-    for batch in record_batches {
-        let batch = batch;
-        row_count += batch.num_rows();
+pub(crate) const AES_128_KEY_NAME_KEY: &[(&str, &[u8]); 3] = &[
+    (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
+    (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
+    (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
+];
 
-        let bool_col = batch.column(0).as_boolean();
-        let time_col = batch
-            .column(1)
-            .as_primitive::<types::Time32MillisecondType>();
-        let list_col = batch.column(2).as_list::<i32>();
-        let timestamp_col = batch
-            .column(3)
-            .as_primitive::<types::TimestampNanosecondType>();
-        let f32_col = batch.column(4).as_primitive::<types::Float32Type>();
-        let f64_col = batch.column(5).as_primitive::<types::Float64Type>();
-        let binary_col = batch.column(6).as_binary::<i32>();
-        let fixed_size_binary_col = batch.column(7).as_fixed_size_binary();
+pub(crate) const AES_256_FOOTER_KEY: &[u8; 32] = b"01234567890123456789012345678901"; // 256bit/32
+pub(crate) const BAD_AES_256_FOOTER_KEY: &[u8; 32] = b"00000000000000000000000000000000";
+pub(crate) const AES_256_FOOTER_KEY_NAME: &str = "kf";
+pub(crate) const AES_256_KEY_NAMES: [&str; 8] =
+    ["kc1", "kc2", "kc3", "kc4", "kc5", "kc6", "kc7", "kc8"];
 
-        for (i, x) in bool_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), i % 2 == 0);
-        }
-        for (i, x) in time_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as i32);
-        }
-        for (i, list_item) in list_col.iter().enumerate() {
-            let list_item = list_item.unwrap();
-            let list_item = list_item.as_primitive::<types::Int64Type>();
-            assert_eq!(list_item.len(), 2);
-            assert_eq!(
-                list_item.value(0),
-                (((i % wrap_at) * 2) * 1000000000000) as i64
-            );
-            assert_eq!(
-                list_item.value(1),
-                (((i % wrap_at) * 2 + 1) * 1000000000000) as i64
-            );
-        }
-        for x in timestamp_col.iter() {
-            assert!(x.is_some());
-        }
-        for (i, x) in f32_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f32 * 1.1f32);
-        }
-        for (i, x) in f64_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f64 * 1.1111111f64);
-        }
-        for (i, x) in binary_col.iter().enumerate() {
-            assert_eq!(x.is_some(), i % 2 == 0);
-            if let Some(x) = x {
-                assert_eq!(&x[0..7], b"parquet");
-            }
-        }
-        for (i, x) in fixed_size_binary_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), &[(i % wrap_at) as u8; 10]);
-        }
-    }
+pub(crate) const AES_256_COLUMN_NAMES: [&str; 8] = [
+    "double_field",
+    "float_field",
+    "boolean_field",
+    "int32_field",
+    "ba_field",
+    "flba_field",
+    "int64_field.list.element",
+    "int96_field",
+];
+pub(crate) const AES_256_COLUMN_KEYS: [&[u8]; 8] = [
+    b"12345678901234567890123456789012",
+    b"12345678901234567890123456789013",
+    b"12345678901234567890123456789014",
+    b"12345678901234567890123456789015",
+    b"12345678901234567890123456789016",
+    b"12345678901234567890123456789017",
+    b"12345678901234567890123456789018",
+    b"12345678901234567890123456789019",
+];
 
-    assert_eq!(row_count, file_metadata.num_rows() as usize);
-}
+pub(crate) const AES_256_COLUMN_NAME_KEYS: &[(&str, &[u8]); 8] = &[
+    (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+    (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+    (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+    (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+    (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+    (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+    (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+    (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
+];
+
+pub(crate) const AES_256_KEY_NAME_KEY: &[(&str, &[u8]); 9] = &[
+    (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
+    (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
+    (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
+    (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
+    (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
+    (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
+    (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
+    (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
+    (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
+];
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
 pub(crate) fn verify_encryption_test_data(
@@ -316,4 +311,15 @@ impl KeyRetriever for TestKeyRetriever {
             ))),
         }
     }
+}
+
+pub fn encrypted_data_path(footer_key: &[u8], file_name: &str) -> String {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let subpath = if AES_256_GCM.key_len() == footer_key.len() {
+        "aes256/"
+    } else {
+        ""
+    };
+    let path = format!("{test_data}/{subpath}/{file_name}");
+    path
 }

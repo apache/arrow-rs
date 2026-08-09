@@ -178,7 +178,7 @@ impl WritableMetadataBuilder {
     /// If the number of field names exceeds the maximum allowed value for `u32`.
     fn num_field_names(&self) -> usize {
         let n = self.field_names.len();
-        assert!(n <= u32::MAX as usize);
+        assert!(u32::try_from(n).is_ok());
 
         n
     }
@@ -215,7 +215,7 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);
@@ -268,7 +268,7 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 #[cfg(test)]
 mod test {
     use crate::{
-        ParentState, ValueBuilder, Variant, VariantBuilder, VariantMetadata,
+        ParentState, ValueBuilder, VariantMetadata,
         builder::{
             metadata::{ReadOnlyMetadataBuilder, WritableMetadataBuilder},
             object::ObjectBuilder,
@@ -357,46 +357,12 @@ mod test {
     }
 
     #[test]
-    fn test_read_only_metadata_builder() {
-        // First create some metadata with a few field names
-        let mut default_builder = VariantBuilder::new();
-        default_builder.add_field_name("name");
-        default_builder.add_field_name("age");
-        default_builder.add_field_name("active");
-        let (metadata_bytes, _) = default_builder.finish();
-
-        // Use the metadata to build new variant values
-        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
-        let mut value_builder = ValueBuilder::new();
-
-        {
-            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
-            let mut obj = ObjectBuilder::new(state, false);
-
-            // These should succeed because the fields exist in the metadata
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i8);
-            obj.insert("active", true);
-            obj.finish();
-        }
-
-        let value = value_builder.into_inner();
-
-        // Verify the variant was built correctly
-        let variant = Variant::try_new(&metadata_bytes, &value).unwrap();
-        let obj = variant.as_object().unwrap();
-        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
-        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
-        assert_eq!(obj.get("active"), Some(Variant::from(true)));
-    }
-
-    #[test]
     fn test_read_only_metadata_builder_fails_on_unknown_field() {
         // Create metadata with only one field
-        let mut default_builder = VariantBuilder::new();
-        default_builder.add_field_name("known_field");
-        let (metadata_bytes, _) = default_builder.finish();
+        let mut default_builder = WritableMetadataBuilder::default();
+        default_builder.upsert_field_name("known_field");
+        default_builder.finish();
+        let metadata_bytes = default_builder.into_inner();
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();

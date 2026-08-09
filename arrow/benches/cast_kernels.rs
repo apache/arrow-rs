@@ -18,14 +18,12 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::cast;
@@ -83,36 +81,6 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
-fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal32Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i32, _>(0..1000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
-fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal64Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i64, _>(0..1000000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
 fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
@@ -167,12 +135,20 @@ fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
             builder.append_null()
         } else {
             builder.append_value(
-                rng.random_range(-999_999_999f32..999_999_999f32)
+                rng.random_range(-1_000_000_000_f32..1_000_000_000_f32)
                     .to_string(),
             )
         }
     }
     Arc::new(builder.finish())
+}
+
+fn build_float64_array_for_cast_to_decimal(size: usize, null_density: f32) -> ArrayRef {
+    Arc::new(create_primitive_array_range::<Float64Type>(
+        size,
+        null_density,
+        -999_999_999f64..999_999_999f64,
+    ))
 }
 
 macro_rules! build_array_with_samples {
@@ -187,46 +163,6 @@ macro_rules! build_array_with_samples {
         }
         Arc::new($builder.finish())
     }};
-}
-
-fn build_string_float_array_invalid_item(size: usize, null_density: f32) -> ArrayRef {
-    let invalid_items = [
-        "--1.23",
-        "1.2.3",
-        "-1.-23499",
-        "--1.23456789",
-        "1-.234",
-        "e10",
-        "1e",
-        "1e++10",
-        "NaN",
-        "Infinity",
-    ];
-    let mut builder = StringBuilder::new();
-    build_array_with_samples!(builder, size, null_density, invalid_items)
-}
-
-fn build_float32_array_for_cast_to_decimal(size: usize, null_density: f32) -> ArrayRef {
-    Arc::new(create_primitive_array_range::<Float32Type>(
-        size,
-        null_density,
-        -999_999_999f32..999_999_999f32,
-    ))
-}
-
-fn build_float64_array_for_cast_to_decimal(size: usize, null_density: f32) -> ArrayRef {
-    Arc::new(create_primitive_array_range::<Float64Type>(
-        size,
-        null_density,
-        -999_999_999f64..999_999_999f64,
-    ))
-}
-
-fn build_float32_array_invalid_item(size: usize, null_density: f32) -> ArrayRef {
-    let mut builder = Float32Builder::with_capacity(size);
-    let invalid_values = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
-
-    build_array_with_samples!(builder, size, null_density, invalid_values)
 }
 
 fn build_float64_array_invalid_items(size: usize, null_density: f32) -> ArrayRef {
@@ -247,6 +183,25 @@ fn build_dict_array(size: usize) -> ArrayRef {
     Arc::new(DictionaryArray::new(keys, Arc::new(values)))
 }
 
+// Dictionary<UInt32, Dictionary<UInt32, Utf8>>: an inner dictionary of 4096
+// entries over 64 moderately long distinct values, wrapped by `size` outer keys
+// that index into it. Casting to Dictionary<UInt32, Utf8> flattens the two index
+// layers; the old path unpacks (copies) the inner values, the fast path reuses
+// them and only remaps indices.
+fn build_nested_dict_array(size: usize) -> ArrayRef {
+    let distinct: Vec<String> = (0..64)
+        .map(|i| format!("a moderately long symbol name number {i:04}"))
+        .collect();
+    let inner_values = StringArray::from_iter(distinct.iter().map(|s| Some(s.as_str())));
+    let inner_len = 4096u32;
+    let distinct_len = inner_values.len() as u32;
+    let inner_keys = UInt32Array::from_iter((0..inner_len).map(|v| v % distinct_len));
+    let inner = DictionaryArray::new(inner_keys, Arc::new(inner_values));
+
+    let outer_keys = UInt32Array::from_iter((0..size as u32).map(|v| v % inner_len));
+    Arc::new(DictionaryArray::new(outer_keys, Arc::new(inner)))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -257,6 +212,7 @@ fn add_benchmark(c: &mut Criterion) {
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
+    let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
 
     let f64_array = build_array::<Float64Type>(512);
     let date64_array = build_array::<Date64Type>(512);
@@ -268,22 +224,18 @@ fn add_benchmark(c: &mut Criterion) {
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
-    let decimal32_array = build_decimal32_array(8_000, 9, 3);
-    let decimal64_array = build_decimal64_array(8_000, 10, 3);
     let decimal128_array = build_decimal128_array(8_000, 10, 3);
     let decimal256_array = build_decimal256_array(8_000, 50, 3);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
     let dict_array = build_dict_array(10_000);
+    let nested_dict_array = build_nested_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
 
     let string_float_array_normal = build_string_float_array(5_000, 0.1);
-    let invalid_string_float_array = build_string_float_array_invalid_item(8_000, 0.1);
-    let float32_array_cast_to_decimal = build_float32_array_for_cast_to_decimal(8_000, 0.1);
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
-    let invalid_float32_array_to_decimal = build_float32_array_invalid_item(8_000, 0.1);
     let invalid_float64_array_to_decimal = build_float64_array_invalid_items(8_000, 0.1);
 
     c.bench_function("cast int32 to int32 512", |b| {
@@ -347,6 +299,9 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast utf8 to f32", |b| {
         b.iter(|| cast_array(&f32_utf8_array, DataType::Float32))
     });
+    c.bench_function("cast utf8 to i32", |b| {
+        b.iter(|| cast_array(&i32_utf8_array, DataType::Int32))
+    });
     c.bench_function("cast i64 to string 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Utf8))
     });
@@ -364,22 +319,6 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast utf8 to date64 512", |b| {
         b.iter(|| cast_array(&utf8_date_time_array, DataType::Date64))
-    });
-
-    c.bench_function("cast decimal32 to decimal32 512", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(9, 4)))
-    });
-    c.bench_function("cast decimal32 to decimal32 512 lower precision", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(6, 5)))
-    });
-    c.bench_function("cast decimal32 to decimal64 512", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal64(11, 5)))
-    });
-    c.bench_function("cast decimal64 to decimal32 512", |b| {
-        b.iter(|| cast_array(&decimal64_array, DataType::Decimal32(9, 2)))
-    });
-    c.bench_function("cast decimal64 to decimal64 512", |b| {
-        b.iter(|| cast_array(&decimal64_array, DataType::Decimal64(12, 4)))
     });
 
     c.bench_function("cast decimal128 to decimal128 512", |b| {
@@ -412,6 +351,14 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast dict to string view", |b| {
         b.iter(|| cast_array(&dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast nested dict to dict", |b| {
+        b.iter(|| {
+            cast_array(
+                &nested_dict_array,
+                DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+            )
+        })
     });
     c.bench_function("cast string view to dict", |b| {
         b.iter(|| {
@@ -456,240 +403,32 @@ fn add_benchmark(c: &mut Criterion) {
 
     // cast string with normal items to decimals
     benchmark_cast!(
-        "cast string to decimal32(9, 2)",
-        string_float_array_normal,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast string to decimal64(18, 2)",
-        string_float_array_normal,
-        DataType::Decimal64(18, 2)
-    );
-    benchmark_cast!(
         "cast string to decimal128(38, 3)",
         string_float_array_normal,
         DataType::Decimal128(38, 3)
     );
-    benchmark_cast!(
-        "cast string to decimal256(76, 4)",
-        string_float_array_normal,
-        DataType::Decimal256(76, 4)
-    );
-
-    // cast invalid string to decimals
-    benchmark_cast!(
-        "cast invalid string to decimal32(9, 2)",
-        invalid_string_float_array,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast invalid string to decimal64(18, 2)",
-        invalid_string_float_array,
-        DataType::Decimal64(18, 2)
-    );
-    benchmark_cast!(
-        "cast invalid string to decimal128(38, 3)",
-        invalid_string_float_array,
-        DataType::Decimal128(38, 3)
-    );
-    benchmark_cast!(
-        "cast invalid string to decimal256(76, 4)",
-        invalid_string_float_array,
-        DataType::Decimal256(76, 4)
-    );
-
-    // cast float32 to decimals
-    benchmark_cast!(
-        "cast float32 to decimal32(9, 2)",
-        float32_array_cast_to_decimal,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast float32 to decimal64(18, 2",
-        float32_array_cast_to_decimal,
-        DataType::Decimal64(18, 2)
-    );
-    benchmark_cast!(
-        "cast float32 to decimal128(32, 3)",
-        float32_array_cast_to_decimal,
-        DataType::Decimal128(38, 3)
-    );
-    benchmark_cast!(
-        "cast float32 to decimal256(76, 4)",
-        float32_array_cast_to_decimal,
-        DataType::Decimal256(76, 4)
-    );
-
-    // cast invalid float32 to decimals
-    benchmark_cast!(
-        "cast invalid float32 to decimal32(9, 2)",
-        invalid_float32_array_to_decimal,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast invalid float32 to decimal64(18, 2",
-        invalid_float32_array_to_decimal,
-        DataType::Decimal64(18, 2)
-    );
-    benchmark_cast!(
-        "cast invalid float32 to decimal128(32, 3)",
-        invalid_float32_array_to_decimal,
-        DataType::Decimal128(32, 3)
-    );
-    benchmark_cast!(
-        "cast invalid float32 to decimal256(76, 4)",
-        invalid_float32_array_to_decimal,
-        DataType::Decimal256(76, 4)
-    );
 
     // cast float64 to decimals
-    benchmark_cast!(
-        "cast float64 to decimal32(9, 2)",
-        float64_array_cast_to_decimal,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast float64 to decimal64(18, 2",
-        float64_array_cast_to_decimal,
-        DataType::Decimal64(18, 2)
-    );
     benchmark_cast!(
         "cast float64 to decimal128(32, 3)",
         float64_array_cast_to_decimal,
         DataType::Decimal128(32, 3)
     );
-    benchmark_cast!(
-        "cast float64 to decimal256(76, 4)",
-        float64_array_cast_to_decimal,
-        DataType::Decimal256(76, 4)
-    );
 
     // cast invalid float64 to decimals
-    benchmark_cast!(
-        "cast invalid float64 to decimal32(9, 2)",
-        invalid_float64_array_to_decimal,
-        DataType::Decimal32(9, 2)
-    );
-    benchmark_cast!(
-        "cast invalid float64 to to decimal64(18, 2)",
-        invalid_float64_array_to_decimal,
-        DataType::Decimal64(18, 2)
-    );
     benchmark_cast!(
         "cast invalid float64 to to decimal128(32, 3)",
         invalid_float64_array_to_decimal,
         DataType::Decimal128(32, 3)
     );
-    benchmark_cast!(
-        "cast invalid float64 to to decimal256(76, 4)",
-        invalid_float64_array_to_decimal,
-        DataType::Decimal256(76, 4)
-    );
 
     // cast decimals to float/integers
-    benchmark_cast!(
-        "cast decimal32 to float32",
-        decimal32_array,
-        DataType::Float32
-    );
-    benchmark_cast!(
-        "cast decimal32 to float64",
-        decimal32_array,
-        DataType::Float64
-    );
-    benchmark_cast!("cast decimal32 to uint8", decimal32_array, DataType::UInt8);
-    benchmark_cast!(
-        "cast decimal32 to uint16",
-        decimal32_array,
-        DataType::UInt16
-    );
-    benchmark_cast!(
-        "cast decimal32 to uint32",
-        decimal32_array,
-        DataType::UInt32
-    );
-    benchmark_cast!(
-        "cast decimal32 to uint64",
-        decimal32_array,
-        DataType::UInt64
-    );
-    benchmark_cast!("cast decimal32 to int8", decimal32_array, DataType::Int8);
-    benchmark_cast!("cast decimal32 to int16", decimal32_array, DataType::Int16);
-    benchmark_cast!("cast decimal32 to int32", decimal32_array, DataType::Int32);
-    benchmark_cast!("cast decimal32 to int64", decimal32_array, DataType::Int64);
-
-    benchmark_cast!(
-        "cast decimal64 to float32",
-        decimal64_array,
-        DataType::Float32
-    );
-    benchmark_cast!(
-        "cast decimal64 to float64",
-        decimal64_array,
-        DataType::Float64
-    );
-    benchmark_cast!("cast decimal64 to uint8", decimal64_array, DataType::UInt8);
-    benchmark_cast!(
-        "cast decimal64 to uint16",
-        decimal64_array,
-        DataType::UInt16
-    );
-    benchmark_cast!(
-        "cast decimal64 to uint32",
-        decimal64_array,
-        DataType::UInt32
-    );
-    benchmark_cast!(
-        "cast decimal64 to uint64",
-        decimal64_array,
-        DataType::UInt64
-    );
-    benchmark_cast!("cast decimal64 to int8", decimal64_array, DataType::Int8);
-    benchmark_cast!("cast decimal64 to int16", decimal64_array, DataType::Int16);
-    benchmark_cast!("cast decimal64 to int32", decimal64_array, DataType::Int32);
-    benchmark_cast!("cast decimal64 to int64", decimal64_array, DataType::Int64);
-
-    benchmark_cast!(
-        "cast decimal128 to float32",
-        decimal128_array,
-        DataType::Float32
-    );
     benchmark_cast!(
         "cast decimal128 to float64",
         decimal128_array,
         DataType::Float64
     );
-    benchmark_cast!(
-        "cast decimal128 to uint8",
-        decimal128_array,
-        DataType::UInt8
-    );
-    benchmark_cast!(
-        "cast decimal128 to uint16",
-        decimal128_array,
-        DataType::UInt16
-    );
-    benchmark_cast!(
-        "cast decimal128 to uint32",
-        decimal128_array,
-        DataType::UInt32
-    );
-    benchmark_cast!(
-        "cast decimal128 to uint64",
-        decimal128_array,
-        DataType::UInt64
-    );
     benchmark_cast!("cast decimal128 to int8", decimal128_array, DataType::Int8);
-    benchmark_cast!(
-        "cast decimal128 to int16",
-        decimal128_array,
-        DataType::Int16
-    );
-    benchmark_cast!(
-        "cast decimal128 to int32",
-        decimal128_array,
-        DataType::Int32
-    );
     benchmark_cast!(
         "cast decimal128 to int64",
         decimal128_array,
@@ -697,45 +436,9 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     benchmark_cast!(
-        "cast decimal256 to float32",
-        decimal256_array,
-        DataType::Float32
-    );
-    benchmark_cast!(
         "cast decimal256 to float64",
         decimal256_array,
         DataType::Float64
-    );
-    benchmark_cast!(
-        "cast decimal256 to uint8",
-        decimal256_array,
-        DataType::UInt8
-    );
-    benchmark_cast!(
-        "cast decimal256 to uint16",
-        decimal256_array,
-        DataType::UInt16
-    );
-    benchmark_cast!(
-        "cast decimal256 to uint32",
-        decimal256_array,
-        DataType::UInt32
-    );
-    benchmark_cast!(
-        "cast decimal256 to uint64",
-        decimal256_array,
-        DataType::UInt64
-    );
-    benchmark_cast!("cast decimal256 to int8", decimal256_array, DataType::Int8);
-    benchmark_cast!(
-        "cast decimal256 to int16",
-        decimal256_array,
-        DataType::Int16
-    );
-    benchmark_cast!(
-        "cast decimal256 to int32",
-        decimal256_array,
-        DataType::Int32
     );
     benchmark_cast!(
         "cast decimal256 to int64",

@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
 pub trait OffsetSizeTrait:
-    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd + num_traits::CheckedSub
 {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
@@ -223,14 +223,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
-                    OffsetSize::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
+                OffsetSize::PREFIX,
+                n.len(),
+            )));
         }
         if !field.is_nullable() && values.is_nullable() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -270,6 +270,29 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         nulls: Option<NullBuffer>,
     ) -> Self {
         Self::try_new(field, offsets, values, nulls).unwrap()
+    }
+
+    /// Create a new [`GenericListArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `offsets.len() - 1 == nulls.len()` if `nulls` is `Some`
+    /// - `offsets.last() <= values.len()`
+    /// - `field.data_type() == values.data_type()`
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        offsets: OffsetBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(field, offsets, values, nulls);
+        }
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+        }
     }
 
     /// Create a new [`GenericListArray`] of length `len` where all values are null

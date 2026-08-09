@@ -17,7 +17,7 @@
 
 use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
     let type_ids = array.buffer::<i8>(0);
@@ -29,10 +29,10 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
-            mutable
-                .child_data
-                .iter_mut()
-                .for_each(|child| child.extend(index, start, start + len))
+            for child in mutable.child_data.iter_mut() {
+                child.try_extend(index, start, start + len)?;
+            }
+            Ok(())
         },
     )
 }
@@ -51,7 +51,7 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
-            (start..start + len).for_each(|i| {
+            for i in start..start + len {
                 let type_id = type_ids[i];
                 let child_index = src_fields
                     .iter()
@@ -63,13 +63,17 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
 
                 // Extend offsets
                 mutable.buffer2.push(dst_offset as i32);
-                mutable.child_data[child_index].extend(index, src_offset, src_offset + 1)
-            })
+                mutable.child_data[child_index].try_extend(index, src_offset, src_offset + 1)?;
+            }
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls_dense(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), ArrowError> {
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
@@ -86,10 +90,14 @@ pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
     let child_offset = mutable.child_data[0].len();
     let (start, end) = (child_offset as i32, (child_offset + len) as i32);
     mutable.buffer2.extend(start..end);
-    mutable.child_data[0].extend_nulls(len);
+    mutable.child_data[0].try_extend_nulls(len)?;
+    Ok(())
 }
 
-pub(super) fn extend_nulls_sparse(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls_sparse(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), ArrowError> {
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
@@ -103,8 +111,8 @@ pub(super) fn extend_nulls_sparse(mutable: &mut _MutableArrayData, len: usize) {
     mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
 
     // Sparse: extend nulls in ALL children
-    mutable
-        .child_data
-        .iter_mut()
-        .for_each(|child| child.extend_nulls(len));
+    for child in mutable.child_data.iter_mut() {
+        child.try_extend_nulls(len)?;
+    }
+    Ok(())
 }

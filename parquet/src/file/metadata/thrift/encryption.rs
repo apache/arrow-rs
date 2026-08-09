@@ -163,10 +163,30 @@ fn row_group_from_encrypted_thrift(
                 }
             };
 
+            // The ordinal is part of the AAD for encrypted column metadata.
+            // It can be missing here only for files with *mixed* row-group
+            // ordinals, which decode leaves untouched — fail cleanly rather
+            // than panic (see `ensure_row_group_ordinals`).
+            let rg_ordinal = rg.ordinal.ok_or_else(|| {
+                general_err!(
+                    "Row group ordinal is required to decrypt column metadata for \
+                     column '{}', but the file's row-group ordinals are inconsistent",
+                    d.path().string()
+                )
+            })?;
+            // Reject a negative ordinal cleanly rather than sign-extending it into
+            // a bogus AAD via `as usize`.
+            let rg_ordinal = usize::try_from(rg_ordinal).map_err(|_| {
+                general_err!(
+                    "Row group ordinal {rg_ordinal} is invalid (must be non-negative) \
+                     for decrypting column metadata for column '{}'",
+                    d.path().string()
+                )
+            })?;
             let column_aad = crate::encryption::modules::create_module_aad(
                 decryptor.file_aad(),
                 crate::encryption::modules::ModuleType::ColumnMetaData,
-                rg.ordinal.unwrap() as usize,
+                rg_ordinal,
                 i,
                 None,
             )?;

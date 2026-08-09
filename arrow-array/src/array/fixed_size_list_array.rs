@@ -142,6 +142,32 @@ impl FixedSizeListArray {
         Self::try_new(field, size, values, nulls).unwrap()
     }
 
+    /// Create a new [`FixedSizeListArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `size >= 0`
+    /// - `values.len() == len * size as usize`
+    /// - `nulls.len() == len` if `nulls` is `Some`
+    /// - `field.data_type() == values.data_type()`
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        size: i32,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::try_new_with_length(field, size, values, nulls, len).unwrap();
+        }
+        Self {
+            data_type: DataType::FixedSizeList(field, size),
+            values,
+            value_length: size,
+            nulls,
+            len,
+        }
+    }
+
     /// Create a new [`FixedSizeListArray`] from the provided parts, returning an error on failure.
     ///
     /// Note that if `size == 0` and `nulls` is `None` (a degenerate, non-nullable
@@ -175,7 +201,7 @@ impl FixedSizeListArray {
 
             Self::try_new_with_length(field, size, values, nulls, len)
         } else {
-            if values.len() % s != 0 {
+            if !values.len().is_multiple_of(s) {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Incorrect length of values buffer for FixedSizeListArray, \
                      expected a multiple of {s} got {}",
@@ -186,15 +212,15 @@ impl FixedSizeListArray {
             let len = values.len() / s;
 
             // Check that the null buffer length is correct (if it exists).
-            if let Some(null_buffer) = &nulls {
-                if s * null_buffer.len() != values.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Incorrect length of values buffer for FixedSizeListArray, \
+            if let Some(null_buffer) = &nulls
+                && s * null_buffer.len() != values.len()
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of values buffer for FixedSizeListArray, \
                             expected {} got {}",
-                        s * null_buffer.len(),
-                        values.len(),
-                    )));
-                }
+                    s * null_buffer.len(),
+                    values.len(),
+                )));
             }
 
             Self::try_new_with_length(field, size, values, nulls, len)
@@ -227,13 +253,13 @@ impl FixedSizeListArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        if let Some(null_buffer) = &nulls {
-            if null_buffer.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
-                    null_buffer.len()
-                )));
-            }
+        if let Some(null_buffer) = &nulls
+            && null_buffer.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
+                null_buffer.len()
+            )));
         }
 
         if s == 0 && !values.is_empty() {
@@ -264,8 +290,7 @@ impl FixedSizeListArray {
             let nulls_valid = field.is_nullable()
                 || nulls
                     .as_ref()
-                    .map(|n| n.expand(size as _).contains(&a))
-                    .unwrap_or_default()
+                    .is_some_and(|n| n.expand(size as _).contains(&a))
                 || (nulls.is_none() && a.null_count() == 0);
 
             if !nulls_valid {
@@ -645,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
+    #[should_panic(expected = "assertion failed: end <= self.len()")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]

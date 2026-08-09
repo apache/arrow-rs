@@ -19,8 +19,9 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{
+    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
@@ -28,7 +29,7 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
-use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
@@ -84,6 +85,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Row ranges with page data loaded for the current projection.
+    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
 }
 
 impl ReadPlanBuilder {
@@ -93,6 +96,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            loaded_row_ranges: None,
         }
     }
 
@@ -107,6 +111,11 @@ impl ReadPlanBuilder {
     /// Defaults to [`RowSelectionPolicy::Auto`]
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_loaded_row_ranges(mut self, ranges: Option<LoadedRowRanges>) -> Self {
+        self.loaded_row_ranges = ranges.map(Arc::new);
         self
     }
 
@@ -157,26 +166,7 @@ impl ReadPlanBuilder {
                     None => return RowSelectionStrategy::Selectors,
                 };
 
-                // total_rows: total number of rows selected / skipped
-                // effective_count: number of non-empty selectors
-                let (total_rows, effective_count) =
-                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
-                        if s.row_count > 0 {
-                            (rows + s.row_count, count + 1)
-                        } else {
-                            (rows, count)
-                        }
-                    });
-
-                if effective_count == 0 {
-                    return RowSelectionStrategy::Mask;
-                }
-
-                if total_rows < effective_count.saturating_mul(threshold) {
-                    RowSelectionStrategy::Mask
-                } else {
-                    RowSelectionStrategy::Selectors
-                }
+                selection.auto_selection_strategy(threshold)
             }
         }
     }
@@ -240,17 +230,21 @@ impl ReadPlanBuilder {
             }
             let filter = match filter.null_count() {
                 0 => filter,
+                // RowSelection::from_filters expects non-null filters. Convert
+                // NULL predicate results to false so they are not selected.
                 _ => prep_null_mask_filter(&filter),
             };
 
             processed_rows += input_rows;
 
             match limit {
-                Some(limit) if matched_rows + filter.true_count() >= limit => {
-                    let needed = limit - matched_rows;
-                    let truncated = truncate_filter_after_n_trues(filter, needed);
+                Some(limit) if limit - matched_rows <= filter.len() => {
+                    let truncated = filter.take_n_true(limit - matched_rows);
+                    matched_rows += truncated.true_count();
                     filters.push(truncated);
-                    break;
+                    if matched_rows >= limit {
+                        break;
+                    }
                 }
                 _ => {
                     matched_rows += filter.true_count();
@@ -264,21 +258,30 @@ impl ReadPlanBuilder {
         // reader would have produced — rows past the early break are marked
         // "not selected". When no limit is set the loop always exhausts and
         // no padding is needed.
-        if let Some(expected) = expected_rows {
-            if processed_rows < expected {
-                let pad_len = expected - processed_rows;
-                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
-            }
+        if let Some(expected) = expected_rows
+            && processed_rows < expected
+        {
+            let pad_len = expected - processed_rows;
+            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
         }
 
-        // If the predicate selected all rows and there is no prior selection,
-        // skip creating a RowSelection entirely — this avoids the allocation
-        // and keeps selection as None which enables coalesced page fetches.
+        // If the predicate selected all rows, applying it is a no-op. With no
+        // prior selection this keeps selection as None, enabling coalesced page
+        // fetches; with a prior selection it avoids rebuilding the same
+        // selection.
         let all_selected = filters.iter().all(|f| f.true_count() == f.len());
-        if all_selected && self.selection.is_none() {
+        if all_selected {
             return Ok(self);
         }
-        let raw = RowSelection::from_filters(&filters);
+        let raw = if self
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.as_mask().is_some())
+        {
+            RowSelection::from_boolean_buffer(filters_to_boolean_buffer(&filters))
+        } else {
+            RowSelection::from_filters(&filters)
+        };
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),
@@ -300,26 +303,38 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            loaded_row_ranges,
         } = self;
 
-        let selection = selection.map(|s| s.trim());
-
         let row_selection_cursor = selection
-            .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
-                match selection_strategy {
-                    RowSelectionStrategy::Mask => {
-                        RowSelectionCursor::new_mask_from_selectors(selectors)
-                    }
-                    RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
-                }
-            })
+            .map(|s| build_cursor(s.trim(), selection_strategy, loaded_row_ranges))
             .unwrap_or(RowSelectionCursor::new_all());
 
         ReadPlan {
             batch_size,
             row_selection_cursor,
+        }
+    }
+}
+
+/// Lower a [`RowSelection`] to the cursor form requested by the resolved strategy.
+fn build_cursor(
+    selection: RowSelection,
+    strategy: RowSelectionStrategy,
+    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
+) -> RowSelectionCursor {
+    match (strategy, selection.into_inner()) {
+        (RowSelectionStrategy::Mask, RowSelectionInner::Mask(mask)) => {
+            RowSelectionCursor::new_mask_from_buffer((*mask).into_mask(), loaded_row_ranges)
+        }
+        (RowSelectionStrategy::Mask, RowSelectionInner::Selectors(selectors)) => {
+            RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
+        }
+        (RowSelectionStrategy::Selectors, RowSelectionInner::Selectors(selectors)) => {
+            RowSelectionCursor::new_selectors(selectors)
+        }
+        (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
+            RowSelectionCursor::new_selectors((*mask).into_selectors())
         }
     }
 }
@@ -409,33 +424,14 @@ impl LimitedReadPlanBuilder {
     }
 }
 
-/// Produce a new `BooleanArray` of the same length as `filter` in which only
-/// the first `n` `true` positions from `filter` remain `true`; any `true`
-/// positions beyond the first `n` are replaced with `false`.
-///
-/// `filter` must not contain nulls (callers apply [`prep_null_mask_filter`]
-/// first). If `filter` has at most `n` `true` values, a clone is returned.
-fn truncate_filter_after_n_trues(filter: BooleanArray, n: usize) -> BooleanArray {
-    if filter.true_count() <= n {
-        return filter;
+fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
+    let total_rows = filters.iter().map(|f| f.len()).sum();
+    let mut builder = BooleanBufferBuilder::new(total_rows);
+    for filter in filters {
+        assert_eq!(filter.null_count(), 0);
+        builder.append_buffer(filter.values());
     }
-    let len = filter.len();
-    if n == 0 {
-        return BooleanArray::new(BooleanBuffer::new_unset(len), None);
-    }
-    // `set_indices` scans 64 bits at a time via `trailing_zeros`, so locating
-    // the `n`-th set bit is cheaper than visiting every bit. Everything up to
-    // and including that position is copied verbatim; the rest is zeroed.
-    let values = filter.values();
-    let last_kept = values
-        .set_indices()
-        .nth(n - 1)
-        .expect("n - 1 < true_count, checked above");
-
-    let mut builder = BooleanBufferBuilder::new(len);
-    builder.append_buffer(&values.slice(0, last_kept + 1));
-    builder.append_n(len - last_kept - 1, false);
-    BooleanArray::new(builder.finish(), None)
+    builder.finish()
 }
 
 /// A plan reading specific rows from a Parquet Row Group.
@@ -450,16 +446,6 @@ pub struct ReadPlan {
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection selectors, if any
-    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
-    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
-        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
-            Some(selectors_cursor.selectors_mut())
-        } else {
-            None
-        }
-    }
-
     /// Returns a mutable reference to the row selection cursor
     pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
         &mut self.row_selection_cursor
@@ -502,45 +488,174 @@ mod tests {
     }
 
     #[test]
-    fn truncate_filter_after_n_trues_keeps_first_n_matches() {
-        let f = BooleanArray::from(vec![true, false, true, true, false, true, true]);
-        // true positions: 0, 2, 3, 5, 6
-        let t = truncate_filter_after_n_trues(f.clone(), 3);
-        assert_eq!(t.len(), f.len());
-        assert_eq!(t.true_count(), 3);
-        let out: Vec<bool> = (0..t.len()).map(|i| t.value(i)).collect();
+    fn preferred_selection_strategy_handles_dense_mask_backing() {
+        let bits: Vec<_> = (0..16).map(|i| i % 2 == 0).collect();
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 4 });
         assert_eq!(
-            out,
-            vec![true, false, true, true, false, false, false],
-            "first three trues should survive, the rest become false"
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
         );
     }
 
     #[test]
-    fn truncate_filter_after_n_trues_passes_through_when_already_small_enough() {
-        let f = BooleanArray::from(vec![true, false, true, false]);
-        let t = truncate_filter_after_n_trues(f.clone(), 5);
-        assert_eq!(t.len(), f.len());
-        assert_eq!(t.true_count(), 2);
+    fn preferred_selection_strategy_handles_sparse_mask_backing() {
+        let bits: Vec<_> = (0..128).map(|i| i < 64).collect();
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits));
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 });
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
     }
 
     #[test]
-    fn truncate_filter_after_n_trues_zero_returns_all_false() {
-        let f = BooleanArray::from(vec![true, true, true]);
-        let t = truncate_filter_after_n_trues(f, 0);
-        assert_eq!(t.len(), 3);
-        assert_eq!(t.true_count(), 0);
+    fn preferred_selection_strategy_preserves_mask_threshold_boundaries() {
+        let mask = BooleanBuffer::from(vec![true; 8]);
+
+        let empty = builder_with_selection(RowSelection::from_boolean_buffer(
+            BooleanBuffer::new_unset(0),
+        ));
+        assert_eq!(
+            empty.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+
+        let disabled = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 0 });
+        assert_eq!(
+            disabled.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
+
+        // Equality does not satisfy the policy's strict inequality: 8 < 1 * 8.
+        let equal = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 8 });
+        assert_eq!(
+            equal.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
+
+        let above = builder_with_selection(RowSelection::from_boolean_buffer(mask))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 9 });
+        assert_eq!(
+            above.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_mask_matches_selector_backing() {
+        use rand::{RngExt, rng};
+
+        let mut rand = rng();
+        for _ in 0..200 {
+            let len = rand.random_range(0..256);
+            let bits: Vec<_> = (0..len).map(|_| rand.random_bool(0.5)).collect();
+            let mask_backed = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits.clone()));
+            let selector_backed = RowSelection::from_filters(&[BooleanArray::from(bits)]);
+
+            for threshold in [0, 1, 2, 8, 32, 64, usize::MAX] {
+                assert_eq!(
+                    mask_backed.auto_selection_strategy(threshold),
+                    selector_backed.auto_selection_strategy(threshold),
+                    "strategy differs for len {len} and threshold {threshold}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mask_plan_trims_trailing_skips_before_chunking() {
+        let mut plan = ReadPlanBuilder::new(8)
+            .with_selection(Some(RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(7),
+            ])))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        let chunk = cursor.next_chunk(8).unwrap();
+        assert_eq!(chunk.chunk_rows, 1);
+        assert_eq!(chunk.selected_rows, 1);
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn selectors_policy_lowers_mask_backed_selection() {
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, false, true, true,
+        ]));
+        let mut plan = ReadPlanBuilder::new(4)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build();
+        let RowSelectionCursor::Selectors(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Selectors cursor");
+        };
+
+        assert_eq!(cursor.next_selector(), RowSelector::select(1));
+        assert_eq!(cursor.next_selector(), RowSelector::skip(2));
+        assert_eq!(cursor.next_selector(), RowSelector::select(2));
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn mask_backed_plan_respects_loaded_row_ranges() {
+        // Start from a non-byte-aligned BooleanBuffer::slice so the mask-backed
+        // cursor path (new_mask_from_buffer) is exercised with a bit offset.
+        // Rows 0 and 11 of 12 are selected; pages for rows [4, 10) are unloaded.
+        let mut bits = vec![false; 5];
+        bits.push(true); // row 0
+        bits.extend(std::iter::repeat_n(false, 10)); // rows 1..=10
+        bits.push(true); // row 11
+        bits.extend([true, false, true]); // trailing padding outside the slice
+        let mask = BooleanBuffer::from(bits).slice(5, 12);
+        let selection = RowSelection::from_boolean_buffer(mask);
+        assert!(selection.as_mask().is_some());
+
+        let loaded = LoadedRowRanges::from_selection(RowSelection::from(vec![
+            RowSelector::select(4),
+            RowSelector::skip(6),
+            RowSelector::select(2),
+        ]));
+
+        let mut plan = ReadPlanBuilder::new(12)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .with_loaded_row_ranges(Some(loaded))
+            .build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected a Mask cursor");
+        };
+
+        // The first chunk must end at the loaded range boundary (row 4), not
+        // continue into the unloaded gap.
+        let first = cursor.next_chunk(12).unwrap();
+        assert_eq!(first.initial_skip, 0);
+        assert_eq!(first.chunk_rows, 4);
+        assert_eq!(first.selected_rows, 1);
+
+        // The second chunk skips the gap and decodes only within [10, 12).
+        let second = cursor.next_chunk(12).unwrap();
+        assert_eq!(second.initial_skip, 7);
+        assert_eq!(second.chunk_rows, 1);
+        assert_eq!(second.selected_rows, 1);
+        assert!(cursor.is_empty());
     }
 
     #[test]
     fn with_predicate_options_limit_pads_tail_when_no_prior_selection() {
         use crate::arrow::ProjectionMask;
         use crate::arrow::array_reader::StructArrayReader;
-        use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
         use crate::arrow::arrow_reader::ArrowPredicateFn;
-        use arrow_array::Int32Array;
         use arrow_schema::{DataType as ArrowType, Field, Fields};
-        use std::sync::Arc;
 
         // 100 rows, all match the predicate. Limit stops the loop after 10
         // matches — but the resulting RowSelection must still describe the
@@ -550,14 +665,14 @@ mod tests {
         const LIMIT: usize = 10;
 
         let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
-        let array = Arc::new(Int32Array::from(data));
-        let leaf = InMemoryArrayReader::new(ArrowType::Int32, array.clone(), None, None);
+        let levels = vec![0; TOTAL_ROWS];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
         let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
             "c0",
             ArrowType::Int32,
             false,
         )]));
-        let struct_reader = StructArrayReader::new(struct_type, vec![Box::new(leaf)], 0, 0, false);
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
 
         let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
             Ok(BooleanArray::from(vec![true; batch.num_rows()]))
@@ -584,5 +699,97 @@ mod tests {
             total, TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
+    }
+
+    #[test]
+    fn with_predicate_options_preserves_mask_selection() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        let data: Vec<i32> = (0..6).collect();
+        let levels = vec![0; data.len()];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+
+        let prior = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, true, true, false, true,
+        ]));
+        let mut filters = vec![BooleanArray::from(vec![true, false, true, false])];
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), move |batch| {
+            assert_eq!(batch.num_rows(), 4);
+            Ok(filters.remove(0))
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_selection(Some(prior))
+            .with_predicate_options(PredicateOptions::new(
+                Box::new(struct_reader),
+                &mut predicate,
+            ))
+            .unwrap();
+
+        let selection = builder.selection().unwrap();
+        assert!(selection.as_mask().is_some());
+
+        let expected = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, false, true, false, false,
+        ]));
+        assert_eq!(selection, &expected);
+    }
+
+    #[test]
+    fn with_predicate_options_limit_handles_null_filters() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        const TOTAL_ROWS: usize = 100;
+        const LIMIT: usize = 10;
+
+        let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
+        let levels = vec![0; TOTAL_ROWS];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok((0..batch.num_rows())
+                .map(|i| match i % 4 {
+                    0 | 2 => Some(true),
+                    1 => None,
+                    _ => Some(false),
+                })
+                .collect::<BooleanArray>())
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_predicate_options(
+                PredicateOptions::new(Box::new(struct_reader), &mut predicate)
+                    .with_limit(LIMIT, TOTAL_ROWS),
+            )
+            .unwrap();
+
+        let selection = builder
+            .selection()
+            .expect("limit-driven early break must produce a selection");
+
+        assert_eq!(selection.row_count(), LIMIT);
+
+        let total: usize = selection.iter().map(|s| s.row_count).sum();
+        assert_eq!(total, TOTAL_ROWS);
     }
 }

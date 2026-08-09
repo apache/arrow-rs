@@ -196,10 +196,7 @@ impl Fields {
                 Struct(fields) => {
                     let filtered: Result<Vec<_>, _> =
                         fields.iter().map(|f| filter_field(f, filter)).collect();
-                    let filtered: Fields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: Fields = filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -212,10 +209,8 @@ impl Fields {
                         .iter()
                         .map(|(id, f)| filter_field(f, filter).map(|f| f.map(|f| (id, f))))
                         .collect();
-                    let filtered: UnionFields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: UnionFields =
+                        filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -250,10 +245,7 @@ impl Fields {
             .iter()
             .map(|f| filter_field(f, &mut filter))
             .collect();
-        let filtered = filtered?
-            .iter()
-            .filter_map(|f| f.as_ref().cloned())
-            .collect();
+        let filtered = filtered?.iter().filter_map(|f| f.clone()).collect();
         Ok(filtered)
     }
 }
@@ -534,55 +526,6 @@ impl UnionFields {
         Ok(Self(out.into()))
     }
 
-    /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
-    ///
-    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`UnionFields::try_new`] instead. This method panics on invalid input,
-    /// while `try_new` returns a `Result`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any type_id appears more than once (duplicate type ids).
-    ///
-    /// ```
-    /// use arrow_schema::{DataType, Field, UnionFields};
-    /// // Create a new UnionFields with type id mapping
-    /// // 1 -> DataType::UInt8
-    /// // 3 -> DataType::Utf8
-    /// UnionFields::try_new(
-    ///     vec![1, 3],
-    ///     vec![
-    ///         Field::new("field1", DataType::UInt8, false),
-    ///         Field::new("field3", DataType::Utf8, false),
-    ///     ],
-    /// );
-    /// ```
-    #[deprecated(since = "57.0.0", note = "Use `try_new` instead")]
-    pub fn new<F, T>(type_ids: T, fields: F) -> Self
-    where
-        F: IntoIterator,
-        F::Item: Into<FieldRef>,
-        T: IntoIterator<Item = i8>,
-    {
-        let fields = fields.into_iter().map(Into::into);
-        let mut set = 0_u128;
-        type_ids
-            .into_iter()
-            .inspect(|&idx| {
-                let mask = 1_u128 << idx;
-                if (set & mask) != 0 {
-                    panic!("duplicate type id: {idx}");
-                } else {
-                    set |= mask;
-                }
-            })
-            .zip(fields)
-            .collect()
-    }
-
     /// Return size of this instance in bytes.
     pub fn size(&self) -> usize {
         self.iter()
@@ -614,13 +557,13 @@ impl UnionFields {
     /// ```
     /// use arrow_schema::{DataType, Field, UnionFields};
     ///
-    /// let fields = UnionFields::new(
+    /// let fields = UnionFields::try_new(
     ///     vec![1, 3],
     ///     vec![
     ///         Field::new("field1", DataType::UInt8, false),
     ///         Field::new("field3", DataType::Utf8, false),
     ///     ],
-    /// );
+    /// ).unwrap();
     ///
     /// assert!(fields.get(0).is_some());
     /// assert!(fields.get(1).is_some());
@@ -724,9 +667,13 @@ mod tests {
             ),
             Field::new_map(
                 "g",
-                "entries",
-                Field::new("keys", DataType::LargeUtf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(
+                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::LargeUtf8,
+                    false,
+                ),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),

@@ -986,6 +986,14 @@ pub trait AsArray: private::Sealed {
     fn as_any_dictionary(&self) -> &dyn AnyDictionaryArray {
         self.as_any_dictionary_opt().expect("any dictionary array")
     }
+
+    /// Downcasts this to a [`AnyRunEndArray`] returning `None` if not possible
+    fn as_any_ree_opt(&self) -> Option<&dyn AnyRunEndArray>;
+
+    /// Downcasts this to a [`AnyRunEndArray`] panicking if not possible
+    fn as_any_ree(&self) -> &dyn AnyRunEndArray {
+        self.as_any_ree_opt().expect("any run end array")
+    }
 }
 
 impl private::Sealed for dyn Array + '_ {}
@@ -1049,6 +1057,14 @@ impl AsArray for dyn Array + '_ {
             _ => None
         }
     }
+
+    fn as_any_ree_opt(&self) -> Option<&dyn AnyRunEndArray> {
+        let array = self;
+        downcast_run_array! {
+            array => Some(array),
+            _ => None
+        }
+    }
 }
 
 impl private::Sealed for ArrayRef {}
@@ -1103,6 +1119,10 @@ impl AsArray for ArrayRef {
 
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
         self.as_ref().as_any_dictionary_opt()
+    }
+
+    fn as_any_ree_opt(&self) -> Option<&dyn AnyRunEndArray> {
+        self.as_ref().as_any_ree_opt()
     }
 
     fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {

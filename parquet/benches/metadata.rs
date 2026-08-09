@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -30,24 +31,24 @@ use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
 };
-use rand::Rng;
+use rand::{RngExt, SeedableRng};
 
-use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use rand::rngs::StdRng;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
-fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
-    let mut rng = seedable_rng();
+fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
+    let mut rng = StdRng::seed_from_u64(42);
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
     let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        write!(message_type, "REQUIRED FLOAT {i};").ok();
         column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
@@ -90,7 +91,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
                 .map(|j| {
                     ColumnChunkMetaData::builder(column_desc_ptrs[j].clone())
                         .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
-                        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                        .set_compression_codec(parquet::basic::CompressionCodec::UNCOMPRESSED)
                         .set_num_values(rng.random_range(1..1000000))
                         .set_total_compressed_size(rng.random_range(50000..5000000))
                         .set_data_page_offset(rng.random_range(4..2000000000))
@@ -124,7 +125,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
                 .set_column_metadata(columns)
                 .set_total_byte_size(rng.random_range(1..2000000000))
                 .set_num_rows(rng.random_range(1..10000000000))
-                .set_ordinal(i as i16)
+                .set_ordinal(i as i32)
                 .build()
                 .unwrap()
         })
@@ -143,7 +144,11 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(1024);
     {
         let buf = TrackedWrite::new(&mut buffer);
-        let writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        let mut writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        // use defaults unless `write_path_in_schema` is false
+        if !write_path_in_schema {
+            writer = writer.with_write_path_in_schema(write_path_in_schema);
+        }
         writer.finish().unwrap();
     }
 
@@ -153,9 +158,9 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
 fn get_footer_bytes(data: Bytes) -> Bytes {
     let footer_bytes = data.slice(data.len() - 8..);
     let footer_len = footer_bytes[0] as u32
-        | (footer_bytes[1] as u32) << 8
-        | (footer_bytes[2] as u32) << 16
-        | (footer_bytes[3] as u32) << 24;
+        | ((footer_bytes[1] as u32) << 8)
+        | ((footer_bytes[2] as u32) << 16)
+        | ((footer_bytes[3] as u32) << 24);
     let meta_start = data.len() - footer_len as usize - 8;
     let meta_end = data.len() - 8;
     data.slice(meta_start..meta_end)
@@ -233,7 +238,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta(false, false)).into();
+    let buf: Bytes = black_box(encoded_meta(false, false, true)).into();
     let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
@@ -275,7 +280,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta(true, true)).into();
+    let buf: Bytes = black_box(encoded_meta(false, false, false)).into();
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+    c.bench_function("decode parquet metadata no path_in_schema (wide)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let buf: Bytes = black_box(encoded_meta(true, true, true)).into();
     c.bench_function("decode parquet metadata w/ size stats (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();

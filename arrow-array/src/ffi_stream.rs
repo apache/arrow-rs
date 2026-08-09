@@ -74,10 +74,21 @@ use crate::record_batch::{RecordBatch, RecordBatchReader};
 
 type Result<T> = std::result::Result<T, ArrowError>;
 
+// Errno values returned through the C stream interface, taken from libc so they match
+// the platform the consumer interprets them against.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use libc::{EINVAL, EIO, ENOMEM, ENOSYS};
+
+// wasm32-unknown-unknown has no libc, and no OS to interpret the codes either — any
+// non-zero value works there, so use Linux's.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const ENOMEM: i32 = 12;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EIO: i32 = 5;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EINVAL: i32 = 22;
-const ENOSYS: i32 = 78;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+const ENOSYS: i32 = 38;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
@@ -406,8 +417,8 @@ mod tests {
         pub fn new(
             schema: SchemaRef,
             iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
-        ) -> Box<TestRecordBatchReader> {
-            Box::new(TestRecordBatchReader { schema, iter })
+        ) -> TestRecordBatchReader {
+            TestRecordBatchReader { schema, iter }
         }
     }
 
@@ -428,7 +439,7 @@ mod tests {
     fn _test_round_trip_export(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
         let mut ffi_stream = FFI_ArrowArrayStream::new(reader);
@@ -473,7 +484,7 @@ mod tests {
     fn _test_round_trip_import(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
@@ -533,9 +544,9 @@ mod tests {
     fn test_error_import() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
+        let iter = Box::new(vec![Err(ArrowError::MemoryError(String::new()))].into_iter());
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);

@@ -190,6 +190,17 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
 
+In addition to the lints that `clippy` enables by default, we enable a few extra ones in
+`[workspace.lints]` in the root `Cargo.toml`. Every crate in the workspace opts in to those with:
+
+```toml
+[lints]
+workspace = true
+```
+
+New crates should include that section, and new lints should be added to `[workspace.lints]`
+rather than to individual crates, so that they apply everywhere.
+
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
 Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
@@ -198,9 +209,11 @@ Search for `allow(clippy::` in the codebase to identify lints that are ignored/a
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
-## Running Benchmarks
+## Performance Improvements
 
-Running benchmarks are a good way to test the performance of a change. As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
+Pull requests that improve performance, especially those that add non-trivial complexity or use `unsafe`, should include evidence of the improvement, such as benchmarks.
+
+As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
 
 ```bash
 # run all benchmarks
@@ -225,27 +238,25 @@ git checkout feature
 cargo bench --bench parse_time -- --baseline main
 ```
 
-## Git Pre-Commit Hook
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
+If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
 
-We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
+[#9729]: https://github.com/apache/arrow-rs/pull/9729
 
-Suppose you are in the root directory of the project.
+## AI Generated Submissions
 
-First check if the file already exists:
+This project follows the guidance for AI generated submissions used by the
+[Arrow Project](https://arrow.apache.org/docs/dev/developers/overview.html#ai-generated-code).
+As such, it is expected that you will:
 
-```bash
-ls -l .git/hooks/pre-commit
-```
+- Only submit a PR if you are able to debug and own the changes yourself - review all generated
+  code to understand every detail
+- Match the style and conventions used in the rest of the codebase, including PR titles and descriptions
+- Be upfront about AI usage and summarise what was AI-generated
+- If there are parts you don’t fully understand, leave comments on your own PR explaining what steps you took to verify correctness
+- Watch for AI’s tendency to generate overly verbose comments, unnecessary test cases, and incorrect fixes
+- Break down large PRs into smaller ones to make review easier
 
-If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
-the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
-
-```bash
-ln -s  ../../pre-commit.sh .git/hooks/pre-commit
-```
-
-If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
-
-```bash
-git commit --no-verify -m "... commit message ..."
-```
+It is also important for submitters to be aware of potential copyright issues. See the ASF's
+[guidance](https://www.apache.org/legal/generative-tooling.html) on AI-generated code for further
+information on licensing considerations.

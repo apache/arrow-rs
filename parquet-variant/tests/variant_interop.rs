@@ -27,7 +27,7 @@ use parquet_variant::{
 };
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use uuid::Uuid;
 
 /// Returns a directory path for the parquet variant test data.
@@ -132,7 +132,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
             "primitive_decimal16",
             Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap()),
         ),
-        ("primitive_float", Variant::Float(1234567890.1234)),
+        ("primitive_float", Variant::Float(1_234_568_000.0)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
         ("primitive_int16", Variant::Int16(1234)),
@@ -466,11 +466,12 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             )
             .unwrap();
 
-            // timestamp w/o timezone
-            builder.append_value(data_time.naive_local());
-
-            // timestamp with timezone
-            builder.append_value(data_time.naive_utc().and_utc());
+            // randomly pick timestamp with or without timezone
+            if rng.random_bool(0.5) {
+                builder.append_value(data_time.naive_local());
+            } else {
+                builder.append_value(data_time.naive_utc().and_utc());
+            }
         }
         17 => {
             builder.append_value(Uuid::new_v4());

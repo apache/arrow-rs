@@ -23,11 +23,13 @@ use half::f16;
 use crate::bloom_filter::Sbbf;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
+    SortOrder, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -46,9 +48,12 @@ use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
+mod byte_budget_chunker;
 pub(crate) mod encoder;
+
+use byte_budget_chunker::ByteBudgetChunker;
 
 macro_rules! downcast_writer {
     ($e:expr, $i:ident, $b:expr) => {
@@ -205,12 +210,44 @@ pub struct ColumnCloseResult {
     pub offset_index: Option<OffsetIndexMetaData>,
 }
 
+impl ColumnCloseResult {
+    /// Rewrite the page offsets for a dictionary-first on-disk layout.
+    ///
+    /// A writer that buffers the whole column chunk and splices it later (the
+    /// Arrow path) may accept the data pages *before* the dictionary page so the
+    /// data pages can stream straight through, then emit the dictionary page
+    /// first at splice. The offsets recorded during encoding therefore assume a
+    /// data-pages-first layout; call this with the serialized length of the
+    /// dictionary page to move it to offset 0 and shift every data page after
+    /// it. A `dictionary_len` of 0 (no dictionary page) leaves the result
+    /// unchanged.
+    pub fn update_dictionary_location(mut self, dictionary_len: usize) -> Result<Self> {
+        if dictionary_len > 0 {
+            self.metadata = self
+                .metadata
+                .into_builder()
+                .set_dictionary_page_offset(Some(0))
+                .set_data_page_offset(dictionary_len as i64)
+                .build()?;
+            if let Some(offset_index) = self.offset_index.as_mut() {
+                let mut offset = dictionary_len as i64;
+                for location in offset_index.page_locations.iter_mut() {
+                    location.offset = offset;
+                    offset += location.compressed_page_size as i64;
+                }
+            }
+        }
+        Ok(self)
+    }
+}
+
 // Metrics per page
 #[derive(Default)]
 struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
+    num_page_nans: Option<u64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
 }
@@ -238,6 +275,7 @@ impl PageMetrics {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
         self.num_page_nulls = 0;
+        self.num_page_nans = None;
         self.repetition_level_histogram
             .as_mut()
             .map(LevelHistogram::reset);
@@ -260,6 +298,7 @@ struct ColumnMetrics<T: Default> {
     min_column_value: Option<T>,
     max_column_value: Option<T>,
     num_column_nulls: u64,
+    num_column_nans: Option<u64>,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
@@ -310,6 +349,85 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_variable_length_bytes(&mut self, variable_length_bytes: Option<i64>) {
         if let Some(var_bytes) = variable_length_bytes {
             *self.variable_length_bytes.get_or_insert(0) += var_bytes;
+        }
+    }
+}
+
+/// Borrowed view of level data, analogous to `&str` for `LevelData`'s `String`.
+///
+/// `LevelDataRef` can be constructed from `LevelData` and directly from an existing
+/// `&[i16]` without allocating.
+///
+/// The variants are different physical representations of the same logical
+/// sequence of levels.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LevelDataRef<'a> {
+    Absent,
+    Materialized(&'a [i16]),
+    Uniform { value: i16, count: usize },
+}
+
+impl<'a> From<&'a [i16]> for LevelDataRef<'a> {
+    fn from(levels: &'a [i16]) -> Self {
+        Self::Materialized(levels)
+    }
+}
+
+impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
+    fn from(levels: Option<&'a [i16]>) -> Self {
+        levels.map_or(Self::Absent, Self::from)
+    }
+}
+
+impl<'a> LevelDataRef<'a> {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Self::Absent => 0,
+            Self::Materialized(values) => values.len(),
+            Self::Uniform { count, .. } => count,
+        }
+    }
+
+    pub(crate) fn first(self) -> Option<i16> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(values) => values.first().copied(),
+            Self::Uniform { value, count } => (count > 0).then_some(value),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn value_at(self, idx: usize) -> Option<i16> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(values) => values.get(idx).copied(),
+            Self::Uniform { value, count } => (idx < count).then_some(value),
+        }
+    }
+
+    pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Absent => Self::Absent,
+            Self::Materialized(values) => Self::Materialized(&values[offset..offset + len]),
+            Self::Uniform { value, .. } => Self::Uniform { value, count: len },
+        }
+    }
+
+    /// Count of positions in this slice that represent an actual value
+    /// (definition level equal to `max_def`). `Absent` means the column has
+    /// `max_def == 0` and every position is a value, so the implicit count
+    /// is the caller-supplied `total`.
+    pub(crate) fn value_count(self, total: usize, max_def: i16) -> usize {
+        match self {
+            Self::Absent => total,
+            Self::Materialized(values) => values.iter().filter(|&&d| d == max_def).count(),
+            Self::Uniform { value, count } => {
+                if value == max_def {
+                    count
+                } else {
+                    0
+                }
+            }
         }
     }
 }
@@ -424,21 +542,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         value_indices: Option<&[usize]>,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
         min: Option<&E::T>,
         max: Option<&E::T>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         // Check if number of definition levels is the same as number of repetition levels.
-        if let (Some(def), Some(rep)) = (def_levels, rep_levels) {
-            if def.len() != rep.len() {
-                return Err(general_err!(
-                    "Inconsistent length of definition and repetition levels: {} != {}",
-                    def.len(),
-                    rep.len()
-                ));
-            }
+        if def_levels.len() != 0 && rep_levels.len() != 0 && def_levels.len() != rep_levels.len() {
+            return Err(general_err!(
+                "Inconsistent length of definition and repetition levels: {} != {}",
+                def_levels.len(),
+                rep_levels.len()
+            ));
         }
 
         // We check for DataPage limits only after we have inserted the values. If a user
@@ -450,10 +566,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // TODO: find out why we don't account for size of levels when we estimate page
         // size.
-
-        let num_levels = match def_levels {
-            Some(def_levels) => def_levels.len(),
-            None => values.len(),
+        let num_levels = def_levels.len().max(rep_levels.len());
+        let num_levels = if num_levels > 0 {
+            num_levels
+        } else {
+            value_indices.map_or(values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -472,25 +589,68 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
-        let base_batch_size = self.props.write_batch_size();
+        let both_levels_compact = !matches!(def_levels, LevelDataRef::Materialized(_))
+            && !matches!(rep_levels, LevelDataRef::Materialized(_));
+        let has_levels = !matches!(def_levels, LevelDataRef::Absent)
+            || !matches!(rep_levels, LevelDataRef::Absent);
+        // When both level vectors are compact (Uniform or Absent), there is no
+        // materialized slice to split and the per-mini-batch work is O(1), so we
+        // can safely use a much larger batch size.
+        let base_batch_size = if both_levels_compact && has_levels {
+            self.props.data_page_row_count_limit()
+        } else {
+            self.props.write_batch_size()
+        };
+        let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
             // Split at record boundary
-            if let Some(r) = rep_levels {
-                while end_offset < r.len() && r[end_offset] != 0 {
+            if let LevelDataRef::Materialized(levels) = rep_levels {
+                while end_offset < levels.len() && levels[end_offset] != 0 {
                     end_offset += 1;
                 }
             }
 
-            values_offset += self.write_mini_batch(
+            let chunk_size = end_offset - levels_offset;
+            let chunk_def = def_levels.slice(levels_offset, chunk_size);
+            let chunk_rep = rep_levels.slice(levels_offset, chunk_size);
+
+            // Key decision point: can we write this whole chunk as one
+            // mini-batch (the common case — small or fixed-width values, no
+            // further page-size accounting needed), or must we fall back to
+            // byte-budget-aware sub-batching to keep a page from overshooting
+            // `data_page_size_limit`? `pick_sub_batch_size` returns
+            // `chunk_size` for the former.
+            let sub_batch_size = chunker.pick_sub_batch_size(
+                &self.encoder,
                 values,
-                values_offset,
                 value_indices,
-                end_offset - levels_offset,
-                def_levels.map(|lv| &lv[levels_offset..end_offset]),
-                rep_levels.map(|lv| &lv[levels_offset..end_offset]),
-            )?;
+                chunk_def,
+                values_offset,
+                chunk_size,
+            );
+
+            if sub_batch_size >= chunk_size {
+                values_offset += self.write_mini_batch(
+                    values,
+                    values_offset,
+                    value_indices,
+                    chunk_size,
+                    chunk_def,
+                    chunk_rep,
+                )?;
+            } else {
+                values_offset += self.write_granular_chunk(
+                    values,
+                    values_offset,
+                    value_indices,
+                    chunk_size,
+                    chunk_def,
+                    chunk_rep,
+                    sub_batch_size,
+                )?;
+            }
             levels_offset = end_offset;
         }
 
@@ -516,7 +676,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(values, None, def_levels, rep_levels, None, None, None)
+        self.write_batch_internal(
+            values,
+            None,
+            LevelDataRef::from(def_levels),
+            LevelDataRef::from(rep_levels),
+            None,
+            None,
+            None,
+        )
     }
 
     /// Writer may optionally provide pre-calculated statistics for use when computing
@@ -538,8 +706,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.write_batch_internal(
             values,
             None,
-            def_levels,
-            rep_levels,
+            LevelDataRef::from(def_levels),
+            LevelDataRef::from(rep_levels),
             min,
             max,
             distinct_count,
@@ -552,7 +720,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// of the current memory usage and not the final anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
-        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
+        // In-flight encoder buffers, plus any completed pages still held on the
+        // heap: the dictionary-column data pages buffered here (column-at-a-time
+        // path), plus whatever the page writer keeps resident. A page writer
+        // that spills completed pages off-heap reports far less than the bytes
+        // it was handed, so this tracks real memory rather than bytes written.
+        self.encoder.estimated_memory_size()
+            + self
+                .data_pages
+                .iter()
+                .map(|page| page.memory_usage())
+                .sum::<usize>()
+            + self.page_writer.buffered_memory_size()
     }
 
     /// Returns total number of bytes written by this column writer so far.
@@ -633,6 +812,69 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         })
     }
 
+    /// Writes a chunk in `sub_batch_size`-level sub-batches, checking the
+    /// data page byte limit after each. This keeps the page size close to
+    /// `data_page_size_limit` instead of overshooting it by a whole chunk.
+    ///
+    /// For repeated/nested columns sub-batches step from one `rep == 0`
+    /// boundary to the next so a record never spans data pages, matching
+    /// the parquet format rule.
+    ///
+    /// Returns the total number of values consumed across all sub-batches.
+    ///
+    /// `#[inline(never)]` keeps this slow path — only reached for
+    /// variable-width columns whose values need page splitting — out of
+    /// the hot `write_batch_internal` loop.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn write_granular_chunk(
+        &mut self,
+        values: &E::Values,
+        values_offset: usize,
+        value_indices: Option<&[usize]>,
+        chunk_size: usize,
+        chunk_def: LevelDataRef<'_>,
+        chunk_rep: LevelDataRef<'_>,
+        sub_batch_size: usize,
+    ) -> Result<usize> {
+        // The chunker always sizes a sub-batch to at least one level, so each
+        // iteration below makes progress (`sub_end > sub_start`).
+        debug_assert!(sub_batch_size >= 1, "chunker must size at least one level");
+        let mut values_consumed = 0;
+        let mut sub_start = 0;
+        while sub_start < chunk_size {
+            let sub_end = match chunk_rep {
+                LevelDataRef::Materialized(levels) => {
+                    // Pack up to `sub_batch_size` levels per mini-batch, then
+                    // extend to the next record boundary (rep == 0) so a
+                    // record never spans data pages. Packing whole records
+                    // rather than stepping one record at a time avoids
+                    // calling `write_mini_batch` per record: records average
+                    // only a handful of levels, so a record-at-a-time step
+                    // would issue many more mini-batches than necessary.
+                    let mut e = (sub_start + sub_batch_size).min(chunk_size);
+                    while e < chunk_size && levels[e] != 0 {
+                        e += 1;
+                    }
+                    e
+                }
+                _ => (sub_start + sub_batch_size).min(chunk_size),
+            };
+            let sub_len = sub_end - sub_start;
+            let written = self.write_mini_batch(
+                values,
+                values_offset + values_consumed,
+                value_indices,
+                sub_len,
+                chunk_def.slice(sub_start, sub_len),
+                chunk_rep.slice(sub_start, sub_len),
+            )?;
+            values_consumed += written;
+            sub_start = sub_end;
+        }
+        Ok(values_consumed)
+    }
+
     /// Creates a new streaming level encoder appropriate for the writer version.
     fn create_level_encoder(max_level: i16, props: &WriterProperties) -> LevelEncoder {
         match props.writer_version() {
@@ -650,32 +892,53 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         values_offset: usize,
         value_indices: Option<&[usize]>,
         num_levels: usize,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
     ) -> Result<usize> {
         // Process definition levels and determine how many values to write.
         let values_to_write = if self.descr.max_def_level() > 0 {
-            let levels = def_levels.ok_or_else(|| {
-                general_err!(
-                    "Definition levels are required, because max definition level = {}",
-                    self.descr.max_def_level()
-                )
-            })?;
-
-            let mut values_to_write = 0usize;
             let max_def = self.descr.max_def_level();
-            let encoder = &mut self.def_levels_encoder;
-            match self.page_metrics.definition_level_histogram.as_mut() {
-                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
-                    values_to_write += count * (level == max_def) as usize;
-                    histogram.increment_by(level, count as i64);
-                }),
-                None => encoder.put_with_observer(levels, |level, count| {
-                    values_to_write += count * (level == max_def) as usize;
-                }),
-            };
-            self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
-            values_to_write
+            match def_levels {
+                LevelDataRef::Absent => {
+                    return Err(general_err!(
+                        "Definition levels are required, because max definition level = {}",
+                        self.descr.max_def_level()
+                    ));
+                }
+                LevelDataRef::Materialized(levels) => {
+                    // General path for caller-provided or already-materialized
+                    // level buffers.
+                    let mut values_to_write = 0usize;
+                    let encoder = &mut self.def_levels_encoder;
+                    match self.page_metrics.definition_level_histogram.as_mut() {
+                        Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                            values_to_write += count * (level == max_def) as usize;
+                            histogram.increment_by(level, count as i64);
+                        }),
+                        None => encoder.put_with_observer(levels, |level, count| {
+                            values_to_write += count * (level == max_def) as usize;
+                        }),
+                    };
+                    self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
+                    values_to_write
+                }
+                LevelDataRef::Uniform { value, count } => {
+                    // Fast path for all-null, all-valid, or otherwise uniform
+                    // definition levels without materializing a level buffer.
+                    let encoder = &mut self.def_levels_encoder;
+                    match self.page_metrics.definition_level_histogram.as_mut() {
+                        Some(histogram) => {
+                            encoder.put_n_with_observer(value, count, |level, run_len| {
+                                histogram.increment_by(level, run_len as i64);
+                            })
+                        }
+                        None => encoder.put_n_with_observer(value, count, |_, _| {}),
+                    };
+                    let values_to_write = count * (value == max_def) as usize;
+                    self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
+                    values_to_write
+                }
+            }
         } else {
             num_levels
         };
@@ -683,31 +946,50 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Process repetition levels and determine how many rows we are about to process.
         if self.descr.max_rep_level() > 0 {
             // A row could contain more than one value.
-            let levels = rep_levels.ok_or_else(|| {
+            let first_level = rep_levels.first().ok_or_else(|| {
                 general_err!(
                     "Repetition levels are required, because max repetition level = {}",
                     self.descr.max_rep_level()
                 )
             })?;
 
-            if !levels.is_empty() && levels[0] != 0 {
+            if first_level != 0 {
                 return Err(general_err!(
                     "Write must start at a record boundary, got non-zero repetition level of {}",
-                    levels[0]
+                    first_level
                 ));
             }
 
             let mut new_rows = 0u32;
-            let encoder = &mut self.rep_levels_encoder;
-            match self.page_metrics.repetition_level_histogram.as_mut() {
-                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
-                    new_rows += (count as u32) * (level == 0) as u32;
-                    histogram.increment_by(level, count as i64);
-                }),
-                None => encoder.put_with_observer(levels, |level, count| {
-                    new_rows += (count as u32) * (level == 0) as u32;
-                }),
-            };
+            match rep_levels {
+                LevelDataRef::Absent => unreachable!(),
+                LevelDataRef::Materialized(levels) => {
+                    let encoder = &mut self.rep_levels_encoder;
+                    match self.page_metrics.repetition_level_histogram.as_mut() {
+                        Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                            new_rows += (count as u32) * (level == 0) as u32;
+                            histogram.increment_by(level, count as i64);
+                        }),
+                        None => encoder.put_with_observer(levels, |level, count| {
+                            new_rows += (count as u32) * (level == 0) as u32;
+                        }),
+                    };
+                }
+                LevelDataRef::Uniform { value, count } => {
+                    let encoder = &mut self.rep_levels_encoder;
+                    match self.page_metrics.repetition_level_histogram.as_mut() {
+                        Some(histogram) => {
+                            encoder.put_n_with_observer(value, count, |level, run_len| {
+                                new_rows += (run_len as u32) * (level == 0) as u32;
+                                histogram.increment_by(level, run_len as i64);
+                            })
+                        }
+                        None => encoder.put_n_with_observer(value, count, |level, run_len| {
+                            new_rows += (run_len as u32) * (level == 0) as u32;
+                        }),
+                    };
+                }
+            }
             self.page_metrics.num_buffered_rows += new_rows;
         } else {
             // Each value is exactly one row.
@@ -780,6 +1062,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
+    // For float columns, always provide Some(n), even if n is 0
+    // For non-float columns, always provide None
+    fn get_nan_count<T: ParquetValueType>(&self) -> Option<i64> {
+        let nan_count = || {
+            let nan_count = self.page_metrics.num_page_nans.unwrap_or(0);
+            match i64::try_from(nan_count) {
+                Ok(count) => Some(count),
+                _ => Some(i64::MAX),
+            }
+        };
+        match T::PHYSICAL_TYPE {
+            Type::FLOAT | Type::DOUBLE => nan_count(),
+            Type::FIXED_LEN_BYTE_ARRAY
+                if matches!(self.descr.logical_type_ref(), Some(LogicalType::Float16)) =>
+            {
+                nan_count()
+            }
+            _ => None,
+        }
+    }
+
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
@@ -797,6 +1100,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 vec![],
                 vec![],
                 self.page_metrics.num_page_nulls as i64,
+                self.get_nan_count::<E::T>(),
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -810,10 +1114,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     let new_min = stat.min_opt().unwrap();
                     let new_max = stat.max_opt().unwrap();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
+                        let basic_info = self.descr.get_basic_info();
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
-                                || compare_greater(&self.descr, last_max, new_max);
+                            let not_ascending = compare_greater(basic_info, last_min, new_min)
+                                || compare_greater(basic_info, last_max, new_max);
                             if not_ascending {
                                 self.data_page_boundary_ascending = false;
                             }
@@ -821,8 +1126,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                         if self.data_page_boundary_descending {
                             // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = compare_greater(&self.descr, new_min, last_min)
-                                || compare_greater(&self.descr, new_max, last_max);
+                            let not_descending = compare_greater(basic_info, new_min, last_min)
+                                || compare_greater(basic_info, new_max, last_max);
                             if not_descending {
                                 self.data_page_boundary_descending = false;
                             }
@@ -844,6 +1149,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
+                            self.get_nan_count::<E::T>(),
                         );
                     } else {
                         self.column_index_builder.append(
@@ -851,6 +1157,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             stat.min_bytes_opt().unwrap().to_vec(),
                             stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
+                            self.get_nan_count::<E::T>(),
                         );
                     }
                 }
@@ -879,7 +1186,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             Type::FIXED_LEN_BYTE_ARRAY
                 if !matches!(
                     self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. }) | Some(&LogicalType::Float16)
+                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
                 ) =>
             {
                 true
@@ -1019,6 +1326,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
+        if let Some(nan_count) = values_data.nan_count {
+            *self.column_metrics.num_column_nans.get_or_insert(0) += nan_count;
+            self.page_metrics.num_page_nans = Some(nan_count);
+        }
+
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
@@ -1032,7 +1344,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None,
                         Some(self.page_metrics.num_page_nulls),
                         false,
-                    ),
+                    )
+                    .with_nan_count(values_data.nan_count),
                 )
             }
             _ => None,
@@ -1115,7 +1428,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     Some(ref mut cmpr) => {
                         let buffer_len = buffer.len();
                         cmpr.compress(&values_data.buf, &mut buffer)?;
-                        if uncompressed_size <= buffer.len() - buffer_len {
+                        let compressed_values_size = buffer.len() - buffer_len;
+                        let threshold = self
+                            .props
+                            .column_data_page_v2_compression_ratio_threshold(self.descr.path());
+                        if (compressed_values_size as f64) >= (uncompressed_size as f64) * threshold
+                        {
                             buffer.truncate(buffer_len);
                             buffer.extend_from_slice(&values_data.buf);
                             false
@@ -1146,7 +1464,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         // Check if we need to buffer data page or flush it to the sink directly.
-        if self.encoder.has_dictionary() {
+        //
+        // For dictionary-encoded columns the dictionary page must be written
+        // first, but it is not final until all values are seen, so completed
+        // data pages are normally buffered here until `close`. A page writer
+        // that defers final layout (the Arrow path) instead orders pages itself
+        // at flush, so we stream the data pages straight through and never let
+        // them accumulate in memory.
+        if self.encoder.has_dictionary() && !self.page_writer.defers_dictionary_ordering() {
             self.data_pages.push_back(compressed_page);
         } else {
             self.write_data_page(compressed_page)?;
@@ -1204,6 +1529,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )
+            .with_nan_count(self.column_metrics.num_column_nans)
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
@@ -1352,80 +1678,109 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, min, |cur| compare_greater(descr, cur, val))
+    match min {
+        None => *min = Some(val.clone()),
+        Some(min) => {
+            let basic_type_info = descr.get_basic_info();
+            let is_min_nan = is_nan(basic_type_info, min);
+            let is_val_nan = is_nan(basic_type_info, val);
+            match (is_min_nan, is_val_nan) {
+                // current min is not NaN, but incoming is NaN: skip
+                (false, true) => {}
+                // current min is NaN, but incoming is not: assign val to min
+                (true, false) => *min = val.clone(),
+                // both NaN or non-NaN, safe to call update_stat()
+                _ => {
+                    update_stat::<T, _>(val, min, |cur| compare_greater(basic_type_info, cur, val))
+                }
+            }
+        }
+    }
 }
 
 fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
+    match max {
+        None => *max = Some(val.clone()),
+        Some(max) => {
+            let basic_type_info = descr.get_basic_info();
+            let is_max_nan = is_nan(basic_type_info, max);
+            let is_val_nan = is_nan(basic_type_info, val);
+            match (is_max_nan, is_val_nan) {
+                // current max is not NaN, but incoming is NaN: skip
+                (false, true) => {}
+                // current max is NaN, but incoming is not: assign val to max
+                (true, false) => *max = val.clone(),
+                // both NaN or non-NaN, safe to call update_stat()
+                _ => {
+                    update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, val, cur))
+                }
+            }
+        }
+    }
 }
 
 #[inline]
 #[allow(clippy::eq_op)]
-fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
+fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
+        {
+            // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
-            let val = f16::from_le_bytes([val[0], val[1]]);
-            val.is_nan()
+            // Float16 is stored little endian
+            let uval = ((val[1] as u16) << 8) | val[0] as u16;
+            uval & 0x7FFFu16 > 0x7C00u16
         }
         _ => false,
     }
 }
 
-/// Perform a conditional update of `cur`, skipping any NaN values
+/// Perform a conditional update of `cur`
 ///
-/// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
-/// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
-fn update_stat<T: ParquetValueType, F>(
-    descr: &ColumnDescriptor,
-    val: &T,
-    cur: &mut Option<T>,
-    should_update: F,
-) where
+/// Calls `should_update` with the value of `cur`, and updates `cur` to `Some(val)` if it
+/// returns `true`. `cur` must not be `None` or this will panic.
+fn update_stat<T: ParquetValueType, F>(val: &T, cur: &mut T, should_update: F)
+where
     F: Fn(&T) -> bool,
 {
-    if is_nan(descr, val) {
-        return;
-    }
-
-    if cur.as_ref().is_none_or(should_update) {
-        *cur = Some(val.clone());
+    if should_update(cur) {
+        *cur = val.clone();
     }
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, b: &T) -> bool {
     match T::PHYSICAL_TYPE {
-        Type::INT32 | Type::INT64 => {
-            if let Some(LogicalType::Integer {
-                is_signed: false, ..
-            }) = descr.logical_type_ref()
-            {
-                // need to compare unsigned
-                return compare_greater_unsigned_int(a, b);
-            }
-
-            match descr.converted_type() {
-                ConvertedType::UINT_8
-                | ConvertedType::UINT_16
-                | ConvertedType::UINT_32
-                | ConvertedType::UINT_64 => {
-                    return compare_greater_unsigned_int(a, b);
-                }
-                _ => {}
-            };
+        Type::FLOAT => {
+            let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal { .. }) = descr.logical_type_ref() {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            if let ConvertedType::DECIMAL = descr.converted_type() {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            if let Some(LogicalType::Float16) = descr.logical_type_ref() {
-                return compare_greater_f16(a.as_bytes(), b.as_bytes());
-            }
+        Type::DOUBLE => {
+            let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
+        Type::INT32 | Type::INT64
+            if matches!(basic_type_info.sort_order(), SortOrder::UNSIGNED) =>
+        {
+            return compare_greater_unsigned_int(a, b);
+        }
+        Type::FIXED_LEN_BYTE_ARRAY
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
+        {
+            return compare_greater_f16(a.as_bytes(), b.as_bytes());
+        }
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
+            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
+                || matches!(
+                    basic_type_info.logical_type_ref(),
+                    Some(LogicalType::Decimal(_))
+                ) =>
+        {
+            return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
         _ => {}
@@ -1474,7 +1829,7 @@ fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
 fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     let a = f16::from_le_bytes(a.try_into().unwrap());
     let b = f16::from_le_bytes(b.try_into().unwrap());
-    a > b
+    a.total_cmp(&b) == Ordering::Greater
 }
 
 /// Signed comparison of bytes arrays
@@ -2419,6 +2774,55 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_v2_compression_ratio_threshold() {
+        fn write_v2_page(threshold: f64) -> bool {
+            let mut buf = Vec::with_capacity(4096);
+            let mut write = TrackedWrite::new(&mut buf);
+            let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+            let props = Arc::new(
+                WriterProperties::builder()
+                    .set_writer_version(WriterVersion::PARQUET_2_0)
+                    .set_compression(Compression::SNAPPY)
+                    .set_dictionary_enabled(false)
+                    .set_data_page_v2_compression_ratio_threshold(threshold)
+                    .build(),
+            );
+
+            let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
+            let values: Vec<i32> = vec![42; 4096];
+            writer.write_batch(&values, None, None).unwrap();
+            let r = writer.close().unwrap();
+            drop(write);
+
+            let reader_props = ReaderProperties::builder()
+                .set_backward_compatible_lz4(false)
+                .build();
+            let reader = SerializedPageReader::new_with_properties(
+                Arc::new(Bytes::from(buf)),
+                &r.metadata,
+                r.rows_written as usize,
+                None,
+                Arc::new(reader_props),
+            )
+            .unwrap();
+            let pages = reader.collect::<Result<Vec<_>>>().unwrap();
+            let data_page = pages
+                .iter()
+                .find(|p| p.page_type() == PageType::DATA_PAGE_V2)
+                .expect("expected a v2 data page");
+            match data_page {
+                Page::DataPageV2 { is_compressed, .. } => *is_compressed,
+                _ => unreachable!(),
+            }
+        }
+
+        // Default threshold keeps the compressed buffer for constant data.
+        assert!(write_v2_page(1.0));
+        // A strict threshold (require >1000x reduction) discards it.
+        assert!(!write_v2_page(0.001));
+    }
+
+    #[test]
     fn test_column_writer_add_data_pages_with_dict() {
         // ARROW-5129: Test verifies that we add data page in case of dictionary encoding
         // and no fallback occurred so far.
@@ -2503,6 +2907,310 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_caps_page_size_for_large_byte_array_values() {
+        // Regression: the post-write data page byte limit check only fires
+        // at mini-batch boundaries, so a 1024-row mini-batch of multi-MiB
+        // BYTE_ARRAY values used to buffer multiple GiB into a single page
+        // before the limit was even consulted. With the threshold-based
+        // granular mode this batch should split into ~one page per value.
+        let value_size = 64 * 1024; // 64 KiB per value
+        let page_byte_limit = 16 * 1024; // 16 KiB page limit
+        let num_rows = 64;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            // Default write_batch_size (1024) — without the fix this
+            // buffers the entire input into a single ~4 MiB page.
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+
+        // Every value must end up somewhere.
+        let total_values: u32 = pages.data_pages.iter().map(|(_, n)| n).sum();
+        assert_eq!(total_values as usize, num_rows);
+        // Without the fix this assertion fired with one ~4 MiB page; the
+        // threshold splits the input so that no page holds more than a
+        // single oversized value's worth of bytes.
+        assert!(
+            pages.data_pages.len() >= num_rows / 2,
+            "expected pages to be cut close to one per value, got {:?}",
+            pages.data_pages,
+        );
+        // Each page must be bounded by roughly one value's worth of bytes;
+        // parquet allows a single oversized value to occupy a page by
+        // itself but never lets us pile many of them together.
+        for (size, _) in &pages.data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound ({}B) — pages {:?}",
+                value_size + 64,
+                pages.data_pages,
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_for_large_values_in_list() {
+        // Coverage for the Materialized-rep branch of
+        // `write_granular_chunk`. The flat-column regression test
+        // exercises the per-level step; this exercises the
+        // record-by-record step used when rep levels are present.
+        //
+        // Column is `list<required binary>` (max_def = 1, max_rep = 1)
+        // with 3 records of 3 large blobs each. The page byte limit is
+        // smaller than a single blob, so granular mode kicks in, and the
+        // Materialized-rep arm of `write_granular_chunk` steps from one
+        // `rep == 0` boundary to the next so a record never spans pages.
+        let value_size = 32 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let values_per_record = 3;
+        let num_records = 3;
+        let num_values = values_per_record * num_records;
+
+        // rep levels: 0, 1, 1, 0, 1, 1, 0, 1, 1
+        let mut rep_levels = Vec::with_capacity(num_values);
+        for _ in 0..num_records {
+            rep_levels.push(0i16);
+            rep_levels.extend(std::iter::repeat_n(1i16, values_per_record - 1));
+        }
+        let def_levels = vec![1i16; num_values];
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(
+            props,
+            1,
+            1,
+            &data,
+            Some(&def_levels),
+            Some(&rep_levels),
+        );
+        let data_pages = pages.data_pages;
+
+        // The Materialized-rep arm groups levels by record, and each
+        // record's bytes blow the page byte limit on its own, so we get
+        // exactly one page per record.
+        assert_eq!(
+            data_pages.len(),
+            num_records,
+            "expected one data page per record, got {data_pages:?}"
+        );
+        for (bytes, n_values) in &data_pages {
+            assert_eq!(
+                *n_values as usize, values_per_record,
+                "each page must hold a whole record's leaves, got {data_pages:?}"
+            );
+            // Each page is one full record (its leaves cannot be split),
+            // so allow up to `values_per_record` blobs of payload plus a
+            // small fudge for level encoding overhead.
+            let upper_bound = values_per_record * (value_size + 16);
+            assert!(
+                *bytes <= upper_bound,
+                "page size {bytes} exceeds whole-record bound ({upper_bound}); pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_with_nullable_large_values() {
+        // Coverage for `LevelDataRef::value_count` on Materialized def
+        // levels: a nullable column with mixed nulls and large values.
+        // `value_count` must return the actual non-null count so the
+        // byte estimate reflects bytes that will actually be written,
+        // not the level count.
+        let value_size = 32 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_levels = 32;
+
+        // Alternating null / non-null: 16 nulls and 16 values.
+        let def_levels: Vec<i16> = (0..num_levels as i16).map(|i| i % 2).collect();
+        let num_values = def_levels.iter().filter(|&&d| d == 1).count();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // With 16 actual values of 32 KiB each and a 16 KiB page limit,
+        // every non-null value should get its own page (plus possibly
+        // adjacent nulls). At minimum, the number of pages must be
+        // roughly the value count, not 1 (which is what `main` produced).
+        assert!(
+            data_pages.len() >= num_values / 2,
+            "expected at least {} pages for {num_values} large values, got {} pages: {data_pages:?}",
+            num_values / 2,
+            data_pages.len(),
+        );
+        // No page contains more than ~one value's worth of payload bytes.
+        for size in &data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_dict_enabled_large_values_post_spill() {
+        // While dictionary encoding is active, `has_dictionary()` short-
+        // circuits `estimated_value_bytes` — the byte estimate is plain-
+        // encoded size but dict-encoded pages only store small RLE
+        // indices, so we'd otherwise shrink pages spuriously. Once the
+        // dictionary spills (each value is large + unique), plain
+        // encoding takes over and the byte-budget sub-batch kicks in.
+        //
+        // This test makes sure the writer survives that transition and
+        // produces bounded pages thereafter.
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_rows = 32;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            // Force a small dict so it spills quickly even though
+            // each value here is unique.
+            .set_dictionary_page_size_limit(1024)
+            .set_data_page_size_limit(page_byte_limit)
+            // Small mini-batches so dict fallback happens part-way
+            // through the input, leaving subsequent mini-batches to
+            // exercise the post-spill plain-encoding path that the
+            // page-size fix actually targets.
+            .set_write_batch_size(4)
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // After spill, plain encoding writes one ~64 KiB value per page.
+        // Without the fix, post-spill writes still buffered all 32
+        // values into a single ~2 MiB page.
+        assert!(
+            data_pages.len() >= num_rows / 2,
+            "expected >= {} data pages after dict spill, got {} ({data_pages:?})",
+            num_rows / 2,
+            data_pages.len(),
+        );
+        for size in &data_pages {
+            assert!(
+                *size <= value_size + 64,
+                "page size {size} exceeds one-value bound; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_caps_dictionary_page_size() {
+        // A column of large *distinct* values with dictionary encoding on:
+        // the dictionary page accumulates the values themselves, and its
+        // spill check runs only once per mini-batch. Without bounding the
+        // dictionary-encoding mini-batch, one `write_batch_size` mini-batch
+        // would intern `write_batch_size * value_size` bytes into the
+        // dictionary page before the check fires (~16 MiB here). The chunker
+        // must sub-batch the dictionary-encoding phase too.
+        let value_size = 8 * 1024;
+        let dict_page_limit = 64 * 1024;
+        let num_rows = 2048;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(dict_page_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| {
+                // each value distinct, so the dictionary cannot dedup them
+                let mut v = vec![0u8; value_size];
+                v[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                ByteArray::from(v)
+            })
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+        let dict_page_size = pages.dict_page_size;
+
+        assert!(
+            dict_page_size > 0,
+            "expected the column to dictionary-encode"
+        );
+        // Bounded near the limit (~2x from the post-mini-batch check). Before
+        // the fix the dictionary page reached num_rows * value_size (~16 MiB,
+        // 256x the limit).
+        assert!(
+            dict_page_size <= 3 * dict_page_limit,
+            "dictionary page {dict_page_size} exceeds 3x the {dict_page_limit} limit",
+        );
+    }
+
+    #[test]
+    fn test_column_writer_caps_page_size_for_fixed_len_byte_array() {
+        // Coverage for `ParquetValueType::byte_size` override on
+        // `FixedLenByteArray`. With `type_length = 1`, each plain-encoded
+        // value is one byte, so a 4-byte page byte limit forces the
+        // sub-batch sizer to write ~4 values per page rather than one
+        // page for the whole batch.
+        let page_byte_limit = 4;
+        let num_values = 128;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_data_page_size_limit(page_byte_limit)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|i| {
+                let mut fla = FixedLenByteArray::default();
+                fla.set_data(Bytes::from(vec![i as u8]));
+                fla
+            })
+            .collect();
+        let pages =
+            write_and_collect_pages::<FixedLenByteArrayType>(props, 0, 0, &data, None, None);
+        let data_pages: Vec<_> = pages.data_pages.iter().map(|(size, _)| *size).collect();
+
+        // Without the fix this is a single 128-byte page; with the fix
+        // the byte budget caps each page at ~`page_byte_limit` bytes.
+        assert!(
+            data_pages.len() >= num_values / 8,
+            "expected pages capped by byte budget, got {data_pages:?}"
+        );
+        for size in &data_pages {
+            assert!(
+                *size <= page_byte_limit * 4,
+                "page size {size} larger than expected; pages {data_pages:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         // Booleans have an unsigned sort order and so are not compatible
@@ -2564,7 +3272,7 @@ mod tests {
     #[test]
     fn test_float_statistics() {
         let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -2576,7 +3284,7 @@ mod tests {
     #[test]
     fn test_double_statistics() {
         let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -2622,6 +3330,137 @@ mod tests {
     }
 
     #[test]
+    fn test_ieee754_total_order_float() {
+        // Test IEEE 754 total order for f32
+        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        let neg_nan = f32::from_bits(0xffc00000); // a NaN with the sign bit set
+        let neg_inf = f32::NEG_INFINITY;
+        let neg_one = -1.0_f32;
+        let neg_zero = -0.0_f32;
+        let pos_zero = 0.0_f32;
+        let pos_one = 1.0_f32;
+        let pos_inf = f32::INFINITY;
+        let pos_nan = f32::from_bits(0x7fc00000); // a NaN with the sign bit unset
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be -NaN, max should be +NaN
+            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2)); // neg_nan and pos_nan
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_float_only_nan() {
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
+        let neg_nan1 = f32::from_bits(0xffc00000); // sign bit set, significand x400000
+        let neg_nan2 = f32::from_bits(0xffc00001); // sign bit set, significand x400001
+        let neg_nan3 = f32::from_bits(0xffc00002); // sign bit set, significand x400002
+        let pos_nan1 = f32::from_bits(0x7fc00000); // sign bit unset, significand x400000
+        let pos_nan2 = f32::from_bits(0x7fc00001); // sign bit unset, significand x400001
+        let pos_nan3 = f32::from_bits(0x7fc00002); // sign bit unset, significand x400002
+
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double() {
+        // Test IEEE 754 total order for f64
+        let neg_nan = f64::from_bits(0xfff8000000000000);
+        let neg_inf = f64::NEG_INFINITY;
+        let neg_one = -1.0_f64;
+        let neg_zero = -0.0_f64;
+        let pos_zero = 0.0_f64;
+        let pos_one = 1.0_f64;
+        let pos_inf = f64::INFINITY;
+        let pos_nan = f64::from_bits(0x7ff8000000000000);
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, and NaN filtering
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2));
+        } else {
+            panic!("Expected double statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double_only_nan() {
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
+        let neg_nan1 = f64::from_bits(0xfff8000000000000);
+        let neg_nan2 = f64::from_bits(0xfff8000000000001);
+        let neg_nan3 = f64::from_bits(0xfff8000000000002);
+        let pos_nan1 = f64::from_bits(0x7ff8000000000000);
+        let pos_nan2 = f64::from_bits(0x7ff8000000000001);
+        let pos_nan3 = f64::from_bits(0x7ff8000000000002);
+
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_zeros() {
+        // Test that -0.0 and +0.0 are handled correctly
+        let values = vec![-0.0_f32, 0.0_f32, -0.0_f32, 0.0_f32];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, -0.0 < +0.0
+            assert_eq!(stats.min_opt().unwrap().to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(stats.max_opt().unwrap().to_bits(), 0.0_f32.to_bits());
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -2634,7 +3473,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(
             stats.min_opt().unwrap(),
             &ByteArray::from(-f16::from_f32(2.0))
@@ -2653,12 +3492,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2669,12 +3509,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2685,12 +3526,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2701,9 +3543,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(
+            stats.min_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
+        assert_eq!(
+            stats.max_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
@@ -2714,8 +3563,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
@@ -2727,9 +3576,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
@@ -2740,8 +3589,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
     }
 
@@ -2753,18 +3602,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2773,10 +3623,11 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2785,19 +3636,20 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
+        assert!(!stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
 
     #[test]
     fn test_float_statistics_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -2808,12 +3660,12 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2822,10 +3674,10 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_min() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -2835,11 +3687,11 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2848,10 +3700,11 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2860,10 +3713,11 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2872,19 +3726,20 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
+        assert_eq!(stats.min_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
         assert!(matches!(stats, Statistics::Double(_)));
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
     }
 
     #[test]
     fn test_double_statistics_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -2895,12 +3750,12 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2909,10 +3764,10 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_min() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -2922,11 +3777,11 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -3916,7 +4771,7 @@ mod tests {
             let values = page.iter().filter_map(Clone::clone).collect::<Vec<_>>();
             let def_levels = page
                 .iter()
-                .map(|maybe_value| if maybe_value.is_some() { 1 } else { 0 })
+                .map(|maybe_value| i16::from(maybe_value.is_some()))
                 .collect::<Vec<_>>();
             writer.write_batch(&values, Some(&def_levels), None)?;
             writer.flush_data_pages()?;
@@ -4135,6 +4990,69 @@ mod tests {
         get_typed_column_writer::<T>(column_writer)
     }
 
+    /// Pages collected by [`write_and_collect_pages`].
+    struct CollectedPages {
+        /// `(compressed byte size, value count)` for every data page, in order.
+        data_pages: Vec<(usize, u32)>,
+        /// Largest dictionary page seen, or 0 if the column wasn't dict-encoded.
+        dict_page_size: usize,
+    }
+
+    /// Writes `data` (with optional def/rep levels) through a raw
+    /// `ColumnWriterImpl` configured by `props`, then re-reads the file and
+    /// returns its page layout. Shared by the page-size regression tests so
+    /// each only has to express its props, input, and assertions.
+    fn write_and_collect_pages<T: DataType>(
+        props: WriterProperties,
+        max_def_level: i16,
+        max_rep_level: i16,
+        data: &[T::T],
+        def_levels: Option<&[i16]>,
+        rep_levels: Option<&[i16]>,
+    ) -> CollectedPages {
+        let mut file = tempfile::tempfile().unwrap();
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let mut writer =
+            get_test_column_writer::<T>(page_writer, max_def_level, max_rep_level, Arc::new(props));
+        writer.write_batch(data, def_levels, rep_levels).unwrap();
+        let r = writer.close().unwrap();
+        drop(write);
+
+        let read_props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+        let mut page_reader = Box::new(
+            SerializedPageReader::new_with_properties(
+                Arc::new(file),
+                &r.metadata,
+                r.rows_written as usize,
+                None,
+                Arc::new(read_props),
+            )
+            .unwrap(),
+        );
+
+        let mut collected = CollectedPages {
+            data_pages: Vec::new(),
+            dict_page_size: 0,
+        };
+        while let Some(page) = page_reader.get_next_page().unwrap() {
+            match page.page_type() {
+                PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => {
+                    collected
+                        .data_pages
+                        .push((page.buffer().len(), page.num_values()));
+                }
+                PageType::DICTIONARY_PAGE => {
+                    collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
+                }
+                _ => {}
+            }
+        }
+        collected
+    }
+
     /// Returns column reader.
     fn get_test_column_reader<T: DataType>(
         page_reader: Box<dyn PageReader>,
@@ -4276,10 +5194,7 @@ mod tests {
         let path = ColumnPath::from("col");
         let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
-            .with_logical_type(Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 3,
-            }))
+            .with_logical_type(Some(LogicalType::decimal(2, 3)))
             .with_scale(2)
             .with_precision(3)
             .build()
@@ -4396,5 +5311,258 @@ mod tests {
             result.metadata.uncompressed_size(),
             result.metadata.compressed_size()
         );
+    }
+
+    struct ColumnRoundTripUniform<'a, T: DataType> {
+        props: WriterProperties,
+        values: &'a [T::T],
+        def_levels: LevelDataRef<'a>,
+        rep_levels: LevelDataRef<'a>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        expected_values: &'a [T::T],
+        expected_def_levels: Option<&'a [i16]>,
+        expected_rep_levels: Option<&'a [i16]>,
+    }
+
+    impl<'a, T: DataType> ColumnRoundTripUniform<'a, T>
+    where
+        T::T: PartialEq + std::fmt::Debug,
+    {
+        fn new() -> Self {
+            Self {
+                props: Default::default(),
+                values: &[],
+                def_levels: LevelDataRef::Absent,
+                rep_levels: LevelDataRef::Absent,
+                max_def_level: 0,
+                max_rep_level: 0,
+                expected_values: &[],
+                expected_def_levels: None,
+                expected_rep_levels: None,
+            }
+        }
+
+        fn with_props(mut self, props: WriterProperties) -> Self {
+            self.props = props;
+            self
+        }
+
+        fn with_values(mut self, values: &'a [T::T]) -> Self {
+            self.values = values;
+            self
+        }
+
+        fn with_def_levels(mut self, def_levels: LevelDataRef<'a>) -> Self {
+            self.def_levels = def_levels;
+            self
+        }
+
+        fn with_rep_levels(mut self, rep_levels: LevelDataRef<'a>) -> Self {
+            self.rep_levels = rep_levels;
+            self
+        }
+
+        fn with_max_def_level(mut self, max_def_level: i16) -> Self {
+            self.max_def_level = max_def_level;
+            self
+        }
+
+        fn with_max_rep_level(mut self, max_rep_level: i16) -> Self {
+            self.max_rep_level = max_rep_level;
+            self
+        }
+
+        fn with_expected_values(mut self, expected_values: &'a [T::T]) -> Self {
+            self.expected_values = expected_values;
+            self
+        }
+
+        fn with_expected_def_levels(mut self, expected_def_levels: &'a [i16]) -> Self {
+            self.expected_def_levels = Some(expected_def_levels);
+            self
+        }
+
+        fn with_expected_rep_levels(mut self, expected_rep_levels: &'a [i16]) -> Self {
+            self.expected_rep_levels = Some(expected_rep_levels);
+            self
+        }
+
+        /// Write-then-read roundtrip using `write_batch_internal` with the given
+        /// [`LevelDataRef`] variants, and assert the read-back matches `expected_*`.
+        fn run(self) {
+            let mut file = tempfile::tempfile().unwrap();
+            let mut write = TrackedWrite::new(&mut file);
+            let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+            let mut writer = get_test_column_writer::<T>(
+                page_writer,
+                self.max_def_level,
+                self.max_rep_level,
+                Arc::new(self.props),
+            );
+
+            writer
+                .write_batch_internal(
+                    self.values,
+                    None,
+                    self.def_levels,
+                    self.rep_levels,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let result = writer.close().unwrap();
+            drop(write);
+
+            let props = ReaderProperties::builder()
+                .set_backward_compatible_lz4(false)
+                .build();
+            let page_reader = Box::new(
+                SerializedPageReader::new_with_properties(
+                    Arc::new(file),
+                    &result.metadata,
+                    result.rows_written as usize,
+                    None,
+                    Arc::new(props),
+                )
+                .unwrap(),
+            );
+            let mut reader =
+                get_test_column_reader::<T>(page_reader, self.max_def_level, self.max_rep_level);
+
+            let batch_size = self
+                .expected_def_levels
+                .map_or(self.expected_values.len(), |l| l.len());
+            let mut actual_values = Vec::with_capacity(batch_size);
+            let mut actual_def = self
+                .expected_def_levels
+                .map(|_| Vec::with_capacity(batch_size));
+            let mut actual_rep = self
+                .expected_rep_levels
+                .map(|_| Vec::with_capacity(batch_size));
+
+            let (_, values_read, levels_read) = reader
+                .read_records(
+                    batch_size,
+                    actual_def.as_mut(),
+                    actual_rep.as_mut(),
+                    &mut actual_values,
+                )
+                .unwrap();
+
+            assert_eq!(&actual_values[..values_read], self.expected_values);
+            if let Some(ref v) = actual_def {
+                assert_eq!(&v[..levels_read], self.expected_def_levels.unwrap());
+            }
+            if let Some(ref v) = actual_rep {
+                assert_eq!(&v[..levels_read], self.expected_rep_levels.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_level_data_ref_value_count() {
+        // `value_count` is what the byte-budget chunker uses to convert a
+        // chunk's level span into a leaf-value count. It must work for any
+        // column shape — flat, nullable, or nested — because the leaf
+        // values array is decoupled from the rep/def level stream.
+        let max_def = 2;
+        // Non-nullable / unrepeated: no def levels materialized — every
+        // level is a value.
+        assert_eq!(LevelDataRef::Absent.value_count(64, max_def), 64);
+        // Uniform run of present values, and of nulls.
+        assert_eq!(
+            LevelDataRef::Uniform {
+                value: max_def,
+                count: 40
+            }
+            .value_count(40, max_def),
+            40
+        );
+        assert_eq!(
+            LevelDataRef::Uniform {
+                value: max_def - 1,
+                count: 40
+            }
+            .value_count(40, max_def),
+            0
+        );
+        // Materialized def levels (nullable / nested): only levels equal to
+        // `max_def` are values; empty-list / null levels are not.
+        let levels = [2i16, 0, 2, 1, 2, 2, 0];
+        assert_eq!(
+            LevelDataRef::Materialized(&levels).value_count(levels.len(), max_def),
+            4
+        );
+    }
+
+    #[test]
+    fn test_uniform_def_levels_all_null() {
+        // All-null column: def_level=0 (null) for every slot, no values written.
+        let max_def_level = 1;
+        let count = 100;
+        let expected_def_levels = vec![0i16; count];
+        ColumnRoundTripUniform::<Int32Type>::new()
+            .with_def_levels(LevelDataRef::Uniform { value: 0, count })
+            .with_max_def_level(max_def_level)
+            .with_expected_def_levels(&expected_def_levels)
+            .run();
+    }
+
+    #[test]
+    fn test_uniform_def_levels_all_valid() {
+        // All-valid column: def_level=max for every slot, all values written.
+        let max_def_level = 1;
+        let values: Vec<i32> = (0..50).collect();
+        let expected_def_levels = vec![max_def_level; values.len()];
+        ColumnRoundTripUniform::<Int32Type>::new()
+            .with_values(&values)
+            .with_def_levels(LevelDataRef::Uniform {
+                value: max_def_level,
+                count: values.len(),
+            })
+            .with_max_def_level(max_def_level)
+            .with_expected_values(&values)
+            .with_expected_def_levels(&expected_def_levels)
+            .run();
+    }
+
+    #[test]
+    fn test_uniform_def_and_rep_levels() {
+        // Simulates a list column where every row is null:
+        // def=0, rep=0 for each row (one row = one entry with no child values).
+        let max_def_level = 2;
+        let max_rep_level = 1;
+        let count = 200;
+        let expected_def_levels = vec![0i16; count];
+        let expected_rep_levels = vec![0i16; count];
+        ColumnRoundTripUniform::<Int32Type>::new()
+            .with_def_levels(LevelDataRef::Uniform { value: 0, count })
+            .with_rep_levels(LevelDataRef::Uniform { value: 0, count })
+            .with_max_def_level(max_def_level)
+            .with_max_rep_level(max_rep_level)
+            .with_expected_def_levels(&expected_def_levels)
+            .with_expected_rep_levels(&expected_rep_levels)
+            .run();
+    }
+
+    #[test]
+    fn test_uniform_levels_v1_and_v2() {
+        // Verify uniform levels work identically for both Parquet writer versions.
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .build();
+            let max_def = 1;
+            let count = 100;
+            let expected_def_levels = vec![0i16; count];
+            ColumnRoundTripUniform::<Int32Type>::new()
+                .with_props(props)
+                .with_def_levels(LevelDataRef::Uniform { value: 0, count })
+                .with_max_def_level(max_def)
+                .with_expected_def_levels(&expected_def_levels)
+                .run();
+        }
     }
 }

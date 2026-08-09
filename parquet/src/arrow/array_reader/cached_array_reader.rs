@@ -346,6 +346,10 @@ impl ArrayReader for CachedArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         None
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.inner.max_def_level()
+    }
 }
 
 #[cfg(test)]

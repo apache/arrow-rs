@@ -109,36 +109,7 @@ use arrow_data::{ArrayData, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
 
-use crate::array::ArrayRef;
-
 type Result<T> = std::result::Result<T, ArrowError>;
-
-/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-///
-/// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
-/// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
-/// Usually the raw pointers are provided by the array data consumer.
-#[deprecated(
-    since = "52.0.0",
-    note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from"
-)]
-pub unsafe fn export_array_into_raw(
-    src: ArrayRef,
-    out_array: *mut FFI_ArrowArray,
-    out_schema: *mut FFI_ArrowSchema,
-) -> Result<()> {
-    let data = src.to_data();
-    let array = FFI_ArrowArray::new(&data);
-    let schema = FFI_ArrowSchema::try_from(data.data_type())?;
-
-    unsafe { std::ptr::write_unaligned(out_array, array) };
-    unsafe { std::ptr::write_unaligned(out_schema, schema) };
-
-    Ok(())
-}
 
 /// returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 /// This is set by the Arrow specification
@@ -162,12 +133,18 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
-        (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
+        (DataType::FixedSizeBinary(num_bytes), 1) => {
+            TryInto::<usize>::try_into(*num_bytes).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "cannot determine bit_width for FixedSizeBinary({num_bytes})"
+                ))
+            })? * u8::BITS as usize
+        }
         (DataType::FixedSizeList(f, num_elems), 1) => {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
         }
-        (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
+        (DataType::FixedSizeBinary(_) | DataType::FixedSizeList(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
@@ -175,34 +152,29 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         // Variable-size list and map have one i32 buffer.
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
-        (DataType::Utf8, 1)
-        | (DataType::Binary, 1)
-        | (DataType::List(_), 1)
-        | (DataType::Map(_, _), 1) => i32::BITS as _,
-        (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
+        (DataType::Utf8 | DataType::Binary | DataType::List(_) | DataType::Map(_, _), 1) => {
+            i32::BITS as _
+        }
+        (DataType::Utf8 | DataType::Binary, 2) => u8::BITS as _,
         // List views have two i32 buffers, offsets and sizes
-        (DataType::ListView(_), 1) | (DataType::ListView(_), 2) => i32::BITS as _,
+        (DataType::ListView(_), 1 | 2) => i32::BITS as _,
         // Large list views have two i64 buffers, offsets and sizes
-        (DataType::LargeListView(_), 1) | (DataType::LargeListView(_), 2) => i64::BITS as _,
-        (DataType::List(_), _) | (DataType::Map(_, _), _) => {
+        (DataType::LargeListView(_), 1 | 2) => i64::BITS as _,
+        (DataType::List(_) | DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
-        (DataType::Utf8, _) | (DataType::Binary, _) => {
+        (DataType::Utf8 | DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
         // Variable-sized binaries: have two buffers.
         // LargeUtf8: first buffer is i64, second is in bytes
-        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => {
-            i64::BITS as _
-        }
-        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2) => {
-            u8::BITS as _
-        }
-        (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _) => {
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), 1) => i64::BITS as _,
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), 2) => u8::BITS as _,
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
@@ -210,8 +182,8 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         // Variable-sized views: have 3 or more buffers.
         // Buffer 1 are the u128 views
         // Buffers 2...N-1 are u8 byte buffers
-        (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => u128::BITS as _,
-        (DataType::Utf8View, _) | (DataType::BinaryView, _) => u8::BITS as _,
+        (DataType::Utf8View | DataType::BinaryView, 1) => u128::BITS as _,
+        (DataType::Utf8View | DataType::BinaryView, _) => u8::BITS as _,
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
         (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
@@ -257,7 +229,7 @@ unsafe fn create_buffer(
     if array.num_buffers() == 0 {
         return None;
     }
-    NonNull::new(array.buffer(index) as _)
+    NonNull::new(array.buffer(index).cast_mut())
         .map(|ptr| unsafe { Buffer::from_custom_allocation(ptr, len, owner) })
 }
 
@@ -281,7 +253,14 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    tmp.consume()
+    let mut data = tmp.consume()?;
+    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
+    // See https://github.com/apache/arrow/issues/43552 and
+    // https://github.com/apache/arrow-rs/issues/10028 for context.
+    data.align_buffers();
+    Ok(data)
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -299,7 +278,14 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    tmp.consume()
+    let mut data = tmp.consume()?;
+    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
+    // a no-op when buffers are already aligned. Unreachable under
+    // `cfg(feature = "force_validate")`; tracked in #10034.
+    // See https://github.com/apache/arrow/issues/43552 and
+    // https://github.com/apache/arrow-rs/issues/10028 for context.
+    data.align_buffers();
+    Ok(data)
 }
 
 #[derive(Debug)]
@@ -465,27 +451,27 @@ impl ImportedArrowArray<'_> {
 
         // Inner type is not important for buffer length.
         Ok(match (&data_type, i) {
-            (DataType::Utf8, 1)
-            | (DataType::LargeUtf8, 1)
-            | (DataType::Binary, 1)
-            | (DataType::LargeBinary, 1)
-            | (DataType::List(_), 1)
-            | (DataType::LargeList(_), 1)
-            | (DataType::Map(_, _), 1) => {
+            (
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::Map(_, _),
+                1,
+            ) => {
                 // the len of the offset buffer (buffer 1) equals length + 1
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 (length + 1) * (bits / 8)
             }
-            (DataType::ListView(_), 1)
-            | (DataType::ListView(_), 2)
-            | (DataType::LargeListView(_), 1)
-            | (DataType::LargeListView(_), 2) => {
+            (DataType::ListView(_) | DataType::LargeListView(_), 1 | 2) => {
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 length * (bits / 8)
             }
-            (DataType::Utf8, 2) | (DataType::Binary, 2) => {
+            (DataType::Utf8 | DataType::Binary, 2) => {
                 if self.array.is_empty() {
                     return Ok(0);
                 }
@@ -499,7 +485,7 @@ impl ImportedArrowArray<'_> {
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
-            (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
+            (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
                 if self.array.is_empty() {
                     return Ok(0);
                 }
@@ -517,10 +503,8 @@ impl ImportedArrowArray<'_> {
             // Buffer 1 is the views buffer, which stores 1 u128 per length of the array.
             // Buffers 2..N-1 are the buffers holding the byte data. Their lengths are variable.
             // Buffer N is of length (N - 2) and stores i64 containing the lengths of buffers 2..N-1
-            (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => {
-                std::mem::size_of::<u128>() * length
-            }
-            (DataType::Utf8View, i) | (DataType::BinaryView, i) => {
+            (DataType::Utf8View | DataType::BinaryView, 1) => std::mem::size_of::<u128>() * length,
+            (DataType::Utf8View | DataType::BinaryView, i) => {
                 variadic_buffer_lengths[i - 2] as usize
             }
             // buffer len of primitive types
@@ -666,6 +650,40 @@ mod tests_to_then_from_ffi {
         Ok(())
     }
     // case with nulls is tested in the docs, through the example on this module.
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_decimal128_under_aligned_round_trip() -> Result<()> {
+        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
+        // an FFI producer that only guarantees the C Data Interface's
+        // recommended 8-byte alignment (e.g. arrow-java).
+        let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
+        let under_aligned = aligned.slice(8);
+        assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
+        assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
+
+        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
+        // input is the condition under test.
+        let data = unsafe {
+            ArrayData::builder(DataType::Decimal128(10, 2))
+                .len(2)
+                .add_buffer(under_aligned)
+                .build_unchecked()
+        };
+
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+        let array = FFI_ArrowArray::new(&data);
+
+        let imported = unsafe { from_ffi(array, &schema) }?;
+        let array = Decimal128Array::from(imported);
+
+        // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
+        // yields elements `1 << 64` and `2 << 64`.
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), 1_i128 << 64);
+        assert_eq!(array.value(1), 2_i128 << 64);
+        Ok(())
+    }
 
     #[test]
     fn test_null_count_handling() {
@@ -1094,35 +1112,6 @@ mod tests_to_then_from_ffi {
         assert_eq!(actual, &expected);
 
         // (drop/release)
-        Ok(())
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_export_array_into_raw() -> Result<()> {
-        let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
-
-        // Assume two raw pointers provided by the consumer
-        let mut out_array = FFI_ArrowArray::empty();
-        let mut out_schema = FFI_ArrowSchema::empty();
-
-        {
-            let out_array_ptr = std::ptr::addr_of_mut!(out_array);
-            let out_schema_ptr = std::ptr::addr_of_mut!(out_schema);
-            unsafe {
-                export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
-            }
-        }
-
-        // (simulate consumer) import it
-        let data = unsafe { from_ffi(out_array, &out_schema) }?;
-        let array = make_array(data);
-
-        // perform some operation
-        let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-
-        // verify
-        assert_eq!(array, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
 
@@ -1729,7 +1718,7 @@ mod tests_from_ffi {
         let data = array.to_data();
 
         let mut mutable = MutableArrayData::new(vec![&data], false, len);
-        mutable.extend(0, 0, len);
+        mutable.try_extend(0, 0, len).unwrap();
         make_array(mutable.freeze())
     }
 

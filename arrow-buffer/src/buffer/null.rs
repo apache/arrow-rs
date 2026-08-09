@@ -78,9 +78,11 @@ impl NullBuffer {
     /// can yield significant performance improvements over an iterator approach
     pub fn union(lhs: Option<&NullBuffer>, rhs: Option<&NullBuffer>) -> Option<NullBuffer> {
         match (lhs, rhs) {
-            (Some(lhs), Some(rhs)) => Some(Self::new(lhs.inner() & rhs.inner())),
-            (Some(n), None) | (None, Some(n)) => Some(n.clone()),
-            (None, None) => None,
+            (Some(lhs), Some(rhs)) if lhs.null_count() > 0 || rhs.null_count() > 0 => {
+                Some(Self::new(lhs.inner() & rhs.inner()))
+            }
+            (Some(n), None) | (None, Some(n)) if n.null_count() > 0 => Some(n.clone()),
+            (_, _) => None,
         }
     }
 
@@ -91,7 +93,10 @@ impl NullBuffer {
         nulls: impl IntoIterator<Item = Option<&'a NullBuffer>>,
     ) -> Option<NullBuffer> {
         // Unwrap to BooleanBuffer because BitAndAssign is not implemented for NullBuffer
-        let mut buffers = nulls.into_iter().filter_map(|nb| nb.map(NullBuffer::inner));
+        let mut buffers = nulls.into_iter().filter_map(|nb| match nb {
+            Some(nb) if nb.null_count > 0 => Some(nb.inner()),
+            _ => None,
+        });
         let first = buffers.next()?;
         let mut result = first.clone();
         for buf in buffers {
@@ -398,5 +403,39 @@ mod tests {
     fn test_union_many_empty_slice() {
         let result = NullBuffer::union_many([] as [Option<&NullBuffer>; 0]);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_union_many_no_nulls() {
+        let a = NullBuffer::from(&[true, true, true, true]);
+
+        let result = NullBuffer::union_many([Some(&a), Some(&a), Some(&a)]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_union_no_nulls() {
+        let a = NullBuffer::from(&[true, true, true, true]);
+
+        let result = NullBuffer::union(Some(&a), Some(&a));
+        assert_eq!(result, None);
+
+        let result = NullBuffer::union(Some(&a), None);
+        assert_eq!(result, None);
+
+        let result = NullBuffer::union(None, Some(&a));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_union_nulls_one_side() {
+        let all_valid = NullBuffer::from(&[true, true, true, true]);
+        let all_null = NullBuffer::from(&[false, false, false, false]);
+
+        let result = NullBuffer::union(Some(&all_valid), Some(&all_null));
+        assert_eq!(result, Some(all_null.clone()));
+
+        let result = NullBuffer::union(Some(&all_null), Some(&all_valid));
+        assert_eq!(result, Some(all_null.clone()));
     }
 }

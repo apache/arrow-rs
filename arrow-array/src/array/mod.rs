@@ -266,7 +266,7 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_null(0), false);
     /// ```
     fn is_null(&self, index: usize) -> bool {
-        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
     /// Returns whether the element at `index` is *not* null, the
@@ -1178,10 +1178,10 @@ mod tests {
     fn test_null_map() {
         let data_type = DataType::Map(
             Arc::new(Field::new(
-                "entry",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 ])),
                 false,
             )),

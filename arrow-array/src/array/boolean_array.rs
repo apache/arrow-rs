@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::BooleanBuilder;
+use crate::builder::{BooleanBufferBuilder, BooleanBuilder};
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -94,6 +93,17 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Create a new [`BooleanArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(values: BooleanBuffer, nulls: Option<NullBuffer>) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self { values, nulls }
+    }
+
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
         Self {
@@ -157,16 +167,6 @@ impl BooleanArray {
         &self.values
     }
 
-    /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
-    /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
-    /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
-    const CHUNK_FOLD_BLOCK_SIZE: usize = 16;
-
-    /// Returns an [`UnalignedBitChunk`] over this array's values.
-    fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
-        UnalignedBitChunk::new(self.values().values(), self.values().offset(), self.len())
-    }
-
     /// Returns the number of non null, true values within this array.
     /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
@@ -202,16 +202,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
             }
-            None => {
-                let bit_chunks = self.unaligned_bit_chunks();
-                let chunks = bit_chunks.chunks();
-                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
-                let found = bit_chunks.prefix().unwrap_or(0) != 0
-                    || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
-                found
-                    || exact.remainder().iter().any(|&c| c != 0)
-                    || bit_chunks.suffix().unwrap_or(0) != 0
-            }
+            None => self.values().has_true(),
         }
     }
 
@@ -228,35 +219,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
             }
-            None => {
-                let bit_chunks = self.unaligned_bit_chunks();
-                // UnalignedBitChunk zeros padding bits; fill them with 1s so
-                // they don't appear as false values.
-                let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
-                let trail_mask = if bit_chunks.trailing_padding() == 0 {
-                    u64::MAX
-                } else {
-                    (1u64 << (64 - bit_chunks.trailing_padding())) - 1
-                };
-                let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
-                    (Some(_), Some(_)) => (!lead_mask, !trail_mask),
-                    (Some(_), None) => (!lead_mask | !trail_mask, 0),
-                    (None, Some(_)) => (0, !trail_mask),
-                    (None, None) => (0, 0),
-                };
-                let chunks = bit_chunks.chunks();
-                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
-                let found = bit_chunks
-                    .prefix()
-                    .is_some_and(|v| (v | prefix_fill) != u64::MAX)
-                    || exact
-                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
-                found
-                    || exact.remainder().iter().any(|&c| c != u64::MAX)
-                    || bit_chunks
-                        .suffix()
-                        .is_some_and(|v| (v | suffix_fill) != u64::MAX)
-            }
+            None => self.values().has_false(),
         }
     }
 
@@ -608,6 +571,45 @@ impl BooleanArray {
         }
     }
 
+    /// Returns a new [`BooleanArray`] of the same length where only the first
+    /// `n` non-null `true` positions remain `true`; any `true` positions
+    /// beyond the first `n` are replaced with `false`. The null buffer is
+    /// preserved unchanged.
+    ///
+    /// If this array has at most `n` non-null `true` values, `self` is
+    /// returned unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let a = BooleanArray::from(vec![true, false, true, true, false, true]);
+    /// // Keep only the first 2 `true` positions; later trues become false.
+    /// let r = a.take_n_true(2);
+    /// assert_eq!(r, BooleanArray::from(vec![true, false, true, false, false, false]));
+    /// ```
+    pub fn take_n_true(self, n: usize) -> BooleanArray {
+        let len = self.len();
+        // `set_indices` scans 64 bits at a time via `trailing_zeros`, so locating
+        // the first set bit beyond the retained prefix is cheaper than visiting
+        // every bit. When a null buffer is present, skip set bits whose
+        // corresponding entry is null so only non-null trues count toward `n`
+        // (matching `true_count` semantics).
+        let mut iter = self.values.set_indices();
+        let end = match self.nulls.as_ref() {
+            Some(nulls) => iter.filter(|&i| nulls.is_valid(i)).nth(n),
+            None => iter.nth(n),
+        };
+        let Some(end) = end else {
+            return self;
+        };
+
+        let mut builder = BooleanBufferBuilder::new(len);
+        builder.append_buffer(&self.values.slice(0, end));
+        builder.append_n(len - end, false);
+        BooleanArray::new(builder.finish(), self.nulls)
+    }
+
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (BooleanBuffer, Option<NullBuffer>) {
         (self.values, self.nulls)
@@ -923,7 +925,7 @@ mod tests {
         }
     }
     use arrow_buffer::Buffer;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -1084,6 +1086,10 @@ mod tests {
     fn test_boolean_array_from_iter_with_larger_upper_bound() {
         // See https://github.com/apache/arrow-rs/issues/8505
         // This returns an upper size hint of 4
+        #[expect(
+            clippy::iter_filter_is_some,
+            reason = "the point of the test is the size hint of `filter`, which `flatten` does not have"
+        )]
         let iterator = vec![Some(true), None, Some(false), None]
             .into_iter()
             .filter(Option::is_some);
@@ -1092,6 +1098,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_boolean_array_builder() {
         // Test building a boolean array with ArrayData builder and offset
         // 000011011
@@ -1343,6 +1350,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_not() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1351,6 +1359,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_preserves_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
         let result = arr.bitwise_unary(|x| !x);
@@ -1363,6 +1372,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_unshared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1373,6 +1383,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_shared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
         let info = PointerInfo::new(&arr);
@@ -1386,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_with_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let result = arr.bitwise_unary_mut(|x| !x).unwrap();
@@ -1567,6 +1579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_sliced() {
         // Slicing creates a non-zero offset into the underlying buffer.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);
@@ -1580,6 +1593,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_bitwise_unary_mut_sliced() {
         // Slicing shares the buffer, so _mut must return Err.
         let arr = BooleanArray::from(vec![true, false, true, true, false]);
@@ -1629,5 +1643,73 @@ mod tests {
         let expected = left.bitwise_bin_op(&right, |a, b| a & b);
         let result = left.bitwise_bin_op_mut_or_clone(&right, |a, b| a & b);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_take_n_true_keeps_first_n_matches() {
+        let a = BooleanArray::from(vec![true, false, true, true, false, true, true]);
+        // true positions: 0, 2, 3, 5, 6
+        let r = a.clone().take_n_true(3);
+        assert_eq!(r.len(), a.len());
+        assert_eq!(r.true_count(), 3);
+        let out: Vec<bool> = (0..r.len()).map(|i| r.value(i)).collect();
+        assert_eq!(
+            out,
+            vec![true, false, true, true, false, false, false],
+            "first three trues should survive, the rest become false"
+        );
+    }
+
+    #[test]
+    fn test_take_n_true_passes_through_when_already_small_enough() {
+        let a = BooleanArray::from(vec![true, false, true, false]);
+        let r = a.clone().take_n_true(5);
+        assert_eq!(r.len(), a.len());
+        assert_eq!(r.true_count(), 2);
+        assert_eq!(r, a);
+    }
+
+    #[test]
+    fn test_take_n_true_zero_returns_all_false() {
+        let a = BooleanArray::from(vec![true, true, true]);
+        let r = a.take_n_true(0);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r.true_count(), 0);
+    }
+
+    #[test]
+    fn test_take_n_true_preserves_nulls_and_skips_them() {
+        // Non-null trues: positions 0, 3, 5. Null at 2 must not count toward `n`.
+        let a = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            Some(false),
+            Some(true),
+        ]);
+        assert_eq!(a.true_count(), 3);
+        let len = a.len();
+
+        let r = a.take_n_true(2);
+        assert_eq!(r.len(), len);
+        assert_eq!(r.true_count(), 2);
+        // Null buffer is preserved unchanged.
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(2));
+        // First two non-null trues kept; the third (position 5) becomes false.
+        assert!(r.value(0));
+        assert!(!r.value(1));
+        assert!(r.value(3));
+        assert!(!r.value(4));
+        assert!(!r.value(5));
+    }
+
+    #[test]
+    fn test_take_n_true_empty_array() {
+        let a = BooleanArray::from(Vec::<bool>::new());
+        let r = a.take_n_true(5);
+        assert_eq!(r.len(), 0);
+        assert_eq!(r.true_count(), 0);
     }
 }

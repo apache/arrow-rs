@@ -127,7 +127,11 @@ pub struct VariantObject<'m, 'v> {
 }
 
 // We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+#[cfg(target_pointer_width = "64")]
 const _: () = crate::utils::expect_size_of::<VariantObject>(64);
+
+#[cfg(target_pointer_width = "32")]
+const _: () = crate::utils::expect_size_of::<VariantObject>(44);
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
@@ -262,12 +266,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 for field_id in field_ids_iter {
                     let next_field_name = self.metadata.get(field_id)?;
 
-                    if let Some(current_name) = current_field_name {
-                        if next_field_name < current_name {
-                            return Err(ArrowError::InvalidArgumentError(
-                                "field names not sorted".to_string(),
-                            ));
-                        }
+                    if let Some(current_name) = current_field_name
+                        && next_field_name < current_name
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "field names not sorted".to_string(),
+                        ));
                     }
                     current_field_name = Some(next_field_name);
                 }

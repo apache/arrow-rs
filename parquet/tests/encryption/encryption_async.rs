@@ -17,9 +17,13 @@
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
+use crate::encryption_util;
 use crate::encryption_util::{
-    TestKeyRetriever, read_encrypted_file, verify_column_indexes,
-    verify_encryption_double_test_data, verify_encryption_test_data,
+    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAME_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY,
+    AES_128_FOOTER_KEY_NAME, AES_128_KEY_NAME_KEY, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAME_KEYS,
+    AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY, AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAME_KEY,
+    BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY, TestKeyRetriever, read_encrypted_file,
+    verify_column_indexes, verify_encryption_test_data,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
@@ -29,9 +33,7 @@ use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
 };
-use parquet::arrow::{
-    ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
-};
+use parquet::arrow::{ArrowSchemaConverter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
@@ -47,64 +49,67 @@ use tokio::task::JoinHandle;
 
 #[tokio::test]
 async fn test_non_uniform_encryption_plaintext_footer() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn non_uniform_encryption_plaintext_footer(
+        footer_key: &[u8],
+        column_keys: &[(&str, &[u8])],
+    ) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_plaintext_footer.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
+        for (column_name, key) in column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
+        }
+        let decryption_properties = builder.build().unwrap();
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
+    }
 
-    // There is always a footer key even with a plaintext footer,
+    // AES-128: there is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes().to_vec();
-    let column_2_key = "1234567890123451".as_bytes().to_vec();
+    non_uniform_encryption_plaintext_footer(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key)
-        .with_column_key("double_field", column_1_key)
-        .with_column_key("float_field", column_2_key)
-        .build()
-        .unwrap();
-
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+    // AES-256
+    non_uniform_encryption_plaintext_footer(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
 async fn test_misspecified_encryption_keys() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
-
-    // There is always a footer key even with a plaintext footer,
-    // but this is used for signing the footer.
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
-
     // read file with keys and check for expected error message
     async fn check_for_error(
         expected_message: &str,
-        path: &String,
         footer_key: &[u8],
         column_1_key: &[u8],
         column_2_key: &[u8],
+        additional_column_keys: &[(&str, &[u8])],
     ) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer.parquet.encrypted",
+        );
         let mut file = File::open(&path).await.unwrap();
 
-        let mut decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec());
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
 
         if !column_1_key.is_empty() {
-            decryption_properties =
-                decryption_properties.with_column_key("double_field", column_1_key.to_vec());
+            builder = builder.with_column_key(AES_128_COLUMN_NAMES[0], column_1_key.to_vec());
         }
 
         if !column_2_key.is_empty() {
-            decryption_properties =
-                decryption_properties.with_column_key("float_field", column_2_key.to_vec());
+            builder = builder.with_column_key(AES_128_COLUMN_NAMES[1], column_2_key.to_vec());
         }
 
-        let decryption_properties = decryption_properties.build().unwrap();
+        for (column_name, key) in additional_column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
+        }
+
+        let decryption_properties = builder.build().unwrap();
 
         match verify_encryption_test_file_read_async(&mut file, decryption_properties).await {
-            Ok(_) => {
+            Ok(()) => {
                 panic!("did not get expected error")
             }
             Err(e) => {
@@ -113,63 +118,149 @@ async fn test_misspecified_encryption_keys() {
         }
     }
 
+    // There is always a footer key even with a plaintext footer,
+    // but this is used for signing the footer.
+    let footer_key = AES_128_FOOTER_KEY;
+    let column_1_key = AES_128_COLUMN_KEYS[0];
+    let column_2_key = AES_128_COLUMN_KEYS[1];
+    let empty_column_key = &[];
+
     // Too short footer key
     check_for_error(
-        "Parquet error: Invalid footer key. Failed to create AES key",
-        &path,
-        "bad_pwd".as_bytes(),
+        format!("Parquet error: Invalid footer key. Error creating RingGcmBlockDecryptor with unsupported key length: {}", "bad_pwd".len()).as_str(),
+        b"bad_pwd",
         column_1_key,
         column_2_key,
+        empty_column_key
     )
     .await;
 
     // Wrong footer key
     check_for_error(
         "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer",
-        &path,
-        "1123456789012345".as_bytes(),
+        BAD_AES_128_FOOTER_KEY,
         column_1_key,
         column_2_key,
+        empty_column_key,
     )
     .await;
 
     // Missing column key
     check_for_error(
         "Parquet error: No column decryption key set for encrypted column 'double_field'",
-        &path,
         footer_key,
         "".as_bytes(),
         column_2_key,
+        empty_column_key,
     )
     .await;
 
     // Too short column key
     check_for_error(
-        "Parquet error: Failed to create AES key",
-        &path,
+        format!(
+            "Parquet error: Error creating RingGcmBlockDecryptor with unsupported key length: {}",
+            "abc".len()
+        )
+        .as_str(),
         footer_key,
         "abc".as_bytes(),
         column_2_key,
+        empty_column_key,
     )
     .await;
 
     // Wrong column key
     check_for_error(
         "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
-        &path,
         footer_key,
         "1123456789012345".as_bytes(),
         column_2_key,
+        empty_column_key,
     )
     .await;
 
     // Mixed up keys
     check_for_error(
         "Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong?",
-        &path,
         footer_key,
         column_2_key,
         column_1_key,
+        empty_column_key,
+    )
+    .await;
+
+    let aes256_footer_key = AES_256_FOOTER_KEY;
+    let aes256_column_1_key = AES_256_COLUMN_KEYS[0];
+    let aes256_column_2_key = AES_256_COLUMN_KEYS[1];
+    let additional_column_keys = &[
+        (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+        (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+        (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+        (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+        (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+        (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
+    ];
+
+    // Too short footer key
+    check_for_error(
+        format!("Parquet error: Invalid footer key. Error creating RingGcmBlockDecryptor with unsupported key length: {}", "bad_pwd".len()).as_str(),
+        b"bad_pwd",
+        aes256_column_1_key,
+        aes256_column_2_key,
+        additional_column_keys
+    ).await;
+
+    // Wrong footer key
+    check_for_error(
+        "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer",
+        BAD_AES_256_FOOTER_KEY,
+        aes256_column_1_key,
+        aes256_column_2_key,
+        additional_column_keys,
+    )
+    .await;
+
+    // Missing column key
+    check_for_error(
+        "Parquet error: No column decryption key set for encrypted column 'double_field'",
+        aes256_footer_key,
+        "".as_bytes(),
+        aes256_column_2_key,
+        additional_column_keys,
+    )
+    .await;
+
+    // Too short column key
+    check_for_error(
+        format!(
+            "Parquet error: Error creating RingGcmBlockDecryptor with unsupported key length: {}",
+            "abc".len()
+        )
+        .as_str(),
+        aes256_footer_key,
+        "abc".as_bytes(),
+        aes256_column_2_key,
+        additional_column_keys,
+    )
+    .await;
+
+    // Wrong column key
+    check_for_error(
+        "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
+        aes256_footer_key,
+        "22345678901234567890123456789012".as_bytes(),
+        aes256_column_2_key,
+        additional_column_keys,
+    )
+    .await;
+
+    // Mixed up keys
+    check_for_error(
+        "Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong?",
+        aes256_footer_key,
+        aes256_column_2_key,
+        aes256_column_1_key,
+        additional_column_keys,
     )
     .await;
 }
@@ -183,68 +274,81 @@ async fn test_plaintext_footer_read_without_decryption() {
 
 #[tokio::test]
 async fn test_non_uniform_encryption() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn non_uniform_encryption(footer_key: &[u8], column_keys: &[(&str, &[u8])]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes().to_vec();
-    let column_2_key = "1234567890123451".as_bytes().to_vec();
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
+        for (column_name, key) in column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
+        }
+        let decryption_properties = builder.build().unwrap();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key)
-        .with_column_key("float_field", column_2_key)
-        .build()
-        .unwrap();
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
+    }
 
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+    non_uniform_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
+    non_uniform_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
 async fn test_uniform_encryption() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn uniform_encryption(footer_key: &[u8]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "uniform_encryption.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let key_code: &[u8] = "0123456789012345".as_bytes();
-    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-        .build()
-        .unwrap();
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
 
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
+    }
+
+    uniform_encryption(AES_128_FOOTER_KEY).await;
+    uniform_encryption(AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
 async fn test_aes_ctr_encryption() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_and_footer_ctr.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn aes_ctr_encryption(footer_key: &[u8], column_keys: &[(&str, &[u8])]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer_ctr.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let footer_key = "0123456789012345".as_bytes().to_vec();
-    let column_1_key = "1234567890123450".as_bytes().to_vec();
-    //let column_2_key = "1234567890123451".as_bytes().to_vec();
-
-    let decryption_properties = FileDecryptionProperties::builder(footer_key)
-        .with_column_key("double_field", column_1_key.clone())
-        .with_column_key("float_field", column_1_key)
-        .build()
-        .unwrap();
-
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    let metadata = ArrowReaderMetadata::load_async(&mut file, options).await;
-
-    match metadata {
-        Err(ParquetError::NYI(s)) => {
-            assert!(s.contains("AES_GCM_CTR_V1"));
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
+        for (column_name, key) in column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
         }
-        _ => {
-            panic!("Expected ParquetError::NYI");
-        }
-    };
+        let decryption_properties = builder.build().unwrap();
+
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+        let metadata = ArrowReaderMetadata::load_async(&mut file, options).await;
+
+        match metadata {
+            Err(ParquetError::NYI(s)) => {
+                assert!(s.contains("AES_GCM_CTR_V1"));
+            }
+            _ => {
+                panic!("Expected ParquetError::NYI");
+            }
+        };
+    }
+
+    aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
+    aes_ctr_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
@@ -264,60 +368,150 @@ async fn test_decrypting_without_decryption_properties_fails() {
 
 #[tokio::test]
 async fn test_write_non_uniform_encryption() {
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    async fn write_non_uniform_encryption(
+        footer_key: &[u8],
+        column_names: Vec<&str>,
+        column_keys: Vec<Vec<u8>>,
+        encryption_column_keys: &[(&str, &[u8])],
+    ) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer.parquet.encrypted",
+        );
 
-    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
-    let column_names = vec!["double_field", "float_field"];
-    let column_keys = vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()];
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .unwrap()
+            .build()
+            .unwrap();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-        .with_column_keys(column_names.clone(), column_keys.clone())
-        .unwrap()
-        .build()
-        .unwrap();
+        let mut builder = FileEncryptionProperties::builder(footer_key.to_vec());
+        for (column_name, key) in encryption_column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
+        }
+        let file_encryption_properties = builder.build().unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
-        .with_column_keys(column_names, column_keys)
-        .unwrap()
-        .build()
-        .unwrap();
-
-    read_and_roundtrip_to_encrypted_file_async(
-        &path,
-        decryption_properties,
-        file_encryption_properties,
-    )
-    .await
-    .unwrap();
-}
-
-#[cfg(feature = "object_store")]
-async fn get_encrypted_meta_store() -> (
-    object_store::ObjectMeta,
-    std::sync::Arc<dyn object_store::ObjectStore>,
-) {
-    use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
-    use object_store::{ObjectStore, ObjectStoreExt};
-
-    use std::sync::Arc;
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let store = LocalFileSystem::new_with_prefix(test_data).unwrap();
-
-    let meta = store
-        .head(&Path::from("uniform_encryption.parquet.encrypted"))
+        read_and_roundtrip_to_encrypted_file_async(
+            &path,
+            decryption_properties,
+            file_encryption_properties,
+        )
         .await
         .unwrap();
+    }
 
-    (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    write_non_uniform_encryption(
+        AES_128_FOOTER_KEY,
+        AES_128_COLUMN_NAMES.to_vec(),
+        AES_128_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
+        AES_128_COLUMN_NAME_KEYS,
+    )
+    .await;
+
+    // AES-256
+    write_non_uniform_encryption(
+        AES_256_FOOTER_KEY,
+        AES_256_COLUMN_NAMES.to_vec(),
+        AES_256_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
+        AES_256_COLUMN_NAME_KEYS,
+    )
+    .await;
+}
+
+/// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+/// example on the [`AsyncFileReader`] trait documentation
+///
+/// [`AsyncFileReader`]: parquet::arrow::async_reader::AsyncFileReader
+/// [`ObjectStore`]: object_store::ObjectStore
+mod object_store_reader {
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::{FutureExt, TryFutureExt};
+    use object_store::path::Path;
+    use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+    use parquet::errors::{ParquetError, Result};
+    use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+    use std::ops::Range;
+    use std::sync::Arc;
+
+    fn to_parquet_err(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+
+    #[derive(Clone)]
+    pub struct ObjectStoreReader {
+        pub store: Arc<dyn ObjectStore>,
+        pub path: Path,
+    }
+
+    impl AsyncFileReader for ObjectStoreReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+            self.store
+                .get_range(&self.path, range)
+                .map_err(to_parquet_err)
+                .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+            async move {
+                self.store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+            async move {
+                let metadata = ParquetMetaDataReader::new()
+                    .with_arrow_reader_options(options)
+                    .load_via_suffix_and_finish(self)
+                    .await?;
+                Ok(Arc::new(metadata))
+            }
+            .boxed()
+        }
+    }
+
+    impl MetadataSuffixFetch for &mut ObjectStoreReader {
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+            let options = GetOptions {
+                range: Some(GetRange::Suffix(suffix as u64)),
+                ..Default::default()
+            };
+            async move {
+                let resp = self
+                    .store
+                    .get_opts(&self.path, options)
+                    .await
+                    .map_err(to_parquet_err)?;
+                resp.bytes().await.map_err(to_parquet_err)
+            }
+            .boxed()
+        }
+    }
 }
 
 #[tokio::test]
-#[cfg(feature = "object_store")]
 async fn test_read_encrypted_file_from_object_store() {
-    use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-    let (meta, store) = get_encrypted_meta_store().await;
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store_reader::ObjectStoreReader;
+    use parquet::arrow::async_reader::AsyncFileReader;
+    use std::sync::Arc;
+
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(test_data).unwrap());
+    let path = Path::from("uniform_encryption.parquet.encrypted");
 
     let key_code: &[u8] = "0123456789012345".as_bytes();
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
@@ -325,7 +519,7 @@ async fn test_read_encrypted_file_from_object_store() {
         .unwrap();
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let mut reader = ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
+    let mut reader = ObjectStoreReader { store, path };
     let metadata = reader.get_metadata(Some(&options)).await.unwrap();
     let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
         .await
@@ -338,98 +532,138 @@ async fn test_read_encrypted_file_from_object_store() {
 
 #[tokio::test]
 async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn non_uniform_encryption_plaintext_footer_with_key_retriever(
+        footer_key: &[u8],
+        keys: &[(&str, &[u8])],
+    ) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_plaintext_footer.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let key_retriever = TestKeyRetriever::new()
-        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
-        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
-        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+        let mut key_retriever = TestKeyRetriever::new();
+        for (key_name, key) in keys {
+            key_retriever = key_retriever.with_key((*key_name).to_owned(), (*key).to_vec());
+        }
 
-    let decryption_properties =
-        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
-            .build()
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+                .build()
+                .unwrap();
+
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
             .unwrap();
+    }
 
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+    non_uniform_encryption_plaintext_footer_with_key_retriever(
+        AES_128_FOOTER_KEY,
+        AES_128_KEY_NAME_KEY,
+    )
+    .await;
+
+    non_uniform_encryption_plaintext_footer_with_key_retriever(
+        AES_256_FOOTER_KEY,
+        AES_256_KEY_NAME_KEY,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn test_non_uniform_encryption_with_key_retriever() {
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn non_uniform_encryption_with_key_retriever(footer_key: &[u8], keys: &[(&str, &[u8])]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let key_retriever = TestKeyRetriever::new()
-        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
-        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
-        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+        let mut key_retriever = TestKeyRetriever::new();
+        for (key_name, key) in keys {
+            key_retriever = key_retriever.with_key((*key_name).to_owned(), (*key).to_vec());
+        }
 
-    let decryption_properties =
-        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
-            .build()
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+                .build()
+                .unwrap();
+
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
             .unwrap();
+    }
 
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+    non_uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY, AES_128_KEY_NAME_KEY).await;
+    non_uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY, AES_256_KEY_NAME_KEY).await;
 }
 
 #[tokio::test]
 async fn test_uniform_encryption_with_key_retriever() {
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+    async fn uniform_encryption_with_key_retriever(key_name: &str, footer_key: &[u8]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "uniform_encryption.parquet.encrypted",
+        );
+        let mut file = File::open(&path).await.unwrap();
 
-    let key_retriever =
-        TestKeyRetriever::new().with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec());
+        let key_retriever =
+            TestKeyRetriever::new().with_key(key_name.to_owned(), footer_key.to_vec());
 
-    let decryption_properties =
-        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
-            .build()
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+                .build()
+                .unwrap();
+
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
             .unwrap();
+    }
 
-    verify_encryption_test_file_read_async(&mut file, decryption_properties)
-        .await
-        .unwrap();
+    uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY).await;
+    uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
 async fn test_decrypt_page_index_uniform() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
+    async fn decrypt_page_index_uniform(footer_key: &[u8]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "uniform_encryption.parquet.encrypted",
+        );
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
 
-    let key_code: &[u8] = "0123456789012345".as_bytes();
-    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-        .build()
-        .unwrap();
+        test_decrypt_page_index(&path, decryption_properties)
+            .await
+            .unwrap();
+    }
 
-    test_decrypt_page_index(&path, decryption_properties)
-        .await
-        .unwrap();
+    decrypt_page_index_uniform(AES_128_FOOTER_KEY).await;
+    decrypt_page_index_uniform(AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
 async fn test_decrypt_page_index_non_uniform() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+    async fn decrypt_page_index_non_uniform(footer_key: &[u8], column_keys: &[(&str, &[u8])]) {
+        let path = encryption_util::encrypted_data_path(
+            footer_key,
+            "encrypt_columns_and_footer.parquet.encrypted",
+        );
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
+        for (column_name, key) in column_keys {
+            builder = builder.with_column_key(column_name, key.to_vec());
+        }
+        let decryption_properties = builder.build().unwrap();
+        test_decrypt_page_index(&path, decryption_properties)
+            .await
+            .unwrap();
+    }
 
-    let footer_key = "0123456789012345".as_bytes().to_vec();
-    let column_1_key = "1234567890123450".as_bytes().to_vec();
-    let column_2_key = "1234567890123451".as_bytes().to_vec();
+    decrypt_page_index_non_uniform(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key)
-        .with_column_key("float_field", column_2_key)
-        .build()
-        .unwrap();
-
-    test_decrypt_page_index(&path, decryption_properties)
-        .await
-        .unwrap();
+    decrypt_page_index_non_uniform(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 async fn test_decrypt_page_index(
@@ -537,7 +771,7 @@ fn spawn_rg_join_and_finalize_task(
     tokio::task::spawn(async move {
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
-        for task in column_writer_tasks.into_iter() {
+        for task in column_writer_tasks {
             let writer = task
                 .await
                 .map_err(|e| ParquetError::General(e.to_string()))??;
@@ -629,7 +863,7 @@ fn spawn_column_parallel_row_group_writer(
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut col_writer in col_writers.into_iter() {
+    for mut col_writer in col_writers {
         let (send_array, mut receive_array) =
             tokio::sync::mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
@@ -675,14 +909,14 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
     let file = std::fs::File::open(path).unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
 
@@ -748,14 +982,14 @@ async fn test_multi_threaded_encrypted_writing() {
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
     let file = std::fs::File::open(path).unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
 
@@ -833,96 +1067,6 @@ async fn test_multi_threaded_encrypted_writing() {
     let (read_record_batches, read_metadata) =
         read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
-
-    // Check that file was encrypted
-    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-    );
-}
-
-#[tokio::test]
-async fn test_multi_threaded_encrypted_writing_deprecated() {
-    // Read example data and set up encryption/decryption properties
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
-    let file = std::fs::File::open(path).unwrap();
-
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
-        .build()
-        .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
-        .build()
-        .unwrap();
-
-    let (record_batches, metadata) =
-        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
-    let to_write: Vec<_> = record_batches
-        .iter()
-        .flat_map(|rb| rb.columns().to_vec())
-        .collect();
-    let schema = metadata.schema().clone();
-
-    let props = Some(
-        WriterPropertiesBuilder::default()
-            .with_file_encryption_properties(file_encryption_properties)
-            .build(),
-    );
-
-    // Create a temporary file to write the encrypted data
-    let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), props).unwrap();
-
-    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
-
-    // Get column writers
-    #[allow(deprecated)]
-    let col_writers = writer.get_column_writers().unwrap();
-    let num_columns = col_writers.len();
-
-    let (col_writer_tasks, mut col_array_channels) =
-        spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
-
-    // Send the ArrowLeafColumn data to the respective column writer channels
-    let mut worker_iter = col_array_channels.iter_mut();
-    for (array, field) in to_write.iter().zip(schema.fields()) {
-        for leaves in compute_leaves(field, array).unwrap() {
-            worker_iter.next().unwrap().send(leaves).await.unwrap();
-        }
-    }
-    drop(col_array_channels);
-
-    // Wait for all column writers to finish writing
-    let mut finalized_rg = Vec::with_capacity(num_columns);
-    for task in col_writer_tasks.into_iter() {
-        finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
-    }
-
-    // Append the finalized row group to the SerializedFileWriter
-    #[allow(deprecated)]
-    writer.append_row_group(finalized_rg).unwrap();
-
-    // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
-
-    // Write individual RecordBatches into the file
-    for rb in record_batches {
-        writer.write(&rb).unwrap()
-    }
-    assert!(writer.flush().is_ok());
-
-    // Close the file writer which writes the footer
-    let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.file_metadata().num_rows(), 100);
-
-    // Check that the file was written correctly
-    let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties).unwrap();
-    verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
     let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
