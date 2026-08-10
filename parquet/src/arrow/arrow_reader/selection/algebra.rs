@@ -397,7 +397,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
 mod tests {
     use super::*;
     use arrow_array::BooleanArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_and() {

@@ -927,7 +927,7 @@ impl Field {
         && (self.nullable || !other.nullable)
         // make sure self.metadata is a superset of other.metadata
         && other.metadata.iter().all(|(k, v1)| {
-            self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
+            self.metadata.get(k).is_some_and(|v2| v1 == v2)
         })
     }
 
@@ -1497,7 +1497,7 @@ mod test {
     #[test]
     fn test_field_with_nonempty_metadata_serde() {
         let mut metadata = HashMap::new();
-        metadata.insert("hi".to_owned(), "".to_owned());
+        metadata.insert("hi".to_owned(), String::new());
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)

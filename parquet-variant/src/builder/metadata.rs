@@ -178,7 +178,7 @@ impl WritableMetadataBuilder {
     /// If the number of field names exceeds the maximum allowed value for `u32`.
     fn num_field_names(&self) -> usize {
         let n = self.field_names.len();
-        assert!(n <= u32::MAX as usize);
+        assert!(u32::try_from(n).is_ok());
 
         n
     }
@@ -215,7 +215,7 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);

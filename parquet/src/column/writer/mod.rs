@@ -1186,7 +1186,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             Type::FIXED_LEN_BYTE_ARRAY
                 if !matches!(
                     self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. }) | Some(&LogicalType::Float16)
+                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
                 ) =>
             {
                 true
@@ -1730,7 +1730,7 @@ fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool
             // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
             // Float16 is stored little endian
-            let uval = (val[1] as u16) << 8 | val[0] as u16;
+            let uval = ((val[1] as u16) << 8) | val[0] as u16;
             uval & 0x7FFFu16 > 0x7C00u16
         }
         _ => false,

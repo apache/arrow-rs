@@ -524,6 +524,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn nullif_fuzz() {
         let mut rng = StdRng::seed_from_u64(7337);
 

@@ -23,7 +23,7 @@ use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano, NullBuffer};
 use arrow_schema::Field;
 use half::f16;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::distr::uniform::SampleUniform;
 use rand::rng;
@@ -33,6 +33,13 @@ use rand::{
 };
 use std::ops::Range;
 use std::sync::Arc;
+
+fn f16_random(rng: &mut StdRng) -> f16 {
+    // Otherwise it can round up to 1.0 even though we should generate in [0, 1)
+    // See: https://github.com/VoidStarKat/half-rs/issues/152
+    let one_next_down = f16::from_bits(0x3BFFu16); // 0.9995117
+    f16::from_f32(rng.random::<f32>()).clamp(f16::ZERO, one_next_down)
+}
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
@@ -48,6 +55,25 @@ where
                 None
             } else {
                 Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Same as [`create_primitive_array`] but specialized for f16 since it doesn't
+/// implement the required rand traits.
+///
+/// This may be deprecated/removed in the future if half updates to the required
+/// rand version.
+pub fn create_nullable_f16_array(size: usize, null_density: f32) -> Float16Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(f16_random(&mut rng))
             }
         })
         .collect()
@@ -823,7 +849,7 @@ pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
             if rng.random::<f32>() < nan_density {
                 Some(f16::NAN)
             } else {
-                Some(rng.random())
+                Some(f16_random(&mut rng))
             }
         })
         .collect()

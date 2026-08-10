@@ -526,7 +526,7 @@ mod test {
 
     fn test_empty<T: IntervalTrait>(empty: T) {
         // Equals itself
-        #[allow(clippy::eq_op)]
+        #[expect(clippy::eq_op)]
         {
             assert_eq!(empty, empty);
         }

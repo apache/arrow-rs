@@ -63,7 +63,7 @@ use num_traits::Zero;
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
 ///
-/// # Safety
+/// # Panics
 ///
 /// When `options` is not set to check bounds, taking indexes after `len` will panic.
 ///
@@ -132,7 +132,7 @@ pub fn take(
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
 ///
-/// # Safety
+/// # Panics
 ///
 /// When `options` is not set to check bounds, taking indexes after `len` will panic.
 ///
@@ -599,7 +599,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
             let mut offset = 0;
 
-            for (start, end) in source_ranges.into_iter() {
+            for (start, end) in source_ranges {
                 let value_len = end - start;
                 // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
                 // `dst` asserted above to include the required capacity.

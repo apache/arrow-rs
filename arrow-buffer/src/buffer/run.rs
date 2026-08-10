@@ -132,8 +132,8 @@ where
 
         Self {
             run_ends,
-            logical_offset,
             logical_length,
+            logical_offset,
         }
     }
 
@@ -151,8 +151,8 @@ where
     ) -> Self {
         Self {
             run_ends,
-            logical_offset,
             logical_length,
+            logical_offset,
         }
     }
 
