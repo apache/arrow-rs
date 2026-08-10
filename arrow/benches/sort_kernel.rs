@@ -319,12 +319,6 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
-    // `Utf8View` takes the `byte_view_rank` path added in #10559, which reads
-    // values from the view layout rather than the contiguous buffer used by
-    // `bytes_rank` above. These mirror the `sort string_view` benchmarks so
-    // the two kernels stay consistent, and cover the fixed-length and
-    // variable-length shapes that decide how often a value spills out of the
-    // inline prefix into a separate buffer.
     let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.0, 10);
     c.bench_function("rank string_view[10] 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
