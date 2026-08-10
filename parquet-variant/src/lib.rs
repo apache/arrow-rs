@@ -31,6 +31,8 @@
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
+#![warn(clippy::allow_attributes)]
+
 mod builder;
 mod decoder;
 mod path;
