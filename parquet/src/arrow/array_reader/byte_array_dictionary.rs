@@ -128,6 +128,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
+    hash_scratch: Vec<u8>,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -146,6 +147,7 @@ where
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
+            hash_scratch: Vec::new(),
         }
     }
 }
@@ -181,7 +183,7 @@ where
 
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
-        let array = buffer.into_array(null_buffer, &self.data_type)?;
+        let array = buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?;
         self.record_reader.reset();
 
         Ok(array)
@@ -452,7 +454,7 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type).unwrap();
+        let array = output.into_array(Some(valid_buffer), &data_type, &mut Vec::new()).unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -523,7 +525,7 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type).unwrap();
+        let array = output.into_array(Some(valid_buffer), &data_type, &mut Vec::new()).unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -558,7 +560,7 @@ mod tests {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
-        let array = output.into_array(None, &data_type).unwrap();
+        let array = output.into_array(None, &data_type, &mut Vec::new()).unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -602,7 +604,7 @@ mod tests {
             decoder.skip_values(2).expect("skipping two values");
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
-        let array = output.into_array(None, &data_type).unwrap();
+        let array = output.into_array(None, &data_type, &mut Vec::new()).unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -665,7 +667,7 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type)
+                .into_array(Some(Buffer::from(&[0])), &data_type, &mut Vec::new())
                 .unwrap();
 
             assert_eq!(array.len(), 8);
@@ -680,7 +682,7 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type)
+                .into_array(Some(Buffer::from(&[0])), &data_type, &mut Vec::new())
                 .unwrap();
 
             assert_eq!(array.len(), 8);

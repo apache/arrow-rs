@@ -18,17 +18,21 @@
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{Array, GenericByteArray, downcast_integer};
+use ahash::RandomState;
+use arrow_array::{Array, DictionaryArray, downcast_integer};
 use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait,
-    builder::{FixedSizeBinaryDictionaryBuilder, GenericByteDictionaryBuilder},
-    cast::AsArray,
-    make_array,
-    types::{ArrowDictionaryKeyType, ByteArrayType},
+    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait, cast::AsArray, make_array,
+    types::ArrowDictionaryKeyType,
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
+use hashbrown::HashMap as HbHashMap;
+use hashbrown::hash_map::Entry;
+use std::hash::{BuildHasher, Hasher};
+use std::mem::size_of;
+use std::ptr::write_unaligned;
+use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
 
 /// An array of variable length byte arrays that are potentially dictionary encoded
@@ -127,6 +131,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         self,
         null_buffer: Option<Buffer>,
         data_type: &ArrowType,
+        hash_scratch: &mut Vec<u8>,
     ) -> Result<ArrayRef> {
         assert!(matches!(data_type, ArrowType::Dictionary(_, _)));
 
@@ -186,8 +191,10 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     _ => unreachable!(),
                 };
 
-                let array = values.into_array(null_buffer, value_type);
-                pack_values(key_type, &array)
+                hash_byte_slices(&values.offsets, &values.values, hash_scratch);
+                let hashes = hashes_as_u64(hash_scratch);
+
+                pack_values_from_offsets(key_type, &value_type, &values, hashes, null_buffer)
             }
         }
     }
@@ -226,58 +233,171 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
     }
 }
 
-macro_rules! dict_helper {
-    ($k:ty, $array:ident) => {
-        match $array.data_type() {
-            ArrowType::Utf8 => pack_values_impl::<$k, _>($array.as_string::<i32>()),
-            ArrowType::LargeUtf8 => pack_values_impl::<$k, _>($array.as_string::<i64>()),
-            ArrowType::Binary => pack_values_impl::<$k, _>($array.as_binary::<i32>()),
-            ArrowType::LargeBinary => pack_values_impl::<$k, _>($array.as_binary::<i64>()),
-            ArrowType::FixedSizeBinary(_) => {
-                pack_fixed_values_impl::<$k>($array.as_fixed_size_binary())
-            }
-            _ => unreachable!(),
-        }
+macro_rules! offsets_dict_helper {
+    ($k:ty, $key_type:ident, $value_type:ident, $values:ident, $hashes:ident, $null_buffer:ident) => {
+        pack_values_from_offsets_impl::<$k, _>(
+            $values,
+            $hashes,
+            $null_buffer,
+            $key_type,
+            $value_type,
+        )
     };
 }
 
-fn pack_values(key_type: &ArrowType, values: &ArrayRef) -> Result<ArrayRef> {
+fn pack_values_from_offsets<V: OffsetSizeTrait>(
+    key_type: &ArrowType,
+    value_type: &ArrowType,
+    values: &OffsetBuffer<V>,
+    hashes: &[u64],
+    null_buffer: Option<Buffer>,
+) -> Result<ArrayRef> {
     downcast_integer! {
-        key_type => (dict_helper, values),
-            _ => unreachable!(),
+        key_type => (offsets_dict_helper, key_type, value_type, values, hashes, null_buffer),
+        _ => unreachable!(),
     }
 }
 
-fn pack_values_impl<K: ArrowDictionaryKeyType, T: ByteArrayType>(
-    array: &GenericByteArray<T>,
-) -> Result<ArrayRef> {
-    let mut builder = GenericByteDictionaryBuilder::<K, T>::with_capacity(array.len(), 1024, 1024);
-    for x in array {
-        match x {
-            Some(x) => builder.append_value(x),
-            None => builder.append_null(),
-        }
+// Avoids double-hashing: keys are already high-quality u64 hashes from ahash,
+// so we pass them through directly rather than re-hashing inside the HashMap.
+struct PassthroughHasher(u64);
+impl std::hash::Hasher for PassthroughHasher {
+    fn finish(&self) -> u64 {
+        self.0
     }
-    let raw = builder.finish();
-    Ok(Arc::new(raw))
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+#[derive(Default)]
+struct BuildPassthroughHasher;
+impl std::hash::BuildHasher for BuildPassthroughHasher {
+    type Hasher = PassthroughHasher;
+    fn build_hasher(&self) -> PassthroughHasher {
+        PassthroughHasher(0)
+    }
 }
 
-fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
-    array: &FixedSizeBinaryArray,
+/// Builds a [`DictionaryArray`] directly from a flat [`OffsetBuffer`] using pre-computed
+/// hashes to deduplicate values in a single pass, avoiding the intermediate [`StringArray`]
+/// materialization
+fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
+    offset_buffer: &OffsetBuffer<V>,
+    hashes: &[u64],
+    null_buffer: Option<Buffer>,
+    key_type: &ArrowType,
+    value_type: &ArrowType,
 ) -> Result<ArrayRef> {
-    let mut builder = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(
-        array.len(),
-        1024,
-        array.value_length(),
-    );
-    for x in array {
-        match x {
-            Some(x) => builder.append_value(x),
-            None => builder.append_null(),
-        }
+    let dict_type = ArrowType::Dictionary(Box::new(key_type.clone()), Box::new(value_type.clone()));
+    let num_values = offset_buffer.len();
+
+    let mut keys: Vec<K::Native> = Vec::with_capacity(num_values);
+    let mut unique_offsets: Vec<V> = Vec::with_capacity(num_values + 1);
+    unique_offsets.push(V::default());
+    let mut unique_bytes: Vec<u8> = Vec::with_capacity(offset_buffer.values.len());
+
+    let mut dedup: HbHashMap<u64, (usize, usize), BuildPassthroughHasher> =
+        HbHashMap::with_capacity_and_hasher(num_values, BuildPassthroughHasher);
+
+    for input_idx in 0..num_values {
+        let hash = hashes[input_idx];
+        let byte_start = offset_buffer.offsets[input_idx].as_usize();
+        let byte_end = offset_buffer.offsets[input_idx + 1].as_usize();
+        let bytes = &offset_buffer.values[byte_start..byte_end];
+
+        let output_idx = match dedup.entry(hash) {
+            Entry::Occupied(entry) => {
+                let (first_input_idx, existing_output_idx) = *entry.get();
+                let first_start = offset_buffer.offsets[first_input_idx].as_usize();
+                let first_end = offset_buffer.offsets[first_input_idx + 1].as_usize();
+                if &offset_buffer.values[first_start..first_end] == bytes {
+                    existing_output_idx
+                } else {
+                    // True hash collision: same hash, different bytes — insert as new unique value
+                    let new_output_idx = unique_offsets.len() - 1;
+                    unique_bytes.extend_from_slice(bytes);
+                    let new_end = V::from_usize(unique_bytes.len())
+                        .ok_or_else(|| general_err!("offset overflow building dictionary"))?;
+                    unique_offsets.push(new_end);
+                    new_output_idx
+                }
+            }
+            Entry::Vacant(entry) => {
+                let output_idx = unique_offsets.len() - 1;
+                unique_bytes.extend_from_slice(bytes);
+                let new_end = V::from_usize(unique_bytes.len())
+                    .ok_or_else(|| general_err!("offset overflow building dictionary"))?;
+                unique_offsets.push(new_end);
+                entry.insert((input_idx, output_idx));
+                output_idx
+            }
+        };
+
+        let key = K::Native::from_usize(output_idx)
+            .ok_or_else(|| general_err!("dictionary key overflow"))?;
+        keys.push(key);
     }
-    let raw = builder.finish();
-    Ok(Arc::new(raw))
+
+    let arrow_value_type = if V::IS_LARGE {
+        ArrowType::LargeUtf8
+    } else {
+        ArrowType::Utf8
+    };
+    let num_unique = unique_offsets.len() - 1;
+
+    // SAFETY: buffers are constructed directly from typed Vecs above; offsets are
+    // monotonically non-decreasing and bounded by unique_bytes.len(), and all
+    // key values are within 0..num_unique, so the invariants Arrow requires hold.
+    let value_data = unsafe {
+        arrow_data::ArrayData::builder(arrow_value_type)
+            .len(num_unique)
+            .add_buffer(Buffer::from_vec(unique_offsets))
+            .add_buffer(Buffer::from_vec(unique_bytes))
+            .build_unchecked()
+    };
+
+    // SAFETY: keys are within 0..num_unique and value_data is valid.
+    let dict_array: DictionaryArray<K> = unsafe {
+        arrow_data::ArrayData::builder(dict_type)
+            .len(keys.len())
+            .add_buffer(Buffer::from_vec(keys))
+            .add_child_data(value_data)
+            .null_bit_buffer(null_buffer)
+            .build_unchecked()
+            .into()
+    };
+
+    Ok(Arc::new(dict_array))
+}
+
+fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &mut Vec<u8>) {
+    let count = offsets.len().saturating_sub(1);
+    scratch.clear();
+    scratch.resize(count * size_of::<u64>(), 0u8);
+
+    let state = RandomState::new();
+    // SAFETY: scratch is sized to exactly count * size_of::<u64>() above
+    let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr() as *mut u64, count) };
+
+    for idx in 0..count {
+        let start = offsets[idx].as_usize();
+        let end = offsets[idx + 1].as_usize();
+        let mut hasher = state.build_hasher();
+        hasher.write(&values[start..end]);
+        // SAFETY: idx is within 0..count
+        unsafe { write_unaligned(hash_slots.as_mut_ptr().add(idx), hasher.finish()) };
+    }
+}
+
+#[allow(dead_code)]
+#[inline]
+fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
+    let n = scratch.len() / size_of::<u64>();
+    // SAFETY: scratch was written as u64s by hash_byte_slices
+    unsafe { from_raw_parts(scratch.as_ptr() as *const u64, n) }
 }
 
 #[cfg(test)]
@@ -321,7 +441,9 @@ mod tests {
         assert_eq!(buffer.len(), 13);
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
-        let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
+        let array = split
+            .into_array(Some(null_buffer), &dict_type, &mut Vec::new())
+            .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
         let strings = cast(&array, &ArrowType::Utf8).unwrap();
@@ -355,7 +477,7 @@ mod tests {
             .extend_from_slice(&[0, 1, 0, 1]);
 
         let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
-            .into_array(None, &dict_type)
+            .into_array(None, &dict_type, &mut Vec::new())
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -386,7 +508,10 @@ mod tests {
         let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
-        let err = buffer.into_array(None, &dict_type).unwrap_err().to_string();
+        let err = buffer
+            .into_array(None, &dict_type, &mut Vec::new())
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("dictionary key beyond bounds of dictionary: 0..2"),
             "{}",
