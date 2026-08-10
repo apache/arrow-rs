@@ -634,10 +634,10 @@ mod tests {
     fn test_wrap_release_callback() {
         use std::sync::atomic::Ordering;
 
-        let batch_reader = TestRecordBatchReader::new(
+        let batch_reader = Box::new(TestRecordBatchReader::new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
             Box::new(std::iter::empty()),
-        );
+        ));
         let mut stream = FFI_ArrowArrayStream::new(batch_reader);
 
         let data = Box::new(StreamWrapperData {
