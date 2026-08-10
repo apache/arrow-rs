@@ -157,7 +157,7 @@ impl DecimalCast for i256 {
 /// exceeds the supported precomputed precision table `O::MAX_FOR_EACH_PRECISION`.
 /// In that case, the caller should treat this as an overflow for the output scale
 /// and handle it accordingly (e.g., return a cast error).
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn make_upscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
@@ -206,7 +206,7 @@ where
 /// In this scenario, any value would round to zero (e.g., dividing by 10^k where k exceeds the
 /// available precision). Callers should therefore produce zero values (preserving nulls) rather
 /// than returning an error.
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
