@@ -519,6 +519,46 @@ where
     }
 }
 
+impl<R> BufReader<R> {
+    /// The number of rows padded because they had fewer fields than the schema
+    ///
+    /// Always 0 unless [`ReaderBuilder::with_truncated_rows`] was set to `true`.
+    ///
+    /// The count is cumulative over the lifetime of this reader, so reading it
+    /// between batches yields a running total of the rows read so far, and reading it
+    /// once the reader is exhausted yields the total for the whole input. Rows that
+    /// are skipped rather than read into a batch, such as a header row or rows before
+    /// the start bound, do not contribute.
+    ///
+    /// A padded row is indistinguishable from a row with genuinely empty trailing
+    /// fields once it has been read, so this counter is the only way to tell the two
+    /// apart.
+    ///
+    /// ```
+    /// # use std::io::Cursor;
+    /// # use std::sync::Arc;
+    /// # use arrow_csv::ReaderBuilder;
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// #
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, true),
+    ///     Field::new("b", DataType::Int32, true),
+    /// ]));
+    ///
+    /// let mut reader = ReaderBuilder::new(schema)
+    ///     .with_truncated_rows(true)
+    ///     .build(Cursor::new("1,2\n3\n"))
+    ///     .unwrap();
+    ///
+    /// let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+    /// assert_eq!(batches[0].num_rows(), 2);
+    /// assert_eq!(reader.truncated_row_count(), 1);
+    /// ```
+    pub fn truncated_row_count(&self) -> usize {
+        self.decoder.truncated_row_count()
+    }
+}
+
 impl<R: Read> Reader<R> {
     /// Returns the schema of the reader, useful for getting the schema without reading
     /// record batches
@@ -703,6 +743,23 @@ impl Decoder {
     /// Returns the number of records that can be read before requiring a call to [`Self::flush`]
     pub fn capacity(&self) -> usize {
         self.batch_size - self.record_decoder.len()
+    }
+
+    /// The number of rows padded because they had fewer fields than the schema
+    ///
+    /// Always 0 unless [`ReaderBuilder::with_truncated_rows`] was set to `true`.
+    ///
+    /// The count is cumulative over the lifetime of this decoder and is not reset by
+    /// [`Self::flush`], so reading it between batches yields a running total of the
+    /// rows decoded so far, and reading it once the input is exhausted yields the
+    /// total for the whole stream. Rows that are skipped rather than decoded into a
+    /// batch, such as a header row or rows before the start bound, do not contribute.
+    ///
+    /// A padded row is indistinguishable from a row with genuinely empty trailing
+    /// fields once it has been decoded, so this counter is the only way to tell the
+    /// two apart.
+    pub fn truncated_row_count(&self) -> usize {
+        self.record_decoder.truncated_row_count()
     }
 }
 
@@ -2633,6 +2690,143 @@ mod tests {
         assert_eq!(dob.value(3), -1858);
         assert!(dob.is_null(4));
         assert!(dob.is_null(5));
+    }
+
+    /// Schema used by the `truncated_row_count` tests below
+    fn truncated_row_count_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+            Field::new("city", DataType::Utf8, true),
+        ]))
+    }
+
+    #[test]
+    fn test_truncated_row_count_counts_padded_rows() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 1);
+    }
+
+    #[test]
+    fn test_truncated_row_count_ignores_empty_trailing_field() {
+        // "Carol,35," has all three fields, the last one just happens to be empty, so it
+        // parses to the same null as a padded row would. The count must not be inferred
+        // from the nulls in the batch
+        let data = "name,age,city\nAlice,25,Rome\nCarol,35,\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 2);
+        assert!(batch.column(2).is_null(1));
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_clean_file() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30,Milan\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_without_truncated_rows() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        // The short row is an error rather than something to count
+        let err = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields"),
+            "{err}"
+        );
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_accumulates_across_batches() {
+        // Six short rows read two at a time
+        let data = "name,age,city\nn0,0\nn1,1\nn2,2\nn3,3\nn4,4\nn5,5\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .with_batch_size(2)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let mut running = vec![];
+        while let Some(batch) = reader.next().transpose().unwrap() {
+            assert_eq!(batch.num_rows(), 2);
+            running.push(reader.truncated_row_count());
+        }
+
+        // A running total, not a per batch count
+        assert_eq!(running, vec![2, 4, 6]);
+        assert_eq!(reader.truncated_row_count(), 6);
+    }
+
+    #[test]
+    fn test_truncated_row_count_excludes_skipped_rows() {
+        // The header is one field short of the schema, so skipping it pads it. Skipped
+        // rows never reach a batch and must not be counted
+        let data = "name,age\nAlice,25,Rome\nBob,30,Milan\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_on_decoder() {
+        let data = "1,2\n3\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut decoder = ReaderBuilder::new(schema)
+            .with_truncated_rows(true)
+            .build_decoder();
+
+        assert_eq!(decoder.truncated_row_count(), 0);
+        let decoded = decoder.decode(data.as_bytes()).unwrap();
+        assert_eq!(decoded, data.len());
+        decoder.flush().unwrap().unwrap();
+        assert_eq!(decoder.truncated_row_count(), 1);
     }
 
     #[test]
