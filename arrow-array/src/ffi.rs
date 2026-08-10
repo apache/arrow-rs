@@ -144,7 +144,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
         }
-        (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
+        (DataType::FixedSizeBinary(_) | DataType::FixedSizeList(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
@@ -152,34 +152,29 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         // Variable-size list and map have one i32 buffer.
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
-        (DataType::Utf8, 1)
-        | (DataType::Binary, 1)
-        | (DataType::List(_), 1)
-        | (DataType::Map(_, _), 1) => i32::BITS as _,
-        (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
+        (DataType::Utf8 | DataType::Binary | DataType::List(_) | DataType::Map(_, _), 1) => {
+            i32::BITS as _
+        }
+        (DataType::Utf8 | DataType::Binary, 2) => u8::BITS as _,
         // List views have two i32 buffers, offsets and sizes
-        (DataType::ListView(_), 1) | (DataType::ListView(_), 2) => i32::BITS as _,
+        (DataType::ListView(_), 1 | 2) => i32::BITS as _,
         // Large list views have two i64 buffers, offsets and sizes
-        (DataType::LargeListView(_), 1) | (DataType::LargeListView(_), 2) => i64::BITS as _,
-        (DataType::List(_), _) | (DataType::Map(_, _), _) => {
+        (DataType::LargeListView(_), 1 | 2) => i64::BITS as _,
+        (DataType::List(_) | DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
-        (DataType::Utf8, _) | (DataType::Binary, _) => {
+        (DataType::Utf8 | DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
         }
         // Variable-sized binaries: have two buffers.
         // LargeUtf8: first buffer is i64, second is in bytes
-        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => {
-            i64::BITS as _
-        }
-        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2) => {
-            u8::BITS as _
-        }
-        (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _) => {
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), 1) => i64::BITS as _,
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), 2) => u8::BITS as _,
+        (DataType::LargeUtf8 | DataType::LargeBinary | DataType::LargeList(_), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )));
@@ -187,8 +182,8 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         // Variable-sized views: have 3 or more buffers.
         // Buffer 1 are the u128 views
         // Buffers 2...N-1 are u8 byte buffers
-        (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => u128::BITS as _,
-        (DataType::Utf8View, _) | (DataType::BinaryView, _) => u8::BITS as _,
+        (DataType::Utf8View | DataType::BinaryView, 1) => u128::BITS as _,
+        (DataType::Utf8View | DataType::BinaryView, _) => u8::BITS as _,
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
         (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
@@ -234,7 +229,7 @@ unsafe fn create_buffer(
     if array.num_buffers() == 0 {
         return None;
     }
-    NonNull::new(array.buffer(index) as _)
+    NonNull::new(array.buffer(index).cast_mut())
         .map(|ptr| unsafe { Buffer::from_custom_allocation(ptr, len, owner) })
 }
 
@@ -456,27 +451,27 @@ impl ImportedArrowArray<'_> {
 
         // Inner type is not important for buffer length.
         Ok(match (&data_type, i) {
-            (DataType::Utf8, 1)
-            | (DataType::LargeUtf8, 1)
-            | (DataType::Binary, 1)
-            | (DataType::LargeBinary, 1)
-            | (DataType::List(_), 1)
-            | (DataType::LargeList(_), 1)
-            | (DataType::Map(_, _), 1) => {
+            (
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::Map(_, _),
+                1,
+            ) => {
                 // the len of the offset buffer (buffer 1) equals length + 1
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 (length + 1) * (bits / 8)
             }
-            (DataType::ListView(_), 1)
-            | (DataType::ListView(_), 2)
-            | (DataType::LargeListView(_), 1)
-            | (DataType::LargeListView(_), 2) => {
+            (DataType::ListView(_) | DataType::LargeListView(_), 1 | 2) => {
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 length * (bits / 8)
             }
-            (DataType::Utf8, 2) | (DataType::Binary, 2) => {
+            (DataType::Utf8 | DataType::Binary, 2) => {
                 if self.array.is_empty() {
                     return Ok(0);
                 }
@@ -490,7 +485,7 @@ impl ImportedArrowArray<'_> {
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
-            (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
+            (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
                 if self.array.is_empty() {
                     return Ok(0);
                 }
@@ -508,10 +503,8 @@ impl ImportedArrowArray<'_> {
             // Buffer 1 is the views buffer, which stores 1 u128 per length of the array.
             // Buffers 2..N-1 are the buffers holding the byte data. Their lengths are variable.
             // Buffer N is of length (N - 2) and stores i64 containing the lengths of buffers 2..N-1
-            (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => {
-                std::mem::size_of::<u128>() * length
-            }
-            (DataType::Utf8View, i) | (DataType::BinaryView, i) => {
+            (DataType::Utf8View | DataType::BinaryView, 1) => std::mem::size_of::<u128>() * length,
+            (DataType::Utf8View | DataType::BinaryView, i) => {
                 variadic_buffer_lengths[i - 2] as usize
             }
             // buffer len of primitive types

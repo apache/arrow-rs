@@ -34,10 +34,29 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
+use chrono::format::{Item, StrftimeItems};
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
+
+struct CompiledItems<'a>(Vec<Item<'a>>);
+
+enum CompiledTimeFormat<'a> {
+    Default,
+    Custom(Box<CompiledItems<'a>>),
+}
+
+impl<'a> CompiledTimeFormat<'a> {
+    fn new(format: TimeFormat<'a>) -> Self {
+        match format {
+            Some(format) => Self::Custom(Box::new(CompiledItems(
+                StrftimeItems::new(format).collect(),
+            ))),
+            None => Self::Default,
+        }
+    }
+}
 
 /// Format for displaying durations
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -419,7 +438,7 @@ impl ValueFormatter<'_> {
     /// will return an error on formatting issue
     pub fn write(&self, s: &mut dyn Write) -> Result<(), ArrowError> {
         match self.formatter.format.write(self.idx, s) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
             Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
         }
@@ -614,7 +633,7 @@ impl<'a, T: DisplayIndex> DisplayIndexState<'a> for T {
         Ok(())
     }
 
-    fn write(&self, _: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+    fn write(&self, (): &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         DisplayIndex::write(self, idx, f)
     }
 }
@@ -737,19 +756,25 @@ fn write_timestamp(
     f: &mut dyn Write,
     naive: NaiveDateTime,
     timezone: Option<Tz>,
-    format: Option<&str>,
+    format: &CompiledTimeFormat<'_>,
 ) -> FormatResult {
     match timezone {
         Some(tz) => {
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
             match format {
-                Some(s) => write!(f, "{}", date.format(s))?,
-                None => write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?,
+                CompiledTimeFormat::Custom(items) => {
+                    write!(f, "{}", date.format_with_items(items.0.iter()))?
+                }
+                CompiledTimeFormat::Default => {
+                    write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
+                }
             }
         }
         None => match format {
-            Some(s) => write!(f, "{}", naive.format(s))?,
-            None => write!(f, "{naive:?}")?,
+            CompiledTimeFormat::Custom(items) => {
+                write!(f, "{}", naive.format_with_items(items.0.iter()))?
+            }
+            CompiledTimeFormat::Default => write!(f, "{naive:?}")?,
         },
     }
     Ok(())
@@ -758,12 +783,12 @@ fn write_timestamp(
 macro_rules! timestamp_display {
     ($($t:ty),+) => {
         $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = (Option<Tz>, TimeFormat<'a>);
+            type State = (Option<Tz>, CompiledTimeFormat<'a>);
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => Ok((Some(tz.parse()?), options.timestamp_tz_format)),
-                    DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
+                    DataType::Timestamp(_, Some(tz)) => Ok((Some(tz.parse()?), CompiledTimeFormat::new(options.timestamp_tz_format))),
+                    DataType::Timestamp(_, None) => Ok((None, CompiledTimeFormat::new(options.timestamp_format))),
                     _ => unreachable!(),
                 }
             }
@@ -778,7 +803,7 @@ macro_rules! timestamp_display {
                     ))
                 })?;
 
-                write_timestamp(f, naive, s.0, s.1.clone())
+                write_timestamp(f, naive, s.0, &s.1)
             }
         })+
     };
@@ -794,10 +819,10 @@ timestamp_display!(
 macro_rules! temporal_display {
     ($convert:ident, $format:ident, $t:ty) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = TimeFormat<'a>;
+            type State = CompiledTimeFormat<'a>;
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-                Ok(options.$format)
+                Ok(CompiledTimeFormat::new(options.$format))
             }
 
             fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -811,8 +836,10 @@ macro_rules! temporal_display {
                 })?;
 
                 match fmt {
-                    Some(s) => write!(f, "{}", naive.format(s))?,
-                    None => write!(f, "{naive:?}")?,
+                    CompiledTimeFormat::Custom(items) => {
+                        write!(f, "{}", naive.format_with_items(items.0.iter()))?
+                    }
+                    CompiledTimeFormat::Default => write!(f, "{naive:?}")?,
                 }
                 Ok(())
             }
@@ -1454,6 +1481,38 @@ mod tests {
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
         let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
         (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
+    }
+
+    #[test]
+    fn test_temporal_custom_format() {
+        let options = FormatOptions::new()
+            .with_date_format(Some("%Y-%m-%d"))
+            .with_datetime_format(Some("%Y-%m-%d %H:%M:%S"))
+            .with_time_format(Some("%H:%M:%S"))
+            .with_timestamp_format(Some("%Y-%m-%d %H:%M:%S"))
+            .with_timestamp_tz_format(Some("%Y-%m-%d %H:%M:%S %:z"));
+
+        let date32 = Date32Array::from(vec![0]);
+        assert_eq!(format_array(&date32, &options), ["1970-01-01"]);
+
+        let date64 = Date64Array::from(vec![0]);
+        assert_eq!(format_array(&date64, &options), ["1970-01-01 00:00:00"]);
+
+        let time = Time32SecondArray::from(vec![3661]);
+        assert_eq!(format_array(&time, &options), ["01:01:01"]);
+
+        let timestamp = TimestampSecondArray::from(vec![0]);
+        assert_eq!(format_array(&timestamp, &options), ["1970-01-01 00:00:00"]);
+
+        let timestamp_tz = TimestampSecondArray::from(vec![0]).with_timezone("+08:00");
+        assert_eq!(
+            format_array(&timestamp_tz, &options),
+            ["1970-01-01 08:00:00 +08:00"]
+        );
+
+        let invalid_options = FormatOptions::new().with_datetime_format(Some("%"));
+        let formatter = ArrayFormatter::try_new(&date64, &invalid_options).unwrap();
+        assert!(formatter.value(0).try_to_string().is_err());
     }
 
     #[test]

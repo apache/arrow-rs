@@ -138,7 +138,6 @@ where
 }
 
 /// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
-#[allow(unused)]
 pub(crate) const fn expect_size_of<T>(expected: usize) {
     let size = std::mem::size_of::<T>();
     if size != expected {
@@ -187,7 +186,7 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
     };
 
     let bytes = s.as_bytes();
-    if let Some(b'.') = bytes.first() {
+    if bytes.first() == Some(&b'.') {
         return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
     }
 

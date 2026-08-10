@@ -2005,7 +2005,7 @@ mod tests {
         ItemType: Clone + Into<Option<V::Native>> + 'static,
     {
         let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
-        for v in values.into_iter() {
+        for v in values {
             builder.append_option((*v).clone().into());
         }
         builder.finish()

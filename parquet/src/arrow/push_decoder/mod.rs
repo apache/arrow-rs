@@ -788,7 +788,7 @@ impl ParquetDecoderState {
                 mut remaining_row_groups,
             } => {
                 // Push data to the RowGroupReaderBuilder
-                remaining_row_groups.push_data(ranges, data);
+                remaining_row_groups.push_data(ranges, data)?;
                 Ok(ParquetDecoderState::ReadingRowGroup {
                     remaining_row_groups,
                 })
@@ -798,7 +798,7 @@ impl ParquetDecoderState {
                 record_batch_reader,
                 mut remaining_row_groups,
             } => {
-                remaining_row_groups.push_data(ranges, data);
+                remaining_row_groups.push_data(ranges, data)?;
                 Ok(ParquetDecoderState::DecodingRowGroup {
                     record_batch_reader,
                     remaining_row_groups,

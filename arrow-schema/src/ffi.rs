@@ -112,9 +112,9 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     let schema = unsafe { &mut *schema };
 
     // take ownership back to release it.
-    drop(unsafe { CString::from_raw(schema.format as *mut c_char) });
+    drop(unsafe { CString::from_raw(schema.format.cast_mut()) });
     if !schema.name.is_null() {
-        drop(unsafe { CString::from_raw(schema.name as *mut c_char) });
+        drop(unsafe { CString::from_raw(schema.name.cast_mut()) });
     }
     if !schema.private_data.is_null() {
         let private_data = unsafe { Box::from_raw(schema.private_data as *mut SchemaPrivateData) };
@@ -209,7 +209,7 @@ impl FFI_ArrowSchema {
             })?;
             metadata_serialized.extend(num_entries.to_ne_bytes());
 
-            for (key, value) in metadata.into_iter() {
+            for (key, value) in metadata {
                 let key_len: i32 = key.as_ref().len().try_into().map_err(|_| {
                     ArrowError::CDataInterface(format!(
                         "metadata key can only have {} bytes, but {} were provided",
@@ -854,7 +854,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             Flags::empty()
         };
 
-        if let Some(true) = field.dict_is_ordered() {
+        if field.dict_is_ordered() == Some(true) {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
@@ -1043,9 +1043,9 @@ mod tests {
             [].into(),
             [("key".to_string(), "value".to_string())].into(),
             [
-                ("key".to_string(), "".to_string()),
+                ("key".to_string(), String::new()),
                 ("ascii123".to_string(), "你好".to_string()),
-                ("".to_string(), "value".to_string()),
+                (String::new(), "value".to_string()),
             ]
             .into(),
         ];

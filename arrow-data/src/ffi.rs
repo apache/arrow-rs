@@ -121,7 +121,7 @@ fn align_nulls(data_offset: usize, nulls: Option<&NullBuffer>) -> Option<Buffer>
 }
 
 struct ArrayPrivateData {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     buffers: Vec<Option<Buffer>>,
     buffers_ptr: Box<[*const c_void]>,
     children: Box<[*mut FFI_ArrowArray]>,

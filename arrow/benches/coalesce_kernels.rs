@@ -25,7 +25,7 @@ use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
 use criterion::{Criterion, criterion_group, criterion_main};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Benchmarks for generating evently sized output RecordBatches
 /// from a sequence of filtered source batches

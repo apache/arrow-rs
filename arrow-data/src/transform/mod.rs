@@ -138,7 +138,7 @@ pub struct MutableArrayData<'a> {
     ///
     /// Note this is "dead code" because all actual references to the arrays are
     /// stored in closures for extending values and nulls.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     arrays: Vec<&'a ArrayData>,
 
     /// In progress output array: The data being written TO

@@ -318,6 +318,26 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("rank string[10] nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
+
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.0, 10);
+    c.bench_function("rank string_view[10] 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.5, 10);
+    c.bench_function("rank string_view[10] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array(2usize.pow(12), 0.0);
+    c.bench_function("rank string_view[0-400] 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_string_view_array(2usize.pow(12), 0.5);
+    c.bench_function("rank string_view[0-400] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
 }
 
 criterion_group!(benches, add_benchmark);

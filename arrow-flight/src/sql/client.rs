@@ -441,6 +441,10 @@ where
     }
 
     /// Explicitly shut down and clean up the client.
+    #[expect(
+        clippy::unused_async,
+        reason = "public API: dropping `async` would break callers that `.await` it"
+    )]
     pub async fn close(&mut self) -> Result<()> {
         // TODO: consume self instead of &mut self to explicitly prevent reuse?
         Ok(())

@@ -499,11 +499,11 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // boolean field has no data
             FieldType::BooleanFalse | FieldType::BooleanTrue => Ok(()),
             FieldType::Byte => self.read_i8().map(|_| ()),
-            FieldType::I16 => self.skip_vlq().map(|_| ()),
-            FieldType::I32 => self.skip_vlq().map(|_| ()),
-            FieldType::I64 => self.skip_vlq().map(|_| ()),
-            FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => self.skip_binary().map(|_| ()),
+            FieldType::I16 => self.skip_vlq(),
+            FieldType::I32 => self.skip_vlq(),
+            FieldType::I64 => self.skip_vlq(),
+            FieldType::Double => self.skip_bytes(8),
+            FieldType::Binary => self.skip_binary(),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
                 loop {
@@ -541,7 +541,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 Ok(())
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
-            FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
+            FieldType::Uuid => self.skip_bytes(16),
             _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
@@ -829,7 +829,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     ) -> Result<()> {
         let delta = field_id.wrapping_sub(last_field_id);
         if delta > 0 && delta <= 0xf {
-            self.write_byte((delta as u8) << 4 | field_type as u8)
+            self.write_byte(((delta as u8) << 4) | field_type as u8)
         } else {
             self.write_byte(field_type as u8)?;
             self.write_i16(field_id)
@@ -839,7 +839,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Used to indicate the start of a list of `element_type` elements.
     pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
         if len < 15 {
-            self.write_byte((len as u8) << 4 | element_type as u8)
+            self.write_byte(((len as u8) << 4) | element_type as u8)
         } else {
             self.write_byte(0xf0u8 | element_type as u8)?;
             self.write_vlq(len as _)
