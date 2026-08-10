@@ -520,6 +520,18 @@ where
 }
 
 impl<R> BufReader<R> {
+    fn projected_schema(&self) -> SchemaRef {
+        match &self.decoder.projection {
+            Some(projection) => Arc::new(
+                self.decoder
+                    .schema
+                    .project(projection)
+                    .expect("invalid CSV projection"),
+            ),
+            None => self.decoder.schema.clone(),
+        }
+    }
+
     /// The number of rows padded because they had fewer fields than the schema
     ///
     /// Always 0 unless [`ReaderBuilder::with_truncated_rows`] was set to `true`.
@@ -563,14 +575,7 @@ impl<R: Read> Reader<R> {
     /// Returns the schema of the reader, useful for getting the schema without reading
     /// record batches
     pub fn schema(&self) -> SchemaRef {
-        match &self.decoder.projection {
-            Some(projection) => {
-                let fields = self.decoder.schema.fields();
-                let projected = projection.iter().map(|i| fields[*i].clone());
-                Arc::new(Schema::new(projected.collect::<Fields>()))
-            }
-            None => self.decoder.schema.clone(),
-        }
+        self.projected_schema()
     }
 }
 
@@ -604,7 +609,7 @@ impl<R: BufRead> Iterator for BufReader<R> {
 
 impl<R: BufRead> RecordBatchReader for BufReader<R> {
     fn schema(&self) -> SchemaRef {
-        self.decoder.schema.clone()
+        self.projected_schema()
     }
 }
 
