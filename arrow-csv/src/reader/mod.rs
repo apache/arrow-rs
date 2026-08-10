@@ -1701,6 +1701,29 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_record_batch_reader_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let cases = [None, Some(vec![]), Some(vec![1]), Some(vec![1, 0])];
+        for projection in cases {
+            let builder = ReaderBuilder::new(schema.clone());
+            let builder = match projection {
+                Some(projection) => builder.with_projection(projection),
+                None => builder,
+            };
+            let mut reader = builder.build(Cursor::new(b"1,2\n")).unwrap();
+
+            let reader_schema = RecordBatchReader::schema(&reader);
+            let batch = reader.next().unwrap().unwrap();
+
+            assert_eq!(reader_schema, batch.schema());
+        }
+    }
+
+    #[test]
     fn test_csv_with_dictionary() {
         let schema = Arc::new(Schema::new(vec![
             Field::new_dictionary("city", DataType::Int32, DataType::Utf8, false),
