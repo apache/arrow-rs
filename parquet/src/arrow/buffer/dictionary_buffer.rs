@@ -282,7 +282,7 @@ impl std::hash::BuildHasher for BuildPassthroughHasher {
 }
 
 /// Builds a [`DictionaryArray`] directly from a flat [`OffsetBuffer`] using pre-computed
-/// hashes to deduplicate values in a single pass, avoiding the intermediate [`StringArray`]
+/// hashes to deduplicate values in a single pass, avoiding the intermediate StringArray
 /// materialization
 fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     offset_buffer: &OffsetBuffer<V>,
@@ -302,8 +302,7 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     let mut dedup: HbHashMap<u64, (usize, usize), BuildPassthroughHasher> =
         HbHashMap::with_capacity_and_hasher(num_values, BuildPassthroughHasher);
 
-    for input_idx in 0..num_values {
-        let hash = hashes[input_idx];
+    for (input_idx, &hash) in hashes.iter().enumerate() {
         let byte_start = offset_buffer.offsets[input_idx].as_usize();
         let byte_end = offset_buffer.offsets[input_idx + 1].as_usize();
         let bytes = &offset_buffer.values[byte_start..byte_end];
@@ -392,7 +391,6 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     }
 }
 
-#[allow(dead_code)]
 #[inline]
 fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
     let n = scratch.len() / size_of::<u64>();

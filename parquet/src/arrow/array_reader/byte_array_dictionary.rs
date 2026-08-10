@@ -454,7 +454,9 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type, &mut Vec::new()).unwrap();
+        let array = output
+            .into_array(Some(valid_buffer), &data_type, &mut Vec::new())
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -525,7 +527,9 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type, &mut Vec::new()).unwrap();
+        let array = output
+            .into_array(Some(valid_buffer), &data_type, &mut Vec::new())
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -560,7 +564,9 @@ mod tests {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
-        let array = output.into_array(None, &data_type, &mut Vec::new()).unwrap();
+        let array = output
+            .into_array(None, &data_type, &mut Vec::new())
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -604,7 +610,9 @@ mod tests {
             decoder.skip_values(2).expect("skipping two values");
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
-        let array = output.into_array(None, &data_type, &mut Vec::new()).unwrap();
+        let array = output
+            .into_array(None, &data_type, &mut Vec::new())
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
