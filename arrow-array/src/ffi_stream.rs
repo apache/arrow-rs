@@ -97,8 +97,8 @@ const ENOSYS: i32 = 38;
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
-    // Fields are private so safe code can't install a bogus callback that import
-    // or [`Drop`] would invoke. Write the release fields with the unsafe setters.
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// C function to get schema from the stream
     get_schema: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
     /// C function to get next array from the stream
@@ -106,14 +106,8 @@ pub struct FFI_ArrowArrayStream {
     /// C function to get the error from last operation on the stream
     get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
     /// C function to release the stream
-    ///
-    /// Private so safe code can't install a callback that [`Drop`] would invoke.
-    /// Use [`FFI_ArrowArrayStream::release`] and [`FFI_ArrowArrayStream::set_release`].
     release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
     /// Private data used by the stream, owned by the release callback.
-    ///
-    /// Private for the same reason as `release`. Use
-    /// [`FFI_ArrowArrayStream::private_data`] and [`FFI_ArrowArrayStream::set_private_data`].
     private_data: *mut c_void,
 }
 
@@ -222,22 +216,19 @@ impl FFI_ArrowArrayStream {
     }
 
     /// Returns the producer-provided release callback, if any.
-    ///
-    /// Lets a consumer wrap release: save this callback, install its own with
-    /// [`FFI_ArrowArrayStream::set_release`], and chain back to it on drop. See
-    /// <https://github.com/apache/arrow-rs/issues/9771>.
     pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
         self.release
     }
 
     /// Returns the opaque producer-provided private data pointer.
-    ///
-    /// See [`FFI_ArrowArrayStream::release`] for the intended use.
     pub fn private_data(&self) -> *mut c_void {
         self.private_data
     }
 
     /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
     ///
     /// # Safety
     ///

@@ -37,10 +37,8 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
-    // Fields are private so safe code can't set them to values that break import
-    // or the release callback (e.g. a bad `buffers` pointer gets dereferenced on
-    // import). Read them with the getters; write the callback fields with the
-    // unsafe setters.
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// Logical length of the array
     length: i64,
     /// Number of null items in the array
@@ -58,9 +56,6 @@ pub struct FFI_ArrowArray {
     /// Pointer to the underlying array of dictionary values
     dictionary: *mut FFI_ArrowArray,
     /// Producer-provided release callback.
-    ///
-    /// Private so safe code can't install a callback that [`Drop`] would invoke.
-    /// Use [`FFI_ArrowArray::release`] and [`FFI_ArrowArray::set_release`].
     release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     /// Opaque pointer to producer-provided private data
     /// When exported, this MUST contain everything that is owned by this array.
@@ -68,9 +63,6 @@ pub struct FFI_ArrowArray {
     /// as the `buffers` pointer itself.
     /// In other words, everything in [FFI_ArrowArray] must be owned by
     /// `private_data` and can assume that they do not outlive `private_data`.
-    ///
-    /// Private for the same reason as `release`. Use
-    /// [`FFI_ArrowArray::private_data`] and [`FFI_ArrowArray::set_private_data`].
     private_data: *mut c_void,
 }
 
@@ -262,22 +254,19 @@ impl FFI_ArrowArray {
     }
 
     /// Returns the producer-provided release callback, if any.
-    ///
-    /// Lets a consumer wrap release: save this callback, install its own with
-    /// [`FFI_ArrowArray::set_release`], and chain back to it on drop. See
-    /// <https://github.com/apache/arrow-rs/issues/9771>.
     pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)> {
         self.release
     }
 
     /// Returns the opaque producer-provided private data pointer.
-    ///
-    /// See [`FFI_ArrowArray::release`] for the intended use.
     pub fn private_data(&self) -> *mut c_void {
         self.private_data
     }
 
     /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
     ///
     /// # Safety
     ///

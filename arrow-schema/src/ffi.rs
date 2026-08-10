@@ -75,10 +75,8 @@ bitflags! {
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
-    // Fields are private so safe code can't set them to values that break the
-    // release callback (e.g. a `format`/`name` that isn't a `CString`, or a bad
-    // pointer). Read them with the getters; write the callback fields with the
-    // unsafe setters.
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// Null-terminated, UTF8-encoded string describing the data type
     format: *const c_char,
     /// Null-terminated, UTF8-encoded string of the field or array name
@@ -95,14 +93,8 @@ pub struct FFI_ArrowSchema {
     /// Pointer to the type of dictionary values
     dictionary: *mut FFI_ArrowSchema,
     /// Producer-provided release callback.
-    ///
-    /// Private so safe code can't install a callback that [`Drop`] would invoke.
-    /// Use [`FFI_ArrowSchema::release`] and [`FFI_ArrowSchema::set_release`].
     release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
     /// Opaque producer-provided private data, owned by the release callback.
-    ///
-    /// Private for the same reason as `release`. Use
-    /// [`FFI_ArrowSchema::private_data`] and [`FFI_ArrowSchema::set_private_data`].
     private_data: *mut c_void,
 }
 
@@ -287,22 +279,19 @@ impl FFI_ArrowSchema {
     }
 
     /// Returns the producer-provided release callback, if any.
-    ///
-    /// Lets a consumer wrap release: save this callback, install its own with
-    /// [`FFI_ArrowSchema::set_release`], and chain back to it on drop. See
-    /// <https://github.com/apache/arrow-rs/issues/9771>.
     pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)> {
         self.release
     }
 
     /// Returns the opaque producer-provided private data pointer.
-    ///
-    /// See [`FFI_ArrowSchema::release`] for the intended use.
     pub fn private_data(&self) -> *mut c_void {
         self.private_data
     }
 
     /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
     ///
     /// # Safety
     ///
