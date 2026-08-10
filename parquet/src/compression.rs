@@ -579,7 +579,7 @@ pub struct ZstdLevel(i32);
 impl CompressionLevel<i32> for ZstdLevel {
     // zstd binds to C, and hence zstd::compression_level_range() is not const as this calls the
     // underlying C library.
-    const MINIMUM_LEVEL: i32 = 1;
+    const MINIMUM_LEVEL: i32 = -131072;
     const MAXIMUM_LEVEL: i32 = 22;
 }
 
@@ -935,7 +935,11 @@ mod tests {
 
     #[test]
     fn test_codec_zstd() {
-        for level in ZstdLevel::MINIMUM_LEVEL..=ZstdLevel::MAXIMUM_LEVEL {
+        // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
+        for level in [ZstdLevel::MINIMUM_LEVEL]
+            .into_iter()
+            .chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));
             test_codec_without_size(CodecType::ZSTD(level));

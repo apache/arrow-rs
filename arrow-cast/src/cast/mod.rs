@@ -12336,7 +12336,7 @@ mod tests {
     };
 
     #[test]
-    #[allow(clippy::assertions_on_constants)]
+    #[expect(clippy::assertions_on_constants)]
     fn test_const_options() {
         assert!(CAST_OPTIONS.safe)
     }
