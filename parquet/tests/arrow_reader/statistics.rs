@@ -3246,8 +3246,7 @@ mod test {
 
         let mut file_buffer: Vec<u8> = Vec::new();
         let mut file_writer =
-            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
-                .unwrap();
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
 
         let mut row_group_writer = file_writer.next_row_group().unwrap();
         let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
@@ -3290,9 +3289,8 @@ mod test {
 
     #[test]
     fn test_row_group_distinct_counts() {
-        let parquet_schema = Arc::new(
-            parse_message_type("message schema { REQUIRED INT32 col; }").unwrap(),
-        );
+        let parquet_schema =
+            Arc::new(parse_message_type("message schema { REQUIRED INT32 col; }").unwrap());
         let writer_properties = Arc::new(
             WriterProperties::builder()
                 .set_statistics_enabled(EnabledStatistics::Chunk)
@@ -3301,8 +3299,7 @@ mod test {
 
         let mut file_buffer: Vec<u8> = Vec::new();
         let mut file_writer =
-            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
-                .unwrap();
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
 
         // row group 0: 4 distinct values
         let mut row_group_writer = file_writer.next_row_group().unwrap();
@@ -3355,9 +3352,8 @@ mod test {
     // Verifies that a missing distinct_count in one row group does not affect the others.
     #[test]
     fn test_row_group_distinct_counts_absent() {
-        let parquet_schema = Arc::new(
-            parse_message_type("message schema { REQUIRED INT32 col; }").unwrap(),
-        );
+        let parquet_schema =
+            Arc::new(parse_message_type("message schema { REQUIRED INT32 col; }").unwrap());
         let writer_properties = Arc::new(
             WriterProperties::builder()
                 .set_statistics_enabled(EnabledStatistics::Chunk)
@@ -3366,8 +3362,7 @@ mod test {
 
         let mut file_buffer: Vec<u8> = Vec::new();
         let mut file_writer =
-            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
-                .unwrap();
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
 
         // row group 0: distinct_count present
         let mut row_group_writer = file_writer.next_row_group().unwrap();
