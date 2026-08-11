@@ -48,24 +48,26 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     let left_values = left.value_data();
     let right_values = right.value_data();
 
-    let mut output_values = BufferBuilder::<u8>::new(
+    let mut output_values = Vec::with_capacity(
         left_values.len() + right_values.len()
             - left_offsets[0].as_usize()
             - right_offsets[0].as_usize(),
     );
 
-    let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
-    output_offsets.append(T::Offset::usize_as(0));
+    let mut output_offsets = Vec::with_capacity(left_offsets.len());
+    output_offsets.push(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values.append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
-        output_values.append_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
-        output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
+        output_values
+            .extend_from_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
+        output_values
+            .extend_from_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
+        output_offsets.push(T::Offset::from_usize(output_values.len()).unwrap());
     }
 
     let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(left.len())
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
+        .add_buffer(output_offsets.into())
+        .add_buffer(output_values.into())
         .nulls(nulls);
 
     // SAFETY - offsets valid by construction
