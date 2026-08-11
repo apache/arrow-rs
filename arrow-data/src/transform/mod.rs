@@ -789,7 +789,9 @@ impl<'a> MutableArrayData<'a> {
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
-        nulls.resize(bit_len, 0);
+        nulls
+            .try_resize(bit_len, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
         (self.extend_nulls)(&mut self.data, len)?;
         Ok(())

@@ -48,7 +48,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = bool_buf.as_slice_mut();
 
     // if both array slots are valid, check if list contains primitive
@@ -88,7 +89,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = &mut bool_buf;
 
     for i in 0..left_len {

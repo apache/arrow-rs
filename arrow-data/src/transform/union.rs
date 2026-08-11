@@ -84,7 +84,10 @@ pub(super) fn extend_nulls_dense(
         .0;
 
     // Extend type_ids buffer
-    mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
+    mutable
+        .buffer1
+        .try_extend_from_slice(&vec![first_type_id; len])
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Dense: extend offsets pointing into the first child, then extend nulls in that child
     let child_offset = mutable.child_data[0].len();
@@ -108,7 +111,10 @@ pub(super) fn extend_nulls_sparse(
         .0;
 
     // Extend type_ids buffer
-    mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
+    mutable
+        .buffer1
+        .try_extend_from_slice(&vec![first_type_id; len])
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children
     for child in mutable.child_data.iter_mut() {
