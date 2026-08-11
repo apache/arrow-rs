@@ -160,7 +160,7 @@ pub fn schema_to_fb_offset<'a>(
 /// Convert an IPC Field to Arrow Field
 ///
 /// This panics on malformed input; every reader path uses the fallible
-/// [`try_field_from`] instead. kept for backwards compatibility only.
+/// conversion instead. kept for backwards compatibility only.
 impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         try_field_from(field).expect("invalid IPC field")
@@ -206,7 +206,7 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     try_fb_to_schema(fb).expect("invalid IPC schema")
 }
 
-/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema].
+/// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 ///
 /// Unlike [`fb_to_schema`], returns an error instead of panicking on schema
 /// messages that the flatbuffer verifier accepts but that are not valid Arrow.
