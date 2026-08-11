@@ -141,29 +141,31 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// documentation]. Each [`ColumnIndex`] holds statistics about all the pages in a
 /// particular column chunk.
 ///
-/// `column_index[row_group_number][column_number]` holds the
+/// `column_index[row_group_number][column_number]` holds the optional
 /// [`ColumnIndex`] corresponding to column `column_number` of row group
-/// `row_group_number`.
+/// `row_group_number`. This will be `None` if no index is present for the given
+/// column chunk.
 ///
 /// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
 /// column in the third row group of the parquet file.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
+pub type ParquetColumnIndex = Vec<Vec<Option<ColumnIndexMetaData>>>;
 
-/// [`OffsetIndexMetaData`] for each data page of each row group of each column
+/// [`OffsetIndexMetaData`] for each column chunk of each row group
 ///
 /// This structure is the parsed representation of the [`OffsetIndex`] from the
 /// Parquet file footer, as described in the Parquet [PageIndex documentation].
 ///
 /// `offset_index[row_group_number][column_number]` holds
-/// the [`OffsetIndexMetaData`] corresponding to column
-/// `column_number`of row group `row_group_number`.
+/// the optional [`OffsetIndexMetaData`] corresponding to column
+/// `column_number`of row group `row_group_number`. This will be `None` if no index
+/// is present for the given column chunk.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
+pub type ParquetOffsetIndex = Vec<Vec<Option<OffsetIndexMetaData>>>;
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -2117,11 +2119,13 @@ mod tests {
         offset_index.append_row_count(1);
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
-        let offset_index = offset_index.build();
+        let offset_index = Some(offset_index.build());
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
+            .set_column_index(Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(
+                native_index,
+            ))]]))
             .set_offset_index(Some(vec![vec![offset_index]]))
             .build();
 

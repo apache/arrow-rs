@@ -269,8 +269,9 @@ pub(crate) fn parse_column_index(
                             rg_idx,
                             col_idx,
                         )
+                        .map(Some)
                     }
-                    None => Ok(ColumnIndexMetaData::NONE),
+                    None => Ok(None),
                 })
                 .collect::<crate::errors::Result<Vec<_>>>()
         })
@@ -305,23 +306,18 @@ pub(crate) fn parse_offset_index(
                         rg_idx,
                         col_idx,
                     )
+                    .map(Some)
                 }
-                None => Err(general_err!("missing offset index")),
-            };
-
-            match result {
-                Ok(index) => row_group_indexes.push(index),
-                Err(e) => {
+                None => {
                     if offset_index_policy == PageIndexPolicy::Required {
-                        return Err(e);
+                        Err(general_err!("missing offset index"))
                     } else {
-                        // Invalidate and return
-                        metadata.set_column_index(None);
-                        metadata.set_offset_index(None);
-                        return Ok(());
+                        Ok(None)
                     }
                 }
-            }
+            };
+
+            row_group_indexes.push(result?);
         }
         all_indexes.push(row_group_indexes);
     }

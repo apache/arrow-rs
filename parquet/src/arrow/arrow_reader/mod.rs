@@ -1318,7 +1318,12 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
+            .map(|i| {
+                i[rg_idx][self.column_idx]
+                    .as_ref()
+                    .map(|o| o.page_locations.clone())
+            })
+            .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 

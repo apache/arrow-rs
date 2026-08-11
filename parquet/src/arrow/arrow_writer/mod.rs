@@ -2964,7 +2964,7 @@ mod tests {
         assert!(reader.metadata().offset_index().is_some());
         let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
 
-        let page_locations = offset_indexes[0].page_locations.clone();
+        let page_locations = offset_indexes[0].as_ref().unwrap().page_locations.clone();
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
@@ -3372,6 +3372,8 @@ mod tests {
         if let Some(col_indexes) = file_meta_data.column_index() {
             for rg_idx in col_indexes {
                 for idx in rg_idx {
+                    assert!(idx.is_some());
+                    let idx = idx.as_ref().unwrap();
                     assert!(idx.nan_counts().is_some());
                     let float_idx = match idx {
                         ColumnIndexMetaData::DOUBLE(idx) => idx,
@@ -3449,11 +3451,11 @@ mod tests {
 
         assert!(file_meta_data.column_index().is_some());
         let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
-        assert_eq!(col_idx.num_pages(), 4);
+        assert_eq!(col_idx.as_ref().unwrap().num_pages(), 4);
 
         // test each page
         let float_idx = match col_idx {
-            ColumnIndexMetaData::DOUBLE(idx) => idx,
+            Some(ColumnIndexMetaData::DOUBLE(idx)) => idx,
             _ => panic!("expected double statistics"),
         };
 
@@ -4947,8 +4949,8 @@ mod tests {
 
         assert_eq!(index.len(), 1);
         assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
-        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][0].as_ref().unwrap().page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][1].as_ref().unwrap().page_locations().len(), 1); // 1 page
     }
 
     #[test]
@@ -5019,11 +5021,11 @@ mod tests {
 
         let a_idx = &column_index[0][0];
         assert!(
-            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            matches!(a_idx, Some(ColumnIndexMetaData::BYTE_ARRAY(_))),
             "{a_idx:?}"
         );
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5089,9 +5091,9 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
+        assert!(a_idx.is_none(), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]

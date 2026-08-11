@@ -99,24 +99,28 @@ impl Args {
                 ParquetError::General(format!(
                     "No offset index for row group {row_group_idx} column chunk {column_idx}"
                 ))
+            })?.as_ref().ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Offset index is None for row group {row_group_idx} column chunk {column_idx}"
+                ))
             })?;
 
             let row_counts =
-                compute_row_counts(offset_index.page_locations.as_slice(), row_group.num_rows());
-            match &column_indices[column_idx] {
-                ColumnIndexMetaData::NONE => println!("NO INDEX"),
-                ColumnIndexMetaData::BOOLEAN(v) => {
+                compute_row_counts(offset_index.page_locations(), row_group.num_rows());
+            match column_indices[column_idx].as_ref() {
+                None | Some(ColumnIndexMetaData::NONE) => println!("NO INDEX"),
+                Some(ColumnIndexMetaData::BOOLEAN(v)) => {
                     print_index::<bool>(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::INT32(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT64(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT96(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::FLOAT(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::DOUBLE(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::INT32(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT64(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT96(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::FLOAT(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::DOUBLE(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
             }
@@ -147,11 +151,11 @@ fn print_index<T: std::fmt::Display>(
     offset_index: &OffsetIndexMetaData,
     row_counts: &[i64],
 ) -> Result<()> {
-    if column_index.num_pages() as usize != offset_index.page_locations.len() {
+    if column_index.num_pages() as usize != offset_index.page_locations().len() {
         return Err(ParquetError::General(format!(
             "Index length mismatch, got {} and {}",
             column_index.num_pages(),
-            offset_index.page_locations.len()
+            offset_index.page_locations().len()
         )));
     }
 
@@ -186,11 +190,11 @@ fn print_bytes_index(
     offset_index: &OffsetIndexMetaData,
     row_counts: &[i64],
 ) -> Result<()> {
-    if column_index.num_pages() as usize != offset_index.page_locations.len() {
+    if column_index.num_pages() as usize != offset_index.page_locations().len() {
         return Err(ParquetError::General(format!(
             "Index length mismatch, got {} and {}",
             column_index.num_pages(),
-            offset_index.page_locations.len()
+            offset_index.page_locations().len()
         )));
     }
 

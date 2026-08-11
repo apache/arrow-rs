@@ -188,8 +188,8 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
     // Check float column, which is encrypted in the non-uniform test file
     let float_col_idx = 4;
     let offset_index = &offset_index[0][float_col_idx];
-    assert_eq!(offset_index.page_locations.len(), 1);
-    assert!(offset_index.page_locations[0].offset > 0);
+    assert_eq!(offset_index.as_ref().unwrap().page_locations.len(), 1);
+    assert!(offset_index.as_ref().unwrap().page_locations[0].offset > 0);
 
     let column_index = metadata.column_index().unwrap();
     assert_eq!(column_index.len(), 1);
@@ -197,7 +197,7 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
     let column_index = &column_index[0][float_col_idx];
 
     match column_index {
-        parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index) => {
+        Some(parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index)) => {
             assert_eq!(float_index.num_pages(), 1);
             assert_eq!(float_index.min_value(0), Some(&0.0f32));
             assert!(

@@ -2197,9 +2197,12 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 column
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
+        assert!(
+            matches!(a_idx, Some(ColumnIndexMetaData::INT32(_))),
+            "{a_idx:?}"
+        );
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -2279,7 +2282,7 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
+        let col_idx = if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = &column_index[0][0] {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2294,8 +2297,17 @@ mod tests {
         let offset_index = reader.metadata().offset_index().unwrap();
         assert_eq!(offset_index.len(), 1);
         assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_some());
+        assert!(offset_index[0][0].is_some());
+        assert!(
+            offset_index[0][0]
+                .as_ref()
+                .unwrap()
+                .unencoded_byte_array_data_bytes
+                .is_some()
+        );
         let page_sizes = offset_index[0][0]
+            .as_ref()
+            .unwrap()
             .unencoded_byte_array_data_bytes
             .as_ref()
             .unwrap();
@@ -2474,7 +2486,7 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+        let col_idx = if let Some(ColumnIndexMetaData::INT32(index)) = &column_index[0][0] {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2488,7 +2500,13 @@ mod tests {
         let offset_index = reader.metadata().offset_index().unwrap();
         assert_eq!(offset_index.len(), 1);
         assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
+        assert!(
+            offset_index[0][0]
+                .as_ref()
+                .unwrap()
+                .unencoded_byte_array_data_bytes
+                .is_none()
+        );
     }
 
     #[test]
@@ -2658,8 +2676,11 @@ mod tests {
             let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
-                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
-                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let column_index =
+                    rg_column_indexes.and_then(|row| row.get(col_idx).and_then(|c| c.clone()));
+                let offset_index =
+                    rg_offset_indexes.and_then(|row| row.get(col_idx).and_then(|o| o.clone()));
+
                 let result = ColumnCloseResult {
                     bytes_written: column.compressed_size() as _,
                     rows_written: rg.num_rows() as _,
@@ -2704,7 +2725,7 @@ mod tests {
 
             let col_idx = metadata.column_index().expect("column index not present");
             let col0 = match &col_idx[0][0] {
-                ColumnIndexMetaData::INT96(index) => index,
+                Some(ColumnIndexMetaData::INT96(index)) => index,
                 _ => panic!("expected INT96 stats"),
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");

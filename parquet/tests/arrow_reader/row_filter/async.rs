@@ -315,6 +315,8 @@ async fn test_mask_nested_projection_with_different_page_boundaries() {
         .iter()
         .map(|column| {
             column
+                .as_ref()
+                .unwrap()
                 .page_locations()
                 .iter()
                 .map(|page| page.first_row_index)

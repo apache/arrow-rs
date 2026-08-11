@@ -149,23 +149,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
 
-        // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
-        // Option<Vec<Vec<ColumnIndexMetaData>>>
-        let column_indexes: Option<ParquetColumnIndex> = if all_none {
-            None
+        if all_none {
+            Ok(None)
         } else {
-            column_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| {
-                        vi.into_iter()
-                            .map(|ci| ci.unwrap_or(ColumnIndexMetaData::NONE))
-                            .collect()
-                    })
-                    .collect()
-            })
-        };
-
-        Ok(column_indexes)
+            Ok(column_indexes)
+        }
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
@@ -182,18 +170,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
 
-        let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
-            None
+        if all_none {
+            Ok(None)
         } else {
-            // FIXME(ets): this will panic if there's a missing index.
-            offset_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
-                    .collect()
-            })
-        };
-
-        Ok(offset_indexes)
+            Ok(offset_indexes)
+        }
     }
 
     /// Assembles and writes the final metadata to self.buf
@@ -464,8 +445,8 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let column_indexes = self.convert_column_indexes();
-        let offset_indexes = self.convert_offset_index();
+        let column_indexes = self.metadata.column_index().cloned();
+        let offset_indexes = self.metadata.offset_index().cloned();
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
@@ -490,40 +471,6 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         encoder.finish()?;
 
         Ok(())
-    }
-
-    fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        // TODO(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
-        // but then converting back to ParquetColumnIndex in the end. need to unify this.
-        self.metadata
-            .column_index()
-            .map(|row_group_column_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let column_indexes = &row_group_column_indexes[rg_idx];
-                        column_indexes
-                            .iter()
-                            .map(|column_index| Some(column_index.clone()))
-                            .collect()
-                    })
-                    .collect()
-            })
-    }
-
-    fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
-        self.metadata
-            .offset_index()
-            .map(|row_group_offset_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let offset_indexes = &row_group_offset_indexes[rg_idx];
-                        offset_indexes
-                            .iter()
-                            .map(|offset_index| Some(offset_index.clone()))
-                            .collect()
-                    })
-                    .collect()
-            })
     }
 }
 

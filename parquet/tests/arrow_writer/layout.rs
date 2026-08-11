@@ -94,11 +94,13 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
 
         for (column_index, column_layout) in offset_index.iter().zip(&row_group_layout.columns) {
             assert_eq!(
-                column_index.page_locations.len(),
+                column_index.as_ref().unwrap().page_locations.len(),
                 column_layout.pages.len(),
                 "index page count mismatch"
             );
             for (idx, (page, page_layout)) in column_index
+                .as_ref()
+                .unwrap()
                 .page_locations
                 .iter()
                 .zip(&column_layout.pages)
@@ -110,6 +112,8 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                     "index page {idx} size mismatch"
                 );
                 let next_first_row_index = column_index
+                    .as_ref()
+                    .unwrap()
                     .page_locations
                     .get(idx + 1)
                     .map(|x| x.first_row_index)
@@ -598,8 +602,8 @@ fn test_per_column_data_page_size_limit() {
 
     // Get page counts from offset index
     let offset_index = metadata.offset_index().unwrap();
-    let col_a_page_count = offset_index[0][0].page_locations.len();
-    let col_b_page_count = offset_index[0][1].page_locations.len();
+    let col_a_page_count = offset_index[0][0].as_ref().unwrap().page_locations.len();
+    let col_b_page_count = offset_index[0][1].as_ref().unwrap().page_locations.len();
 
     // col_a should have many more pages than col_b due to smaller page size limit
     // col_a: 500 byte limit for 8000 bytes of data -> 16 pages
