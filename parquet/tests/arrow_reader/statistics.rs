@@ -2630,10 +2630,13 @@ mod test {
         Int32Array, Int64Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
         new_empty_array,
     };
-    use arrow_schema::{DataType, SchemaRef, TimeUnit};
+    use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
     use bytes::Bytes;
     use parquet::arrow::parquet_column;
+    use parquet::data_type::{ByteArray, ByteArrayType, Int32Type};
     use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
     use std::path::PathBuf;
     use std::sync::Arc;
     // TODO error cases (with parquet statistics that are mismatched in expected type)
@@ -3221,5 +3224,203 @@ mod test {
             .map(|s| s.map(|s| s.to_string()))
             .collect();
         Arc::new(array)
+    }
+
+    // Roundtrip test: write 10 unique UTF-8 strings to a single row group with
+    // distinct_count=10 stored in the statistics, then read it back via
+    // StatisticsConverter::row_group_distinct_counts and assert we get 10.
+    // Uses the low-level writer because ArrowWriter does not yet write distinct_count.
+    #[test]
+    fn test_row_group_distinct_counts_utf8_roundtrip() {
+        let unique_string_values: Vec<ByteArray> = (0..10)
+            .map(|index| ByteArray::from(format!("value_{index}").into_bytes()))
+            .collect();
+
+        let parquet_schema = Arc::new(
+            parse_message_type("message schema { REQUIRED BYTE_ARRAY col (UTF8); }").unwrap(),
+        );
+        let writer_properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut file_buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
+                .unwrap();
+
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        let min_value = unique_string_values.first().unwrap().clone();
+        let max_value = unique_string_values.last().unwrap().clone();
+        let expected_distinct_count = unique_string_values.len() as u64;
+        column_writer
+            .typed::<ByteArrayType>()
+            .write_batch_with_statistics(
+                &unique_string_values,
+                None,
+                None,
+                Some(&min_value),
+                Some(&max_value),
+                Some(expected_distinct_count),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+
+        let parquet_bytes = Bytes::from(file_buffer);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
+        let file_metadata = reader_builder.metadata().clone();
+        let arrow_schema = reader_builder.schema().clone();
+        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
+
+        let statistics_converter =
+            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
+        let distinct_counts = statistics_converter
+            .row_group_distinct_counts(file_metadata.row_groups().iter())
+            .unwrap();
+
+        assert_eq!(
+            distinct_counts,
+            UInt64Array::from(vec![Some(expected_distinct_count)]),
+            "expected distinct_count of 10 unique string values"
+        );
+    }
+
+    #[test]
+    fn test_row_group_distinct_counts() {
+        let parquet_schema = Arc::new(
+            parse_message_type("message schema { REQUIRED INT32 col; }").unwrap(),
+        );
+        let writer_properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut file_buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
+                .unwrap();
+
+        // row group 0: 4 distinct values
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[1, 2, 3, 4], None, None, Some(&1), Some(&4), Some(4))
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        // row group 1: 2 distinct values
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(
+                &[10, 10, 20, 20],
+                None,
+                None,
+                Some(&10),
+                Some(&20),
+                Some(2),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        file_writer.close().unwrap();
+
+        let parquet_bytes = Bytes::from(file_buffer);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
+        let file_metadata = reader_builder.metadata().clone();
+        let arrow_schema = reader_builder.schema().clone();
+        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
+
+        let statistics_converter =
+            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
+        let distinct_counts = statistics_converter
+            .row_group_distinct_counts(file_metadata.row_groups().iter())
+            .unwrap();
+
+        assert_eq!(
+            distinct_counts,
+            UInt64Array::from(vec![Some(4), Some(2)]),
+            "distinct counts should match the values injected via write_batch_with_statistics"
+        );
+    }
+
+    // Verifies that iteration continues across all row groups even when one is
+    // missing distinct_count. Row group 1 has no distinct_count written, but
+    // row groups 0 and 2 do — the result should be [Some(2), null, Some(5)],
+    // not a short-circuit to all-nulls.
+    #[test]
+    fn test_row_group_distinct_counts_absent() {
+        let parquet_schema = Arc::new(
+            parse_message_type("message schema { REQUIRED INT32 col; }").unwrap(),
+        );
+        let writer_properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut file_buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties)
+                .unwrap();
+
+        // row group 0: distinct_count present
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[1, 2], None, None, Some(&1), Some(&2), Some(2))
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        // row group 1: distinct_count absent — should appear as null in output
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[3, 4], None, None, Some(&3), Some(&4), None)
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        // row group 2: distinct_count present — iteration must reach here despite row group 1
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[5, 6, 7, 8, 9], None, None, Some(&5), Some(&9), Some(5))
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        file_writer.close().unwrap();
+
+        let parquet_bytes = Bytes::from(file_buffer);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
+        let file_metadata = reader_builder.metadata().clone();
+        let arrow_schema = reader_builder.schema().clone();
+        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
+
+        let statistics_converter =
+            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
+        let distinct_counts = statistics_converter
+            .row_group_distinct_counts(file_metadata.row_groups().iter())
+            .unwrap();
+
+        assert_eq!(
+            distinct_counts,
+            UInt64Array::from(vec![Some(2), None, Some(5)]),
+            "a missing distinct_count in one row group should not affect the others"
+        );
     }
 }
