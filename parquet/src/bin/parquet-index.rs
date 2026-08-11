@@ -108,7 +108,7 @@ impl Args {
             let row_counts =
                 compute_row_counts(offset_index.page_locations(), row_group.num_rows());
             match column_indices[column_idx].as_ref() {
-                None | Some(ColumnIndexMetaData::NONE) => println!("NO INDEX"),
+                None => println!("NO INDEX"),
                 Some(ColumnIndexMetaData::BOOLEAN(v)) => {
                     print_index::<bool>(v, offset_index, &row_counts)?
                 }

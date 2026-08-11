@@ -527,14 +527,8 @@ impl MetadataObjectWriter {
         _column_idx: usize,
         sink: impl Write,
     ) -> Result<bool> {
-        match column_index {
-            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
-            ColumnIndexMetaData::NONE => Ok(false),
-            _ => {
-                Self::write_thrift_object(column_index, sink)?;
-                Ok(true)
-            }
-        }
+        Self::write_thrift_object(column_index, sink)?;
+        Ok(true)
     }
 
     /// No-op implementation of row-group metadata encryption
@@ -624,25 +618,19 @@ impl MetadataObjectWriter {
         column_idx: usize,
         sink: impl Write,
     ) -> Result<bool> {
-        match column_index {
-            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
-            ColumnIndexMetaData::NONE => Ok(false),
-            _ => {
-                match &self.file_encryptor {
-                    Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                        column_index,
-                        sink,
-                        file_encryptor,
-                        column_chunk,
-                        ModuleType::ColumnIndex,
-                        row_group_idx,
-                        column_idx,
-                    )?,
-                    None => Self::write_thrift_object(column_index, sink)?,
-                }
-                Ok(true)
-            }
+        match &self.file_encryptor {
+            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
+                column_index,
+                sink,
+                file_encryptor,
+                column_chunk,
+                ModuleType::ColumnIndex,
+                row_group_idx,
+                column_idx,
+            )?,
+            None => Self::write_thrift_object(column_index, sink)?,
         }
+        Ok(true)
     }
 
     /// If encryption is enabled and configured, encrypt row group metadata.
