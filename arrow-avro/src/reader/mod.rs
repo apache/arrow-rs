@@ -504,7 +504,7 @@ pub mod async_reader;
 
 pub use header::{HeaderInfo, read_header_info};
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
