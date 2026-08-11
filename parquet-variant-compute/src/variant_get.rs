@@ -145,11 +145,11 @@ pub(crate) fn follow_shredded_path_element(
             };
 
             let struct_array = field.as_struct_opt().ok_or_else(|| {
-                // TODO: Should we blow up? Or just end the traversal and let the normal
-                // variant pathing code sort out the mess that it must anyway be
-                // prepared to handle?
+                // Each named child of a shredded object represents a shredded Variant field,
+                // whose physical layout is a Struct containing `value` and/or `typed_value`.
                 ArrowError::InvalidArgumentError(format!(
-                    "Expected Struct array while following path, got {}",
+                    "Shredded object field '{name}' must be a Struct containing 'value' and/or \
+                     'typed_value', got {}",
                     field.data_type(),
                 ))
             })?;
@@ -1916,6 +1916,33 @@ mod test {
         assert_eq!(result_variant.value(0), Variant::Int32(1));
         // Row 1: expect x=42
         assert_eq!(result_variant.value(1), Variant::Int32(42));
+    }
+
+    #[test]
+    fn test_malformed_shredded_object_field_reports_field_and_type() {
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
+        let typed_value = StructArray::try_new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(42)]))],
+            None,
+        )
+        .unwrap();
+        let array = ArrayRef::from(VariantArray::from_parts(
+            Arc::new(metadata),
+            all_null_value_column(2),
+            Some(Arc::new(typed_value)),
+            None,
+        ));
+
+        let options = GetOptions::new_with_path(VariantPath::try_from("x").unwrap());
+        let err = variant_get(&array, options).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Shredded object field 'x' must be a Struct containing \
+             'value' and/or 'typed_value', got Int32"
+        );
     }
 
     /// Test extracting shredded object field with type conversion
