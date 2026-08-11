@@ -360,74 +360,93 @@ impl<W: Write + Send> ArrowWriter<W> {
             return Ok(());
         }
 
-        let in_progress = match &mut self.in_progress {
-            Some(in_progress) => in_progress,
-            x => x.insert(
-                self.row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
-            ),
-        };
+        // Rows not yet handed to a row group writer. Splitting iterates here instead of
+        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
+        let mut remaining = batch.clone();
 
-        if let Some(max_rows) = self.max_row_group_row_count
-            && in_progress.buffered_rows + batch.num_rows() > max_rows
-        {
-            let to_write = max_rows - in_progress.buffered_rows;
-            let a = batch.slice(0, to_write);
-            let b = batch.slice(to_write, batch.num_rows() - to_write);
-            self.write(&a)?;
-            return self.write(&b);
-        }
-
-        // Check byte limit: if we have buffered data, use measured average row size
-        // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes
-            && in_progress.buffered_rows > 0
-        {
-            let current_bytes = in_progress.get_estimated_total_bytes();
-
-            if current_bytes >= max_bytes {
-                self.flush()?;
-                return self.write(batch);
+        loop {
+            if self.in_progress.is_none() {
+                let row_group_index = self.writer.flushed_row_groups().len();
+                self.in_progress = Some(
+                    self.row_group_writer_factory
+                        .create_row_group_writer(row_group_index)?,
+                );
             }
+            let buffered_rows = self.in_progress.as_ref().unwrap().buffered_rows;
 
-            if let Some(avg_row_bytes) = current_bytes
-                .checked_div(in_progress.buffered_rows)
-                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            // Leading rows of `remaining` that still fit in the current row group, when the
+            // rest has to go to a later one.
+            let mut split_at = match self.max_row_group_row_count {
+                Some(max_rows) if buffered_rows + remaining.num_rows() > max_rows => {
+                    Some(max_rows - buffered_rows)
+                }
+                _ => None,
+            };
+
+            // Check byte limit: if we have buffered data, use measured average row size
+            // to split batch proactively before exceeding byte limit
+            if split_at.is_none()
+                && let Some(max_bytes) = self.max_row_group_bytes
+                && buffered_rows > 0
             {
-                // At this point, `current_bytes < max_bytes` (checked above)
-                let remaining_bytes = max_bytes - current_bytes;
-                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+                let current_bytes = self
+                    .in_progress
+                    .as_ref()
+                    .unwrap()
+                    .get_estimated_total_bytes();
 
-                if batch.num_rows() > rows_that_fit {
-                    if rows_that_fit > 0 {
-                        let a = batch.slice(0, rows_that_fit);
-                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                        self.write(&a)?;
-                        return self.write(&b);
-                    } else {
-                        self.flush()?;
-                        return self.write(batch);
+                if current_bytes >= max_bytes {
+                    self.flush()?;
+                    continue;
+                }
+
+                if let Some(avg_row_bytes) = current_bytes
+                    .checked_div(buffered_rows)
+                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                {
+                    // At this point, `current_bytes < max_bytes` (checked above)
+                    let remaining_bytes = max_bytes - current_bytes;
+                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+
+                    if remaining.num_rows() > rows_that_fit {
+                        if rows_that_fit > 0 {
+                            split_at = Some(rows_that_fit);
+                        } else {
+                            self.flush()?;
+                            continue;
+                        }
                     }
                 }
             }
-        }
 
-        match self.cdc_chunkers.as_mut() {
-            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
-            None => in_progress.write(batch)?,
-        }
+            let rest = split_at.map(|to_write| {
+                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
+                remaining = remaining.slice(0, to_write);
+                rest
+            });
 
-        let should_flush = self
-            .max_row_group_row_count
-            .is_some_and(|max| in_progress.buffered_rows >= max)
-            || self
-                .max_row_group_bytes
-                .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+            let in_progress = self.in_progress.as_mut().unwrap();
+            match self.cdc_chunkers.as_mut() {
+                Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
+                None => in_progress.write(&remaining)?,
+            }
 
-        if should_flush {
-            self.flush()?
+            let should_flush = self
+                .max_row_group_row_count
+                .is_some_and(|max| in_progress.buffered_rows >= max)
+                || self
+                    .max_row_group_bytes
+                    .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+
+            if should_flush {
+                self.flush()?
+            }
+
+            match rest {
+                Some(rest) => remaining = rest,
+                None => return Ok(()),
+            }
         }
-        Ok(())
     }
 
     /// Writes the given buf bytes to the internal buffer.
@@ -5632,6 +5651,34 @@ mod tests {
             &row_group_sizes(builder.metadata()),
             &[300, 300, 300, 100],
             "Row groups should be split by row count"
+        );
+    }
+
+    #[test]
+    // A row limit far smaller than the batch splits it many times over; the split must not
+    // consume stack proportional to the number of row groups.
+    fn test_row_group_limit_rows_only_many_splits() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .set_max_row_group_bytes(None)
+            .build();
+
+        let rows = 50_000;
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                rows_per_batch: rows,
+                row_size: 4,
+            },
+            props,
+        );
+
+        let sizes = row_group_sizes(builder.metadata());
+        assert_eq!(sizes.len(), rows, "Every row should get its own row group");
+        assert_eq!(
+            sizes.iter().sum::<i64>(),
+            rows as i64,
+            "Total rows should be preserved"
         );
     }
 
