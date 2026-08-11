@@ -95,7 +95,6 @@ const ENOSYS: i32 = 38;
 /// This was created by bindgen
 #[repr(C)]
 #[derive(Debug)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
     /// C function to get schema from the stream
     pub get_schema:
@@ -318,7 +317,6 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
 impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
-    #[allow(dead_code)]
     pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
