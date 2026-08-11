@@ -234,6 +234,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn metadata(&self) -> &ParquetMetaData {
         self.metadata
     }
+
+    fn offset_index(&self) -> Option<&[OffsetIndexMetaData]> {
+        self.offset_index.filter(|index| !index.is_empty())
+    }
 }
 
 /// An in-memory column chunk.
