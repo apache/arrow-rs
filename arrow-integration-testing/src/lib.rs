@@ -19,6 +19,7 @@
 
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
 #![allow(unused_crate_dependencies)]
+#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use serde_json::Value;
 
