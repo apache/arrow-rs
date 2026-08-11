@@ -31,6 +31,8 @@
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
+#![deny(clippy::allow_attributes)]
+
 mod from_json;
 mod to_json;
 

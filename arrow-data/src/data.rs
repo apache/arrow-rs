@@ -2016,7 +2016,6 @@ pub enum BufferSpec {
     BitMap,
     /// Buffer is always null. Unused currently in Rust implementation,
     /// (used in C++ for Union type)
-    #[allow(dead_code)]
     AlwaysNull,
 }
 
@@ -2136,7 +2135,6 @@ impl ArrayDataBuilder {
     }
 
     #[inline]
-    #[allow(clippy::len_without_is_empty)]
     /// Sets the length of the [ArrayData]
     pub const fn len(mut self, n: usize) -> Self {
         self.len = n;
@@ -2600,7 +2598,6 @@ mod tests {
         assert!(!int_data.ptr_eq(&float_data));
         assert!(int_data.ptr_eq(&int_data));
 
-        #[allow(clippy::redundant_clone)]
         let int_data_clone = int_data.clone();
         assert_eq!(int_data, int_data_clone);
         assert!(int_data.ptr_eq(&int_data_clone));
@@ -2628,7 +2625,6 @@ mod tests {
 
         assert!(string_data.ptr_eq(&string_data));
 
-        #[allow(clippy::redundant_clone)]
         let string_data_cloned = string_data.clone();
         assert!(string_data_cloned.ptr_eq(&string_data));
         assert!(string_data.ptr_eq(&string_data_cloned));

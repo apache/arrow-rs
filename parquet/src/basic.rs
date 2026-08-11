@@ -708,13 +708,13 @@ impl From<Compression> for CompressionCodec {
     }
 }
 
-fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), ParquetError> {
+fn split_compression_string(str_setting: &str) -> Result<(&str, Option<i32>), ParquetError> {
     let split_setting = str_setting.split_once('(');
 
     match split_setting {
         Some((codec, level_str)) => {
             let level = &level_str[..level_str.len() - 1]
-                .parse::<u32>()
+                .parse::<i32>()
                 .map_err(|_| {
                     ParquetError::General(format!("invalid compression level: {level_str}"))
                 })?;
@@ -724,7 +724,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), Pa
     }
 }
 
-fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
+fn check_level_is_none(level: &Option<i32>) -> Result<(), ParquetError> {
     if level.is_some() {
         return Err(ParquetError::General(
             "compression level is not supported".to_string(),
@@ -734,7 +734,7 @@ fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
     Ok(())
 }
 
-fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
+fn require_level(codec: &str, level: Option<i32>) -> Result<i32, ParquetError> {
     level.ok_or(ParquetError::General(format!(
         "{codec} requires a compression level",
     )))
@@ -757,7 +757,7 @@ impl FromStr for Compression {
             }
             "GZIP" | "gzip" => {
                 let level = require_level(codec, level)?;
-                Compression::GZIP(GzipLevel::try_new(level)?)
+                Compression::GZIP(GzipLevel::try_new(level.try_into()?)?)
             }
             "LZO" | "lzo" => {
                 check_level_is_none(&level)?;
@@ -765,7 +765,7 @@ impl FromStr for Compression {
             }
             "BROTLI" | "brotli" => {
                 let level = require_level(codec, level)?;
-                Compression::BROTLI(BrotliLevel::try_new(level)?)
+                Compression::BROTLI(BrotliLevel::try_new(level.try_into()?)?)
             }
             "LZ4" | "lz4" => {
                 check_level_is_none(&level)?;
@@ -773,7 +773,7 @@ impl FromStr for Compression {
             }
             "ZSTD" | "zstd" => {
                 let level = require_level(codec, level)?;
-                Compression::ZSTD(ZstdLevel::try_new(level as i32)?)
+                Compression::ZSTD(ZstdLevel::try_new(level)?)
             }
             "LZ4_RAW" | "lz4_raw" => {
                 check_level_is_none(&level)?;
@@ -2334,6 +2334,8 @@ mod tests {
         assert_eq!(compress, Compression::LZO);
         compress = "zstd(3)".parse().unwrap();
         assert_eq!(compress, Compression::ZSTD(ZstdLevel::try_new(3).unwrap()));
+        compress = "zstd(-3)".parse().unwrap();
+        assert_eq!(compress, Compression::ZSTD(ZstdLevel::try_new(-3).unwrap()));
         compress = "LZ4_RAW".parse().unwrap();
         assert_eq!(compress, Compression::LZ4_RAW);
         compress = "uncompressed".parse().unwrap();
