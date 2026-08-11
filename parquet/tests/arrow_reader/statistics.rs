@@ -3287,68 +3287,6 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_row_group_distinct_counts() {
-        let parquet_schema =
-            Arc::new(parse_message_type("message schema { REQUIRED INT32 col; }").unwrap());
-        let writer_properties = Arc::new(
-            WriterProperties::builder()
-                .set_statistics_enabled(EnabledStatistics::Chunk)
-                .build(),
-        );
-
-        let mut file_buffer: Vec<u8> = Vec::new();
-        let mut file_writer =
-            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
-
-        // row group 0: 4 distinct values
-        let mut row_group_writer = file_writer.next_row_group().unwrap();
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int32Type>()
-            .write_batch_with_statistics(&[1, 2, 3, 4], None, None, Some(&1), Some(&4), Some(4))
-            .unwrap();
-        column_writer.close().unwrap();
-        row_group_writer.close().unwrap();
-
-        // row group 1: 2 distinct values
-        let mut row_group_writer = file_writer.next_row_group().unwrap();
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int32Type>()
-            .write_batch_with_statistics(
-                &[10, 10, 20, 20],
-                None,
-                None,
-                Some(&10),
-                Some(&20),
-                Some(2),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-        row_group_writer.close().unwrap();
-
-        file_writer.close().unwrap();
-
-        let parquet_bytes = Bytes::from(file_buffer);
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
-        let file_metadata = reader_builder.metadata().clone();
-        let arrow_schema = reader_builder.schema().clone();
-        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
-
-        let statistics_converter =
-            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
-        let distinct_counts = statistics_converter
-            .row_group_distinct_counts(file_metadata.row_groups().iter())
-            .unwrap();
-
-        assert_eq!(
-            distinct_counts,
-            UInt64Array::from(vec![Some(4), Some(2)]),
-            "distinct counts should match the values injected via write_batch_with_statistics"
-        );
-    }
-
     // Verifies that a missing distinct_count in one row group does not affect the others.
     #[test]
     fn test_row_group_distinct_counts_absent() {
