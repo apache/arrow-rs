@@ -1256,7 +1256,7 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = Arc::new(crate::convert::fb_to_schema(ipc_schema));
+        let schema = Arc::new(crate::convert::try_fb_to_schema(ipc_schema)?);
 
         let projected_schema = match &self.projection {
             Some(projection) => Arc::new(schema.project(projection)?),
@@ -1604,7 +1604,7 @@ impl<R: Read> StreamReader<R> {
         let schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::ParseError("Failed to parse schema from message header".to_string())
         })?;
-        let schema = crate::convert::fb_to_schema(schema);
+        let schema = crate::convert::try_fb_to_schema(schema)?;
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1686,7 +1686,7 @@ impl<R: Read> StreamReader<R> {
                 let schema = message.header_as_schema().ok_or_else(|| {
                     ArrowError::ParseError("Failed to parse schema from message header".to_string())
                 })?;
-                let arrow_schema = crate::convert::fb_to_schema(schema);
+                let arrow_schema = crate::convert::try_fb_to_schema(schema)?;
                 IpcMessage::Schema(arrow_schema)
             }
             Message::MessageHeader::RecordBatch => {
