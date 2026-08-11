@@ -16,8 +16,8 @@
 // under the License.
 use arrow::{
     array::{
-        self, Array, ArrayRef, GenericListArray, GenericListViewArray, ListLikeArray, StructArray,
-        UInt64Array, make_array,
+        self, Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray,
+        ListLikeArray, StructArray, UInt64Array, make_array,
     },
     buffer::NullBuffer,
     compute::{CastOptions, take},
@@ -170,6 +170,9 @@ pub(crate) fn follow_shredded_path_element(
                 >(typed_value.as_ref(), *index)?,
                 DataType::LargeListView(_) => take_list_like_index_as_shredding_state::<
                     GenericListViewArray<i64>,
+                >(typed_value.as_ref(), *index)?,
+                DataType::FixedSizeList(_, _) => take_list_like_index_as_shredding_state::<
+                    FixedSizeListArray,
                 >(typed_value.as_ref(), *index)?,
                 _ => {
                     // JSONPath semantics: indexing a non-list yields no match.
@@ -1937,12 +1940,13 @@ mod test {
     type ShreddedListLikeArrayGen = fn() -> ArrayRef;
     type ShreddedListLikeCase = (&'static str, ShreddedListLikeArrayGen);
 
-    fn shredded_list_like_cases() -> [ShreddedListLikeCase; 4] {
+    fn shredded_list_like_cases() -> [ShreddedListLikeCase; 5] {
         [
             ("list", shredded_list_variant_array),
             ("large_list", shredded_large_list_variant_array),
             ("list_view", shredded_list_view_variant_array),
             ("large_list_view", shredded_large_list_view_variant_array),
+            ("fixed_size_list", shredded_fixed_size_list_variant_array),
         ]
     }
 
@@ -2106,6 +2110,13 @@ mod test {
             DataType::Utf8,
             true,
         ))))
+    }
+
+    fn shredded_fixed_size_list_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            2,
+        ))
     }
 
     fn shredded_struct_with_list_variant_array() -> ArrayRef {
