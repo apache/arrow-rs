@@ -22,7 +22,7 @@ use crate::type_conversion::{
     generic_conversion_single_value, generic_conversion_single_value_with_result,
     primitive_conversion_single_value,
 };
-use arrow::array::{Array, ArrayRef, AsArray, StructArray, new_null_array};
+use arrow::array::{Array, ArrayRef, AsArray, StructArray, StructArrayBuilder, new_null_array};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
@@ -32,7 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::Result;
 use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
     Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
@@ -947,55 +947,6 @@ fn typed_value_field(array: &ArrayRef) -> FieldRef {
         field = field.with_extension_type(UuidExtension);
     }
     Arc::new(field)
-}
-
-/// Builds struct arrays from component fields
-///
-/// TODO: move to arrow crate
-#[derive(Debug, Default, Clone)]
-pub(crate) struct StructArrayBuilder {
-    fields: Vec<FieldRef>,
-    arrays: Vec<ArrayRef>,
-    nulls: Option<NullBuffer>,
-}
-
-impl StructArrayBuilder {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Add an array to this struct array as a field with the specified name.
-    pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
-        let field = Field::new(field_name, array.data_type().clone(), nullable);
-        self.fields.push(Arc::new(field));
-        self.arrays.push(array);
-        self
-    }
-
-    /// Add an array to this struct array using a caller-supplied [`FieldRef`].
-    ///
-    /// Use this when the field carries metadata (e.g. an extension type) that
-    /// would be lost if the field were synthesized from the array's data type alone.
-    pub fn with_field_ref(mut self, field: FieldRef, array: ArrayRef) -> Self {
-        self.fields.push(field);
-        self.arrays.push(array);
-        self
-    }
-
-    /// Set the null buffer for this struct array.
-    pub fn with_nulls(mut self, nulls: NullBuffer) -> Self {
-        self.nulls = Some(nulls);
-        self
-    }
-
-    pub fn build(self) -> StructArray {
-        let Self {
-            fields,
-            arrays,
-            nulls,
-        } = self;
-        StructArray::new(Fields::from(fields), arrays, nulls)
-    }
 }
 
 /// returns the non-null element at index as a Variant
