@@ -132,8 +132,9 @@ pub(crate) mod private {
             },
             Encoding::ALP => {
                 return Err(general_err!(
-                    "Encoding {} is not supported for type",
-                    encoding
+                    "Encoding {} only supports FLOAT and DOUBLE, got {}",
+                    encoding,
+                    T::get_physical_type()
                 ));
             }
             e => return Err(nyi_err!("Encoding {} is not supported", e)),
@@ -857,6 +858,13 @@ mod tests {
             Encoding::PLAIN_DICTIONARY,
             Some(general_err!(
                 "Cannot initialize this encoding through this function"
+            )),
+        );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::ALP,
+            Some(general_err!(
+                "Encoding ALP only supports FLOAT and DOUBLE, got INT32"
             )),
         );
 
