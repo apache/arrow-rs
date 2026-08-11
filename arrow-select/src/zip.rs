@@ -473,6 +473,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     /// return an output array that has
     /// `value` in all locations where predicate is true
     /// `null` otherwise
+    #[allow(clippy::type_complexity)]
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: &[u8],
@@ -729,6 +730,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (bytes.into(), buffers, Some(nulls))
     }
 
+    #[allow(clippy::type_complexity)]
     fn get_views_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
@@ -770,8 +772,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let mut mutable = MutableBuffer::new(total_number_of_bytes);
                 let mut filled = 0;
 
-                SlicesIterator::from(&predicate)
-                    .try_for_each(|(start, end)| -> Result<(), ArrowError> {
+                SlicesIterator::from(&predicate).try_for_each(
+                    |(start, end)| -> Result<(), ArrowError> {
                         if start > filled {
                             let false_repeat_count = start - filled;
                             mutable
@@ -790,7 +792,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                         filled = end;
                         Ok(())
-                    })?;
+                    },
+                )?;
 
                 if filled < predicate.len() {
                     let false_repeat_count = predicate.len() - filled;
