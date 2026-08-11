@@ -19,7 +19,6 @@
 //! Supported array types:
 //! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
 
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -169,7 +168,7 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
     max_element_len: Option<usize>,
     bounds: F,
 ) -> GenericStringArray<OffsetSize> {
-    let mut vals = BufferBuilder::<u8>::new({
+    let mut vals = Vec::with_capacity({
         let offsets = array.value_offsets();
         let input_len = (offsets[array.len()] - offsets[0]).to_usize().unwrap();
         match max_element_len {
@@ -177,19 +176,19 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
             None => input_len,
         }
     });
-    let mut new_offsets = BufferBuilder::<OffsetSize>::new(array.len() + 1);
-    new_offsets.append(OffsetSize::zero());
+    let mut new_offsets = Vec::with_capacity(array.len() + 1);
+    new_offsets.push(OffsetSize::zero());
 
     array.iter().for_each(|val| {
         if let Some(val) = val {
             let (start_offset, end_offset) = bounds(val);
-            vals.append_slice(&val.as_bytes()[start_offset..end_offset]);
+            vals.extend_from_slice(&val.as_bytes()[start_offset..end_offset]);
         }
-        new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
+        new_offsets.push(OffsetSize::from_usize(vals.len()).unwrap());
     });
 
-    let offsets = OffsetBuffer::new(new_offsets.finish().into());
-    let values = vals.finish();
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    let values = vals.into();
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
