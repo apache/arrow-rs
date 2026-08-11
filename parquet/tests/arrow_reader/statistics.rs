@@ -3226,10 +3226,9 @@ mod test {
         Arc::new(array)
     }
 
-    // Roundtrip test: write 10 unique UTF-8 strings to a single row group with
-    // distinct_count=10 stored in the statistics, then read it back via
-    // StatisticsConverter::row_group_distinct_counts and assert we get 10.
-    // Uses the low-level writer because ArrowWriter does not yet write distinct_count.
+    // Verifies that distinct_count is correctly read back from UTF-8 column statistics.
+    // Uses the low-level writer to inject a known distinct_count into the parquet footer
+    // since ArrowWriter does not yet write this field.
     #[test]
     fn test_row_group_distinct_counts_utf8_roundtrip() {
         let unique_string_values: Vec<ByteArray> = (0..10)
@@ -3353,10 +3352,7 @@ mod test {
         );
     }
 
-    // Verifies that iteration continues across all row groups even when one is
-    // missing distinct_count. Row group 1 has no distinct_count written, but
-    // row groups 0 and 2 do — the result should be [Some(2), null, Some(5)],
-    // not a short-circuit to all-nulls.
+    // Verifies that a missing distinct_count in one row group does not affect the others.
     #[test]
     fn test_row_group_distinct_counts_absent() {
         let parquet_schema = Arc::new(
