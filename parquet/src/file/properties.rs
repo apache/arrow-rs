@@ -68,6 +68,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default value for [`WriterProperties::write_row_group_number_distinct_values`]
+pub const DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES: bool = false;
 /// Default value for [`WriterProperties::data_page_v2_compression_ratio_threshold`]
 pub const DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD: f64 = 1.0;
 /// Default value for [`WriterProperties::write_path_in_schema`]
@@ -254,6 +256,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    write_row_group_number_distinct_values: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
@@ -433,6 +436,14 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// Returns `true` if the writer should compute and store the distinct count
+    /// (`num_distinct_values`) in row group column chunk statistics.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_write_row_group_number_distinct_values`]
+    pub fn write_row_group_number_distinct_values(&self) -> bool {
+        self.write_row_group_number_distinct_values
+    }
+
     /// Returns `true` if the `path_in_schema` field of the `ColumnMetaData` Thrift struct
     /// should be written.
     ///
@@ -595,6 +606,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    write_row_group_number_distinct_values: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
@@ -620,6 +632,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            write_row_group_number_distinct_values: DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES,
             content_defined_chunking: None,
             write_path_in_schema: DEFAULT_WRITE_PATH_IN_SCHEMA,
             #[cfg(feature = "encryption")]
@@ -675,6 +688,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            write_row_group_number_distinct_values: self.write_row_group_number_distinct_values,
             content_defined_chunking: self.content_defined_chunking,
             write_path_in_schema: self.write_path_in_schema,
             #[cfg(feature = "encryption")]
@@ -893,6 +907,28 @@ impl WriterPropertiesBuilder {
     /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Enable or disable writing the distinct value count (`num_distinct_values`) into
+    /// row group column chunk statistics (defaults to `false` via
+    /// [`DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES`]).
+    ///
+    /// When enabled, the [`ArrowWriter`] scans each column's values before encoding
+    /// and stores the number of distinct non-null values in the row group statistics
+    /// footer. This count can be used by query engines to improve cardinality estimates
+    /// during query planning (e.g. via [`StatisticsConverter::row_group_distinct_counts`]).
+    ///
+    /// # Performance
+    ///
+    /// Computing the distinct count requires hashing every non-null value in the column.
+    /// For large row groups or columns with many values this adds measurable overhead.
+    /// Benchmark your workload before enabling this globally.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    /// [`StatisticsConverter::row_group_distinct_counts`]: crate::arrow::arrow_reader::statistics::StatisticsConverter::row_group_distinct_counts
+    pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
+        self.write_row_group_number_distinct_values = value;
         self
     }
 
@@ -1342,6 +1378,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
+            write_row_group_number_distinct_values: props.write_row_group_number_distinct_values,
             content_defined_chunking: props.content_defined_chunking,
             write_path_in_schema: props.write_path_in_schema,
             #[cfg(feature = "encryption")]
