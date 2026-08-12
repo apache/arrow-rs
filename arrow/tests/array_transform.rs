@@ -29,7 +29,7 @@ use arrow_data::transform::MutableArrayData;
 use arrow_schema::{DataType, Field, Fields, UnionFields};
 use std::sync::Arc;
 
-#[allow(unused)]
+#[cfg_attr(feature = "force_validate", expect(dead_code))]
 fn create_decimal_array(array: Vec<Option<i128>>, precision: u8, scale: i8) -> Decimal128Array {
     array
         .into_iter()
