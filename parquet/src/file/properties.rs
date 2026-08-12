@@ -914,19 +914,15 @@ impl WriterPropertiesBuilder {
     /// row group column chunk statistics (defaults to `false` via
     /// [`DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES`]).
     ///
-    /// When enabled, the [`ArrowWriter`] scans each column's values before encoding
+    /// When enabled, the ArrowWriter scans each column's values before encoding
     /// and stores the number of distinct non-null values in the row group statistics
-    /// footer. This count can be used by query engines to improve cardinality estimates
-    /// during query planning (e.g. via [`StatisticsConverter::row_group_distinct_counts`]).
+    /// footer.
     ///
     /// # Performance
     ///
     /// Computing the distinct count requires hashing every non-null value in the column.
     /// For large row groups or columns with many values this adds measurable overhead.
     /// Benchmark your workload before enabling this globally.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
-    /// [`StatisticsConverter::row_group_distinct_counts`]: crate::arrow::arrow_reader::statistics::StatisticsConverter::row_group_distinct_counts
     pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
         self.write_row_group_number_distinct_values = value;
         self

@@ -1133,8 +1133,8 @@ impl ArrowColumnWriter {
                     let width = arrow_key_byte_width(keys.data_type());
                     if width > 0 {
                         let buffer = key_data.buffers()[0].as_slice();
-                        for &i in non_null {
-                            let pos = (offset + i) * width;
+                        for &row in non_null {
+                            let pos = (offset + row) * width;
                             seen.insert(hash_bytes(&buffer[pos..pos + width]));
                         }
                     }
@@ -1968,7 +1968,13 @@ fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
         Int8 | UInt8 => Some(1),
         Int16 | UInt16 | Float16 => Some(2),
         Int32 | UInt32 | Float32 | Date32 | Time32(_) | Decimal32(_, _) => Some(4),
-        Int64 | UInt64 | Float64 | Date64 | Time64(_) | Timestamp(_, _) | Duration(_)
+        Int64
+        | UInt64
+        | Float64
+        | Date64
+        | Time64(_)
+        | Timestamp(_, _)
+        | Duration(_)
         | Decimal64(_, _) => Some(8),
         Interval(IntervalUnit::YearMonth) => Some(4),
         Interval(IntervalUnit::DayTime) => Some(8),
@@ -1984,7 +1990,11 @@ fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
 /// Handles primitive, boolean, fixed-size-binary, and variable-length (Utf8/Binary)
 /// arrays. Unsupported types are silently skipped, leaving `seen` unchanged for
 /// those values (NDV is best-effort).
-fn update_distinct_values_seen(array: &dyn arrow_array::Array, non_null_indices: &[usize], seen: &mut DistinctValuesSet) {
+fn update_distinct_values_seen(
+    array: &dyn arrow_array::Array,
+    non_null_indices: &[usize],
+    seen: &mut DistinctValuesSet,
+) {
     let data = array.to_data();
     let offset = data.offset();
 
@@ -1994,45 +2004,45 @@ fn update_distinct_values_seen(array: &dyn arrow_array::Array, non_null_indices:
                 .as_any()
                 .downcast_ref::<arrow_array::BooleanArray>()
                 .unwrap();
-            for &i in non_null_indices {
-                seen.insert(arr.value(i) as u64);
+            for &row in non_null_indices {
+                seen.insert(arr.value(row) as u64);
             }
         }
         ArrowDataType::Utf8 | ArrowDataType::Binary => {
             let offsets = data.buffers()[0].typed_data::<i32>();
             let values = data.buffers()[1].as_slice();
-            for &i in non_null_indices {
-                let start = offsets[offset + i] as usize;
-                let end = offsets[offset + i + 1] as usize;
+            for &row in non_null_indices {
+                let start = offsets[offset + row] as usize;
+                let end = offsets[offset + row + 1] as usize;
                 seen.insert(hash_bytes(&values[start..end]));
             }
         }
         ArrowDataType::LargeUtf8 | ArrowDataType::LargeBinary => {
             let offsets = data.buffers()[0].typed_data::<i64>();
             let values = data.buffers()[1].as_slice();
-            for &i in non_null_indices {
-                let start = offsets[offset + i] as usize;
-                let end = offsets[offset + i + 1] as usize;
+            for &row in non_null_indices {
+                let start = offsets[offset + row] as usize;
+                let end = offsets[offset + row + 1] as usize;
                 seen.insert(hash_bytes(&values[start..end]));
             }
         }
-        ArrowDataType::FixedSizeBinary(w) => {
-            let w = *w as usize;
+        ArrowDataType::FixedSizeBinary(byte_width) => {
+            let byte_width = *byte_width as usize;
             let buffer = data.buffers()[0].as_slice();
-            for &i in non_null_indices {
-                let start = (offset + i) * w;
-                seen.insert(hash_bytes(&buffer[start..start + w]));
+            for &row in non_null_indices {
+                let start = (offset + row) * byte_width;
+                seen.insert(hash_bytes(&buffer[start..start + byte_width]));
             }
         }
-        dt => {
-            if let Some(width) = fixed_byte_width(dt) {
+        data_type => {
+            if let Some(width) = fixed_byte_width(data_type) {
                 let buffer = data.buffers()[0].as_slice();
-                for &i in non_null_indices {
-                    let pos = (offset + i) * width;
+                for &row in non_null_indices {
+                    let pos = (offset + row) * width;
                     seen.insert(hash_bytes(&buffer[pos..pos + width]));
                 }
             }
-            // Utf8View, BinaryView, nested types: skip (NDV not computed)
+            // Utf8View, BinaryView, nested types: skip
         }
     }
 }

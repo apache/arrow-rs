@@ -117,6 +117,7 @@ impl ColumnWriter<'_> {
     /// Sets a pre-computed distinct count on this column writer.
     ///
     /// See [`GenericColumnWriter::set_distinct_count_override`] for details.
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
         downcast_writer!(self, typed, typed.set_distinct_count_override(count))
     }
@@ -556,6 +557,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// When set, this value is written as `distinct_count` in the row group statistics
     /// footer. It takes precedence over any `distinct_count` passed through
     /// [`Self::write_batch_with_statistics`].
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
         self.distinct_count_override = Some(count);
     }
