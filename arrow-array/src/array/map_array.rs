@@ -188,6 +188,25 @@ impl MapArray {
         (f, self.value_offsets, self.entries, self.nulls, ordered)
     }
 
+    /// The field that describes the entries of this map.
+    ///
+    /// The field's type is always a [`DataType::Struct`] of the key and value fields,
+    /// see [`Self::entries_fields`].
+    pub fn entries_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::Map(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Are the entries of this map sorted by key?
+    pub fn ordered(&self) -> bool {
+        match &self.data_type {
+            DataType::Map(_, ordered) => *ordered,
+            _ => unreachable!(),
+        }
+    }
+
     /// Returns a reference to the offsets of this map
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
