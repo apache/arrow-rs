@@ -1256,7 +1256,12 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = crate::convert::fb_to_schema(ipc_schema);
+        let schema = Arc::new(crate::convert::fb_to_schema(ipc_schema));
+
+        let projected_schema = match &self.projection {
+            Some(projection) => Arc::new(schema.project(projection)?),
+            None => schema.clone(),
+        };
 
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
@@ -1268,7 +1273,7 @@ impl FileReaderBuilder {
             }
         }
 
-        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        let mut decoder = FileDecoder::new(schema, footer.version());
         if let Some(projection) = self.projection {
             decoder = decoder.with_projection(projection)
         }
@@ -1287,6 +1292,7 @@ impl FileReaderBuilder {
             current_block: 0,
             total_blocks,
             decoder,
+            schema: projected_schema,
             custom_metadata,
         })
     }
@@ -1343,6 +1349,9 @@ pub struct FileReader<R> {
     /// The decoder
     decoder: FileDecoder,
 
+    /// Schema of the record batches produced by this reader
+    schema: SchemaRef,
+
     /// The blocks in the file
     ///
     /// A block indicates the regions in the file to read to get data
@@ -1387,8 +1396,9 @@ impl<R: Read + Seek> FileReader<R> {
     /// # Errors
     ///
     /// An [`Err`] may be returned if:
-    /// - the file does not meet the Arrow Format footer requirements, or
-    /// - file endianness does not match the target endianness.
+    /// - the file does not meet the Arrow Format footer requirements,
+    /// - file endianness does not match the target endianness, or
+    /// - the projection contains an index outside the file schema.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let builder = FileReaderBuilder {
             projection,
@@ -1407,9 +1417,9 @@ impl<R: Read + Seek> FileReader<R> {
         self.total_blocks
     }
 
-    /// Return the schema of the file
+    /// Return the schema of the record batches produced by this reader
     pub fn schema(&self) -> SchemaRef {
-        self.decoder.schema.clone()
+        self.schema.clone()
     }
 
     /// See to a specific [`RecordBatch`]
@@ -2343,6 +2353,43 @@ mod tests {
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
             assert_eq!(read_batch, expected_batch);
         }
+    }
+
+    #[test]
+    fn test_file_reader_projected_schema_matches_batch_schema() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let projection = vec![3, 2, 1];
+        let mut reader = FileReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
+        let reader_schema = RecordBatchReader::schema(&reader);
+        let read_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(reader_schema, read_batch.schema());
+    }
+
+    #[test]
+    fn test_file_reader_rejects_invalid_projection() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = FileReader::try_new(Cursor::new(buf), Some(vec![schema.fields().len()]));
+
+        assert!(matches!(result, Err(ArrowError::SchemaError(_))));
     }
 
     #[test]
