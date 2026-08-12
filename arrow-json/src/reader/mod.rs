@@ -165,9 +165,8 @@ use crate::reader::tape::TapeDecoder;
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
-// Note: `mod tape` is deliberately kept private. Exposing only these two types means
-// downstream code can read a `Tape` handed to it, but cannot construct one, keeping
-// `TapeDecoder` an implementation detail.
+// `mod tape` stays private: exposing only these two types means downstream can read a
+// `Tape` but not construct one, keeping `TapeDecoder` an implementation detail.
 pub use tape::{Tape, TapeElement};
 pub use value_iter::ValueIter;
 
@@ -196,6 +195,7 @@ pub struct ReaderBuilder {
     ignore_type_conflicts: bool,
     is_field: bool,
     struct_mode: StructMode,
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 
     schema: SchemaRef,
 }
@@ -217,6 +217,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: false,
             struct_mode: Default::default(),
+            decoder_factory: None,
             schema,
         }
     }
@@ -259,6 +260,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: true,
             struct_mode: Default::default(),
+            decoder_factory: None,
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -318,6 +320,16 @@ impl ReaderBuilder {
         }
     }
 
+    /// Set an optional hook for customizing decoding behavior.
+    ///
+    /// See [`DecoderFactory`] for details and an example.
+    pub fn with_decoder_factory(self, decoder_factory: Arc<dyn DecoderFactory>) -> Self {
+        Self {
+            decoder_factory: Some(decoder_factory),
+            ..self
+        }
+    }
+
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         Ok(Reader {
@@ -342,6 +354,7 @@ impl ReaderBuilder {
             strict_mode: self.strict_mode,
             struct_mode: self.struct_mode,
             ignore_type_conflicts: self.ignore_type_conflicts,
+            decoder_factory: self.decoder_factory,
         };
         let decoder = ctx.make_decoder(data_type.as_ref(), nullable)?;
 
@@ -708,9 +721,131 @@ impl Decoder {
     }
 }
 
-trait ArrayDecoder: Send {
+/// Decodes a column of JSON values from a [`Tape`] into an [`ArrayRef`]
+///
+/// Implement this together with [`DecoderFactory`] to override how a type is
+/// decoded, or to add support for a type the reader does not handle.
+pub trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
+    ///
+    /// `pos` contains one tape index per output row, so the returned array must have
+    /// exactly `pos.len()` elements. A row's value may be [`TapeElement::Null`].
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
+}
+
+/// A trait to create custom decoders for specific data types.
+///
+/// Overrides the default decoder for a data type, or adds support for one the reader
+/// does not handle. The reader-side counterpart of [`EncoderFactory`]; register an
+/// implementation with [`ReaderBuilder::with_decoder_factory`].
+///
+/// # Examples
+///
+/// Decodes `Binary` from a JSON array of integers rather than the default hex string,
+/// the inverse of the [`EncoderFactory`] example.
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow_array::{Array, ArrayRef, BinaryArray};
+/// use arrow_array::cast::AsArray;
+/// use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
+/// use arrow_json::ReaderBuilder;
+/// use arrow_schema::{ArrowError, DataType, Field, Schema};
+///
+/// /// Decodes `[104, 105]` into the bytes `b"hi"`
+/// struct IntArrayBinaryDecoder;
+///
+/// impl ArrayDecoder for IntArrayBinaryDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let mut values: Vec<Option<Vec<u8>>> = Vec::with_capacity(pos.len());
+///         for p in pos {
+///             match tape.get(*p) {
+///                 TapeElement::Null => values.push(None),
+///                 TapeElement::StartList(end) => {
+///                     let mut bytes = Vec::new();
+///                     let mut cur = p + 1;
+///                     while cur < end {
+///                         match tape.get(cur) {
+///                             // JSON text yields `Number`; serde yields `I32`
+///                             TapeElement::Number(idx) => {
+///                                 let s = tape.get_string(idx);
+///                                 bytes.push(s.parse::<u8>().map_err(|e| {
+///                                     ArrowError::JsonError(format!("invalid byte {s}: {e}"))
+///                                 })?);
+///                             }
+///                             TapeElement::I32(v) => bytes.push(v as u8),
+///                             _ => return Err(tape.error(cur, "byte")),
+///                         }
+///                         cur = tape.next(cur, "byte")?;
+///                     }
+///                     values.push(Some(bytes));
+///                 }
+///                 _ => return Err(tape.error(*p, "list of bytes")),
+///             }
+///         }
+///         Ok(Arc::new(BinaryArray::from_iter(values.iter().map(|v| v.as_deref()))))
+///     }
+/// }
+///
+/// #[derive(Debug)]
+/// struct IntArrayBinaryDecoderFactory;
+///
+/// impl DecoderFactory for IntArrayBinaryDecoderFactory {
+///     fn make_custom_decoder(
+///         &self,
+///         _ctx: &DecoderContext,
+///         data_type: &DataType,
+///         _is_nullable: bool,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         match data_type {
+///             DataType::Binary => Ok(Some(Box::new(IntArrayBinaryDecoder))),
+///             // Returning `None` uses the reader's default decoder
+///             _ => Ok(None),
+///         }
+///     }
+/// }
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("bytes", DataType::Binary, true),
+///     Field::new("float", DataType::Float64, true),
+/// ]));
+///
+/// let json = r#"{"bytes": [104, 105], "float": 1.0}
+/// {"float": 2.3}
+/// {"bytes": [98]}
+/// "#;
+///
+/// let batch = ReaderBuilder::new(schema)
+///     .with_decoder_factory(Arc::new(IntArrayBinaryDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
+///
+/// let bytes = batch.column(0).as_binary::<i32>();
+/// assert_eq!(bytes.value(0), b"hi");
+/// assert!(bytes.is_null(1));
+/// assert_eq!(bytes.value(2), b"b");
+/// ```
+///
+/// [`EncoderFactory`]: crate::EncoderFactory
+pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
+    /// Make a decoder for `data_type`, or `Ok(None)` to use the reader's default.
+    ///
+    /// Use [`DecoderContext::make_decoder`] on `ctx` to build child decoders. Calling
+    /// it for the `data_type` this was invoked with recurses back here and loops.
+    ///
+    /// `is_nullable` folds in ancestor nullability, so it may be `true` even where the
+    /// corresponding field is not.
+    fn make_custom_decoder(
+        &self,
+        _ctx: &DecoderContext,
+        _data_type: &DataType,
+        _is_nullable: bool,
+    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+        Ok(None)
+    }
 }
 
 /// Context for decoder creation, containing configuration.
@@ -726,6 +861,8 @@ pub struct DecoderContext {
     struct_mode: StructMode,
     /// Whether to treat columns with incompatible types as missing (i.e. NULL)
     ignore_type_conflicts: bool,
+    /// An optional hook for customizing decoding behavior
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 }
 
 impl DecoderContext {
@@ -749,11 +886,18 @@ impl DecoderContext {
         self.ignore_type_conflicts
     }
 
+    /// Returns the optional hook for customizing decoding behavior
+    pub fn decoder_factory(&self) -> Option<&Arc<dyn DecoderFactory>> {
+        self.decoder_factory.as_ref()
+    }
+
     /// Create a decoder for a type.
     ///
-    /// This is the standard way to create child decoders from within a decoder
-    /// implementation.
-    fn make_decoder(
+    /// The standard way to create child decoders from within a decoder, and how a
+    /// [`DecoderFactory`] delegates to the decoder the reader would otherwise use.
+    /// The factory is consulted first, so calling this for the same data type the
+    /// factory was asked about will loop.
+    pub fn make_decoder(
         &self,
         data_type: &DataType,
         is_nullable: bool,
@@ -783,6 +927,12 @@ fn make_decoder(
         ($t:ty, $p:expr, $s:expr) => {
             Ok(Box::new(DecimalArrayDecoder::<$t>::new(ctx, $p, $s)))
         };
+    }
+
+    if let Some(factory) = ctx.decoder_factory()
+        && let Some(decoder) = factory.make_custom_decoder(ctx, data_type, is_nullable)?
+    {
+        return Ok(decoder);
     }
 
     downcast_integer! {
@@ -871,6 +1021,7 @@ mod tests {
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -3758,5 +3909,190 @@ mod tests {
         assert_eq!(nested_values.len(), 2);
         assert_eq!(nested_values.value(0), "x");
         assert_eq!(nested_values.value(1), "y");
+    }
+
+    /// Decodes any string as its byte length, giving an unmistakable signature
+    struct StringLenDecoder;
+
+    impl ArrayDecoder for StringLenDecoder {
+        fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+            let mut builder = Int32Array::builder(pos.len());
+            for p in pos {
+                match tape.get(*p) {
+                    TapeElement::String(idx) => {
+                        builder.append_value(tape.get_string(idx).len() as i32)
+                    }
+                    TapeElement::Null => builder.append_null(),
+                    _ => return Err(tape.error(*p, "string")),
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+    }
+
+    /// Overrides `Int32`, which would otherwise reject strings outright
+    #[derive(Debug)]
+    struct StringLenDecoderFactory;
+
+    impl DecoderFactory for StringLenDecoderFactory {
+        fn make_custom_decoder(
+            &self,
+            _ctx: &DecoderContext,
+            data_type: &DataType,
+            _is_nullable: bool,
+        ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+            match data_type {
+                DataType::Int32 => Ok(Some(Box::new(StringLenDecoder))),
+                _ => Ok(None),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decoder_factory_overrides_primitive() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let buf = r#"{"a": "hello"}
+        {"a": null}
+        {"a": "hi"}
+        "#;
+
+        let batch = ReaderBuilder::new(schema)
+            .with_decoder_factory(Arc::new(StringLenDecoderFactory))
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        let col = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.value(0), 5);
+        assert!(col.is_null(1));
+        assert_eq!(col.value(2), 2);
+    }
+
+    /// Consulted at every depth; declined types still use the default decoders.
+    #[test]
+    fn test_decoder_factory_overrides_nested_and_delegates_siblings() {
+        let inner = Fields::from(vec![
+            Field::new("overridden", DataType::Int32, true),
+            Field::new("untouched", DataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Struct(inner), true),
+            Field::new_list("l", Field::new("item", DataType::Int32, true), true),
+        ]));
+
+        let buf = r#"{"s": {"overridden": "abcd", "untouched": "kept"}, "l": ["xyz", "z"]}
+        "#;
+
+        let batch = ReaderBuilder::new(schema)
+            .with_decoder_factory(Arc::new(StringLenDecoderFactory))
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        // Overridden inside a struct; its sibling decoded normally
+        let s = batch.column(0).as_struct();
+        assert_eq!(s.column(0).as_primitive::<Int32Type>().value(0), 4);
+        assert_eq!(s.column(1).as_string::<i32>().value(0), "kept");
+
+        // The default list decoder built its values decoder via `make_decoder`
+        let l = batch.column(1).as_list::<i32>();
+        let values = l.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[3, 1]);
+    }
+
+    /// Declining everything must be indistinguishable from no factory at all.
+    #[test]
+    fn test_decoder_factory_declining_everything_is_transparent() {
+        #[derive(Debug, Default)]
+        struct DeclineAll {
+            seen: Mutex<Vec<DataType>>,
+        }
+
+        impl DecoderFactory for DeclineAll {
+            fn make_custom_decoder(
+                &self,
+                _ctx: &DecoderContext,
+                data_type: &DataType,
+                _is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                self.seen.lock().unwrap().push(data_type.clone());
+                Ok(None)
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new_list("c", Field::new("item", DataType::Float64, true), true),
+        ]));
+        let buf = r#"{"a": 1, "b": "x", "c": [1.5, 2.5]}
+        {"a": null, "c": []}
+        "#;
+
+        let read = |factory: Option<Arc<dyn DecoderFactory>>| {
+            let mut builder = ReaderBuilder::new(schema.clone());
+            if let Some(factory) = factory {
+                builder = builder.with_decoder_factory(factory);
+            }
+            builder
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+        };
+
+        let factory = Arc::new(DeclineAll::default());
+        assert_eq!(read(None), read(Some(factory.clone())));
+
+        // Still consulted for the root struct and every leaf
+        let seen = factory.seen.lock().unwrap();
+        assert!(matches!(seen[0], DataType::Struct(_)), "{seen:?}");
+        for expected in [DataType::Int32, DataType::Utf8, DataType::Float64] {
+            assert!(seen.contains(&expected), "{expected} missing from {seen:?}");
+        }
+    }
+
+    /// A factory may delegate to the decoder the reader would otherwise use.
+    #[test]
+    fn test_decoder_factory_can_delegate_to_default() {
+        /// Overrides `Utf8` but hands the work straight back to the default decoder
+        #[derive(Debug)]
+        struct DelegatingFactory;
+
+        impl DecoderFactory for DelegatingFactory {
+            fn make_custom_decoder(
+                &self,
+                ctx: &DecoderContext,
+                data_type: &DataType,
+                is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                match data_type {
+                    // A *different* type, so this doesn't recurse back here
+                    DataType::Utf8 => Ok(Some(ctx.make_decoder(&DataType::Utf8View, is_nullable)?)),
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let buf = r#"{"a": "hello"}
+        "#;
+
+        let batch = ReaderBuilder::new(schema)
+            .with_decoder_factory(Arc::new(DelegatingFactory))
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+
+        // The default `Utf8View` decoder ran in place of the `Utf8` one
+        assert_eq!(batch.column(0).as_string_view().value(0), "hello");
     }
 }

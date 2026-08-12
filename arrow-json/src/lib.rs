@@ -87,7 +87,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder, Tape, TapeElement};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
