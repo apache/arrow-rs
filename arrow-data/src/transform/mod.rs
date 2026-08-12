@@ -410,6 +410,20 @@ impl<'a> MutableArrayData<'a> {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
 
+    /// Fallible variant of [MutableArrayData::new].
+    ///
+    /// Unlike [MutableArrayData::new], this does not panic when merging dictionary
+    /// arrays whose combined values would overflow the dictionary key type. Instead,
+    /// it returns an error, letting callers (e.g. [`interleave`](crate) / `concat`)
+    /// surface it as a normal error.
+    pub fn try_new(
+        arrays: Vec<&'a ArrayData>,
+        use_nulls: bool,
+        capacity: usize,
+    ) -> Result<Self, ArrowError> {
+        Self::try_with_capacities(arrays, use_nulls, Capacities::Array(capacity))
+    }
+
     /// Similar to [MutableArrayData::new], but lets users define the
     /// preallocated capacities of the array with more granularity.
     ///
@@ -418,12 +432,29 @@ impl<'a> MutableArrayData<'a> {
     /// # Panics
     ///
     /// This function panics if the given `capacities` don't match the data type
-    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
+    /// of `arrays`. Or when a [Capacities] variant is not yet supported. Or when
+    /// merging dictionary arrays whose combined values overflow the dictionary key
+    /// type — see [MutableArrayData::try_with_capacities] for a fallible variant.
     pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,
         capacities: Capacities,
     ) -> Self {
+        Self::try_with_capacities(arrays, use_nulls, capacities)
+            .expect("MutableArrayData::new is infallible")
+    }
+
+    /// Fallible variant of [MutableArrayData::with_capacities].
+    ///
+    /// Returns an error instead of panicking when merging dictionary arrays whose
+    /// combined values would overflow the dictionary key type. Still panics for
+    /// other unsupported combinations (inconsistent input types, unsupported
+    /// `Capacities` variants) as documented on [MutableArrayData::with_capacities].
+    pub fn try_with_capacities(
+        arrays: Vec<&'a ArrayData>,
+        use_nulls: bool,
+        capacities: Capacities,
+    ) -> Result<Self, ArrowError> {
         let data_type = arrays[0].data_type();
 
         for a in arrays.iter().skip(1) {
@@ -522,9 +553,9 @@ impl<'a> MutableArrayData<'a> {
                         Capacities::Array(array_capacity)
                     };
 
-                vec![MutableArrayData::with_capacities(
+                vec![MutableArrayData::try_with_capacities(
                     children, use_nulls, capacities,
-                )]
+                )?]
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
@@ -538,13 +569,13 @@ impl<'a> MutableArrayData<'a> {
                                 .iter()
                                 .map(|array| &array.child_data()[i])
                                 .collect::<Vec<_>>();
-                            MutableArrayData::with_capacities(
+                            MutableArrayData::try_with_capacities(
                                 child_arrays,
                                 use_nulls,
                                 child_cap.clone(),
                             )
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Result<Vec<_>, _>>()?
                 }
                 Capacities::Struct(capacity, None) => {
                     array_capacity = capacity;
@@ -554,9 +585,9 @@ impl<'a> MutableArrayData<'a> {
                                 .iter()
                                 .map(|array| &array.child_data()[i])
                                 .collect::<Vec<_>>();
-                            MutableArrayData::new(child_arrays, use_nulls, capacity)
+                            MutableArrayData::try_new(child_arrays, use_nulls, capacity)
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Result<Vec<_>, _>>()?
                 }
                 _ => (0..fields.len())
                     .map(|i| {
@@ -564,9 +595,9 @@ impl<'a> MutableArrayData<'a> {
                             .iter()
                             .map(|array| &array.child_data()[i])
                             .collect::<Vec<_>>();
-                        MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                        MutableArrayData::try_new(child_arrays, use_nulls, array_capacity)
                     })
-                    .collect::<Vec<_>>(),
+                    .collect::<Result<Vec<_>, _>>()?,
             },
             DataType::RunEndEncoded(_, _) => {
                 let run_ends_child = arrays
@@ -578,8 +609,8 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[1])
                     .collect::<Vec<_>>();
                 vec![
-                    MutableArrayData::new(run_ends_child, false, array_capacity),
-                    MutableArrayData::new(value_child, use_nulls, array_capacity),
+                    MutableArrayData::try_new(run_ends_child, false, array_capacity)?,
+                    MutableArrayData::try_new(value_child, use_nulls, array_capacity)?,
                 ]
             }
             DataType::FixedSizeList(_, size) => {
@@ -596,9 +627,9 @@ impl<'a> MutableArrayData<'a> {
                     } else {
                         Capacities::Array(array_capacity * *size as usize)
                     };
-                vec![MutableArrayData::with_capacities(
+                vec![MutableArrayData::try_with_capacities(
                     children, use_nulls, capacities,
-                )]
+                )?]
             }
             DataType::Union(fields, _) => (0..fields.len())
                 .map(|i| {
@@ -606,9 +637,9 @@ impl<'a> MutableArrayData<'a> {
                         .iter()
                         .map(|array| &array.child_data()[i])
                         .collect::<Vec<_>>();
-                    MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                    MutableArrayData::try_new(child_arrays, use_nulls, array_capacity)
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Result<Vec<_>, _>>()?,
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
@@ -688,7 +719,7 @@ impl<'a> MutableArrayData<'a> {
                     })
                     .collect();
 
-                extend_values.expect("MutableArrayData::new is infallible")
+                extend_values?
             }
             DataType::BinaryView | DataType::Utf8View => {
                 let mut next_offset = 0u32;
@@ -716,7 +747,7 @@ impl<'a> MutableArrayData<'a> {
             buffer2,
             child_data,
         };
-        Self {
+        Ok(Self {
             arrays,
             data,
             dictionary,
@@ -724,7 +755,7 @@ impl<'a> MutableArrayData<'a> {
             extend_values,
             extend_null_bits,
             extend_nulls,
-        }
+        })
     }
 
     /// Extends the in progress array with a region of the input arrays, returning an error on
