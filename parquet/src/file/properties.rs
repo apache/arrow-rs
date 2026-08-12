@@ -921,7 +921,7 @@ impl WriterPropertiesBuilder {
     /// # Performance
     ///
     /// Computing the distinct count requires hashing every non-null value in the column.
-    /// For large row groups or columns with many values this adds measurable overhead.
+    /// For large row groups or columns with many values this adds significant overhead.
     /// Benchmark your workload before enabling this globally.
     pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
         self.write_row_group_number_distinct_values = value;
