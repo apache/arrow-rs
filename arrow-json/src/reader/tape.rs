@@ -29,8 +29,27 @@ use std::fmt::Write;
 /// Uses `u32` for offsets to ensure `TapeElement` is 64-bits. A future
 /// iteration may increase this to a custom `u56` type.
 ///
+/// # Numeric representation
+///
+/// Numbers reach the tape in one of two forms, depending on how the [`Tape`] was
+/// produced, and code matching on [`TapeElement`] must handle both:
+///
+/// * Parsing JSON text yields [`Self::Number`], which references the textual
+///   representation in the tape's string data. Read it with [`Tape::get_string`]
+///   and parse it yourself.
+/// * Serializing Rust values (see [`Decoder::serialize`]) yields the native
+///   variants [`Self::I32`], [`Self::I64`], [`Self::F32`] and [`Self::F64`].
+///   64-bit values occupy *two* consecutive elements, high bits first.
+///
+/// The built-in primitive decoder handles every case and is a useful reference.
+///
+/// This enum is `#[non_exhaustive]`: the tape's encoding is an implementation
+/// detail and new variants may be added in a minor release.
+///
+/// [`Decoder::serialize`]: super::Decoder::serialize
 /// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TapeElement {
     /// The start of an object, i.e. `{`
     ///
@@ -90,6 +109,18 @@ pub enum TapeElement {
 /// The first element is always [`TapeElement::Null`]
 ///
 /// This approach to decoding JSON is inspired by [simdjson]
+///
+/// # Reading a tape
+///
+/// A `Tape` is borrowed, never constructed, by code that decodes it: use
+/// [`Tape::get`] to inspect the element at an index, [`Tape::get_string`] to
+/// resolve string data, [`Tape::next`] to skip over a value (including nested
+/// objects and lists), and [`Tape::error`] to produce errors consistent with the
+/// built-in decoders.
+///
+/// Note that string data is *copied* into the tape with escape sequences already
+/// resolved, so [`Tape::get_string`] borrows from the tape rather than from the
+/// input buffer. See [`TapeElement`] for how numbers are represented.
 ///
 /// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug)]
