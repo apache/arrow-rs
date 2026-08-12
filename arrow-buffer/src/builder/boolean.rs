@@ -87,7 +87,7 @@ impl BooleanBufferBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is beyond the end of the underlying buffer
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
@@ -101,7 +101,7 @@ impl BooleanBufferBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is beyond the end of the underlying buffer
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)

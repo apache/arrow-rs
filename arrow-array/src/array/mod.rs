@@ -271,8 +271,10 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= self.len()` and this array has a null buffer.
-    /// Arrays without a null buffer do not bounds check `index`.
+    /// Panics if `index >= self.len()`.
+    ///
+    /// Note: arrays without a null buffer currently return `false` instead of
+    /// panicking, but callers must not rely on this.
     fn is_null(&self, index: usize) -> bool {
         self.nulls().is_some_and(|n| n.is_null(index))
     }
@@ -293,8 +295,10 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= self.len()` and this array has a null buffer.
-    /// Arrays without a null buffer do not bounds check `index`.
+    /// Panics if `index >= self.len()`.
+    ///
+    /// Note: arrays without a null buffer currently return `true` instead of
+    /// panicking, but callers must not rely on this.
     fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }

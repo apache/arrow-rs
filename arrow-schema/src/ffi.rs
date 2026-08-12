@@ -360,10 +360,6 @@ impl FFI_ArrowSchema {
     }
 
     /// Returns the metadata in the schema as `Key-Value` pairs
-    ///
-    /// # Panics
-    ///
-    /// Panics if the metadata blob declares more entries than fit in `usize`
     pub fn metadata(&self) -> Result<HashMap<String, String>, ArrowError> {
         if self.metadata.is_null() {
             Ok(HashMap::new())

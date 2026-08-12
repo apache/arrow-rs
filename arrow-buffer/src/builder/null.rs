@@ -155,7 +155,7 @@ impl NullBufferBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is beyond the end of the underlying buffer
+    /// Panics for the same reasons as [`BooleanBufferBuilder::set_bit`]
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         self.materialize_if_needed();
@@ -166,8 +166,8 @@ impl NullBufferBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if a bitmap has been materialized (i.e. a null was appended) and
-    /// `index` is beyond its end
+    /// Panics for the same reasons as [`BooleanBufferBuilder::get_bit`], but only if
+    /// a bitmap has been materialized (i.e. a null was appended)
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
         if let Some(ref buf) = self.bitmap_builder {

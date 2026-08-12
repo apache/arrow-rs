@@ -216,7 +216,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
     ///
     /// # Panics
-    /// Panics if the iterator has no upper bound on its size hint
+    /// Panics if the iterator has no upper bound on its size hint, or if the total
+    /// length of the values exceeds `T::Offset::MAX`
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
