@@ -473,7 +473,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     /// return an output array that has
     /// `value` in all locations where predicate is true
     /// `null` otherwise
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: &[u8],
@@ -730,7 +730,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (bytes.into(), buffers, Some(nulls))
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn get_views_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
