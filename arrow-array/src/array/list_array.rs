@@ -322,6 +322,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         (f, self.value_offsets, self.values, self.nulls)
     }
 
+    /// The field that describes the values of this list.
+    pub fn field(&self) -> &Arc<arrow_schema::Field> {
+        match &self.data_type {
+            DataType::List(f) | DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        }
+    }
+
     /// Returns a reference to the offsets of this list
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
