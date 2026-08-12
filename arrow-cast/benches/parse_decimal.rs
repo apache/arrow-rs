@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::types::Decimal256Type;
+use arrow_array::types::{Decimal128Type, Decimal256Type};
+use arrow_cast::cast::parse_string_to_decimal_native;
 use arrow_cast::parse::parse_decimal;
 use criterion::*;
 use std::hint;
@@ -50,6 +51,43 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(d, |b| {
             b.iter(|| parse_decimal::<Decimal256Type>(d, 20, 3).unwrap());
         });
+    }
+
+    let string_decimals = [
+        ("string decimal128 integer", "12345678912345678", 3),
+        ("string decimal128 exact scale", "12345678912345.123", 3),
+        ("string decimal128 padded scale", "12345678912345.1", 6),
+        ("string decimal128 rounded scale", "12345678912345.1235", 3),
+        ("string decimal128 signed", "-12345678912345.1235", 3),
+        (
+            "string decimal128 38 digits",
+            "99999999999999999999999999999999999999",
+            0,
+        ),
+        (
+            "string decimal256 76 digits",
+            "9999999999999999999999999999999999999999999999999999999999999999999999999999",
+            0,
+        ),
+        (
+            "string decimal256 rounded scale",
+            "999999999999999999999999999999999999999999999999999999999999999999999.9995",
+            3,
+        ),
+    ];
+
+    for (name, decimal, scale) in string_decimals {
+        let d = hint::black_box(decimal);
+        let scale = hint::black_box(scale);
+        if name.contains("decimal256") {
+            c.bench_function(name, |b| {
+                b.iter(|| parse_string_to_decimal_native::<Decimal256Type>(d, scale).unwrap());
+            });
+        } else {
+            c.bench_function(name, |b| {
+                b.iter(|| parse_string_to_decimal_native::<Decimal128Type>(d, scale).unwrap());
+            });
+        }
     }
 }
 
