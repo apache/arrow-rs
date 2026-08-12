@@ -27,6 +27,8 @@
 
 mod bool8;
 pub use bool8::Bool8;
+mod big_decimal;
+pub use big_decimal::{BIG_DECIMAL_LAYOUT_VERSION, BigDecimal, BigDecimalMetadata};
 mod fixed_shape_tensor;
 pub use fixed_shape_tensor::{FixedShapeTensor, FixedShapeTensorMetadata};
 mod json;
@@ -50,6 +52,9 @@ use super::ExtensionType;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanonicalExtensionType {
+    /// The extension type for `BigDecimal`.
+    BigDecimal(BigDecimal),
+
     /// The extension type for `FixedShapeTensor`.
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#fixed-shape-tensor>
@@ -104,6 +109,7 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
                 Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
                 Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
+                BigDecimal::NAME => value.try_extension_type::<BigDecimal>().map(Into::into),
                 TimestampWithOffset::NAME => value
                     .try_extension_type::<TimestampWithOffset>()
                     .map(Into::into),
@@ -126,6 +132,12 @@ impl TryFrom<&Field> for CanonicalExtensionType {
 impl From<FixedShapeTensor> for CanonicalExtensionType {
     fn from(value: FixedShapeTensor) -> Self {
         CanonicalExtensionType::FixedShapeTensor(value)
+    }
+}
+
+impl From<BigDecimal> for CanonicalExtensionType {
+    fn from(value: BigDecimal) -> Self {
+        CanonicalExtensionType::BigDecimal(value)
     }
 }
 

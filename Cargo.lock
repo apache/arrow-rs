@@ -223,6 +223,7 @@ dependencies = [
  "half",
  "hashbrown 0.17.1",
  "libc",
+ "num-bigint 0.5.1",
  "num-complex",
  "num-integer",
  "num-traits",

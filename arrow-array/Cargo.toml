@@ -59,6 +59,7 @@ chrono-tz = { version = "0.10", optional = true }
 futures = { version = "0.3", optional = true }
 num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
+num-bigint = { version = "0.5.0", default-features = false, features = ["std"], optional = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.17.0", default-features = false }
@@ -68,6 +69,7 @@ all-features = true
 
 [features]
 async = ["dep:futures"]
+canonical_extension_types = ["arrow-schema/canonical_extension_types", "dep:num-bigint"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
 force_validate = []
 # Enable memory tracking support

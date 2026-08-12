@@ -246,6 +246,8 @@ pub use numeric::*;
 mod scalar;
 pub use scalar::*;
 
+#[cfg(feature = "canonical_extension_types")]
+pub mod big_decimal;
 pub mod builder;
 pub mod cast;
 mod delta;
