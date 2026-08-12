@@ -815,6 +815,10 @@ impl WriterPropertiesBuilder {
     /// * If `None`, there's no effective limit.
     ///
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -844,6 +848,10 @@ impl WriterPropertiesBuilder {
     /// [`WriterPropertiesBuilder::set_column_index_truncate_length`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -1527,6 +1535,9 @@ impl BloomFilterPropertiesBuilder {
     }
 
     /// Builds [`BloomFilterProperties`].
+    ///
+    ///
+    /// # Panics
     ///
     /// Panics if the configured `fpp` is not in `(0.0, 1.0)` exclusive.
     /// Use [`Self::try_build`] for a non-panicking alternative.

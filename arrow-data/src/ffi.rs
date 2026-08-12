@@ -298,7 +298,7 @@ impl FFI_ArrowArray {
 
     /// Returns the buffer at the provided index
     ///
-    /// # Panic
+    /// # Panics
     /// Panics if index >= self.num_buffers() or the buffer is not correctly aligned
     #[inline]
     pub fn buffer(&self, index: usize) -> *const u8 {

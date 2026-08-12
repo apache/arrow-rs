@@ -355,12 +355,18 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns the size for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if the index is out of bounds
     #[inline]
     pub fn value_size(&self, i: usize) -> OffsetSize {
         self.value_sizes[i]
     }
 
     /// Returns the offset for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if the index is out of bounds
     pub fn value_offset(&self, i: usize) -> OffsetSize {
         self.value_offsets[i]
     }
@@ -381,6 +387,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),

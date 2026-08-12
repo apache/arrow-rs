@@ -143,6 +143,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Create a new [`Scalar`] from `value`
+    ///
+    /// # Panics
+    /// Panics if `value.as_ref().len() > i32::MAX`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
         let value_length =
@@ -373,6 +376,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,

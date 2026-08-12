@@ -386,6 +386,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns the length for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if the index is out of bounds
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
         let offsets = self.value_offsets();
@@ -412,6 +415,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Notes: this method does *NOT* slice the underlying values array or modify
     /// the values in the offsets buffer. See [`Self::values`] and
     /// [`Self::offsets`] for more information.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),

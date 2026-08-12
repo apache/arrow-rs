@@ -157,6 +157,9 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(&array_slice, &Int32Array::from(vec![2, 3, 4]));
     /// ```
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
     /// Returns the length (i.e., number of elements) of this array.
@@ -265,6 +268,11 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// let array = NullArray::new(1);
     /// assert_eq!(array.is_null(0), false);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()` and this array has a null buffer.
+    /// Arrays without a null buffer do not bounds check `index`.
     fn is_null(&self, index: usize) -> bool {
         self.nulls().is_some_and(|n| n.is_null(index))
     }
@@ -282,6 +290,11 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_valid(0), true);
     /// assert_eq!(array.is_valid(1), false);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()` and this array has a null buffer.
+    /// Arrays without a null buffer do not bounds check `index`.
     fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }

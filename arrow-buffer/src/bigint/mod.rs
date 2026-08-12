@@ -518,6 +518,10 @@ impl i256 {
     }
 
     /// Performs wrapping division
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_div(self, other: Self) -> Self {
         match self.div_rem(other) {
@@ -534,6 +538,10 @@ impl i256 {
     }
 
     /// Performs wrapping remainder
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_rem(self, other: Self) -> Self {
         match self.div_rem(other) {
@@ -689,7 +697,10 @@ impl i256 {
     }
 
     /// Computes the `base` logarithm of the number `self`
-    /// Panic if `self` is less than or equal to zero, or if `base` is less than 2.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is less than or equal to zero, or if `base` is less than 2.
     #[inline]
     pub fn ilog(self, base: i256) -> u32 {
         self.checked_ilog(base)
@@ -732,6 +743,9 @@ impl i256 {
     }
 
     /// Computes the decimal logarithm of the number `self`
+    ///
+    /// # Panics
+    ///
     /// Panics if `self` is less than or equal to zero.
     #[inline]
     pub fn ilog10(self) -> u32 {
@@ -747,6 +761,10 @@ impl i256 {
     }
 
     /// Computes the base 2 logarithm of the number, rounded down.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is less than or equal to zero
     #[inline]
     pub fn ilog2(self) -> u32 {
         self.checked_ilog2()

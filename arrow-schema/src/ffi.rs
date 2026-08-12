@@ -132,6 +132,10 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 impl FFI_ArrowSchema {
     /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
     /// [`DataType`] is not supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `format` contains an interior nul byte
     pub fn try_new(
         format: &str,
         children: Vec<FFI_ArrowSchema>,
@@ -277,6 +281,10 @@ impl FFI_ArrowSchema {
     }
 
     /// Returns the format of this schema.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the format field is null or is not valid UTF-8
     pub fn format(&self) -> &str {
         assert!(!self.format.is_null());
         // safe because the lifetime of `self.format` equals `self`
@@ -286,6 +294,10 @@ impl FFI_ArrowSchema {
     }
 
     /// Returns the name of this schema.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name field is not valid UTF-8
     pub fn name(&self) -> Option<&str> {
         if self.name.is_null() {
             None
@@ -348,6 +360,10 @@ impl FFI_ArrowSchema {
     }
 
     /// Returns the metadata in the schema as `Key-Value` pairs
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metadata blob declares more entries than fit in `usize`
     pub fn metadata(&self) -> Result<HashMap<String, String>, ArrowError> {
         if self.metadata.is_null() {
             Ok(HashMap::new())

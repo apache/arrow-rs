@@ -266,6 +266,9 @@ impl MapArray {
     }
 
     /// Returns the length for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if the index is out of bounds
     #[inline]
     pub fn value_length(&self, i: usize) -> i32 {
         let offsets = self.value_offsets();
@@ -273,6 +276,9 @@ impl MapArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),

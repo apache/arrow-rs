@@ -51,7 +51,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     ///
     /// Returns None if the dictionary needs to be recomputed
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if the dictionary is too large for `K`
     pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut Vec<K>> {
