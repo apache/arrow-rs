@@ -208,8 +208,8 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
 
 /// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 ///
-/// Unlike [`fb_to_schema`], returns an error instead of panicking on schema
-/// messages that the flatbuffer verifier accepts but that are not valid Arrow.
+/// Returns an error on schema messages that the flatbuffer
+/// verifier accepts but that are not valid Arrow.
 pub fn try_fb_to_schema(fb: crate::Schema) -> Result<Schema, ArrowError> {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb
@@ -341,9 +341,11 @@ pub(crate) fn get_data_type(
             (64, true) => DataType::Int64,
             (64, false) => DataType::UInt64,
             _ => {
-                return Err(ArrowError::ParseError(
-                    "Unexpected bitwidth and signed".to_string(),
-                ));
+                return Err(ArrowError::ParseError(format!(
+                    "Index type with bit width of {} and signed of {} not supported",
+                    int.bitWidth(),
+                    int.is_signed()
+                )));
             }
         };
         return Ok(DataType::Dictionary(
