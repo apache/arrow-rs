@@ -276,6 +276,11 @@ required-features = ["experimental", "default"]
 harness = false
 
 [[bench]]
+name = "alp"
+required-features = ["experimental", "default"]
+harness = false
+
+[[bench]]
 name = "metadata"
 harness = false
 
