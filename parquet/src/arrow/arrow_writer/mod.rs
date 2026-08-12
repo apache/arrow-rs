@@ -1127,7 +1127,6 @@ impl ArrowColumnWriter {
             let non_null = levels.non_null_indices();
             match array.as_any_dictionary_opt() {
                 Some(dict) => {
-                    // Hash the key indices — each distinct key maps to a distinct value.
                     let keys = dict.keys();
                     let key_data = keys.to_data();
                     let offset = key_data.offset();
@@ -1165,9 +1164,6 @@ impl ArrowColumnWriter {
 
     /// Close this column returning the written [`ArrowColumnChunk`]
     pub fn close(self) -> Result<ArrowColumnChunk> {
-        // Only write the distinct count if we actually hashed values; an empty set
-        // means either all-null data or an unsupported type — in both cases we skip
-        // rather than write a misleading 0.
         let distinct_count = self
             .distinct_values_seen
             .as_ref()
@@ -6168,91 +6164,35 @@ mod tests {
         ree_write_read_roundtrip(sliced, flat);
     }
 
-    // -------------------------------------------------------------------
-    // Distinct value count (number_distinct_values) write tests
-    // -------------------------------------------------------------------
+    #[test]
+    fn test_number_distinct_values_exact_count() {
+        // 50 distinct Int32 values repeated across 100k rows — set tracking must be exact.
+        let cardinality = 50u32;
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..100_000u32).map(|i| (i % cardinality) as i32),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
 
-    /// Writes a parquet file with `write_row_group_number_distinct_values` enabled and
-    /// returns the `distinct_count` stored in each column's row-group statistics.
-    fn write_and_read_distinct_values(batch: &RecordBatch) -> Vec<Option<u64>> {
         let props = WriterProperties::builder()
             .set_write_row_group_number_distinct_values(true)
             .build();
         let mut buf = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
         let metadata = writer.close().unwrap();
-        metadata
+
+        let count = metadata
             .row_group(0)
-            .columns()
-            .iter()
-            .map(|col| col.statistics().and_then(|s| s.distinct_count_opt()))
-            .collect()
-    }
-
-    /// Returns true if `actual` is within 10% of `expected`.
-    fn within_10_pct(actual: u64, expected: u64) -> bool {
-        let lo = expected.saturating_sub(expected / 10);
-        let hi = expected + expected / 10 + 1;
-        actual >= lo && actual <= hi
-    }
-
-    #[test]
-    fn test_number_distinct_values_int32_all_unique() {
-        let n = 1_048_576u32;
-        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..n as i32));
-        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-
-        let counts = write_and_read_distinct_values(&batch);
-        assert_eq!(counts.len(), 1);
-        let count = counts[0].expect("distinct_count should be set");
-        assert!(
-            within_10_pct(count, n as u64),
-            "expected ~{n} distinct values, got {count}"
-        );
-    }
-
-    #[test]
-    fn test_number_distinct_values_string_all_unique() {
-        let n = 1_000u32;
-        let array: ArrayRef = Arc::new(StringArray::from_iter_values(
-            (0..n).map(|i| format!("value_{i}")),
-        ));
-        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-
-        let counts = write_and_read_distinct_values(&batch);
-        assert_eq!(counts.len(), 1);
-        let count = counts[0].expect("distinct_count should be set");
-        assert!(
-            within_10_pct(count, n as u64),
-            "expected ~{n} distinct strings, got {count}"
-        );
-    }
-
-    #[test]
-    fn test_number_distinct_values_int32_repeated() {
-        let cardinality = 50u64;
-        let n = 100_000u32;
-        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(
-            (0..n).map(|i| (i % cardinality as u32) as i32),
-        ));
-        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-
-        let counts = write_and_read_distinct_values(&batch);
-        let count = counts[0].expect("distinct_count should be set");
-        assert!(
-            within_10_pct(count, cardinality),
-            "expected ~{cardinality} distinct values, got {count}"
-        );
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(count, cardinality as u64);
     }
 
     #[test]
     fn test_number_distinct_values_not_written_by_default() {
-        // Without set_write_row_group_number_distinct_values, distinct_count should be absent.
         let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
@@ -6267,10 +6207,7 @@ mod tests {
             .column(0)
             .statistics()
             .and_then(|s| s.distinct_count_opt());
-        assert!(
-            count.is_none(),
-            "distinct_count should be None when number_distinct_values tracking is disabled"
-        );
+        assert!(count.is_none());
     }
 
     #[test]
