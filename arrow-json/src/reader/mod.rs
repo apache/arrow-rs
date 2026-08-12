@@ -161,10 +161,14 @@ use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder};
+use crate::reader::tape::TapeDecoder;
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
+// Note: `mod tape` is deliberately kept private. Exposing only these two types means
+// downstream code can read a `Tape` handed to it, but cannot construct one, keeping
+// `TapeDecoder` an implementation detail.
+pub use tape::{Tape, TapeElement};
 pub use value_iter::ValueIter;
 
 mod binary_array;
