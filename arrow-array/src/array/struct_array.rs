@@ -1023,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_fmt_debug() {
-        let arr: StructArray = StructArray::new(
+        let arr = StructArray::new(
             vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
             vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
             Some(NullBuffer::new(BooleanBuffer::from(

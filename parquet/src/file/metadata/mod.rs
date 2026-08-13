@@ -2018,7 +2018,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let compressed_size_res: i64 = row_group_meta.compressed_size();
+        let compressed_size_res = row_group_meta.compressed_size();
         let compressed_size_exp: i64 = 1000;
 
         assert_eq!(compressed_size_res, compressed_size_exp);

@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn test_set_algebra_agrees_whether_or_not_the_cache_is_populated() {
         let bits: Vec<bool> = (0..256).map(|i| i % 3 == 0).collect();
-        let other: RowSelection = RowSelection::from_filters(&[BooleanArray::from(
+        let other = RowSelection::from_filters(&[BooleanArray::from(
             (0..256).map(|i| i % 5 != 0).collect::<Vec<bool>>(),
         )]);
 

@@ -1336,7 +1336,7 @@ mod tests {
             let max_def_level = desc.max_def_level();
             let max_rep_level = desc.max_rep_level();
             let page_reader = InMemoryPageReader::new(pages);
-            let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
+            let column_reader = get_column_reader(desc, Box::new(page_reader));
             let mut typed_column_reader = get_typed_column_reader::<T>(column_reader);
 
             let mut values = Vec::new();
@@ -1469,7 +1469,7 @@ mod tests {
         // 5 records total: [10,20], [30,40], [50,60], [70,80], [90,100]
         let pages = VecDeque::from(vec![page1, page2, page3]);
         let page_reader = InMemoryPageReader::new(pages);
-        let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
+        let column_reader = get_column_reader(desc, Box::new(page_reader));
         let mut typed_reader = get_typed_column_reader::<Int32Type>(column_reader);
 
         // Step 1 — skip 1 record:

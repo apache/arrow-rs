@@ -809,7 +809,7 @@ fn parse_e_notation<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     // e has a plus sign
-    let mut pos_shift_direction: bool = true;
+    let mut pos_shift_direction = true;
 
     // skip to the exponent index directly or just after any processed fractionals
     let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);

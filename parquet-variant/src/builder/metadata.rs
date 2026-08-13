@@ -198,7 +198,7 @@ impl WritableMetadataBuilder {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
-        let total_dict_size: usize = self.metadata_size();
+        let total_dict_size = self.metadata_size();
 
         let metadata_buffer = &mut self.metadata_buffer;
         let is_sorted = std::mem::take(&mut self.is_sorted);
