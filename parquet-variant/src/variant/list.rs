@@ -145,6 +145,14 @@ impl<'m, 'v> VariantList<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
+    /// Interprets `metadata` and `value` as a variant list, performing only basic
+    /// (constant-cost) [validation].
+    ///
+    /// # Panics
+    ///
+    /// Panics if basic validation fails. Use [`Self::try_new`] for a fallible version.
+    ///
+    /// [validation]: Self#Validation
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant list value")
     }
@@ -250,7 +258,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.len() == 0
     }
 
-    /// Returns element by index in `0..self.len()`, if any. May panic if this list is [invalid].
+    /// Returns element by index in `0..self.len()`, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this list is [invalid]. Use [`Self::try_get`] for a fallible version.
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
@@ -280,6 +292,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [`Self::iter_try`] to avoid panics due to invalid data.
     ///
     /// [unvalidated]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying bytes are invalid. Use [`Self::iter_try`] for a
+    /// fallible version.
     pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
         self.iter_try_with_shallow_validation()
             .map(|result| result.expect("Invalid variant list entry"))
