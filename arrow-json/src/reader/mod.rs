@@ -196,7 +196,6 @@ pub struct ReaderBuilder {
     is_field: bool,
     struct_mode: StructMode,
     decoder_factory: Option<Arc<dyn DecoderFactory>>,
-
     schema: SchemaRef,
 }
 
