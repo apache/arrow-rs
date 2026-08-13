@@ -198,7 +198,6 @@ pub struct ReaderBuilder {
     struct_mode: StructMode,
     flatten_top_level_arrays: bool,
     decoder_factory: Option<Arc<dyn DecoderFactory>>,
-
     schema: SchemaRef,
 }
 
