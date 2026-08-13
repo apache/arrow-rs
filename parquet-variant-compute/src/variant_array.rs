@@ -539,6 +539,15 @@ impl VariantArray {
     }
 }
 
+impl<'a> IntoIterator for &'a VariantArray {
+    type Item = Option<Variant<'a, 'a>>;
+    type IntoIter = VariantArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        VariantArrayIter::new(self)
+    }
+}
+
 impl PartialEq for VariantArray {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner

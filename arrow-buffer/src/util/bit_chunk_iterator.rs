@@ -170,6 +170,15 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
+impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
+    type Item = u64;
+    type IntoIter = UnalignedBitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// Iterator over an [`UnalignedBitChunk`]
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
     std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
@@ -330,6 +339,15 @@ impl<'a> BitChunks<'a> {
 }
 
 impl<'a> IntoIterator for BitChunks<'a> {
+    type Item = u64;
+    type IntoIter = BitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &BitChunks<'a> {
     type Item = u64;
     type IntoIter = BitChunkIterator<'a>;
 

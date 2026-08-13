@@ -667,6 +667,15 @@ impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListArray<Offs
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListArrayIter::<'a, OffsetSize>::new(self)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {
     type Item = ArrayRef;
 
