@@ -1313,16 +1313,10 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
-        let offset_index = self.metadata.offset_index();
-        // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
-        let page_locations = offset_index
-            .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| {
-                i[rg_idx][self.column_idx]
-                    .as_ref()
-                    .map(|o| o.page_locations.clone())
-            })
+        let page_locations = self
+            .metadata
+            .page_index()
+            .map(|i| i.page_locations(rg_idx, self.column_idx).cloned())
             .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
@@ -4691,7 +4685,11 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(builder.metadata().page_index().is_some());
+            let page_index = builder.metadata().page_index().unwrap();
+            assert!(page_index.offset_index(0, 0).is_some());
+            assert!(page_index.column_index(0, 0).is_some());
+            // TODO(ets): test more of the function on PageIndex
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
@@ -4708,7 +4706,7 @@ pub(crate) mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            assert!(builder.metadata().offset_index().is_none());
+            assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);

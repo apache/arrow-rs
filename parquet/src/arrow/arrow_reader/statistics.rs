@@ -23,7 +23,7 @@ use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
 use crate::basic::Type as PhysicalType;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
+use crate::file::metadata::{PageIndex, RowGroupMetaData};
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
@@ -1836,11 +1836,7 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// # Parameters:
     ///
-    /// * `column_page_index`: The parquet column page indices, read from
-    ///   `ParquetMetaData` column_index
-    ///
-    /// * `column_offset_index`: The parquet column offset indices, read from
-    ///   `ParquetMetaData` offset_index
+    /// * `page_index`: The parquet page indices, read from `ParquetMetaData`
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
     ///   extract the column page index and offset index on a per row group
@@ -1873,8 +1869,7 @@ impl<'a> StatisticsConverter<'a> {
     /// * the stored statistic value can not be converted to the requested type
     pub fn data_page_mins<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1888,10 +1883,9 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                column_page_index[*rg_index][parquet_index].as_ref();
-            let num_data_pages = column_offset_index[*rg_index][parquet_index]
-                .as_ref()
-                .map(|offset| offset.page_locations().len())
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
 
             (num_data_pages, column_page_index_per_row_group_per_column)
@@ -1905,8 +1899,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_maxes<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1920,10 +1913,9 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                column_page_index[*rg_index][parquet_index].as_ref();
-            let num_data_pages = column_offset_index[*rg_index][parquet_index]
-                .as_ref()
-                .map(|offset| offset.page_locations().len())
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
 
             (num_data_pages, column_page_index_per_row_group_per_column)
@@ -1937,8 +1929,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<UInt64Array>
     where
@@ -1951,10 +1942,9 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                column_page_index[*rg_index][parquet_index].as_ref();
-            let num_data_pages = column_offset_index[*rg_index][parquet_index]
-                .as_ref()
-                .map(|offset| offset.page_locations().len())
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
 
             (num_data_pages, column_page_index_per_row_group_per_column)
@@ -1967,8 +1957,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_nan_counts<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<UInt64Array>
     where
@@ -1981,10 +1970,9 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                column_page_index[*rg_index][parquet_index].as_ref();
-            let num_data_pages = column_offset_index[*rg_index][parquet_index]
-                .as_ref()
-                .map(|offset| offset.page_locations().len())
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
 
             (num_data_pages, column_page_index_per_row_group_per_column)
@@ -2011,7 +1999,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_row_counts<I>(
         &self,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
     ) -> Result<Option<UInt64Array>>
@@ -2028,7 +2016,7 @@ impl<'a> StatisticsConverter<'a> {
         let mut row_counts = Vec::new();
         let mut nulls = NullBufferBuilder::new(0);
         for rg_idx in row_group_indices {
-            let Some(offset_index) = &column_offset_index[*rg_idx][parquet_index] else {
+            let Some(offset_index) = page_index.offset_index(*rg_idx, parquet_index) else {
                 continue;
             };
             let page_locations = offset_index.page_locations();
