@@ -1824,7 +1824,7 @@ mod test {
         let shredded = shred_variant(&variant, &shred_type).unwrap();
         // Object-shredded typed_value is not yet implemented: reading it must
         // error, never silently return Variant::Null
-        // https://github.com/apache/arrow-rs/issues/10597
+        // TODO: https://github.com/apache/arrow-rs/issues/10620
         let err = shredded.try_value(0).unwrap_err();
         assert!(
             err.to_string().starts_with(
