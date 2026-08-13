@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn test_interleave_run_end_encoded_empty_runs() {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1].into_iter().map(Some));
+        builder.extend(std::iter::once(Some(1)));
         let a = builder.finish();
 
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();

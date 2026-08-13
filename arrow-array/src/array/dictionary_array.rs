@@ -1386,7 +1386,7 @@ mod tests {
     #[should_panic(expected = "Invalid dictionary key -100 at index 0, expected 0 <= key < 2")]
     fn test_try_new_index_too_small() {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
-        let keys: Int32Array = [Some(-100)].into_iter().collect();
+        let keys: Int32Array = std::iter::once(Some(-100)).collect();
         DictionaryArray::new(keys, Arc::new(values));
     }
 

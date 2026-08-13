@@ -936,9 +936,8 @@ mod tests {
     #[test]
     fn test_codec_zstd() {
         // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
-        for level in [ZstdLevel::MINIMUM_LEVEL]
-            .into_iter()
-            .chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        for level in
+            std::iter::once(ZstdLevel::MINIMUM_LEVEL).chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
         {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));

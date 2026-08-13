@@ -664,11 +664,7 @@ mod tests {
             infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
         let schema = Schema::new(vec![Field::new(
             "obj",
-            DataType::Struct(
-                [Field::new("foo", DataType::Int64, true)]
-                    .into_iter()
-                    .collect(),
-            ),
+            DataType::Struct(std::iter::once(Field::new("foo", DataType::Int64, true)).collect()),
             true,
         )]);
         assert_eq!(inferred_schema, schema);
