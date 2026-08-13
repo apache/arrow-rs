@@ -281,17 +281,14 @@ mod tests {
             builder.append(true);
         }
 
+        builder.values().append_value(3);
         if include_null_in_values {
-            builder.values().append_value(3);
             builder.values().append_null();
-            builder.values().append_value(5);
-            builder.append(true);
         } else {
-            builder.values().append_value(3);
             builder.values().append_value(4);
-            builder.values().append_value(5);
-            builder.append(true);
         }
+        builder.values().append_value(5);
+        builder.append(true);
 
         builder
     }

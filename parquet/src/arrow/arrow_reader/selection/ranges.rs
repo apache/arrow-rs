@@ -100,9 +100,7 @@ where
     let mut row_offset = 0;
 
     for selector in selectors {
-        if selector.skip {
-            row_offset += selector.row_count;
-        } else {
+        if !selector.skip {
             let start = row_offset;
             let end = row_offset + selector.row_count;
 
@@ -113,8 +111,8 @@ where
             let expanded_end = expanded_end.min(total_rows);
 
             expanded_ranges.push(expanded_start..expanded_end);
-            row_offset += selector.row_count;
         }
+        row_offset += selector.row_count;
     }
 
     // Sort ranges by start position

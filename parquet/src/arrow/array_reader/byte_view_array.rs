@@ -529,7 +529,6 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             } else {
                 output
                     .views
@@ -551,8 +550,8 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             }
+            Ok(())
         })?;
         if let Some(e) = error {
             return Err(e);
