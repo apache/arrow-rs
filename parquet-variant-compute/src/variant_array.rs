@@ -1153,10 +1153,12 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
         //
-        // Returning Variant::Null here would silently misreport stored values
-        // as null in release builds (https://github.com/apache/arrow-rs/issues/10597)
+        // Composite shredded values may require combining `value` and
+        // `typed_value` and allocating new encoded bytes. `try_value` returns
+        // borrowed Variant, so callers must unshred the array first.
         _ => Err(ArrowError::NotYetImplemented(format!(
-            "VariantArray does not yet support typed_value type: {}",
+            "VariantArray::try_value cannot materialize typed_value of type {} \
+             as a borrowed Variant; call unshred_variant first",
             typed_value.data_type()
         ))),
     }
@@ -1826,7 +1828,7 @@ mod test {
         let err = shredded.try_value(0).unwrap_err();
         assert!(
             err.to_string().starts_with(
-                "Not yet implemented: VariantArray does not yet support typed_value type"
+                "Not yet implemented: VariantArray::try_value cannot materialize typed_value"
             ),
             "unexpected error: {err}"
         );
