@@ -73,7 +73,6 @@ bitflags! {
 ///
 #[repr(C)]
 #[derive(Debug)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ArrowSchema {
     /// Null-terminated, UTF8-encoded string describing the data type
     pub format: *const c_char,
@@ -354,11 +353,8 @@ impl FFI_ArrowSchema {
         } else {
             let mut pos = 0;
 
-            // On some platforms, c_char = u8, and on some, c_char = i8. Where c_char = u8, clippy
-            // wants to complain that we're casting to the same type, but if we remove the cast,
-            // this will fail to compile on the other platforms. So we must allow it.
-            #[allow(clippy::unnecessary_cast)]
-            let buffer: *const u8 = self.metadata as *const u8;
+            // On some platforms, c_char = u8, and on some, c_char = i8.
+            let buffer = self.metadata.cast::<u8>();
 
             fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
                 let out = unsafe {
@@ -978,7 +974,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_ordered() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Schema::new(vec![Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

@@ -1246,7 +1246,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(unused_parens)]
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(

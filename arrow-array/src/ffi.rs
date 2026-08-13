@@ -480,7 +480,7 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
+                #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i32;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
@@ -494,7 +494,7 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
+                #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i64;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
