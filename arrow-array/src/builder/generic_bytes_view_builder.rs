@@ -305,7 +305,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     ///
     /// # Panics
     ///
-    /// Panics unless `index < self.len()`
+    /// Panics if `index >= self.len()`
     pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;

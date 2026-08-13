@@ -268,7 +268,7 @@ impl MapArray {
     /// Returns the length for value at index `i`.
     ///
     /// # Panics
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_length(&self, i: usize) -> i32 {
         let offsets = self.value_offsets();

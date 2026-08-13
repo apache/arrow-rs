@@ -388,7 +388,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns the length for value at index `i`.
     ///
     /// # Panics
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
         let offsets = self.value_offsets();

@@ -1133,7 +1133,7 @@ impl SchemaDescriptor {
     ///
     /// # Panics
     ///
-    /// Panics if `i` is out of bounds
+    /// Panics if `i >= self.num_columns()`
     pub fn column(&self, i: usize) -> ColumnDescPtr {
         assert!(
             i < self.leaves.len(),
@@ -1164,7 +1164,7 @@ impl SchemaDescriptor {
     ///
     /// # Panics
     ///
-    /// Panics if `i` is out of bounds
+    /// Panics if `i >= self.num_columns()`
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()

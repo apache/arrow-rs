@@ -1303,7 +1303,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
         as_datetime::<T>(i64::from(self.value(i)))
     }
@@ -1317,7 +1317,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
         as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
@@ -1330,7 +1330,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value_as_date(&self, i: usize) -> Option<NaiveDate> {
         self.value_as_datetime(i).map(|datetime| datetime.date())
     }
@@ -1343,7 +1343,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value_as_time(&self, i: usize) -> Option<NaiveTime> {
         as_time::<T>(i64::from(self.value(i)))
     }
@@ -1356,7 +1356,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value_as_duration(&self, i: usize) -> Option<Duration> {
         as_duration::<T>(i64::from(self.value(i)))
     }

@@ -405,7 +405,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// cast to `usize`, `None` if the value at `i` is `NULL`.
     ///
     /// # Panics
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn key(&self, i: usize) -> Option<usize> {
         self.keys.is_valid(i).then(|| self.keys.value(i).as_usize())
     }
