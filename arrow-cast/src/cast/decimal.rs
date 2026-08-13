@@ -736,10 +736,10 @@ where
             match v {
                 Some(v) => {
                     let v = parse_string_to_decimal_native::<T>(v, scale as usize)
-                        .map_err(|_| {
+                        .map_err(|e| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{v}' to value of {} type",
-                                T::DATA_TYPE,
+                                "Cannot cast string '{v}' to value of {}({precision}, {scale}) type: {e}",
+                                T::PREFIX,
                             ))
                         })
                         .and_then(|v| {
