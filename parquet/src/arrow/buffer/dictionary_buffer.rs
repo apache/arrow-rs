@@ -300,7 +300,7 @@ mod tests {
         buffer.as_keys(&d1).unwrap().extend_from_slice(values);
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
-        let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+        let valid_buffer = Buffer::from_iter(valid.iter().copied());
         buffer
             .pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice())
             .unwrap();
@@ -313,7 +313,7 @@ mod tests {
         values.try_push("bongo".as_bytes(), false).unwrap();
 
         valid.extend_from_slice(&[false, false, true, false, true]);
-        let null_buffer = Buffer::from_iter(valid.iter().cloned());
+        let null_buffer = Buffer::from_iter(valid.iter().copied());
         buffer
             .pad_nulls(read_offset, 2, 5, null_buffer.as_slice())
             .unwrap();

@@ -4445,7 +4445,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ];
-        let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt32Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4491,7 +4491,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ];
-        let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt64Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4694,7 +4694,7 @@ mod tests {
                     .unwrap()
                     .values()
                     .iter()
-                    .cloned()
+                    .copied()
             })
             .collect();
 

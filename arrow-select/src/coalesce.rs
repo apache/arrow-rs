@@ -2069,7 +2069,7 @@ mod tests {
         let values: Vec<_> = values.into_iter().collect();
         let values_iter = std::iter::repeat(values.iter())
             .flatten()
-            .cloned()
+            .copied()
             .take(num_rows);
 
         let mut builder = StringViewBuilder::with_capacity(100).with_fixed_block_size(8192);

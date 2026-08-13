@@ -801,7 +801,7 @@ mod tests {
             assert_eq!(output.views.len(), 4);
 
             let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
             output
                 .pad_nulls(0, 4, valid.len(), valid_buffer.as_slice())

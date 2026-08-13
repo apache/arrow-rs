@@ -631,7 +631,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -644,7 +644,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -743,7 +743,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -756,7 +756,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 

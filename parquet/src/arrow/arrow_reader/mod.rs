@@ -1939,14 +1939,14 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(BooleanArray::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int32Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1958,7 +1958,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int64Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1970,7 +1970,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Float32Array::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
         );
     }

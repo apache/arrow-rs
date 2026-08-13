@@ -160,7 +160,7 @@ impl<'a> UnalignedBitChunk<'a> {
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()
-            .chain(self.chunks.iter().cloned())
+            .chain(self.chunks.iter().copied())
             .chain(self.suffix)
     }
 
@@ -181,7 +181,7 @@ impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
 
 /// Iterator over an [`UnalignedBitChunk`]
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
+    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Copied<std::slice::Iter<'a, u64>>>,
     std::option::IntoIter<u64>,
 >;
 
@@ -732,7 +732,7 @@ mod tests {
                 .take(mask_len)
                 .collect();
 
-            let buffer = Buffer::from_iter(bools.iter().cloned());
+            let buffer = Buffer::from_iter(bools.iter().copied());
 
             let max_offset = 64.min(mask_len);
             let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
