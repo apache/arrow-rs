@@ -760,6 +760,7 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
                     field.data_type(),
                     cast_options,
                     capacity,
+                    false,
                 )?,
                 len: 0,
             });
