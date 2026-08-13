@@ -381,7 +381,7 @@ impl Schema {
         note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
     )]
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.fields
             .iter()
             .flat_map(|f| f.fields_with_dict_id(dict_id))
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(first_name.name(), "first_name");
         assert_eq!(first_name.data_type(), &DataType::Utf8);
         assert!(!first_name.is_nullable());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = first_name.dict_id();
         assert_eq!(dict_id, None);
         assert_eq!(first_name.dict_is_ordered(), None);
@@ -735,7 +735,7 @@ mod tests {
             interests.data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = interests.dict_id();
         assert_eq!(dict_id, Some(123));
         assert_eq!(interests.dict_is_ordered(), Some(true));
@@ -1177,7 +1177,7 @@ mod tests {
     fn schema_field_with_dict_id() {
         let schema = person_schema();
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let fields_dict_123: Vec<_> = schema
             .fields_with_dict_id(123)
             .iter()
@@ -1185,7 +1185,7 @@ mod tests {
             .collect();
         assert_eq!(fields_dict_123, vec!["interests"]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let is_empty = schema.fields_with_dict_id(456).is_empty();
         assert!(is_empty);
     }
@@ -1207,7 +1207,7 @@ mod tests {
                 ])),
                 false,
             ),
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Field::new_dict(
                 "interests",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

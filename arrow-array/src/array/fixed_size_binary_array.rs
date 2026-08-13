@@ -758,7 +758,7 @@ impl TryFrom<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8]>>) -> Result<Self, Self::Error> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Self::try_from_sparse_iter(v.into_iter())
     }
 }
@@ -1065,7 +1065,7 @@ mod tests {
     fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
         let none_option: Option<[u8; 32]> = None;
         let input_arg = vec![none_option, none_option, none_option];
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
@@ -1080,7 +1080,7 @@ mod tests {
             None,
             Some(vec![13, 14]),
         ];
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
