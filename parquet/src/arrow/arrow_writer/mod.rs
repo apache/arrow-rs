@@ -1697,7 +1697,7 @@ fn write_leaf(
                         let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices.iter().copied())
                     }
-                    _ => {
+                    IntervalUnit::MonthDayNano => {
                         return Err(ParquetError::NYI(format!(
                             "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
                         )));

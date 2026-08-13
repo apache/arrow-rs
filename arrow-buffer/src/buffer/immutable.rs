@@ -434,7 +434,7 @@ impl Buffer {
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
-            _ => return Err(self), // Custom allocation
+            Deallocation::Custom(..) => return Err(self),
         };
 
         if self.ptr != self.data.as_ptr() {

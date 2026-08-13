@@ -856,7 +856,7 @@ impl EdgeInterpolationAlgorithm {
             Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
             Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
             Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
-            unknown => Err(general_err!(
+            unknown @ Self::_Unknown(_) => Err(general_err!(
                 "Unknown edge interpolation algorithm: {}",
                 unknown
             )),

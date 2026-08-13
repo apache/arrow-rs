@@ -99,7 +99,7 @@ impl PageEncryptor {
             PageType::DATA_PAGE => ModuleType::DataPageHeader,
             PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
             PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
-            _ => {
+            PageType::INDEX_PAGE => {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
                     page_header.r#type

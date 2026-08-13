@@ -111,7 +111,7 @@ impl Type {
     pub fn get_fields(&self) -> &[TypePtr] {
         match *self {
             Type::GroupType { ref fields, .. } => &fields[..],
-            _ => panic!("Cannot call get_fields() on a non-group type"),
+            Type::PrimitiveType { .. } => panic!("Cannot call get_fields() on a non-group type"),
         }
     }
 
@@ -124,7 +124,9 @@ impl Type {
                 physical_type,
                 ..
             } => physical_type,
-            _ => panic!("Cannot call get_physical_type() on a non-primitive type"),
+            Type::GroupType { .. } => {
+                panic!("Cannot call get_physical_type() on a non-primitive type")
+            }
         }
     }
 
@@ -133,7 +135,7 @@ impl Type {
     pub fn get_precision(&self) -> i32 {
         match *self {
             Type::PrimitiveType { precision, .. } => precision,
-            _ => panic!("Cannot call get_precision() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_precision() on non-primitive type"),
         }
     }
 
@@ -142,7 +144,7 @@ impl Type {
     pub fn get_scale(&self) -> i32 {
         match *self {
             Type::PrimitiveType { scale, .. } => scale,
-            _ => panic!("Cannot call get_scale() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_scale() on non-primitive type"),
         }
     }
 
@@ -197,7 +199,7 @@ impl Type {
     pub fn is_schema(&self) -> bool {
         match *self {
             Type::GroupType { ref basic_info, .. } => !basic_info.has_repetition(),
-            _ => false,
+            Type::PrimitiveType { .. } => false,
         }
     }
 
@@ -954,7 +956,7 @@ impl ColumnDescriptor {
     pub fn physical_type(&self) -> PhysicalType {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { physical_type, .. } => *physical_type,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -963,7 +965,7 @@ impl ColumnDescriptor {
     pub fn type_length(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { type_length, .. } => *type_length,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -972,7 +974,7 @@ impl ColumnDescriptor {
     pub fn type_precision(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { precision, .. } => *precision,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -981,7 +983,7 @@ impl ColumnDescriptor {
     pub fn type_scale(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { scale, .. } => *scale,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -1232,7 +1234,7 @@ fn build_tree<'a>(
             max_rep_level += 1;
             repeated_ancestor_def_level = max_def_level;
         }
-        _ => {}
+        Repetition::REQUIRED => {}
     }
 
     match tp.as_ref() {
@@ -1461,7 +1463,7 @@ mod tests {
                 Type::PrimitiveType { physical_type, .. } => {
                     assert_eq!(physical_type, PhysicalType::INT32);
                 }
-                _ => panic!(),
+                Type::GroupType { .. } => panic!(),
             }
         }
 

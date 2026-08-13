@@ -194,7 +194,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
             ))
         }
         CodecType::UNCOMPRESSED => Ok(None),
-        _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
+        CodecType::LZO => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
 }
 

@@ -229,7 +229,7 @@ impl RowSelection {
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
             RowSelectionInner::Mask(m) => Some(m.mask()),
-            _ => None,
+            RowSelectionInner::Selectors(_) => None,
         }
     }
 

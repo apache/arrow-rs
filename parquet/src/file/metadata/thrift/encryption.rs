@@ -258,7 +258,7 @@ pub(crate) fn parquet_metadata_with_encryption(
                     .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
             let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
                 EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
-                _ => Some(false),
+                EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Some(false),
             }
             .unwrap_or(false);
             if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {

@@ -752,7 +752,7 @@ impl WriteThrift for ColumnIndexMetaData {
             ColumnIndexMetaData::DOUBLE(index) => index.write_thrift(writer),
             ColumnIndexMetaData::BYTE_ARRAY(index) => index.write_thrift(writer),
             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => index.write_thrift(writer),
-            _ => Err(general_err!("Cannot serialize NONE index")),
+            ColumnIndexMetaData::NONE => Err(general_err!("Cannot serialize NONE index")),
         }
     }
 }

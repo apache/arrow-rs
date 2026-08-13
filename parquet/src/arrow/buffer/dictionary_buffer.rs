@@ -80,10 +80,10 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
-                    _ => unreachable!(),
+                    Self::Values { .. } => unreachable!(),
                 }
             }
-            _ => None,
+            Self::Values { .. } => None,
         }
     }
 
@@ -116,7 +116,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 *self = Self::Values { values: spilled };
                 match self {
                     Self::Values { values } => Ok(values),
-                    _ => unreachable!(),
+                    Self::Dict { .. } => unreachable!(),
                 }
             }
         }

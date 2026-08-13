@@ -386,13 +386,13 @@ mod tests {
         let _ = selection.iter().count();
         match &selection.inner {
             RowSelectionInner::Mask(m) => assert!(m.selectors.get().is_some()),
-            _ => unreachable!(),
+            RowSelectionInner::Selectors(_) => unreachable!(),
         }
 
         let cloned = selection.clone();
         match &cloned.inner {
             RowSelectionInner::Mask(m) => assert!(m.selectors.get().is_none()),
-            _ => unreachable!(),
+            RowSelectionInner::Selectors(_) => unreachable!(),
         }
 
         let round_tripped: Vec<RowSelector> = cloned.iter().copied().collect();
@@ -417,7 +417,7 @@ mod tests {
     fn cached_selectors_ptr(selection: &RowSelection) -> Option<*const RowSelector> {
         match &selection.inner {
             RowSelectionInner::Mask(m) => m.selectors.get().map(|s| s.as_ptr()),
-            _ => unreachable!(),
+            RowSelectionInner::Selectors(_) => unreachable!(),
         }
     }
 
@@ -454,7 +454,7 @@ mod tests {
         let selection = RowSelection::from_boolean_buffer(interleaved_mask());
         let mask = match &selection.inner {
             RowSelectionInner::Mask(m) => m,
-            _ => unreachable!(),
+            RowSelectionInner::Selectors(_) => unreachable!(),
         };
 
         // Uncached: converts into a temporary, leaving the cache empty.
@@ -464,7 +464,7 @@ mod tests {
         let expected: Vec<RowSelector> = selection.iter().copied().collect();
         let mask = match &selection.inner {
             RowSelectionInner::Mask(m) => m,
-            _ => unreachable!(),
+            RowSelectionInner::Selectors(_) => unreachable!(),
         };
         match mask.borrowed_selectors() {
             Cow::Borrowed(selectors) => assert_eq!(selectors, expected.as_slice()),

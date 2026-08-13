@@ -123,7 +123,7 @@ impl TreeBuilder {
                 curr_def_level += 1;
                 curr_rep_level += 1;
             }
-            _ => {}
+            Repetition::REQUIRED => {}
         }
 
         path.push(String::from(field.name()));

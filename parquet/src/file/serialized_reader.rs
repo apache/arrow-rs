@@ -512,7 +512,7 @@ pub(crate) fn decode_page(
                 statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
-        _ => {
+        PageType::INDEX_PAGE => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
             return Err(general_err!(
                 "Page type {:?} is not supported",
@@ -1441,7 +1441,7 @@ mod tests {
                     assert!(statistics.is_none());
                     true
                 }
-                _ => false,
+                Page::DataPageV2 { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1536,7 +1536,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1635,7 +1635,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;

@@ -232,7 +232,7 @@ impl MutableBuffer {
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {
             Deallocation::Standard(layout) => *layout,
-            _ => return Err(bytes),
+            Deallocation::Custom(..) => return Err(bytes),
         };
 
         let len = bytes.len();

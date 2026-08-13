@@ -2243,7 +2243,7 @@ impl<'a> Maker<'a> {
                     Entry::Vacant(e) => {
                         e.insert(idx);
                     }
-                    _ => {}
+                    Entry::Occupied(_) => {}
                 }
             }
         }
