@@ -17,9 +17,10 @@
 
 //! Defines kernel to extract a substring of an Array
 //! Supported array types:
-//! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
+//! [GenericStringArray], [GenericBinaryArray], [GenericByteViewArray],
+//! [FixedSizeBinaryArray], [DictionaryArray]
 
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{BinaryViewBuilder, BufferBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -102,6 +103,8 @@ pub fn substring(
             start as i32,
             length.map(|e| e as i32),
         ),
+        DataType::Utf8View => string_view_substring(array.as_string_view(), start, length),
+        DataType::BinaryView => binary_view_substring(array.as_binary_view(), start, length),
         _ => Err(ArrowError::ComputeError(format!(
             "substring does not support type {:?}",
             array.data_type()
@@ -245,6 +248,68 @@ fn utf8_bounds(val: &str, start: i64, length: Option<usize>) -> (usize, usize) {
             .map_or(len, |(offset, _)| start_offset + offset)
     });
     (start_offset, end_offset)
+}
+
+/// Byte range of one element, following the same rules as [`byte_substring`].
+fn view_substring_range(len: usize, start: i64, length: Option<u64>) -> (usize, usize) {
+    let len = len as i64;
+    let new_start = match start.cmp(&0) {
+        Ordering::Greater => start.min(len),
+        Ordering::Equal => 0,
+        Ordering::Less => (len + start).max(0),
+    };
+    let new_end = match length {
+        Some(length) => new_start.saturating_add(length as i64).min(len),
+        None => len,
+    };
+    (new_start as usize, new_end as usize)
+}
+
+fn string_view_substring(
+    array: &StringViewArray,
+    start: i64,
+    length: Option<u64>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+
+    for idx in 0..array.len() {
+        if array.is_null(idx) {
+            builder.append_null();
+            continue;
+        }
+        let value = array.value(idx);
+        let (new_start, new_end) = view_substring_range(value.len(), start, length);
+        for offset in [new_start, new_end] {
+            if !value.is_char_boundary(offset) {
+                return Err(ArrowError::ComputeError(format!(
+                    "The offset {offset} is at an invalid utf-8 boundary."
+                )));
+            }
+        }
+        builder.append_value(&value[new_start..new_end]);
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn binary_view_substring(
+    array: &BinaryViewArray,
+    start: i64,
+    length: Option<u64>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = BinaryViewBuilder::with_capacity(array.len());
+
+    for idx in 0..array.len() {
+        if array.is_null(idx) {
+            builder.append_null();
+            continue;
+        }
+        let value = array.value(idx);
+        let (new_start, new_end) = view_substring_range(value.len(), start, length);
+        builder.append_value(&value[new_start..new_end]);
+    }
+
+    Ok(Arc::new(builder.finish()))
 }
 
 fn byte_substring<T: ByteArrayType>(
@@ -1034,5 +1099,91 @@ mod tests {
         let expected_bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5];
         let expected = BinaryArray::from(vec![Some(expected_bytes)]);
         assert_eq!(expected, *actual);
+    }
+
+    /// The view result has to match the [`DataType::Utf8`] result for the same input.
+    #[test]
+    fn string_view_matches_utf8() {
+        let values = vec![
+            Some("hello world"),
+            Some(""),
+            None,
+            Some("a"),
+            Some("this one is definitely longer than twelve bytes"),
+        ];
+        let utf8 = StringArray::from(values.clone());
+        let view = StringViewArray::from(values);
+
+        for (start, length) in [
+            (0, None),
+            (0, Some(0)),
+            (0, Some(5)),
+            (0, Some(1000)),
+            (1, Some(3)),
+            (5, None),
+            (100, Some(2)),
+            (100, None),
+            (-3, None),
+            (-3, Some(2)),
+            (-100, Some(4)),
+            (-100, None),
+        ] {
+            let expected = substring(&utf8, start, length).unwrap();
+            let expected = expected.as_string::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_string_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn binary_view_matches_binary() {
+        let values: Vec<Option<&[u8]>> = vec![Some(b"hello world"), Some(b""), None, Some(b"abc")];
+        let binary = BinaryArray::from(values.clone());
+        let view = BinaryViewArray::from(values);
+
+        for (start, length) in [
+            (0, None),
+            (0, Some(5)),
+            (2, Some(3)),
+            (-3, None),
+            (100, Some(2)),
+        ] {
+            let expected = substring(&binary, start, length).unwrap();
+            let expected = expected.as_binary::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_binary_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn string_view_rejects_an_invalid_char_boundary() {
+        let view = StringViewArray::from(vec![Some("E=mc²")]);
+        let err = substring(&view, 0, Some(5)).unwrap_err().to_string();
+        assert!(err.contains("invalid utf-8 boundary"), "{err}");
+    }
+
+    #[test]
+    fn dictionary_of_string_view() {
+        let view = StringViewArray::from(vec![Some("hello world"), Some("bye")]);
+        let dict = DictionaryArray::new(Int32Array::from(vec![0, 1, 0]), Arc::new(view));
+
+        let actual = substring(&dict, 0, Some(3)).unwrap();
+        let actual = actual.as_any_dictionary();
+
+        let values = actual.values().as_string_view();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("hel"), Some("bye")]
+        );
     }
 }
