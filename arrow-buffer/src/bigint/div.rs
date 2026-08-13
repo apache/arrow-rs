@@ -289,14 +289,14 @@ impl<T, const N: usize> std::ops::Deref for ArrayPlusOne<T, N> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        let x = self as *const Self;
+        let x = std::ptr::from_ref::<Self>(self);
         unsafe { std::slice::from_raw_parts(x as *const T, N + 1) }
     }
 }
 
 impl<T, const N: usize> std::ops::DerefMut for ArrayPlusOne<T, N> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let x = self as *mut Self;
+        let x = std::ptr::from_mut::<Self>(self);
         unsafe { std::slice::from_raw_parts_mut(x as *mut T, N + 1) }
     }
 }

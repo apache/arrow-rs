@@ -589,8 +589,8 @@ mod tests_to_then_from_ffi {
         let schema = Box::new(ManuallyDrop::new(schema));
         let array = Box::new(ManuallyDrop::new(array));
 
-        let schema_ptr = &**schema as *const _;
-        let array_ptr = &**array as *const _;
+        let schema_ptr = std::ptr::from_ref(&**schema);
+        let array_ptr = std::ptr::from_ref(&**array);
 
         // We can read them back to memory
         // SAFETY:

@@ -554,7 +554,7 @@ macro_rules! gen_as_bytes {
                 // resulting slice always refers to initialized memory.
                 unsafe {
                     std::slice::from_raw_parts(
-                        self as *const $source_ty as *const u8,
+                        std::ptr::from_ref::<$source_ty>(self) as *const u8,
                         std::mem::size_of::<$source_ty>(),
                     )
                 }
@@ -627,14 +627,16 @@ impl AsBytes for bool {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: a bool is guaranteed to be either 0x00 or 0x01 in memory, so the memory is
         // valid.
-        unsafe { std::slice::from_raw_parts(self as *const bool as *const u8, 1) }
+        unsafe { std::slice::from_raw_parts(std::ptr::from_ref::<bool>(self) as *const u8, 1) }
     }
 }
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: Int96::data is a &[u32; 3].
-        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
+        unsafe {
+            std::slice::from_raw_parts(std::ptr::from_ref::<[u32]>(self.data()) as *const u8, 12)
+        }
     }
 }
 

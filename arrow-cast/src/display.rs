@@ -147,7 +147,7 @@ impl Hash for FormatOptions<'_> {
         self.types_info.hash(state);
         self.quoted_strings.hash(state);
         self.formatter_factory
-            .map(|f| f as *const dyn ArrayFormatterFactory)
+            .map(std::ptr::from_ref::<dyn ArrayFormatterFactory>)
             .hash(state);
     }
 }
