@@ -167,7 +167,7 @@ impl From<crate::Field<'_>> for Field {
     }
 }
 
-/// Fallible conversion of an IPC Field to an Arrow Field.
+/// Convert an IPC Field to Arrow Field
 fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
     let arrow_field = if let Some(dictionary) = field.dictionary() {
         #[allow(deprecated)]
@@ -199,10 +199,7 @@ fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
 }
 
 /// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
-///
-/// Deprecated: this panics on malformed input. Use the fallible
-/// [`try_fb_to_schema`] instead.
-#[deprecated(since = "59.2.0", note = "Use `try_fb_to_schema` instead")]
+#[deprecated(since = "60.0.0", note = "Use `try_fb_to_schema` instead")]
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     try_fb_to_schema(fb).expect("invalid IPC schema")
 }
