@@ -251,16 +251,20 @@ fn utf8_bounds(val: &str, start: i64, length: Option<usize>) -> (usize, usize) {
 }
 
 /// Byte range of one element, following the same rules as [`byte_substring`].
-fn view_substring_range(len: usize, start: i64, length: Option<u64>) -> (usize, usize) {
-    let len = len as i64;
+fn view_substring_range(
+    original_length: usize,
+    start: i64,
+    substring_length: Option<u64>,
+) -> (usize, usize) {
+    let original_length = original_length as i64;
     let new_start = match start.cmp(&0) {
-        Ordering::Greater => start.min(len),
+        Ordering::Greater => start.min(original_length),
         Ordering::Equal => 0,
-        Ordering::Less => (len + start).max(0),
+        Ordering::Less => (original_length + start).max(0),
     };
-    let new_end = match length {
-        Some(length) => new_start.saturating_add(length as i64).min(len),
-        None => len,
+    let new_end = match substring_length {
+        Some(length) => new_start.saturating_add(length as i64).min(original_length),
+        None => original_length,
     };
     (new_start as usize, new_end as usize)
 }
@@ -1101,7 +1105,6 @@ mod tests {
         assert_eq!(expected, *actual);
     }
 
-    /// The view result has to match the [`DataType::Utf8`] result for the same input.
     #[test]
     fn string_view_matches_utf8() {
         let values = vec![
@@ -1142,7 +1145,13 @@ mod tests {
 
     #[test]
     fn binary_view_matches_binary() {
-        let values: Vec<Option<&[u8]>> = vec![Some(b"hello world"), Some(b""), None, Some(b"abc")];
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"hello world"),
+            Some(b""),
+            None,
+            Some(b"abc"),
+            Some(b"this one is definitely longer than twelve bytes"),
+        ];
         let binary = BinaryArray::from(values.clone());
         let view = BinaryViewArray::from(values);
 
@@ -1163,6 +1172,39 @@ mod tests {
                 "start={start} length={length:?}"
             );
         }
+    }
+
+    #[test]
+    fn string_view_slices_on_a_multi_byte_boundary() {
+        // "é" and "ö" are two bytes, the CJK chars three, so 0/3/6 are the offsets that land
+        // on a char boundary in both values.
+        let values = vec![Some("héllo wörld"), Some("日本語"), None];
+        let utf8 = StringArray::from(values.clone());
+        let view = StringViewArray::from(values);
+
+        for (start, length) in [
+            (0, Some(3)),
+            (3, Some(3)),
+            (0, Some(6)),
+            (3, None),
+            (-3, None),
+            (-6, None),
+        ] {
+            let expected = substring(&utf8, start, length).unwrap();
+            let expected = expected.as_string::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_string_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+
+        let actual = substring(&view, 0, Some(3)).unwrap();
+        let actual = actual.as_string_view();
+        assert_eq!(actual.value(0), "hé");
+        assert_eq!(actual.value(1), "日");
     }
 
     #[test]
