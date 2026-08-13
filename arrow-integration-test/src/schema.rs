@@ -83,7 +83,7 @@ fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
             .iter()
             .map(|(k, v)| {
                 if let Value::String(v) = v {
-                    Ok((k.to_string(), v.to_string()))
+                    Ok((k.clone(), v.clone()))
                 } else {
                     Err(ArrowError::ParseError(
                         "metadata `value` field must be a string".to_string(),

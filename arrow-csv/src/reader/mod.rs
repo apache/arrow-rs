@@ -2678,7 +2678,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            Err(ArrowError::CsvError(e)) => e.contains("incorrect number of fields"),
             _ => false,
         });
     }
@@ -2907,8 +2907,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::InvalidArgumentError(e)) =>
-                e.to_string().contains("contains null values"),
+            Err(ArrowError::InvalidArgumentError(e)) => e.contains("contains null values"),
             _ => false,
         });
     }

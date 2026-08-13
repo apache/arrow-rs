@@ -350,9 +350,8 @@ fn get_file_decryptor(
             let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
                 aad_prefix.clone()
             } else {
-                algo.aad_prefix.map(|v| v.to_vec()).unwrap_or_default()
+                algo.aad_prefix.unwrap_or_default()
             };
-            let aad_file_unique = aad_file_unique.to_vec();
 
             FileDecryptor::new(
                 file_decryption_properties,

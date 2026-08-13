@@ -427,7 +427,7 @@ mod tests {
 
         let err = reader.get_bytes(0..1).await.unwrap_err().to_string();
 
-        assert!(err.to_string().contains("was cancelled"));
+        assert!(err.contains("was cancelled"));
     }
 
     #[tokio::test]

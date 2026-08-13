@@ -388,7 +388,7 @@ mod tests {
         /// call set_bits with the given parameters and compare with the expected output
         fn verify(&self) {
             // call set_bits and compare
-            let mut actual = self.write_data.to_vec();
+            let mut actual = self.write_data.clone();
             let null_count = set_bits(
                 &mut actual,
                 &self.data,

@@ -783,7 +783,7 @@ fn test_write_non_uniform_encryption() {
         let file = File::open(path).unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();

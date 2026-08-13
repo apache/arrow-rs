@@ -1388,7 +1388,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -1431,7 +1430,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1

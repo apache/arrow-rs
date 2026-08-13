@@ -1468,10 +1468,7 @@ mod tests {
             "parquet-mr version 1.8.1 (build 4aba4dae7bb0d4edbcf7923ae1339f28fd3f7fcf)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 5);
         assert_eq!(file_metadata.version(), 1);
@@ -1567,10 +1564,7 @@ mod tests {
             "parquet-cpp-arrow version 14.0.2"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 10);
         assert_eq!(file_metadata.version(), 2);
@@ -1669,10 +1663,7 @@ mod tests {
             "parquet-mr version 1.13.1 (build db4183109d5b734ec5930d870cdae161e408ddba)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            2
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 2);
 
         assert_eq!(file_metadata.num_rows(), 1);
         assert_eq!(file_metadata.version(), 1);
