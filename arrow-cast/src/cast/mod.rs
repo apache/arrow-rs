@@ -1277,20 +1277,28 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 parse_string::<Time64NanosecondType, i32>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Second, to_tz) => cast_string_to_timestamp::<
+                i32,
+                TimestampSecondType,
+            >(array, to_tz.as_ref(), cast_options),
             Timestamp(TimeUnit::Millisecond, to_tz) => cast_string_to_timestamp::<
                 i32,
                 TimestampMillisecondType,
-            >(array, to_tz, cast_options),
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Timestamp(TimeUnit::Microsecond, to_tz) => cast_string_to_timestamp::<
                 i32,
                 TimestampMicrosecondType,
-            >(array, to_tz, cast_options),
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_string_to_timestamp::<
+                i32,
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_string_to_year_month_interval::<i32>(array, cast_options)
             }
@@ -1334,17 +1342,23 @@ pub fn cast_with_options(
                 parse_string_view::<Time64NanosecondType>(array, cast_options)
             }
             Timestamp(TimeUnit::Second, to_tz) => {
-                cast_view_to_timestamp::<TimestampSecondType>(array, to_tz, cast_options)
+                cast_view_to_timestamp::<TimestampSecondType>(array, to_tz.as_ref(), cast_options)
             }
-            Timestamp(TimeUnit::Millisecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampMillisecondType>(array, to_tz, cast_options)
-            }
-            Timestamp(TimeUnit::Microsecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampMicrosecondType>(array, to_tz, cast_options)
-            }
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Millisecond, to_tz) => cast_view_to_timestamp::<
+                TimestampMillisecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Microsecond, to_tz) => cast_view_to_timestamp::<
+                TimestampMicrosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_view_to_timestamp::<
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_view_to_year_month_interval(array, cast_options)
             }
@@ -1396,20 +1410,28 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 parse_string::<Time64NanosecondType, i64>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, to_tz) => {
-                cast_string_to_timestamp::<i64, TimestampSecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Second, to_tz) => cast_string_to_timestamp::<
+                i64,
+                TimestampSecondType,
+            >(array, to_tz.as_ref(), cast_options),
             Timestamp(TimeUnit::Millisecond, to_tz) => cast_string_to_timestamp::<
                 i64,
                 TimestampMillisecondType,
-            >(array, to_tz, cast_options),
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Timestamp(TimeUnit::Microsecond, to_tz) => cast_string_to_timestamp::<
                 i64,
                 TimestampMicrosecondType,
-            >(array, to_tz, cast_options),
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_string_to_timestamp::<
+                i64,
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_string_to_year_month_interval::<i64>(array, cast_options)
             }
@@ -11502,11 +11524,8 @@ mod tests {
             format_options: FormatOptions::default(),
         };
 
-        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
-            &array,
-            &None::<Arc<str>>,
-            &cast_options,
-        );
+        let result =
+            cast_string_to_timestamp::<i32, TimestampNanosecondType>(&array, None, &cast_options);
 
         let err = result.unwrap_err();
         assert_eq!(

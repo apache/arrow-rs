@@ -926,7 +926,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         page_writer: SerializedPageWriter<'b, W>,
     ) -> Result<SerializedPageWriter<'b, W>> {
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &context.file_encryptor,
+            context.file_encryptor.as_ref(),
             context.row_group_index,
             context.column_index,
             &column.path().string(),

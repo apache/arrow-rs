@@ -325,7 +325,7 @@ impl<T: Default> ColumnMetrics<T> {
     /// Sum `page_histogram` into `chunk_histogram`
     fn update_histogram(
         chunk_histogram: &mut Option<LevelHistogram>,
-        page_histogram: &Option<LevelHistogram>,
+        page_histogram: Option<&LevelHistogram>,
     ) {
         if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
             chunk_hist.add(page_hist);
@@ -337,11 +337,11 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
         ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
-            &page_metrics.definition_level_histogram,
+            page_metrics.definition_level_histogram.as_ref(),
         );
         ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
-            &page_metrics.repetition_level_histogram,
+            page_metrics.repetition_level_histogram.as_ref(),
         );
     }
 

@@ -40,7 +40,7 @@ pub(crate) struct PageEncryptor {
 impl PageEncryptor {
     /// Create a [`PageEncryptor`] for a column if it should be encrypted
     pub fn create_if_column_encrypted(
-        file_encryptor: &Option<Arc<FileEncryptor>>,
+        file_encryptor: Option<&Arc<FileEncryptor>>,
         row_group_index: usize,
         column_index: usize,
         column_path: &str,

@@ -1368,7 +1368,7 @@ impl ArrowColumnWriterFactory {
     ) -> Result<Box<ArrowPageWriter>> {
         let column_path = column_descriptor.path().string();
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &self.file_encryptor,
+            self.file_encryptor.as_ref(),
             self.row_group_index,
             column_index,
             &column_path,

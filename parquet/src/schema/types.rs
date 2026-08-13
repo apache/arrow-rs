@@ -1268,7 +1268,7 @@ fn build_tree<'a>(
 }
 
 /// Checks if the logical type is valid.
-fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
+fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
     if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
         && *bit_width != 8
         && *bit_width != 16
@@ -1341,7 +1341,7 @@ fn schema_from_array_helper<'a>(
     // LogicalType is prefered to ConvertedType, but both may be present.
     let logical_type = element.logical_type;
 
-    check_logical_type(&logical_type)?;
+    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {
