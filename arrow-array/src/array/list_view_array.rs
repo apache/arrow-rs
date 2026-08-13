@@ -288,7 +288,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// The field that describes the values of this list.
-    pub fn field(&self) -> &FieldRef {
+    pub fn value_field(&self) -> &FieldRef {
         match &self.data_type {
             DataType::ListView(f) | DataType::LargeListView(f) => f,
             _ => unreachable!(),

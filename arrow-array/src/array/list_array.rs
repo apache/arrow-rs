@@ -323,7 +323,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// The field that describes the values of this list.
-    pub fn field(&self) -> &FieldRef {
+    pub fn value_field(&self) -> &FieldRef {
         match &self.data_type {
             DataType::List(f) | DataType::LargeList(f) => f,
             _ => unreachable!(),
