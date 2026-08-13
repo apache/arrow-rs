@@ -1228,7 +1228,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            for predicate in filter.predicates.iter_mut() {
+            for predicate in &mut filter.predicates {
                 // break early if we have ruled out all rows
                 if !plan_builder.selects_any() {
                     break;

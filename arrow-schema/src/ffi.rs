@@ -116,7 +116,7 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     if !schema.private_data.is_null() {
         let private_data =
             unsafe { Box::from_raw(schema.private_data.cast::<SchemaPrivateData>()) };
-        for child in private_data.children.iter() {
+        for child in &private_data.children {
             drop(unsafe { Box::from_raw(*child) })
         }
         if !private_data.dictionary.is_null() {

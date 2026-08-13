@@ -891,7 +891,7 @@ impl RecordEncoder {
     ) -> Result<Vec<FieldEncoder<'a>>, AvroError> {
         let arrays = batch.columns();
         let mut out = Vec::with_capacity(self.columns.len());
-        for col_plan in self.columns.iter() {
+        for col_plan in &self.columns {
             let arrow_index = col_plan.arrow_index;
             let array = arrays.get(arrow_index).ok_or_else(|| {
                 AvroError::SchemaError(format!("Column index {arrow_index} out of range"))
@@ -924,7 +924,7 @@ impl RecordEncoder {
         let n = batch.num_rows();
         let prefix = self.prefix.as_ref().map(|p| p.as_slice());
         for_rows_with_prefix!(n, prefix, out, |row| {
-            for enc in column_encoders.iter_mut() {
+            for enc in &mut column_encoders {
                 enc.encode(out, row)?;
             }
         });
@@ -983,7 +983,7 @@ impl RecordEncoder {
                 });
             } else {
                 for_rows_with_prefix!(n, prefix_bytes, w, |row| {
-                    for enc in column_encoders.iter_mut() {
+                    for enc in &mut column_encoders {
                         enc.encode(&mut w, row)?;
                     }
                     offsets.push(w.get_ref().len());
@@ -1972,7 +1972,7 @@ impl<'a> StructEncoder<'a> {
     }
 
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
-        for encoder in self.encoders.iter_mut() {
+        for encoder in &mut self.encoders {
             encoder.encode(out, idx)?;
         }
         Ok(())

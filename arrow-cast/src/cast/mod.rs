@@ -2856,7 +2856,7 @@ where
 
     let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
 
-    for val in view_array.iter() {
+    for val in &view_array {
         byte_array_builder.append_option(val);
     }
 
@@ -7737,7 +7737,7 @@ mod tests {
     {
         let string_view_array = {
             let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for s in VIEW_TEST_DATA.iter() {
+            for s in &VIEW_TEST_DATA {
                 builder.append_option(*s);
             }
             builder.finish()
@@ -7772,7 +7772,7 @@ mod tests {
     {
         let view_array = {
             let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for s in VIEW_TEST_DATA.iter() {
+            for s in &VIEW_TEST_DATA {
                 builder.append_option(*s);
             }
             builder.finish()
@@ -9850,7 +9850,7 @@ mod tests {
             3,
         )) as ArrayRef;
 
-        for (values, lengths) in cases.iter() {
+        for (values, lengths) in &cases {
             let array = Arc::new(ListArray::new(
                 field.clone(),
                 OffsetBuffer::from_lengths(lengths.clone()),
@@ -9925,7 +9925,7 @@ mod tests {
             3,
         )) as ArrayRef;
 
-        for (values, offsets, lengths) in cases.iter() {
+        for (values, offsets, lengths) in &cases {
             let array = Arc::new(ListViewArray::new(
                 field.clone(),
                 offsets.clone().into(),

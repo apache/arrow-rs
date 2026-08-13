@@ -911,7 +911,7 @@ impl LevelHistogram {
 
     /// Sets the values of all histogram levels to 0.
     pub fn reset(&mut self) {
-        for value in self.inner.iter_mut() {
+        for value in &mut self.inner {
             *value = 0;
         }
     }

@@ -222,7 +222,7 @@ impl WritableMetadataBuilder {
 
         // Write offsets
         let mut cur_offset = 0;
-        for key in field_names.iter() {
+        for key in &field_names {
             write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }

@@ -1089,7 +1089,7 @@ fn write_and_read_stats(
 
     // Check column statistics produced at write time are available in full
     let row_group = metadata.row_group(0);
-    for column in row_group.columns().iter() {
+    for column in row_group.columns() {
         check_column_stats(column, true);
     }
 

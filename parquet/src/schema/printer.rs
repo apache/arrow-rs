@@ -78,7 +78,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     }
     if let Some(metadata) = file_metadata.key_value_metadata() {
         writeln!(out, "metadata:");
-        for kv in metadata.iter() {
+        for kv in metadata {
             writeln!(
                 out,
                 "  {}: {}",

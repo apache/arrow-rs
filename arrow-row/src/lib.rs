@@ -2383,7 +2383,7 @@ unsafe fn decode_column(
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
                         // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows.iter() {
+                        for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
                             let consumed_length = 1 + child_row.len() - remaining_len;
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
@@ -5391,7 +5391,7 @@ mod tests {
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
         let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays.iter() {
+        for array in &arrays {
             rows.clear();
             converter
                 .append(&mut rows, std::slice::from_ref(array))

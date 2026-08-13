@@ -231,7 +231,7 @@ impl ColumnCloseResult {
                 .build()?;
             if let Some(offset_index) = self.offset_index.as_mut() {
                 let mut offset = dictionary_len as i64;
-                for location in offset_index.page_locations.iter_mut() {
+                for location in &mut offset_index.page_locations {
                     location.offset = offset;
                     offset += location.compressed_page_size as i64;
                 }

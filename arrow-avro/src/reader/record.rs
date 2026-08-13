@@ -2513,7 +2513,7 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
-        for field_proj in self.writer_projections.iter() {
+        for field_proj in &self.writer_projections {
             match field_proj {
                 FieldProjection::ToReader(index) => encodings[*index].decode(buf)?,
                 FieldProjection::Skip(skipper) => skipper.skip(buf)?,
@@ -2716,7 +2716,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Struct(fields) => {
-                for f in fields.iter() {
+                for f in fields {
                     f.skip(buf)?
                 }
                 Ok(())

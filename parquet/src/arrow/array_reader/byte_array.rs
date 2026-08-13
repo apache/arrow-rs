@@ -461,7 +461,7 @@ impl ByteArrayDecoderDeltaLength {
 
         let mut total_bytes = 0;
 
-        for l in lengths.iter() {
+        for l in &lengths {
             if *l < 0 {
                 return Err(ParquetError::General(
                     "negative delta length byte array length".to_string(),

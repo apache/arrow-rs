@@ -371,7 +371,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let shifted_offsets: Vec<O> = match self.into_inner().into_inner().into_vec() {
             // If we can reuse the buffer, update in place
             Ok(mut v) => {
-                for offset in v.iter_mut() {
+                for offset in &mut v {
                     *offset = *offset - rhs;
                 }
                 v

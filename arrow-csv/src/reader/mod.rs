@@ -472,7 +472,7 @@ pub fn infer_schema_from_files(
         ..Default::default()
     };
 
-    for fname in files.iter() {
+    for fname in files {
         let f = File::open(fname)?;
         let (schema, records_read) = format.infer_schema(f, Some(records_to_read))?;
         if records_read == 0 {

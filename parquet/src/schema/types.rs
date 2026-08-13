@@ -1173,7 +1173,7 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_nodes = 1usize; // count root
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_nodes(f, &mut n_nodes);
     }
     Ok(n_nodes)
@@ -1194,7 +1194,7 @@ fn num_leaves(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_leaves = 0usize;
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_leaves(f, &mut n_leaves);
     }
     Ok(n_leaves)

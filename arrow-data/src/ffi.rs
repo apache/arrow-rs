@@ -85,7 +85,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
 
     // take ownership of `private_data`, therefore dropping it`
     let private = unsafe { Box::from_raw(array.private_data.cast::<ArrayPrivateData>()) };
-    for child in private.children.iter() {
+    for child in &private.children {
         let _ = unsafe { Box::from_raw(*child) };
     }
     if !private.dictionary.is_null() {

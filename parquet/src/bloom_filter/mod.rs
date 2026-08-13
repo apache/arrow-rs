@@ -1050,7 +1050,7 @@ mod tests {
             }
 
             // --- Per-hash verification of the two lemmas ---
-            for &h in hashes.iter() {
+            for &h in &hashes {
                 // mask(h as u32) gives the 8-bit pattern that this hash sets
                 // inside whichever block it lands in. It uses only the lower
                 // 32 bits of h, so it's the same regardless of filter size.

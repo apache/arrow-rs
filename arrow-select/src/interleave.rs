@@ -310,7 +310,7 @@ fn interleave_views<T: ByteViewType>(
     let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
     offsets.push(0);
     let mut total_buffers = 0;
-    for a in interleaved.arrays.iter() {
+    for a in &interleaved.arrays {
         total_buffers += a.data_buffers().len();
         offsets.push(total_buffers);
     }

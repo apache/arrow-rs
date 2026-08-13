@@ -983,7 +983,7 @@ mod tests {
 
         // All views should be identical
         let first_view = array.views()[0];
-        for view in array.views().iter() {
+        for view in array.views() {
             assert_eq!(*view, first_view);
         }
     }

@@ -29,7 +29,7 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
-            for child in mutable.child_data.iter_mut() {
+            for child in &mut mutable.child_data {
                 child.try_extend(index, start, start + len)?;
             }
             Ok(())
@@ -111,7 +111,7 @@ pub(super) fn extend_nulls_sparse(
     mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
 
     // Sparse: extend nulls in ALL children
-    for child in mutable.child_data.iter_mut() {
+    for child in &mut mutable.child_data {
         child.try_extend_nulls(len)?;
     }
     Ok(())
