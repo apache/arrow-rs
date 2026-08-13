@@ -201,7 +201,7 @@ fn test_primitive_slice() {
     }
 }
 
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn test_equal(lhs: &dyn Array, rhs: &dyn Array, expected: bool) {
     // equality is symmetric
     assert_eq!(lhs, lhs);

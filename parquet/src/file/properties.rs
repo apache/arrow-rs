@@ -706,7 +706,11 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    ///
+    /// # Panics
+    /// If the value is `0`.
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
         self.data_page_row_count_limit = value;
         self
     }
@@ -720,7 +724,11 @@ impl WriterPropertiesBuilder {
     /// [`set_data_page_row_count_limit`](Self::set_data_page_row_count_limit)
     /// are checked between batches, and thus the write batch size value acts as an
     /// upper-bound on the enforcement granularity of other limits.
+    ///
+    /// # Panics
+    /// If the value is `0`.
     pub fn set_write_batch_size(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 write batch size");
         self.write_batch_size = value;
         self
     }
@@ -2088,6 +2096,18 @@ mod tests {
     #[should_panic(expected = "Cannot have a 0 max row group bytes")]
     fn test_writer_properties_panic_on_zero_row_group_bytes() {
         let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 write batch size")]
+    fn test_writer_properties_panic_on_zero_write_batch_size() {
+        let _ = WriterProperties::builder().set_write_batch_size(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 data page row count limit")]
+    fn test_writer_properties_panic_on_zero_data_page_row_count_limit() {
+        let _ = WriterProperties::builder().set_data_page_row_count_limit(0);
     }
 
     #[test]
