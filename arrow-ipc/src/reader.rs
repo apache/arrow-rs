@@ -1660,9 +1660,7 @@ impl<R: Read> StreamReader<R> {
                 IpcMessage::RecordBatch(record_batch) => {
                     return Ok(Some(record_batch));
                 }
-                IpcMessage::DictionaryBatch { .. } => {
-                    continue;
-                }
+                IpcMessage::DictionaryBatch { .. } => {}
             };
         }
     }

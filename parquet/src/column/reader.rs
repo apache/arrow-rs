@@ -442,7 +442,6 @@ where
                         } => {
                             self.values_decoder
                                 .set_dict(buf, num_values, encoding, is_sorted)?;
-                            continue;
                         }
                         // 2. Data page v1
                         Page::DataPage {

@@ -62,8 +62,6 @@ where
                 row_offset += remaining_in_page;
                 current_page = pages.next();
                 current_page_included = false;
-
-                continue;
             } else {
                 if row_offset + selector.row_count == next_page.first_row_index as usize {
                     current_page = pages.next();

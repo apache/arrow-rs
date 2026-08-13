@@ -1132,7 +1132,7 @@ impl LexicographicalComparator {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -1168,7 +1168,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }

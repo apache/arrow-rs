@@ -512,7 +512,7 @@ impl<'a> Parser<'a> {
             let field = self.parse_field()?;
             fields.push(Arc::new(field));
             match self.next_token()? {
-                Token::Comma => continue,
+                Token::Comma => {}
                 Token::RParen => break,
                 tok => {
                     return Err(make_error(
@@ -863,7 +863,6 @@ impl Iterator for Tokenizer<'_> {
                 ' ' => {
                     // skip whitespace
                     self.next_char();
-                    continue;
                 }
                 '"' => {
                     return Some(self.parse_quoted_string(QuoteType::Double));

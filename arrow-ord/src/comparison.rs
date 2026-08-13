@@ -60,7 +60,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
@@ -100,7 +100,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
