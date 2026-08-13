@@ -570,7 +570,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.len())
         };
 
         if let Some(min) = min {

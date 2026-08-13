@@ -249,7 +249,7 @@ impl GeographyType {
     ///
     /// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
     pub fn algorithm(&self) -> Option<EdgeInterpolationAlgorithm> {
-        self.algorithm.or(Some(Default::default()))
+        Some(self.algorithm.unwrap_or_default())
     }
 }
 

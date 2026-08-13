@@ -546,7 +546,7 @@ mod zstd_codec {
                         .flatten()
                         .map(|size| size as usize)
                 })
-                .unwrap_or(input_buf.len().saturating_mul(4));
+                .unwrap_or_else(|| input_buf.len().saturating_mul(4));
             output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);

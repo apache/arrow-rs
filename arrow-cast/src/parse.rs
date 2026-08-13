@@ -1840,7 +1840,7 @@ mod tests {
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
-                .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }
