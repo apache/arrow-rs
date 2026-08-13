@@ -339,6 +339,10 @@ impl Buffer {
     /// Returns a slice of this buffer starting at a certain bit offset.
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len` is larger than the length of this buffer in bits
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
         if offset.is_multiple_of(8) {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
@@ -786,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
+    #[expect(clippy::float_cmp)]
     fn test_as_typed_data() {
         check_as_typed_data!(&[1i8, 3i8, 6i8], i8);
         check_as_typed_data!(&[1u8, 3u8, 6u8], u8);

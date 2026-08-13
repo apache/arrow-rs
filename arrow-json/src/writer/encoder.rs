@@ -262,21 +262,28 @@ pub struct NullableEncoder<'a> {
 
 impl<'a> NullableEncoder<'a> {
     /// Create a new encoder with a null buffer.
+    #[inline]
     pub fn new(encoder: Box<dyn Encoder + 'a>, nulls: Option<NullBuffer>) -> Self {
         Self { encoder, nulls }
     }
 
     /// Encode the value at index `idx` to `out`.
+    #[inline]
     pub fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(idx, out)
     }
 
     /// Returns whether the value at index `idx` is null.
+    #[inline]
     pub fn is_null(&self, idx: usize) -> bool {
-        self.nulls.as_ref().is_some_and(|nulls| nulls.is_null(idx))
+        match self.nulls {
+            Some(ref nulls) => nulls.is_null(idx),
+            None => false,
+        }
     }
 
     /// Returns whether the encoder has any nulls.
+    #[inline]
     pub fn has_nulls(&self) -> bool {
         match self.nulls {
             Some(ref nulls) => nulls.null_count() > 0,
@@ -286,6 +293,7 @@ impl<'a> NullableEncoder<'a> {
 }
 
 impl Encoder for NullableEncoder<'_> {
+    #[inline]
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(idx, out)
     }
@@ -482,6 +490,7 @@ struct FieldEncoder<'a> {
 }
 
 impl FieldEncoder<'_> {
+    #[inline]
     fn is_null(&self, idx: usize) -> bool {
         self.encoder.is_null(idx)
     }
