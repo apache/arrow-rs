@@ -157,6 +157,8 @@ pub fn get_column_writer<'a>(
 /// Gets a typed column writer for the specific type `T`, by "up-casting" `col_writer` of
 /// non-generic type to a generic column writer type `ColumnWriterImpl`.
 ///
+/// # Panics
+///
 /// Panics if actual enum value for `col_writer` does not match the type `T`.
 pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnWriterImpl<T> {
     T::get_column_writer(col_writer).unwrap_or_else(|| {

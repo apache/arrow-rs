@@ -37,31 +37,33 @@ use std::ffi::c_void;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowArray {
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// Logical length of the array
-    pub length: i64,
+    length: i64,
     /// Number of null items in the array
-    pub null_count: i64,
+    null_count: i64,
     /// logical offset inside the array
-    pub offset: i64,
+    offset: i64,
     /// Number of physical buffers backing this array
-    pub n_buffers: i64,
+    n_buffers: i64,
     /// Number of children this array has
-    pub n_children: i64,
+    n_children: i64,
     /// C array of pointers to the start of each physical buffer backing this array
-    pub buffers: *mut *const c_void,
+    buffers: *mut *const c_void,
     /// C array of pointers to each child array of this array
-    pub children: *mut *mut FFI_ArrowArray,
+    children: *mut *mut FFI_ArrowArray,
     /// Pointer to the underlying array of dictionary values
-    pub dictionary: *mut FFI_ArrowArray,
-    /// Pointer to a producer-provided release callback
-    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    dictionary: *mut FFI_ArrowArray,
+    /// Producer-provided release callback.
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     /// Opaque pointer to producer-provided private data
     /// When exported, this MUST contain everything that is owned by this array.
     /// For example, any buffer pointed to in `buffers` must be here, as well
     /// as the `buffers` pointer itself.
     /// In other words, everything in [FFI_ArrowArray] must be owned by
     /// `private_data` and can assume that they do not outlive `private_data`.
-    pub private_data: *mut c_void,
+    private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
@@ -251,6 +253,45 @@ impl FFI_ArrowArray {
         }
     }
 
+    /// Returns the producer-provided release callback, if any.
+    pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)> {
+        self.release
+    }
+
+    /// Returns the opaque producer-provided private data pointer.
+    pub fn private_data(&self) -> *mut c_void {
+        self.private_data
+    }
+
+    /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
+    ///
+    /// # Safety
+    ///
+    /// [`Drop`] calls this callback with a pointer to `self`. The new callback
+    /// must correctly release this array (usually by chaining to the returned
+    /// one) and must match the [`FFI_ArrowArray::private_data`] it reads. A
+    /// wrong callback is undefined behavior on drop.
+    pub unsafe fn set_release(
+        &mut self,
+        release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)> {
+        std::mem::replace(&mut self.release, release)
+    }
+
+    /// Replaces the private data pointer, returning the previous one.
+    ///
+    /// # Safety
+    ///
+    /// The old pointer is returned without being freed; the caller owns it from
+    /// here. The new pointer must match what the current
+    /// [`FFI_ArrowArray::release`] callback expects.
+    pub unsafe fn set_private_data(&mut self, private_data: *mut c_void) -> *mut c_void {
+        std::mem::replace(&mut self.private_data, private_data)
+    }
+
     /// the length of the array
     #[inline]
     pub fn len(&self) -> usize {
@@ -298,7 +339,7 @@ impl FFI_ArrowArray {
 
     /// Returns the buffer at the provided index
     ///
-    /// # Panic
+    /// # Panics
     /// Panics if index >= self.num_buffers() or the buffer is not correctly aligned
     #[inline]
     pub fn buffer(&self, index: usize) -> *const u8 {

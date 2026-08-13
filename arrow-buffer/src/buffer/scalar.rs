@@ -112,6 +112,10 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     }
 
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::new`]
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self::new(self.buffer.clone(), offset, len)
     }

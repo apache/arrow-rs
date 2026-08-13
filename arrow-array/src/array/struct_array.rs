@@ -280,6 +280,9 @@ impl StructArray {
     }
 
     /// Returns the field at `pos`.
+    ///
+    /// # Panics
+    /// Panics if `pos` is out of bounds
     pub fn column(&self, pos: usize) -> &ArrayRef {
         &self.fields[pos]
     }
@@ -339,6 +342,9 @@ impl StructArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
