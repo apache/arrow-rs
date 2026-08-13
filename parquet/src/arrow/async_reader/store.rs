@@ -342,7 +342,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("I don't exist.parquet not found:"), "{err}",);
+                assert!(err.contains("I don't exist.parquet not found:"), "{err}");
             }
         }
     }

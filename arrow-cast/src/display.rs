@@ -971,7 +971,7 @@ impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        write!(f, "{years} years {month} mons",)?;
+        write!(f, "{years} years {month} mons")?;
         Ok(())
     }
 }

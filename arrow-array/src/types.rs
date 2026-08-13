@@ -948,7 +948,7 @@ impl Date32Type {
     #[deprecated(since = "58.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         Self::to_naive_date_opt(i)
-            .unwrap_or_else(|| panic!("Date32Type::to_naive_date overflowed for date: {i}",))
+            .unwrap_or_else(|| panic!("Date32Type::to_naive_date overflowed for date: {i}"))
     }
 
     /// Converts an arrow Date32Type into a chrono::NaiveDate
@@ -988,7 +988,7 @@ impl Date32Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         Self::add_year_months_opt(date, delta).unwrap_or_else(|| {
-            panic!("Date32Type::add_year_months overflowed for date: {date}, delta: {delta}",)
+            panic!("Date32Type::add_year_months overflowed for date: {date}, delta: {delta}")
         })
     }
 
@@ -1025,7 +1025,7 @@ impl Date32Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         Self::add_day_time_opt(date, delta).unwrap_or_else(|| {
-            panic!("Date32Type::add_day_time overflowed for date: {date}, delta: {delta:?}",)
+            panic!("Date32Type::add_day_time overflowed for date: {date}, delta: {delta:?}")
         })
     }
 
@@ -1063,7 +1063,7 @@ impl Date32Type {
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         Self::add_month_day_nano_opt(date, delta).unwrap_or_else(|| {
-            panic!("Date32Type::add_month_day_nano overflowed for date: {date}, delta: {delta:?}",)
+            panic!("Date32Type::add_month_day_nano overflowed for date: {date}, delta: {delta:?}")
         })
     }
 
@@ -1102,7 +1102,7 @@ impl Date32Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         Self::subtract_year_months_opt(date, delta).unwrap_or_else(|| {
-            panic!("Date32Type::subtract_year_months overflowed for date: {date}, delta: {delta}",)
+            panic!("Date32Type::subtract_year_months overflowed for date: {date}, delta: {delta}")
         })
     }
 
@@ -1139,7 +1139,7 @@ impl Date32Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         Self::subtract_day_time_opt(date, delta).unwrap_or_else(|| {
-            panic!("Date32Type::subtract_day_time overflowed for date: {date}, delta: {delta:?}",)
+            panic!("Date32Type::subtract_day_time overflowed for date: {date}, delta: {delta:?}")
         })
     }
 
