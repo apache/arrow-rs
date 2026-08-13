@@ -1310,7 +1310,7 @@ struct ReaderPageIterator<T: ChunkReader> {
 
 impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     /// Return the next SerializedPageReader
-    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
+    fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();

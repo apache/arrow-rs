@@ -818,7 +818,13 @@ impl ArrowPageWriter {
         self.page_encryptor.as_mut()
     }
 
+    // Mirrors the signature of the encryption-enabled version above, so that the
+    // callers do not need a `cfg` of their own.
     #[cfg(not(feature = "encryption"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "mirrors the encryption-enabled signature"
+    )]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }

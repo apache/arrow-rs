@@ -1464,7 +1464,7 @@ impl<'a> Encoder<'a> {
 
 struct BooleanEncoder<'a>(&'a arrow_array::BooleanArray);
 impl BooleanEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_bool(out, self.0.value(idx))
     }
 }
@@ -1472,7 +1472,7 @@ impl BooleanEncoder<'_> {
 /// Generic Avro `int` encoder for primitive arrays with `i32` native values.
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx))
     }
 }
@@ -1480,7 +1480,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 /// Generic Avro `long` encoder for primitive arrays with `i64` native values.
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_long(out, self.0.value(idx))
     }
 }
@@ -1489,7 +1489,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 struct Time32SecondsToMillisEncoder<'a>(&'a PrimitiveArray<Time32SecondType>);
 impl<'a> Time32SecondsToMillisEncoder<'a> {
     #[inline]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let secs = self.0.value(idx);
         let millis = secs
             .checked_mul(1000)
@@ -1504,7 +1504,7 @@ struct TimestampSecondsToMillisEncoder<'a>(&'a PrimitiveArray<TimestampSecondTyp
 #[cfg(not(feature = "avro_custom_types"))]
 impl<'a> TimestampSecondsToMillisEncoder<'a> {
     #[inline]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let secs = self.0.value(idx);
         let millis = secs.checked_mul(1000).ok_or_else(|| {
             AvroError::InvalidArgument("timestamp(secs) * 1000 overflowed".into())
@@ -1518,7 +1518,7 @@ impl<'a> TimestampSecondsToMillisEncoder<'a> {
 struct Int8Encoder<'a>(&'a PrimitiveArray<Int8Type>);
 #[cfg(feature = "avro_custom_types")]
 impl Int8Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1528,7 +1528,7 @@ impl Int8Encoder<'_> {
 struct Int16Encoder<'a>(&'a PrimitiveArray<Int16Type>);
 #[cfg(feature = "avro_custom_types")]
 impl Int16Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1538,7 +1538,7 @@ impl Int16Encoder<'_> {
 struct UInt8Encoder<'a>(&'a PrimitiveArray<UInt8Type>);
 #[cfg(feature = "avro_custom_types")]
 impl UInt8Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1548,7 +1548,7 @@ impl UInt8Encoder<'_> {
 struct UInt16Encoder<'a>(&'a PrimitiveArray<UInt16Type>);
 #[cfg(feature = "avro_custom_types")]
 impl UInt16Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1558,7 +1558,7 @@ impl UInt16Encoder<'_> {
 struct UInt32Encoder<'a>(&'a PrimitiveArray<UInt32Type>);
 #[cfg(feature = "avro_custom_types")]
 impl UInt32Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_long(out, self.0.value(idx) as i64)
     }
 }
@@ -1568,7 +1568,7 @@ impl UInt32Encoder<'_> {
 struct UInt64FixedEncoder<'a>(&'a PrimitiveArray<UInt64Type>);
 #[cfg(feature = "avro_custom_types")]
 impl UInt64FixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx);
         out.write_all(&v.to_le_bytes())?;
         Ok(())
@@ -1580,7 +1580,7 @@ impl UInt64FixedEncoder<'_> {
 struct Float16FixedEncoder<'a>(&'a Float16Array);
 #[cfg(feature = "avro_custom_types")]
 impl Float16FixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx);
         out.write_all(&v.to_le_bytes())?;
         Ok(())
@@ -1598,7 +1598,7 @@ impl Float16FixedEncoder<'_> {
 struct IntervalMonthDayNanoFixedEncoder<'a>(&'a PrimitiveArray<IntervalMonthDayNanoType>);
 #[cfg(feature = "avro_custom_types")]
 impl IntervalMonthDayNanoFixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx);
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(v);
         out.write_all(&months.to_le_bytes())?;
@@ -1613,7 +1613,7 @@ impl IntervalMonthDayNanoFixedEncoder<'_> {
 struct IntervalYearMonthFixedEncoder<'a>(&'a PrimitiveArray<IntervalYearMonthType>);
 #[cfg(feature = "avro_custom_types")]
 impl IntervalYearMonthFixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let months = self.0.value(idx);
         out.write_all(&months.to_le_bytes())?;
         Ok(())
@@ -1625,7 +1625,7 @@ impl IntervalYearMonthFixedEncoder<'_> {
 struct IntervalDayTimeFixedEncoder<'a>(&'a PrimitiveArray<IntervalDayTimeType>);
 #[cfg(feature = "avro_custom_types")]
 impl IntervalDayTimeFixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let dt = self.0.value(idx);
         out.write_all(&dt.days.to_le_bytes())?;
         out.write_all(&dt.milliseconds.to_le_bytes())?;
@@ -1638,7 +1638,7 @@ impl IntervalDayTimeFixedEncoder<'_> {
 struct Int8ToIntEncoder<'a>(&'a PrimitiveArray<Int8Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl Int8ToIntEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1648,7 +1648,7 @@ impl Int8ToIntEncoder<'_> {
 struct Int16ToIntEncoder<'a>(&'a PrimitiveArray<Int16Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl Int16ToIntEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1658,7 +1658,7 @@ impl Int16ToIntEncoder<'_> {
 struct UInt8ToIntEncoder<'a>(&'a PrimitiveArray<UInt8Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl UInt8ToIntEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1668,7 +1668,7 @@ impl UInt8ToIntEncoder<'_> {
 struct UInt16ToIntEncoder<'a>(&'a PrimitiveArray<UInt16Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl UInt16ToIntEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx) as i32)
     }
 }
@@ -1678,7 +1678,7 @@ impl UInt16ToIntEncoder<'_> {
 struct UInt32ToLongEncoder<'a>(&'a PrimitiveArray<UInt32Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl UInt32ToLongEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_long(out, self.0.value(idx) as i64)
     }
 }
@@ -1688,7 +1688,7 @@ impl UInt32ToLongEncoder<'_> {
 struct UInt64ToLongEncoder<'a>(&'a PrimitiveArray<UInt64Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl UInt64ToLongEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx);
         if v > i64::MAX as u64 {
             return Err(AvroError::InvalidArgument(format!(
@@ -1704,7 +1704,7 @@ impl UInt64ToLongEncoder<'_> {
 struct Float16ToFloatEncoder<'a>(&'a Float16Array);
 #[cfg(not(feature = "avro_custom_types"))]
 impl Float16ToFloatEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         out.write_all(&self.0.value(idx).to_f32().to_bits().to_le_bytes())?;
         Ok(())
     }
@@ -1715,7 +1715,7 @@ impl Float16ToFloatEncoder<'_> {
 struct Date64ToLongEncoder<'a>(&'a PrimitiveArray<Date64Type>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl Date64ToLongEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_long(out, self.0.value(idx))
     }
 }
@@ -1725,7 +1725,7 @@ impl Date64ToLongEncoder<'_> {
 struct Time64NanosToMicrosEncoder<'a>(&'a PrimitiveArray<Time64NanosecondType>);
 #[cfg(not(feature = "avro_custom_types"))]
 impl Time64NanosToMicrosEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let nanos = self.0.value(idx);
         let micros = nanos / 1000;
         write_long(out, micros)
@@ -1735,7 +1735,7 @@ impl Time64NanosToMicrosEncoder<'_> {
 /// Unified binary encoder generic over offset size (i32/i64).
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
 impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
@@ -1743,7 +1743,7 @@ impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
 /// BinaryView (byte view) encoder.
 struct BinaryViewEncoder<'a>(&'a BinaryViewArray);
 impl BinaryViewEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
@@ -1751,14 +1751,14 @@ impl BinaryViewEncoder<'_> {
 /// StringView encoder.
 struct Utf8ViewEncoder<'a>(&'a StringViewArray);
 impl Utf8ViewEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
 }
 
 struct F32Encoder<'a>(&'a arrow_array::Float32Array);
 impl F32Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         // Avro float: 4 bytes, IEEE-754 little-endian
         out.write_all(&self.0.value(idx).to_bits().to_le_bytes())?;
         Ok(())
@@ -1767,7 +1767,7 @@ impl F32Encoder<'_> {
 
 struct F64Encoder<'a>(&'a arrow_array::Float64Array);
 impl F64Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         // Avro double: 8 bytes, IEEE-754 little-endian
         out.write_all(&self.0.value(idx).to_bits().to_le_bytes())
             .map_err(Into::into)
@@ -1777,7 +1777,7 @@ impl F64Encoder<'_> {
 struct Utf8GenericEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
 impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
 }
@@ -1885,7 +1885,7 @@ struct EnumEncoder<'a> {
     keys: &'a PrimitiveArray<Int32Type>,
 }
 impl EnumEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, row: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, row: usize) -> Result<(), AvroError> {
         write_int(out, self.keys.value(row))
     }
 }
@@ -2140,7 +2140,7 @@ impl<'a> FixedSizeListEncoder<'a> {
 /// Spec: a fixed is encoded as exactly `size` bytes, with no length prefix.
 struct FixedEncoder<'a>(&'a FixedSizeBinaryArray);
 impl FixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx); // &[u8] of fixed width
         out.write_all(v)?;
         Ok(())
@@ -2151,7 +2151,7 @@ impl FixedEncoder<'_> {
 /// Spec: uuid is a logical type over string (RFC‑4122). We output hyphenated form.
 struct UuidEncoder<'a>(&'a FixedSizeBinaryArray);
 impl UuidEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let mut buf = [0u8; 1 + uuid::fmt::Hyphenated::LENGTH];
         buf[0] = 0x48;
         let v = self.0.value(idx);
@@ -2235,7 +2235,7 @@ impl IntervalToDurationParts for IntervalDayTimeType {
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P> {
     #[inline(always)]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let parts = P::duration_parts(self.0.value(idx))?;
         let months = parts.months.to_le_bytes();
         let days = parts.days.to_le_bytes();
@@ -2308,7 +2308,7 @@ impl<'a, const N: usize, A: DecimalBeBytes<N>> DecimalEncoder<'a, N, A> {
         Self { arr, fixed_size }
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+    fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let be = self.arr.value_be_bytes(idx);
         match self.fixed_size {
             Some(n) => write_sign_extended(out, &be, n),

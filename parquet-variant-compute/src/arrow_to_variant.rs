@@ -501,7 +501,7 @@ pub(crate) struct NullArrowToVariantBuilder;
 
 impl NullArrowToVariantBuilder {
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         _index: usize,
     ) -> Result<(), ArrowError> {

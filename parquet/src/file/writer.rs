@@ -1072,7 +1072,13 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+// These mirror the signatures of the encryption-enabled versions above, so that the
+// callers do not need a `cfg` of their own.
 #[cfg(not(feature = "encryption"))]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "mirrors the encryption-enabled signatures"
+)]
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
