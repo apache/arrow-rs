@@ -34,11 +34,11 @@ use DataType::*;
 
 /// Low level Arrow [Schema] to IPC bytes converter
 ///
-/// See also [`fb_to_schema`] for the reverse operation
+/// See also [`try_fb_to_schema`] for the reverse operation
 ///
 /// # Example
 /// ```
-/// # use arrow_ipc::convert::{fb_to_schema, IpcSchemaEncoder};
+/// # use arrow_ipc::convert::{try_fb_to_schema, IpcSchemaEncoder};
 /// # use arrow_ipc::root_as_schema;
 /// # use arrow_ipc::writer::DictionaryTracker;
 /// # use arrow_schema::{DataType, Field, Schema};
@@ -59,7 +59,7 @@ use DataType::*;
 ///
 ///  // convert the IPC bytes back to an Arrow schema
 ///  let ipc_schema = root_as_schema(ipc_bytes).unwrap();
-///  let schema2 = fb_to_schema(ipc_schema);
+///  let schema2 = try_fb_to_schema(ipc_schema).unwrap();
 /// assert_eq!(schema, schema2);
 /// ```
 #[derive(Debug)]
@@ -200,8 +200,9 @@ fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
 
 /// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 ///
-/// This panics on malformed input; prefer the fallible [`try_fb_to_schema`].
-/// kept for backwards compatibility only.
+/// Deprecated: this panics on malformed input. Use the fallible
+/// [`try_fb_to_schema`] instead.
+#[deprecated(since = "59.2.0", note = "Use `try_fb_to_schema` instead")]
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     try_fb_to_schema(fb).expect("invalid IPC schema")
 }
@@ -1382,7 +1383,7 @@ mod tests {
 
         // read back fields
         let ipc = crate::root_as_schema(fb.finished_data()).unwrap();
-        let schema2 = fb_to_schema(ipc);
+        let schema2 = try_fb_to_schema(ipc).unwrap();
         assert_eq!(schema, schema2);
     }
 
@@ -1428,7 +1429,10 @@ mod tests {
         assert_eq!(schema.endianness(), schema2.endianness());
         assert!(schema.features().is_none());
         assert!(schema2.features().is_none());
-        assert_eq!(fb_to_schema(schema), fb_to_schema(schema2));
+        assert_eq!(
+            try_fb_to_schema(schema).unwrap(),
+            try_fb_to_schema(schema2).unwrap()
+        );
 
         assert_eq!(ipc.version(), ipc2.version());
         assert_eq!(ipc.header_type(), ipc2.header_type());
