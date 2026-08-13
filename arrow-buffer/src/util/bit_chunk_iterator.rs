@@ -368,7 +368,7 @@ impl Iterator for BitChunkIterator<'_> {
 
         // cast to *const u64 should be fine since we are using read_unaligned below
         #[expect(clippy::cast_ptr_alignment)]
-        let raw_data = self.buffer.as_ptr() as *const u64;
+        let raw_data = self.buffer.as_ptr().cast::<u64>();
 
         // bit-packed buffers are stored starting with the least-significant byte first
         // so when reading as u64 on a big-endian machine, the bytes need to be swapped
@@ -382,7 +382,7 @@ impl Iterator for BitChunkIterator<'_> {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
             let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
+                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
 
             (current >> bit_offset) | (next << (64 - bit_offset))
         };

@@ -161,7 +161,7 @@ impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {
         // SAFETY: Verified alignment in From<Buffer>
         unsafe {
             std::slice::from_raw_parts(
-                self.buffer.as_ptr() as *const T,
+                self.buffer.as_ptr().cast::<T>(),
                 self.buffer.len() / std::mem::size_of::<T>(),
             )
         }

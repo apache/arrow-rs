@@ -554,7 +554,7 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,

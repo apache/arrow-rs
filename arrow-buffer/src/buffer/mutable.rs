@@ -657,7 +657,7 @@ impl MutableBuffer {
             // this assumes that `[ToByteSlice]` can be copied directly
             // without calling `to_byte_slice` for each element,
             // which is correct for all ArrowNativeType implementations.
-            let src = items.as_ptr() as *const u8;
+            let src = items.as_ptr().cast::<u8>();
             let dst = self.data.as_ptr().add(self.len);
             std::ptr::copy_nonoverlapping(src, dst, additional);
         }
@@ -1182,7 +1182,7 @@ impl Drop for MutableBuffer {
     fn drop(&mut self) {
         if self.layout.size() != 0 {
             // Safety: data was allocated with standard allocator with given layout
-            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+            unsafe { std::alloc::dealloc(self.data.as_ptr().cast(), self.layout) };
         }
     }
 }

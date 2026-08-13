@@ -84,7 +84,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     let array = unsafe { &mut *array };
 
     // take ownership of `private_data`, therefore dropping it`
-    let private = unsafe { Box::from_raw(array.private_data as *mut ArrayPrivateData) };
+    let private = unsafe { Box::from_raw(array.private_data.cast::<ArrayPrivateData>()) };
     for child in private.children.iter() {
         let _ = unsafe { Box::from_raw(*child) };
     }
@@ -167,7 +167,7 @@ impl FFI_ArrowArray {
         let buffers_ptr = buffers
             .iter()
             .filter_map(|maybe_buffer| match maybe_buffer {
-                Some(b) => Some(b.as_ptr() as *const c_void),
+                Some(b) => Some(b.as_ptr().cast::<c_void>()),
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.
                 None if data_layout.can_contain_null_mask => Some(std::ptr::null()),
@@ -215,7 +215,7 @@ impl FFI_ArrowArray {
             children: private_data.children.as_mut_ptr(),
             dictionary,
             release: Some(release_array),
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
         }
     }
 
@@ -306,7 +306,7 @@ impl FFI_ArrowArray {
         assert!(index < self.num_buffers());
         // SAFETY:
         // If buffers is not null must be valid for reads up to num_buffers
-        unsafe { std::ptr::read_unaligned((self.buffers as *mut *const u8).add(index)) }
+        unsafe { std::ptr::read_unaligned(self.buffers.cast::<*const u8>().add(index)) }
     }
 
     /// Returns the number of buffers
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(0, ffi_array.n_buffers);
 
         let private_data =
-            unsafe { Box::from_raw(ffi_array.private_data as *mut ArrayPrivateData) };
+            unsafe { Box::from_raw(ffi_array.private_data.cast::<ArrayPrivateData>()) };
 
         assert_eq!(0, private_data.buffers_ptr.len());
 

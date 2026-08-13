@@ -446,7 +446,7 @@ impl Sbbf {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
-                self.0.as_ptr() as *const u8,
+                self.0.as_ptr().cast::<u8>(),
                 self.0.len() * size_of::<Block>(),
             )
         };

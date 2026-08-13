@@ -358,7 +358,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
         unsafe {
             std::slice::from_raw_parts(
-                (std::ptr::from_ref::<u128>(view) as *const u8).wrapping_add(4),
+                std::ptr::from_ref::<u128>(view)
+                    .cast::<u8>()
+                    .wrapping_add(4),
                 len,
             )
         }

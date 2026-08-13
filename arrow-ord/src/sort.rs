@@ -373,7 +373,7 @@ fn sort_bytes<T: ByteArrayType>(
             let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
             let prefix = if slice.len() >= 4 {
-                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
+                let raw = std::ptr::read_unaligned(slice.as_ptr().cast::<u32>());
                 u32::from_be(raw)
             } else if slice.is_empty() {
                 // Handle empty slice case to avoid shift overflow

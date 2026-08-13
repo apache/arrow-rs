@@ -62,8 +62,8 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 // Need to discard fat pointer for equality check
                 // - https://stackoverflow.com/a/67114787
                 // - https://github.com/rust-lang/rust/issues/46139
-                let values_ptr = std::ptr::from_ref(values.as_ref()) as *const ();
-                let dict_ptr = std::ptr::from_ref(dictionary.as_ref()) as *const ();
+                let values_ptr = std::ptr::from_ref(values.as_ref()).cast::<()>();
+                let dict_ptr = std::ptr::from_ref(dictionary.as_ref()).cast::<()>();
                 if values_ptr == dict_ptr {
                     Some(keys)
                 } else if keys.is_empty() {
