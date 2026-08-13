@@ -29,6 +29,8 @@ pub use base64::prelude::*;
 
 /// Base64 encode each element of `array` with the provided [`Engine`]
 ///
+/// # Panics
+///
 /// Panics if the `Engine` emits output that is not valid UTF-8. A correct
 /// `Engine` never does, but it is a safe trait so a misbehaving impl could;
 /// validating keeps the returned [`GenericStringArray`] sound (#10284).

@@ -34,7 +34,7 @@ impl<'a> BitIterator<'a> {
     /// Create a new [`BitIterator`] from the provided `buffer`,
     /// and `offset` and `len` in bits
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if `buffer` is too short for the provided offset and length
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {

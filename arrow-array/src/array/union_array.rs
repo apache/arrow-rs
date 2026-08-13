@@ -328,6 +328,9 @@ impl UnionArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         let (offsets, fields) = match self.offsets.as_ref() {
             // If dense union, slice offsets

@@ -554,7 +554,7 @@ impl Field {
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
     /// panics if this [`Field`] does not have this extension type.
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// This calls [`Field::try_extension_type`] and panics when it returns an
     /// error.
