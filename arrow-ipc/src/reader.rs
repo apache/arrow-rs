@@ -967,7 +967,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// # use arrow_array::*;
 /// # use arrow_array::types::Int32Type;
 /// # use arrow_buffer::Buffer;
-/// # use arrow_ipc::convert::fb_to_schema;
+/// # use arrow_ipc::convert::try_fb_to_schema;
 /// # use arrow_ipc::reader::{FileDecoder, read_footer_length};
 /// # use arrow_ipc::root_as_footer;
 /// # use arrow_ipc::writer::FileWriter;
@@ -995,7 +995,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
 /// let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 ///
-/// let back = fb_to_schema(footer.schema().unwrap());
+/// let back = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 /// assert_eq!(&back, schema.as_ref());
 ///
 /// let mut decoder = FileDecoder::new(schema, footer.version());
@@ -1256,7 +1256,7 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = Arc::new(crate::convert::fb_to_schema(ipc_schema));
+        let schema = Arc::new(crate::convert::try_fb_to_schema(ipc_schema)?);
 
         let projected_schema = match &self.projection {
             Some(projection) => Arc::new(schema.project(projection)?),
@@ -1604,7 +1604,7 @@ impl<R: Read> StreamReader<R> {
         let schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::ParseError("Failed to parse schema from message header".to_string())
         })?;
-        let schema = crate::convert::fb_to_schema(schema);
+        let schema = crate::convert::try_fb_to_schema(schema)?;
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1686,7 +1686,7 @@ impl<R: Read> StreamReader<R> {
                 let schema = message.header_as_schema().ok_or_else(|| {
                     ArrowError::ParseError("Failed to parse schema from message header".to_string())
                 })?;
-                let arrow_schema = crate::convert::fb_to_schema(schema);
+                let arrow_schema = crate::convert::try_fb_to_schema(schema)?;
                 IpcMessage::Schema(arrow_schema)
             }
             Message::MessageHeader::RecordBatch => {
@@ -1955,7 +1955,7 @@ impl<R: Read> MessageReader<R> {
 mod tests {
     use std::io::Cursor;
 
-    use crate::convert::fb_to_schema;
+    use crate::convert::try_fb_to_schema;
     use crate::writer::{
         DictionaryTracker, IpcDataGenerator, IpcWriteOptions, unslice_run_array, write_message,
     };
@@ -2530,7 +2530,7 @@ mod tests {
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
             .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid footer: {e}")))?;
 
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         let mut decoder = unsafe {
             FileDecoder::new(Arc::new(schema), footer.version())
@@ -3654,7 +3654,7 @@ mod tests {
 
         let msg = parse_message(&schema_bytes).expect("parse_message");
         let ipc_schema = msg.header_as_schema().expect("header_as_schema");
-        let new_schema = fb_to_schema(ipc_schema);
+        let new_schema = try_fb_to_schema(ipc_schema).unwrap();
 
         assert_eq!(schema, new_schema);
     }

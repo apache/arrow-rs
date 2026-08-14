@@ -229,8 +229,12 @@ impl StreamDecoder {
                                 ));
                             }
 
-                            let ipc_schema = message.header_as_schema().unwrap();
-                            let schema = crate::convert::fb_to_schema(ipc_schema);
+                            let ipc_schema = message.header_as_schema().ok_or_else(|| {
+                                ArrowError::ParseError(
+                                    "Unable to read IPC message as schema".to_string(),
+                                )
+                            })?;
+                            let schema = crate::convert::try_fb_to_schema(ipc_schema)?;
                             self.state = DecoderState::default();
                             self.schema = Some(Arc::new(schema));
                         }
