@@ -170,7 +170,7 @@ impl From<crate::Field<'_>> for Field {
 /// Convert an IPC Field to Arrow Field
 fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
     let arrow_field = if let Some(dictionary) = field.dictionary() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field::new_dict(
             field.name().unwrap_or_default(),
             get_data_type(field, true)?,
@@ -1352,7 +1352,7 @@ mod tests {
                     ),
                     true,
                 ),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1360,7 +1360,7 @@ mod tests {
                     123,
                     true,
                 ),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
