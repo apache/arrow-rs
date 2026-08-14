@@ -49,7 +49,7 @@ where
         dst = unsafe { dst.add(1) };
     }
     assert_eq!(
-        unsafe { dst.offset_from(buffer.as_ptr() as *mut T) as usize },
+        unsafe { dst.offset_from(buffer.as_ptr().cast::<T>()) as usize },
         upper,
         "Trusted iterator length was not accurately reported"
     );

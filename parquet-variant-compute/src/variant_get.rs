@@ -292,10 +292,9 @@ fn shredded_get_path(
                     // Propagating metadata is not necessary for an all-NULL array, but is cheaper than constructing
                     // a new empty metadata array. (n * 3 bytes vs Arc bump)
                     let metadata = input.metadata_column().clone();
-                    let arr = VariantArray::from_parts(
+                    let arr = VariantArray::from_parts_unshredded(
                         metadata,
                         all_null_value_column(num_rows),
-                        None,
                         all_nulls,
                     );
                     return Ok(ArrayRef::from(arr));
@@ -343,26 +342,26 @@ fn shredded_get_path(
     //
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
-    if !as_field.has_valid_extension_type::<VariantType>() {
-        if let DataType::Struct(fields) = as_field.data_type() {
-            if target.typed_value_column().is_none() {
-                return shred_basic_variant(target, VariantPath::default(), Some(as_field));
-            }
-
-            let children = fields
-                .iter()
-                .map(|field| {
-                    let path = &[VariantPathElement::from(field.name().as_str())];
-                    shredded_get_path(&target, path, Some(field), cast_options)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            return Ok(Arc::new(StructArray::try_new(
-                fields.clone(),
-                children,
-                target.nulls().cloned(),
-            )?));
+    if !as_field.has_valid_extension_type::<VariantType>()
+        && let DataType::Struct(fields) = as_field.data_type()
+    {
+        if target.typed_value_column().is_none() {
+            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
+
+        let children = fields
+            .iter()
+            .map(|field| {
+                let path = &[VariantPathElement::from(field.name().as_str())];
+                shredded_get_path(&target, path, Some(field), cast_options)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        return Ok(Arc::new(StructArray::try_new(
+            fields.clone(),
+            children,
+            target.nulls().cloned(),
+        )?));
     }
 
     // Not a struct, so directly shred the variant as the requested type
@@ -423,6 +422,26 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
 /// 1. `as_type: None`: a VariantArray is returned. The values in this new VariantArray will point
 ///    to the specified path.
 /// 2. `as_type: Some(<specific field>)`: an array of the specified type is returned.
+///
+/// # Casting Semantics
+///
+/// Scalar conversion semantics intentionally follow Arrow cast behavior where applicable.
+/// Conversions in this module delegate to Arrow compute cast helpers such as
+/// `num_cast`, `cast_num_to_bool`, `single_bool_to_numeric`, and
+/// `cast_single_string_to_boolean_default`.
+///
+/// - Getting `DataType::Boolean` accepts boolean, numeric, and string variants.
+///   Numeric zero maps to `false`; non-zero maps to `true`. String parsing follows
+///   Arrow UTF8-to-boolean cast rules.
+/// - Getting numeric datatypes such as `DataType::Int8`, `DataType::Int16`, `DataType::Int32`,
+///   `DataType::Int64`, `DataType::UInt8`, `DataType::UInt16`, `DataType::UInt32`, `DataType::UInt64`,
+///   `DataType::Float16`, `DataType::Float32`, `DataType::Float64` accept
+///   boolean and numeric variants (integers, floating-point, and decimals).
+///   They return `None` when conversion is not possible.
+/// - Getting decimals such as `DataType::Decimal32`, `DataType::Decimal64`, `DataType::Decimal128`,
+///   `DataType::Decimal256` accept compatible decimal variants, integer variants,
+///   float variants and string variants.
+///   They return `None` when conversion is not possible.
 ///
 /// TODO: How would a caller request a struct or list type where the fields/elements can be any
 /// variant? Caller can pass None as the requested type to fetch a specific path, but it would
@@ -2328,7 +2347,7 @@ mod test {
         println!("Depth 1 (shredded) passed");
     }
 
-    /// Test depth 2: Double nested field access "a.b.x" with Int32 conversion  
+    /// Test depth 2: Double nested field access "a.b.x" with Int32 conversion
     /// Covers shredded vs non-shredded VariantArrays for deeply nested field access
     #[test]
     fn test_depth_2_int32_conversion() {
@@ -2427,6 +2446,22 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_variant_get_missing_path_as_variant_annotates_value_non_nullable() {
+        let (unshredded, shredded) = create_variant_get_as_variant_test_data();
+        let variant_field = VariantArray::try_new(&unshredded).unwrap().field("result");
+
+        // indexing into a struct typed_value can never match: all-null variant output
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name[0]").unwrap())
+            .with_as_type(Some(FieldRef::from(variant_field)));
+        let result = variant_get(&shredded, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.inner().null_count(), result_variant.len());
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
+        assert!(!value_field.is_nullable());
+    }
+
     fn create_variant_get_as_variant_test_data() -> (ArrayRef, ArrayRef) {
         let input_json: ArrayRef = Arc::new(StringArray::from(vec![
             Some(r#"{"field_name": {"k": 100000}}"#),
@@ -2458,6 +2493,8 @@ mod test {
 
         assert!(result_variant.typed_value_column().is_none());
         assert!(result_variant.value_column().null_count() < result_variant.len());
+        let value_field = result_variant.inner().field_by_name("value").unwrap();
+        assert!(!value_field.is_nullable());
 
         let expected_json: ArrayRef = Arc::new(StringArray::from(vec![
             Some(r#"{"k":100000}"#),
@@ -4862,7 +4899,7 @@ mod test {
         use arrow::datatypes::Int64Type;
 
         let string_array: ArrayRef = Arc::new(StringArray::from(vec![
-            r#"[[1, 2], [3]]"#,
+            "[[1, 2], [3]]",
             r#"[[4], "not a list", [5, 6]]"#,
         ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
@@ -4940,7 +4977,7 @@ mod test {
 
     #[test]
     fn test_variant_get_list_like_unsafe_cast_preserves_null_elements() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec![r#"[1, null, 3]"#]));
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, null, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let cast_options = CastOptions {
             safe: false,

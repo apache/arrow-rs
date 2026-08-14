@@ -34,3 +34,6 @@ publish = false
 # (and checked in) arrow.flight.protocol.rs from changing
 prost-build = { version = "0.14.1", default-features = false }
 tonic-prost-build = { version = "0.14.1", default-features = false }
+
+[lints]
+workspace = true

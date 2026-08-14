@@ -1521,6 +1521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_write_multi_batches() {
         let test_file = "test/data/basic.json";
 
@@ -2603,11 +2604,7 @@ mod tests {
                 // 1. You can use information from Field to determine how to do the encoding.
                 // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
                 //    and thus the data type of `field` may not match the data type of `array`.
-                let padded = field
-                    .metadata()
-                    .get("padded")
-                    .map(|v| v == "true")
-                    .unwrap_or_default();
+                let padded = field.metadata().get("padded").is_some_and(|v| v == "true");
                 match (array.data_type(), padded) {
                     (DataType::Int32, true) => {
                         let array = array.as_primitive::<Int32Type>();

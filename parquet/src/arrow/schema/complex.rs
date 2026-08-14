@@ -85,9 +85,11 @@ impl ParquetField {
         list_data_type: Option<DataType>,
     ) -> Result<Self, ParquetError> {
         let arrow_field = match &list_data_type {
-            Some(DataType::List(field_hint))
-            | Some(DataType::LargeList(field_hint))
-            | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
+            Some(
+                DataType::List(field_hint)
+                | DataType::LargeList(field_hint)
+                | DataType::FixedSizeList(field_hint, _),
+            ) => Some(field_hint.as_ref()),
             Some(_) => {
                 return Err(general_err!(
                     "Internal error: should be validated earlier that list_data_type is only a type of list"
@@ -493,10 +495,9 @@ impl Visitor {
                         .with_nullable(false),
                 );
                 let value_field = Arc::new(convert_field(map_value, &value, arrow_value, true)?);
-                let field_metadata = match arrow_map {
-                    Some(field) => field.metadata().clone(),
-                    _ => HashMap::default(),
-                };
+                let field_metadata = arrow_map
+                    .map(|field| field.metadata().clone())
+                    .unwrap_or_default();
 
                 let map_field = Field::new_struct(
                     map_key_value.name(),

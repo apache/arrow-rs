@@ -18,12 +18,11 @@
 #[macro_use]
 extern crate criterion;
 
+use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, ZstdLevel};
-
-extern crate arrow;
-extern crate parquet;
+use parquet::basic::{Compression, Encoding, ZstdLevel};
+use rand::{RngExt, distr::Alphanumeric};
 
 use std::hint::black_box;
 use std::io::Empty;
@@ -32,6 +31,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{RecordBatchOptions, StringArray};
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
@@ -99,6 +99,38 @@ fn create_string_bench_batch(
         true_density,
     )?)
 }
+// Creates a DictionaryArray with target cardinality
+fn create_low_card_dictionary_bench_batch(size: usize, cardinality: usize) -> Result<RecordBatch> {
+    let mut rng = rand::rng();
+
+    // Generate `cardinality` unique random strings.
+    let categories: Vec<String> = (0..cardinality)
+        .map(|_| {
+            let len = rng.random_range(10..25);
+
+            (0..len).map(|_| rng.sample(Alphanumeric) as char).collect()
+        })
+        .collect();
+
+    let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+
+    for i in 0..size {
+        builder.append_value(&categories[i % cardinality]);
+    }
+
+    let dict = builder.finish();
+
+    let schema = Schema::new(vec![Field::new(
+        "_1",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(dict)],
+    )?)
+}
 
 /// 1 M short, fixed-width 8-byte strings. Exercises the BYTE_ARRAY hot path
 /// for the case where individual values are small enough that the byte-budget
@@ -119,6 +151,125 @@ fn create_large_string_bench_batch(size: usize, value_size: usize) -> Result<Rec
     let value = "x".repeat(value_size);
     let array = Arc::new(StringArray::from_iter_values(
         (0..size).map(|_| value.as_str()),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing a long common prefix and
+/// ending in a short distinct suffix — the case `DELTA_BYTE_ARRAY` exists
+/// for: consecutive values dedup to a prefix length plus a few suffix bytes.
+fn create_large_string_shared_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+) -> Result<RecordBatch> {
+    let prefix = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{prefix}{i:08}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` rows of `value_size`-byte strings whose leading bytes differ — the
+/// adversarial case for `DELTA_BYTE_ARRAY`, where every prefix length is ~0
+/// and the encoding stores each value in full.
+fn create_large_string_distinct_bench_batch(size: usize, value_size: usize) -> Result<RecordBatch> {
+    let filler = "x".repeat(value_size - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{i:08}{filler}")),
+    )) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// Where nulls fall in a generated batch, for
+/// [`create_large_string_nullable_bench_batch`].
+#[derive(Clone, Copy)]
+enum NullPattern {
+    /// One null every `n` rows, spread evenly.
+    Every(usize),
+    /// `n` nulls in a single run at the end of the batch.
+    Trailing(usize),
+}
+
+/// `size` rows of `value_size`-byte strings with nulls, sharing a long common
+/// prefix when `shared_prefix` is set and differing from their first byte
+/// otherwise.
+///
+/// Nullability is the point. The non-null large-value batches leave the
+/// column's definition levels absent, so the writer's byte-budget
+/// sub-batching resolves a chunk's value count in O(1) and never inspects
+/// levels. Nulls put it on the general path, where the number of values that
+/// share a data page is derived from the chunk's level-to-value ratio.
+///
+/// That ratio is why the density levels chosen at the call sites are not
+/// simply "few" and "many". Where a single value already fills the page
+/// budget, the derived window spans `ceil(levels / values)` levels, so it
+/// covers about `levels / values` values instead of one — an overshoot that
+/// is largest when nulls are *sparse* and disappears exactly when the ratio
+/// is a whole number, as at one-null-in-two.
+fn create_large_string_nullable_bench_batch(
+    size: usize,
+    value_size: usize,
+    shared_prefix: bool,
+    nulls: NullPattern,
+) -> Result<RecordBatch> {
+    let filler = "x".repeat(value_size - 8);
+    let is_null = |i: usize| match nulls {
+        NullPattern::Every(n) => i % n == n - 1,
+        NullPattern::Trailing(n) => i >= size - n,
+    };
+    let array = Arc::new(StringArray::from_iter((0..size).map(|i| {
+        (!is_null(i)).then(|| {
+            if shared_prefix {
+                format!("{filler}{i:08}")
+            } else {
+                format!("{i:08}{filler}")
+            }
+        })
+    }))) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` records of `values_per_record` strings of `value_size` bytes,
+/// sharing a long common prefix.
+///
+/// A repeated column is the third level shape the writer sub-batches against,
+/// after absent and flat-nullable levels. Records cannot span data pages, so
+/// mini-batches must step whole records; with values this large a single
+/// record overruns the page limit on its own.
+fn create_list_large_string_bench_batch(
+    size: usize,
+    values_per_record: usize,
+    value_size: usize,
+) -> Result<RecordBatch> {
+    let prefix = "x".repeat(value_size - 8);
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    for i in 0..size {
+        for j in 0..values_per_record {
+            builder
+                .values()
+                .append_value(format!("{prefix}{:08}", i * values_per_record + j));
+        }
+        builder.append(true);
+    }
+    Ok(RecordBatch::try_from_iter([(
+        "col",
+        Arc::new(builder.finish()) as _,
+    )])?)
+}
+
+/// `size` rows of `value_size`-byte strings sharing their first
+/// `shared_bytes` bytes and differing thereafter — the realistic sorted-column
+/// case (paths, URLs, keys), where prefix deduplication saves part of each
+/// value rather than all or none of it.
+fn create_string_partial_prefix_bench_batch(
+    size: usize,
+    value_size: usize,
+    shared_bytes: usize,
+) -> Result<RecordBatch> {
+    let shared = "x".repeat(shared_bytes);
+    let tail = "y".repeat(value_size - shared_bytes - 8);
+    let array = Arc::new(StringArray::from_iter_values(
+        (0..size).map(|i| format!("{shared}{i:08}{tail}")),
     )) as _;
     Ok(RecordBatch::try_from_iter([("col", array)])?)
 }
@@ -530,6 +681,15 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_string_dictionary_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_dictionary", batch));
 
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 20).unwrap();
+    batches.push(("string_dictionary_low_cardinality_20", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 100).unwrap();
+    batches.push(("string_dictionary_low_cardinality_100", batch));
+
+    let batch = create_low_card_dictionary_bench_batch(BATCH_SIZE, 400).unwrap();
+    batches.push(("string_dictionary_low_cardinality_400", batch));
+
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
 
@@ -651,5 +811,191 @@ fn bench_all_writers(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_all_writers);
+/// Writes BYTE_ARRAY columns of *small* string values with `DELTA_BYTE_ARRAY`,
+/// with `PLAIN` on the same data as a baseline.
+///
+/// Values here sit far below `data_page_size_limit`, so many share a page and
+/// the encoder's previous-value state survives across them. This is the regime
+/// `DELTA_BYTE_ARRAY` is actually deployed in, and — unlike the multi-MiB
+/// benches below — the one where the shared-prefix scan runs to real depth.
+///
+/// * `small_string_shared_prefix`: values differing only in a trailing counter,
+///   so each scan covers nearly the whole value.
+/// * `small_string_partial_prefix`: values sharing their first half, the
+///   sorted-column case.
+/// * `small_string_distinct`: values differing from byte 0, where the scan
+///   stops immediately and prefix deduplication saves nothing.
+fn bench_small_delta_byte_array_writers(c: &mut Criterion) {
+    const ROWS: usize = 8192;
+    const VALUE_SIZE: usize = 1024;
+
+    let shared_prefix = create_large_string_shared_prefix_bench_batch(ROWS, VALUE_SIZE).unwrap();
+    let partial_prefix =
+        create_string_partial_prefix_bench_batch(ROWS, VALUE_SIZE, VALUE_SIZE / 2).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(ROWS, VALUE_SIZE).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    for (batch_name, batch) in [
+        ("small_string_shared_prefix", &shared_prefix),
+        ("small_string_partial_prefix", &partial_prefix),
+        ("small_string_distinct", &distinct),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
+            group.bench_function(prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+/// Writes BYTE_ARRAY columns of large (multi-MiB) string values with
+/// `DELTA_BYTE_ARRAY`, with `PLAIN` on the same data as a baseline.
+///
+/// Two data shapes bracket the encoding's best and worst case:
+/// * `large_string_shared_prefix`: values like `xxx…x00000000`,
+///   `xxx…x00000001`, … share a long common prefix and differ only in a
+///   short suffix — the case `DELTA_BYTE_ARRAY` is designed to handle well,
+///   encoding each value as a prefix length plus a few suffix bytes.
+/// * `large_string_distinct`: values like `00000000x…xxx`, `00000001x…xxx`, …
+///   differ in their leading bytes, so prefix deduplication saves nothing and
+///   the encoding stores each value in full.
+fn bench_delta_byte_array_writers(c: &mut Criterion) {
+    // Each 2 MiB value alone exceeds the default 1 MiB data page size limit.
+    let shared = create_large_string_shared_prefix_bench_batch(128, 2 * 1024 * 1024).unwrap();
+    let distinct = create_large_string_distinct_bench_batch(128, 2 * 1024 * 1024).unwrap();
+
+    let plain = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .build();
+    let delta = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    // Nullable and repeated counterparts. Each varies one property of the
+    // first nullable case, so a movement can be attributed to that property
+    // rather than to some combination:
+    //
+    // * `_dense` changes only the null density, to a ratio of exactly two
+    //   levels per value. Deriving a window from that ratio is exact, so this
+    //   case is the one where sub-batching arithmetic cannot go wrong — it
+    //   should stay flat when the others move.
+    // * `_trailing` changes only where the nulls sit, keeping the count. A
+    //   run of nulls at the end leaves every window before it holding values
+    //   only, which is the worst placement for `DELTA_BYTE_ARRAY`.
+    // * `distinct_nullable` changes only the prefix, removing what
+    //   deduplication has to work with.
+    // * `medium_string_*` changes only the value size, to a size where
+    //   several values share a page budget rather than one overrunning it.
+    // * `_list` changes only the level shape, to a repeated column. Records
+    //   cannot span pages, so this one is a control: the writer's output for
+    //   it is byte for byte identical across the changes it is used to judge.
+    //
+    // `PLAIN` is measured wherever page count alone drives the result, and
+    // omitted where it would only restate a neighbouring case: it does not
+    // read the previous value, so prefix, null placement and value size do
+    // not change its per-page work.
+    let nullable = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        true,
+        NullPattern::Every(16),
+    )
+    .unwrap();
+    let nullable_dense =
+        create_large_string_nullable_bench_batch(128, 2 * 1024 * 1024, true, NullPattern::Every(2))
+            .unwrap();
+    let nullable_trailing = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        true,
+        NullPattern::Trailing(8),
+    )
+    .unwrap();
+    let nullable_distinct = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        false,
+        NullPattern::Every(16),
+    )
+    .unwrap();
+    // 256 KiB against the 1 MiB default limit: several values to a page.
+    let nullable_medium =
+        create_large_string_nullable_bench_batch(1024, 256 * 1024, true, NullPattern::Every(16))
+            .unwrap();
+    // 4 values per record, so one record is ~8 MiB and cannot be split.
+    let list = create_list_large_string_bench_batch(32, 4, 2 * 1024 * 1024).unwrap();
+
+    let both: &[(&str, &WriterProperties)] = &[("plain", &plain), ("delta_byte_array", &delta)];
+    let delta_only: &[(&str, &WriterProperties)] = &[("delta_byte_array", &delta)];
+
+    for (batch_name, batch, props) in [
+        ("large_string_shared_prefix", &shared, both),
+        ("large_string_distinct", &distinct, both),
+        ("large_string_shared_prefix_nullable", &nullable, both),
+        (
+            "large_string_shared_prefix_nullable_dense",
+            &nullable_dense,
+            delta_only,
+        ),
+        (
+            "large_string_shared_prefix_nullable_trailing",
+            &nullable_trailing,
+            delta_only,
+        ),
+        (
+            "large_string_distinct_nullable",
+            &nullable_distinct,
+            delta_only,
+        ),
+        (
+            "medium_string_shared_prefix_nullable",
+            &nullable_medium,
+            delta_only,
+        ),
+        ("large_string_shared_prefix_list", &list, delta_only),
+    ] {
+        let mut group = c.benchmark_group(batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in props {
+            group.bench_function(*prop_name, |b| {
+                write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_all_writers,
+    bench_small_delta_byte_array_writers,
+    bench_delta_byte_array_writers
+);
 criterion_main!(benches);

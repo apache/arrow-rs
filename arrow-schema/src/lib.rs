@@ -22,6 +22,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 
 mod datatype;
@@ -37,6 +38,8 @@ mod field;
 pub use field::*;
 mod fields;
 pub use fields::*;
+mod metadata;
+pub use metadata::*;
 mod schema;
 pub use schema::*;
 use std::ops;

@@ -410,7 +410,7 @@ impl ProjectionMask {
     /// ```
     pub fn intersect(&mut self, other: &Self) {
         match (self.mask.as_ref(), other.mask.as_ref()) {
-            (None, _) => self.mask = other.mask.clone(),
+            (None, _) => self.mask.clone_from(&other.mask),
             (_, None) => {}
             (Some(a), Some(b)) => {
                 debug_assert_eq!(a.len(), b.len());

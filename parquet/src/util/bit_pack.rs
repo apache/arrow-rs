@@ -112,7 +112,7 @@ macro_rules! pack_impl {
 
             // Accumulate into locals so the packed words stay in registers. Only the
             // first NUM_BITS entries are used, `[$t; NUM_BITS]` needs generic_const_exprs
-            let mut words = [0 as $t; $bits];
+            let mut words = [0; $bits];
 
             seq_macro::seq!(i in 0..$bits {
                 let value = input[i] & mask;

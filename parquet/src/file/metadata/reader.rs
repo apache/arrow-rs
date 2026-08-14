@@ -513,7 +513,7 @@ impl ParquetMetaDataReader {
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => fetch.fetch(range.start..range.end).await?,
+            _ => fetch.fetch(range.clone()).await?,
         };
 
         // Sanity check
@@ -569,10 +569,10 @@ impl ParquetMetaDataReader {
     /// file footer (8 bytes). Otherwise returns `8`.
     #[cfg(all(feature = "async", feature = "arrow"))]
     fn get_prefetch_size(&self) -> usize {
-        if let Some(prefetch) = self.prefetch_hint {
-            if prefetch > FOOTER_SIZE {
-                return prefetch;
-            }
+        if let Some(prefetch) = self.prefetch_hint
+            && prefetch > FOOTER_SIZE
+        {
+            return prefetch;
         }
         FOOTER_SIZE
     }
@@ -647,7 +647,7 @@ impl ParquetMetaDataReader {
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         let prefetch = self.get_prefetch_size();
 
-        let suffix = fetch.fetch_suffix(prefetch as _).await?;
+        let suffix = fetch.fetch_suffix(prefetch).await?;
         let suffix_len = suffix.len();
 
         if suffix_len < FOOTER_SIZE {
@@ -930,7 +930,7 @@ mod tests {
         let mut bytes = bytes_for_range(452505..len);
         loop {
             match reader.try_parse_sized(&bytes, len) {
-                Ok(_) => break,
+                Ok(()) => break,
                 Err(ParquetError::NeedMoreData(needed)) => {
                     bytes = bytes_for_range(len - needed as u64..len);
                     if reader.has_metadata() {
@@ -1052,10 +1052,10 @@ mod async_tests {
     }
 
     fn read_range(file: &mut File, range: Range<u64>) -> Result<Bytes> {
-        file.seek(SeekFrom::Start(range.start as _))?;
+        file.seek(SeekFrom::Start(range.start))?;
         let len = range.end - range.start;
         let mut buf = Vec::with_capacity(len.try_into().unwrap());
-        file.take(len as _).read_to_end(&mut buf)?;
+        file.take(len).read_to_end(&mut buf)?;
         Ok(buf.into())
     }
 
@@ -1209,7 +1209,6 @@ mod async_tests {
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
 
-        dbg!("test");
         // Metadata hint too large
         fetch_count.store(0, Ordering::SeqCst);
         suffix_fetch_count.store(0, Ordering::SeqCst);

@@ -166,7 +166,11 @@ impl RleEncoder {
         }
 
         self.pending_values.push(value);
-        if self.pending_values.len() % BIT_PACK_GROUP_SIZE == 0 {
+        if self
+            .pending_values
+            .len()
+            .is_multiple_of(BIT_PACK_GROUP_SIZE)
+        {
             // A group of values is complete. Decide its encoding.
             self.commit_group();
         }
@@ -196,7 +200,10 @@ impl RleEncoder {
             // always 0 here: `commit_group` resets it whenever a group completes, and
             // that is the only way to reach a group-aligned state
             if self.repeat_count < BIT_PACK_GROUP_SIZE
-                && self.pending_values.len() % BIT_PACK_GROUP_SIZE == 0
+                && self
+                    .pending_values
+                    .len()
+                    .is_multiple_of(BIT_PACK_GROUP_SIZE)
                 && values.len() - i >= BIT_PACK_GROUP_SIZE
             {
                 debug_assert_eq!(self.repeat_count, 0);
@@ -680,7 +687,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, Rng, SeedableRng, distr::StandardUniform, rng};
+    use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
 
     const MAX_WIDTH: usize = 32;
 

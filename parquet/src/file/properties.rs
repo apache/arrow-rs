@@ -350,14 +350,6 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
-    ///
-    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
-    #[deprecated(since = "58.0.0", note = "Use `max_row_group_row_count` instead")]
-    pub fn max_row_group_size(&self) -> usize {
-        self.max_row_group_row_count.unwrap_or(usize::MAX)
-    }
-
     /// Returns maximum number of rows in a row group, or `None` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_row_count`]
@@ -714,7 +706,11 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    ///
+    /// # Panics
+    /// If the value is `0`.
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
         self.data_page_row_count_limit = value;
         self
     }
@@ -728,20 +724,12 @@ impl WriterPropertiesBuilder {
     /// [`set_data_page_row_count_limit`](Self::set_data_page_row_count_limit)
     /// are checked between batches, and thus the write batch size value acts as an
     /// upper-bound on the enforcement granularity of other limits.
-    pub fn set_write_batch_size(mut self, value: usize) -> Self {
-        self.write_batch_size = value;
-        self
-    }
-
-    /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`
-    /// via [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]).
     ///
     /// # Panics
-    /// If the value is set to 0.
-    #[deprecated(since = "58.0.0", note = "Use `set_max_row_group_row_count` instead")]
-    pub fn set_max_row_group_size(mut self, value: usize) -> Self {
-        assert!(value > 0, "Cannot have a 0 max row group size");
-        self.max_row_group_row_count = Some(value);
+    /// If the value is `0`.
+    pub fn set_write_batch_size(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 write batch size");
+        self.write_batch_size = value;
         self
     }
 
@@ -835,6 +823,10 @@ impl WriterPropertiesBuilder {
     /// * If `None`, there's no effective limit.
     ///
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -864,6 +856,10 @@ impl WriterPropertiesBuilder {
     /// [`WriterPropertiesBuilder::set_column_index_truncate_length`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -1548,6 +1544,9 @@ impl BloomFilterPropertiesBuilder {
 
     /// Builds [`BloomFilterProperties`].
     ///
+    ///
+    /// # Panics
+    ///
     /// Panics if the configured `fpp` is not in `(0.0, 1.0)` exclusive.
     /// Use [`Self::try_build`] for a non-panicking alternative.
     pub fn build(self) -> BloomFilterProperties {
@@ -1755,10 +1754,10 @@ impl ColumnProperties {
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
     /// given `default_ndv` (typically derived from `max_row_group_row_count`).
     fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
-        if !self.bloom_filter_ndv_is_set {
-            if let Some(ref mut bf) = self.bloom_filter_properties {
-                bf.ndv = default_ndv;
-            }
+        if !self.bloom_filter_ndv_is_set
+            && let Some(ref mut bf) = self.bloom_filter_properties
+        {
+            bf.ndv = default_ndv;
         }
     }
 }
@@ -2099,17 +2098,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_writer_properties_deprecated_max_row_group_size_still_works() {
-        let props = WriterProperties::builder()
-            .set_max_row_group_size(42)
-            .build();
-
-        assert_eq!(props.max_row_group_row_count(), Some(42));
-        assert_eq!(props.max_row_group_size(), 42);
-    }
-
-    #[test]
     #[should_panic(expected = "Cannot have a 0 max row group row count")]
     fn test_writer_properties_panic_on_zero_row_group_row_count() {
         let _ = WriterProperties::builder().set_max_row_group_row_count(Some(0));
@@ -2119,6 +2107,18 @@ mod tests {
     #[should_panic(expected = "Cannot have a 0 max row group bytes")]
     fn test_writer_properties_panic_on_zero_row_group_bytes() {
         let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 write batch size")]
+    fn test_writer_properties_panic_on_zero_write_batch_size() {
+        let _ = WriterProperties::builder().set_write_batch_size(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 data page row count limit")]
+    fn test_writer_properties_panic_on_zero_data_page_row_count_limit() {
+        let _ = WriterProperties::builder().set_data_page_row_count_limit(0);
     }
 
     #[test]

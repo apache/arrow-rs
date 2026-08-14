@@ -30,11 +30,13 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. Implementations for remote storage, such as the `object_store` crate,
+/// 2. Implementations for remote storage, such as the [`object_store`] crate,
 ///    can implement this interface directly, typically by pairing a store
 ///    handle with an object path and delegating [`Self::get_bytes`] and
 ///    [`Self::get_byte_ranges`] to ranged reads. [`super::SpawnedReader`] can
 ///    wrap such a reader to perform its I/O on a dedicated tokio runtime.
+///
+/// [`object_store`]: https://crates.io/crates/object_store
 ///
 /// # Example: implementing `AsyncFileReader` for the `object_store` crate
 ///
@@ -94,7 +96,7 @@ pub trait AsyncFileReader: Send {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
-            for range in ranges.into_iter() {
+            for range in ranges {
                 let data = self.get_bytes(range).await?;
                 result.push(data);
             }

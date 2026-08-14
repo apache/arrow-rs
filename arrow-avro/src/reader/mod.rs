@@ -504,7 +504,7 @@ pub mod async_reader;
 
 pub use header::{HeaderInfo, read_header_info};
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
@@ -1371,6 +1371,11 @@ impl<R: BufRead> Reader<R> {
                 self.reader.consume(consumed);
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
+                    if block.sync != self.header.sync() {
+                        return Err(AvroError::ParseError(
+                            "Avro block sync marker does not match file header".to_string(),
+                        ));
+                    }
                     self.block_data = if let Some(ref codec) = self.header.compression()? {
                         let decompressed: Vec<u8> = codec.decompress(&block.data)?;
                         decompressed
@@ -1468,13 +1473,14 @@ mod test {
             // TODO: avoid requiring snappy for this file
             #[cfg(feature = "snappy")]
             "avro/alltypes_plain.avro",
-            #[cfg(feature = "snappy")]
+            // Compression codecs are unsupported by Miri
+            #[cfg(all(feature = "snappy", not(miri)))]
             "avro/alltypes_plain.snappy.avro",
-            #[cfg(feature = "zstd")]
+            #[cfg(all(feature = "zstd", not(miri)))]
             "avro/alltypes_plain.zstandard.avro",
-            #[cfg(feature = "bzip2")]
+            #[cfg(all(feature = "bzip2", not(miri)))]
             "avro/alltypes_plain.bzip2.avro",
-            #[cfg(feature = "xz")]
+            #[cfg(all(feature = "xz", not(miri)))]
             "avro/alltypes_plain.xz.avro",
         ]
         .into_iter()
@@ -1490,6 +1496,23 @@ mod test {
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    #[test]
+    fn test_block_sync_marker_mismatch_errors() {
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let mut bytes = std::fs::read(&path).unwrap();
+        // The file ends with the final block's 16-byte sync marker.
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+        let err = reader
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("corrupted block sync marker should fail the read");
+        assert!(err.to_string().contains("sync marker"), "{err}");
     }
 
     fn read_file_strict(
@@ -1722,10 +1745,10 @@ mod test {
                 }
                 Value::Array(arr) => {
                     for b in arr.iter_mut() {
-                        if let Value::Object(map) = b {
-                            if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
-                                map.insert("symbols".to_string(), symbols.clone());
-                            }
+                        if let Value::Object(map) = b
+                            && matches!(map.get("type"), Some(Value::String(t)) if t == "enum")
+                        {
+                            map.insert("symbols".to_string(), symbols.clone());
                         }
                     }
                 }
@@ -3241,6 +3264,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skippable_types_project_each_field_individually() {
         let path = "test/data/skippable_types.avro";
         let full = read_file(path, 1024, false);
@@ -3618,6 +3642,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_union_schema_resolution_all_type_combinations() {
         let path = "test/data/union_fields.avro";
         let baseline = read_file(path, 1024, false);
@@ -4749,8 +4774,8 @@ mod test {
         {
             let idx = schema.index_of("array_of_union").unwrap();
             let dt = schema.field(idx).data_type().clone();
-            let (item_field, _) = match &dt {
-                DataType::List(f) => (f.clone(), ()),
+            let item_field = match &dt {
+                DataType::List(f) => f.clone(),
                 other => panic!("array_of_union must be List, got {other:?}"),
             };
             let (uf, _) = match item_field.data_type() {
@@ -5487,34 +5512,14 @@ mod test {
             #[cfg(not(feature = "avro_custom_types"))]
             {
                 let schema = Arc::new(Schema::new(vec![
-                    Field::new("duration_time_nanos", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-nanos".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_micros", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-micros".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_millis", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-millis".to_string(),
-                        )]
-                        .into(),
-                    ),
-                    Field::new("duration_time_seconds", DataType::Int64, false).with_metadata(
-                        [(
-                            "logicalType".to_string(),
-                            "arrow.duration-seconds".to_string(),
-                        )]
-                        .into(),
-                    ),
+                    Field::new("duration_time_nanos", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-nanos")]),
+                    Field::new("duration_time_micros", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-micros")]),
+                    Field::new("duration_time_millis", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-millis")]),
+                    Field::new("duration_time_seconds", DataType::Int64, false)
+                        .with_metadata([("logicalType", "arrow.duration-seconds")]),
                 ]));
 
                 let nanos =
@@ -8274,6 +8279,7 @@ mod test {
         );
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn comprehensive_e2e_resolution_test() {
         use serde_json::Value;
         use std::collections::HashMap;
@@ -8322,42 +8328,41 @@ mod test {
                 }
             }
             fn reverse_items_union(f: &mut Value) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
-                        items.reverse();
-                    }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut())
+                {
+                    items.reverse();
                 }
             }
             fn reverse_map_values_union(f: &mut Value) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(values) = obj.get_mut("values").and_then(|v| v.as_array_mut()) {
-                        values.reverse();
-                    }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(values) = obj.get_mut("values").and_then(|v| v.as_array_mut())
+                {
+                    values.reverse();
                 }
             }
             fn reverse_nested_union_in_record(f: &mut Value, field_name: &str) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                        for ff in fields.iter_mut() {
-                            if ff.get("name").and_then(|n| n.as_str()) == Some(field_name) {
-                                if let Some(ty) = ff.get_mut("type") {
-                                    if let Some(arr) = ty.as_array_mut() {
-                                        arr.reverse();
-                                    }
-                                }
-                            }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut())
+                {
+                    for ff in fields.iter_mut() {
+                        if ff.get("name").and_then(|n| n.as_str()) == Some(field_name)
+                            && let Some(ty) = ff.get_mut("type")
+                            && let Some(arr) = ty.as_array_mut()
+                        {
+                            arr.reverse();
                         }
                     }
                 }
             }
             fn rename_nested_field_with_alias(f: &mut Value, old: &str, new: &str) {
-                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
-                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                        for ff in fields.iter_mut() {
-                            if ff.get("name").and_then(|n| n.as_str()) == Some(old) {
-                                ff["name"] = Value::String(new.to_string());
-                                ff["aliases"] = Value::Array(vec![Value::String(old.to_string())]);
-                            }
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut())
+                    && let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut())
+                {
+                    for ff in fields.iter_mut() {
+                        if ff.get("name").and_then(|n| n.as_str()) == Some(old) {
+                            ff["name"] = Value::String(new.to_string());
+                            ff["aliases"] = Value::Array(vec![Value::String(old.to_string())]);
                         }
                     }
                 }
@@ -8430,7 +8435,7 @@ mod test {
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
         const UUID_LOGICAL_KEY: &str = "logicalType";
 
-        let uuid_md_top: Option<HashMap<String, String>> = batch
+        let uuid_md_top: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("uuid_str")
             .ok()
@@ -8448,7 +8453,7 @@ mod test {
                 }
             });
 
-        let uuid_md_union: Option<HashMap<String, String>> = batch
+        let uuid_md_union: Option<arrow_schema::Metadata> = batch
             .schema()
             .field_with_name("union_uuid_or_fixed10")
             .ok()

@@ -34,7 +34,7 @@ impl<'a> BitIterator<'a> {
     /// Create a new [`BitIterator`] from the provided `buffer`,
     /// and `offset` and `len` in bits
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if `buffer` is too short for the provided offset and length
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
@@ -414,7 +414,7 @@ mod tests {
     use super::*;
     use crate::BooleanBuffer;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::fmt::Debug;
     use std::iter::Copied;
     use std::slice::Iter;
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_bit_index_u32_long_all_set() {
         let len = 200;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let num_bytes = len / 8 + usize::from(len % 8 != 0);
         let bytes = vec![0xFFu8; num_bytes];
 
         let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn test_bit_index_u32_none_set() {
         let len = 50;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let num_bytes = len / 8 + usize::from(len % 8 != 0);
         let bytes = vec![0u8; num_bytes];
 
         let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
@@ -931,9 +931,9 @@ mod tests {
                     let mut actual = actual.clone();
                     let mut expected = expected.clone();
                     for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
+                        #[expect(clippy::iter_nth_zero)]
                         let actual_val = actual.nth(0);
-                        #[allow(clippy::iter_nth_zero)]
+                        #[expect(clippy::iter_nth_zero)]
                         let expected_val = expected.nth(0);
                         assert_eq!(actual_val, expected_val, "Failed on nth(0)");
                     }
@@ -971,7 +971,6 @@ mod tests {
                     let mut actual = actual.clone();
                     let mut expected = expected.clone();
                     for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
                         let actual_val = actual.nth_back(0);
                         let expected_val = expected.nth_back(0);
                         assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");

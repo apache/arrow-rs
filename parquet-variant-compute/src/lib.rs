@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![deny(clippy::allow_attributes)]
+
 //! [`VariantArray`] and compute kernels for the [Variant Binary Encoding] from [Apache Parquet].
 //!
 //! ## Main APIs
@@ -51,7 +53,7 @@ mod variant_array_builder;
 mod variant_get;
 mod variant_to_arrow;
 
-pub use variant_array::{ShreddingState, VariantArray, VariantType};
+pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter, VariantType};
 pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};

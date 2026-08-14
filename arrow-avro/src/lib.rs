@@ -131,10 +131,14 @@
 //! [`AsyncAvroFileReader`] implements `Stream<Item = Result<RecordBatch, ArrowError>>`,
 //! allowing efficient async streaming of record batches. Any [`AsyncFileReader`]
 //! can be used as the source; there is a built-in implementation for types
-//! implementing `AsyncRead + AsyncSeek` (such as `tokio::fs::File`), and object
+//! implementing [`AsyncRead`] + [`AsyncSeek`] (such as [`tokio::fs::File`]), and object
 //! storage services such as S3 can be integrated by implementing
 //! [`AsyncFileReader`] on top of a client such as the [object_store] crate
 //! (see the example on the trait documentation).
+//!
+//! [`AsyncRead`]: tokio::io::AsyncRead
+//! [`AsyncSeek`]: tokio::io::AsyncSeek
+//! [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 //!
 //! ```ignore
 //! use arrow_avro::reader::AsyncAvroFileReader;
@@ -213,6 +217,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 
 /// Core functionality for reading Avro data into Arrow arrays

@@ -788,7 +788,7 @@ impl ParquetDecoderState {
                 mut remaining_row_groups,
             } => {
                 // Push data to the RowGroupReaderBuilder
-                remaining_row_groups.push_data(ranges, data);
+                remaining_row_groups.push_data(ranges, data)?;
                 Ok(ParquetDecoderState::ReadingRowGroup {
                     remaining_row_groups,
                 })
@@ -798,7 +798,7 @@ impl ParquetDecoderState {
                 record_batch_reader,
                 mut remaining_row_groups,
             } => {
-                remaining_row_groups.push_data(ranges, data);
+                remaining_row_groups.push_data(ranges, data)?;
                 Ok(ParquetDecoderState::DecodingRowGroup {
                     record_batch_reader,
                     remaining_row_groups,
@@ -2396,7 +2396,7 @@ mod test {
     fn expect_needs_data<T: Debug>(
         result: Result<DecodeResult<T>, ParquetError>,
     ) -> Vec<Range<u64>> {
-        match result.expect("Expected Ok(DecodeResult::NeedsData{ranges})") {
+        match result.expect("Expected Ok(DecodeResult::NeedsData(ranges))") {
             DecodeResult::NeedsData(ranges) => ranges,
             result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
         }

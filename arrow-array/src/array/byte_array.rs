@@ -135,15 +135,15 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // Verify that each pair of offsets is a valid slices of values
         T::validate(&offsets, &values)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
-                    T::Offset::PREFIX,
-                    T::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
+                T::Offset::PREFIX,
+                T::PREFIX,
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -214,6 +214,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    ///
+    /// # Panics
+    /// Panics if the iterator has no upper bound on its size hint, or if the total
+    /// length of the values exceeds `T::Offset::MAX`
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
@@ -359,6 +363,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -574,9 +581,9 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
         // ArrayData is valid, and verified type above
         let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
+            data_type,
             value_offsets,
             value_data,
-            data_type,
             nulls,
         }
     }

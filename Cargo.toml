@@ -32,6 +32,7 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-cmp",
     "arrow-ord",
     "arrow-pyarrow",
     "arrow-row",
@@ -47,15 +48,11 @@ members = [
     "parquet_derive_test",
 ]
 
-# Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
-#
-# Critically this prevents dev-dependencies from enabling features even when not building a target that
-# uses dev-dependencies, e.g. the library crate. This in turn ensures that we can catch invalid feature
-# flag combinations that would otherwise only surface in dependent crates
-#
-# Reference - https://doc.rust-lang.org/nightly/cargo/reference/features.html#feature-resolver-version-2
-#
-resolver = "2"
+# This is the default for edition 2024 but we must manually specify it for virtual
+# workspaces.
+# - https://github.com/rust-lang/cargo/issues/10112
+# - https://github.com/rust-lang/cargo/issues/10587
+resolver = "3"
 
 exclude = [
     # arrow-pyarrow-testing is excluded because it requires a Python interpreter with the pyarrow package installed,
@@ -68,7 +65,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "59.1.0"
+version = "59.2.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -82,29 +79,30 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
-arrow = { version = "59.1.0", path = "./arrow", default-features = false }
-arrow-arith = { version = "59.1.0", path = "./arrow-arith" }
-arrow-array = { version = "59.1.0", path = "./arrow-array" }
-arrow-buffer = { version = "59.1.0", path = "./arrow-buffer" }
-arrow-cast = { version = "59.1.0", path = "./arrow-cast" }
-arrow-csv = { version = "59.1.0", path = "./arrow-csv" }
-arrow-data = { version = "59.1.0", path = "./arrow-data" }
-arrow-ipc = { version = "59.1.0", path = "./arrow-ipc" }
-arrow-json = { version = "59.1.0", path = "./arrow-json" }
-arrow-ord = { version = "59.1.0", path = "./arrow-ord" }
-arrow-pyarrow = { version = "59.1.0", path = "./arrow-pyarrow" }
-arrow-row = { version = "59.1.0", path = "./arrow-row" }
-arrow-schema = { version = "59.1.0", path = "./arrow-schema" }
-arrow-select = { version = "59.1.0", path = "./arrow-select" }
-arrow-string = { version = "59.1.0", path = "./arrow-string" }
-parquet = { version = "59.1.0", path = "./parquet", default-features = false }
-parquet-geospatial = { version = "59.1.0", path = "./parquet-geospatial" }
-parquet-variant = { version = "59.1.0", path = "./parquet-variant" }
-parquet-variant-json = { version = "59.1.0", path = "./parquet-variant-json" }
-parquet-variant-compute = { version = "59.1.0", path = "./parquet-variant-compute" }
+arrow = { version = "59.2.0", path = "./arrow", default-features = false }
+arrow-arith = { version = "59.2.0", path = "./arrow-arith" }
+arrow-array = { version = "59.2.0", path = "./arrow-array" }
+arrow-buffer = { version = "59.2.0", path = "./arrow-buffer" }
+arrow-cast = { version = "59.2.0", path = "./arrow-cast" }
+arrow-csv = { version = "59.2.0", path = "./arrow-csv" }
+arrow-data = { version = "59.2.0", path = "./arrow-data" }
+arrow-ipc = { version = "59.2.0", path = "./arrow-ipc" }
+arrow-json = { version = "59.2.0", path = "./arrow-json" }
+arrow-cmp = { version = "59.2.0", path = "./arrow-cmp" }
+arrow-ord = { version = "59.2.0", path = "./arrow-ord" }
+arrow-pyarrow = { version = "59.2.0", path = "./arrow-pyarrow" }
+arrow-row = { version = "59.2.0", path = "./arrow-row" }
+arrow-schema = { version = "59.2.0", path = "./arrow-schema" }
+arrow-select = { version = "59.2.0", path = "./arrow-select" }
+arrow-string = { version = "59.2.0", path = "./arrow-string" }
+parquet = { version = "59.2.0", path = "./parquet", default-features = false }
+parquet-geospatial = { version = "59.2.0", path = "./parquet-geospatial" }
+parquet-variant = { version = "59.2.0", path = "./parquet-variant" }
+parquet-variant-json = { version = "59.2.0", path = "./parquet-variant-json" }
+parquet-variant-compute = { version = "59.2.0", path = "./parquet-variant-compute" }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
@@ -112,9 +110,153 @@ criterion = { version = "0.8.0", default-features = false }
 
 insta = { version = "1.46.3", default-features = false }
 
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 
 simdutf8 = { version = "0.1.5", default-features = false }
+
+# Lints that are shared by every crate in the workspace.
+#
+# Each member crate opts in with:
+#
+#   [lints]
+#   workspace = true
+#
+# Only lints that are `allow` by default are worth listing here; the lints that clippy
+# enables by default are already enforced by CI (`cargo clippy ... -- -D warnings`).
+#
+# Keep the lists sorted.
+[workspace.lints.rust]
+explicit_outlives_requirements = "warn"
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2021_prelude_collisions = "warn"
+semicolon_in_expressions_from_macros = "warn"
+trivial_numeric_casts = "warn"
+unexpected_cfgs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+
+# Deliberately left off: all the noise of spelling out elided lifetimes and
+# redundant qualifications, without catching anything that matters.
+# `elided_lifetimes_in_paths` is part of `rust_2018_idioms`, so it has to be
+# turned off explicitly; the other two are `allow` by default and are listed
+# only to record the decision.
+elided_lifetimes_in_paths = "allow" # ~600 violations in ~100 files
+trivial_casts = "allow"             # ~2000 violations
+unused_qualifications = "allow"     # ~2000 violations
+
+[workspace.lints.rustdoc]
+all = { level = "warn", priority = -1 }
+broken_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
+
+[workspace.lints.clippy]
+as_ptr_cast_mut = "warn"
+assigning_clones = "warn"
+bool_to_int_with_if = "warn"
+checked_conversions = "warn"
+clear_with_drain = "warn"
+comparison_chain = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+default_union_representation = "warn"
+disallowed_script_idents = "warn"
+doc_comment_double_space_linebreaks = "warn"
+doc_include_without_cfg = "warn"
+doc_link_with_quotes = "warn"
+empty_enum_variants_with_brackets = "warn"
+equatable_if_let = "warn"
+exit = "warn"
+expl_impl_clone_on_copy = "warn"
+explicit_deref_methods = "warn"
+explicit_into_iter_loop = "warn"
+filter_map_next = "warn"
+flat_map_option = "warn"
+float_cmp_const = "warn"
+fn_params_excessive_bools = "warn"
+fn_to_numeric_cast_any = "warn"
+format_push_string = "warn"
+ignored_unit_patterns = "warn"
+imprecise_flops = "warn"
+inconsistent_struct_constructor = "warn"
+index_refutable_slice = "warn"
+inefficient_to_string = "warn"
+infinite_loop = "warn"
+into_iter_without_iter = "warn"
+invalid_upcast_comparisons = "warn"
+iter_filter_is_ok = "warn"
+iter_filter_is_some = "warn"
+iter_not_returning_iterator = "warn"
+iter_on_empty_collections = "warn"
+iter_with_drain = "warn"
+large_digit_groups = "warn"
+large_futures = "warn"
+large_include_file = "warn"
+large_stack_arrays = "warn"
+large_stack_frames = "warn"
+large_types_passed_by_value = "warn"
+linkedlist = "warn"
+literal_string_with_formatting_args = "warn"
+lossy_float_literal = "warn"
+macro_use_imports = "warn"
+manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+manual_midpoint = "warn"
+manual_string_new = "warn"
+match_wild_err_arm = "warn"
+mismatching_type_param_order = "warn"
+mut_mut = "warn"
+mutex_integer = "warn"
+needless_raw_string_hashes = "warn"
+negative_feature_names = "warn"
+non_zero_suggestions = "warn"
+nonstandard_macro_braces = "warn"
+option_as_ref_cloned = "warn"
+option_option = "warn"
+path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
+precedence_bits = "warn"
+ptr_cast_constness = "warn"
+ptr_offset_by_literal = "warn"
+pub_without_shorthand = "warn"
+rc_mutex = "warn"
+ref_binding_to_reference = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_functions_in_if_condition = "warn"
+same_length_and_capacity = "warn"
+set_contains_or_insert = "warn"
+should_panic_without_expect = "warn"
+single_char_pattern = "warn"
+single_option_map = "warn"
+stable_sort_primitive = "warn"
+str_split_at_newline = "warn"
+string_add_assign = "warn"
+string_lit_chars_any = "warn"
+suspicious_xor_used_as_pow = "warn"
+todo = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+transmute_ptr_to_ptr = "warn"
+tuple_array_conversions = "warn"
+uninhabited_references = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_literal_bound = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_self_imports = "warn"
+unnecessary_struct_initialization = "warn"
+unnested_or_patterns = "warn"
+unused_async = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+useless_let_if_seq = "warn"
+verbose_file_reads = "warn"
+wildcard_dependencies = "warn"
+zero_sized_map_values = "warn"
 
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling

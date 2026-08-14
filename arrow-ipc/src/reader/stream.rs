@@ -194,7 +194,9 @@ impl StreamDecoder {
                     }
 
                     let to_read = buffer.len().min(len - self.buf.len());
-                    self.buf.extend_from_slice(&buffer[..to_read]);
+                    self.buf
+                        .try_extend_from_slice(&buffer[..to_read])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     buffer.advance(to_read);
                     if self.buf.len() == len {
                         let message = MessageBuffer::try_new(std::mem::take(&mut self.buf).into())?;
@@ -211,7 +213,9 @@ impl StreamDecoder {
                         body
                     } else {
                         let to_read = buffer.len().min(body_length - self.buf.len());
-                        self.buf.extend_from_slice(&buffer[..to_read]);
+                        self.buf
+                            .try_extend_from_slice(&buffer[..to_read])
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                         buffer.advance(to_read);
 
                         if self.buf.len() != body_length {
@@ -229,8 +233,12 @@ impl StreamDecoder {
                                 ));
                             }
 
-                            let ipc_schema = message.header_as_schema().unwrap();
-                            let schema = crate::convert::fb_to_schema(ipc_schema);
+                            let ipc_schema = message.header_as_schema().ok_or_else(|| {
+                                ArrowError::ParseError(
+                                    "Unable to read IPC message as schema".to_string(),
+                                )
+                            })?;
+                            let schema = crate::convert::try_fb_to_schema(ipc_schema)?;
                             self.state = DecoderState::default();
                             self.schema = Some(Arc::new(schema));
                         }

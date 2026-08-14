@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(iter.max_def_level(), descr.max_def_level());
         assert_eq!(iter.max_rep_level(), descr.max_rep_level());
 
-        while let Ok(true) = iter.read_next() {
+        while matches!(iter.read_next(), Ok(true)) {
             assert!(iter.has_next());
             if !iter.is_null() {
                 values.push(iter.current_value().unwrap());
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn test_current_def_level_safe_after_exhaustion() {
         let mut iter = open_triplet_iter("nulls.snappy.parquet", &["b_struct", "b_c_int"], 256);
-        while let Ok(true) = iter.read_next() {}
+        while matches!(iter.read_next(), Ok(true)) {}
         assert!(!iter.has_next());
         assert_eq!(iter.current_def_level(), 0);
     }
@@ -601,7 +601,7 @@ mod tests {
             &["a", "list", "element", "list", "element", "list", "element"],
             256,
         );
-        while let Ok(true) = iter.read_next() {}
+        while matches!(iter.read_next(), Ok(true)) {}
         assert!(!iter.has_next());
         assert_eq!(iter.current_rep_level(), 0);
     }

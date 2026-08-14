@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
-use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::writer::IpcWriteContext;
 use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
@@ -39,7 +39,7 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let ipc_schema: arrow_ipc::Schema = message
         .header_as_schema()
         .ok_or_else(|| ArrowError::CastError("Cannot get header as Schema".to_string()))?;
-    let schema = fb_to_schema(ipc_schema);
+    let schema = try_fb_to_schema(ipc_schema)?;
     let schema = Arc::new(schema);
 
     let mut batches = vec![];

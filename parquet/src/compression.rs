@@ -20,9 +20,11 @@
 //! See [`Compression`](crate::basic::Compression) enum for all available compression
 //! algorithms.
 //!
-#[cfg_attr(
+// NOTE: this must be an inner attribute so that the example is attached to the module (and
+// therefore actually run as a doc test) rather than to the `use` statement below.
+#![cfg_attr(
     feature = "experimental",
-    doc = r##"
+    doc = r"
 # Example
 
 ```no_run
@@ -45,7 +47,7 @@ codec.decompress(&compressed[..], &mut output, None).unwrap();
 
 assert_eq!(output, data);
 ```
-"##
+"
 )]
 use crate::basic::Compression as CodecType;
 use crate::errors::{ParquetError, Result};
@@ -348,7 +350,7 @@ impl GzipLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`flate2::Compression`]).
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -430,7 +432,7 @@ impl BrotliLevel {
     ///
     /// Compression levels must be valid.
     pub fn try_new(level: u32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -577,7 +579,7 @@ pub struct ZstdLevel(i32);
 impl CompressionLevel<i32> for ZstdLevel {
     // zstd binds to C, and hence zstd::compression_level_range() is not const as this calls the
     // underlying C library.
-    const MINIMUM_LEVEL: i32 = 1;
+    const MINIMUM_LEVEL: i32 = -131072;
     const MAXIMUM_LEVEL: i32 = 22;
 }
 
@@ -586,7 +588,7 @@ impl ZstdLevel {
     ///
     /// Compression levels must be valid (i.e. be acceptable for [`zstd::compression_level_range`]).
     pub fn try_new(level: i32) -> Result<Self> {
-        Self::is_valid_level(level).map(|_| Self(level))
+        Self::is_valid_level(level).map(|()| Self(level))
     }
 
     /// Returns the compression level.
@@ -933,7 +935,11 @@ mod tests {
 
     #[test]
     fn test_codec_zstd() {
-        for level in ZstdLevel::MINIMUM_LEVEL..=ZstdLevel::MAXIMUM_LEVEL {
+        // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
+        for level in [ZstdLevel::MINIMUM_LEVEL]
+            .into_iter()
+            .chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));
             test_codec_without_size(CodecType::ZSTD(level));
