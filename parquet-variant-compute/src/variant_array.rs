@@ -1151,17 +1151,15 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
-        _ => {
-            // We shouldn't panic in production code, but this is a
-            // placeholder until we implement more types
-            // https://github.com/apache/arrow-rs/issues/8091
-            debug_assert!(
-                false,
-                "Unsupported typed_value type: {}",
-                typed_value.data_type()
-            );
-            Ok(Variant::Null)
-        }
+        //
+        // Composite shredded values may require combining `value` and
+        // `typed_value` and allocating new encoded bytes. `try_value` returns
+        // borrowed Variant, so callers must unshred the array first.
+        _ => Err(ArrowError::NotYetImplemented(format!(
+            "VariantArray::try_value cannot materialize typed_value of type {} \
+             as a borrowed Variant; call unshred_variant first",
+            typed_value.data_type()
+        ))),
     }
 }
 
@@ -1814,4 +1812,24 @@ mod test {
         ),]),
         "Cast error: Cast failed at index 0 (array type: Decimal128(38, 10)): Invalid argument error: 123456789012345678901234567890123456789 is wider than max precision 38"
     );
+    #[test]
+    fn try_value_errors_on_unimplemented_typed_value_type() {
+        use crate::{json_to_variant, shred_variant};
+        use arrow::array::StringArray;
+
+        let json: ArrayRef = Arc::new(StringArray::from(vec![r#"{"qty": 3}"#]));
+        let variant = json_to_variant(&json).unwrap();
+        let shred_type = DataType::Struct(vec![Field::new("qty", DataType::Int64, true)].into());
+        let shredded = shred_variant(&variant, &shred_type).unwrap();
+        // Object-shredded typed_value is not yet implemented: reading it must
+        // error, never silently return Variant::Null
+        // TODO: https://github.com/apache/arrow-rs/issues/10620
+        let err = shredded.try_value(0).unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Not yet implemented: VariantArray::try_value cannot materialize typed_value"
+            ),
+            "unexpected error: {err}"
+        );
+    }
 }
