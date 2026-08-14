@@ -1098,7 +1098,7 @@ mod tests {
 
     unsafe extern "C" fn wrapping_release(schema: *mut FFI_ArrowSchema) {
         let schema = unsafe { &mut *schema };
-        let data = unsafe { Box::from_raw(schema.private_data() as *mut WrapperData) };
+        let data = unsafe { Box::from_raw(schema.private_data().cast::<WrapperData>()) };
         WRAPPER_RAN.store(true, Ordering::SeqCst);
         // restore the originals, then let the original callback free everything
         unsafe { schema.set_release(data.original_release) };
@@ -1117,7 +1117,7 @@ mod tests {
             original_private_data: schema.private_data(),
         });
         unsafe { schema.set_release(Some(wrapping_release)) };
-        unsafe { schema.set_private_data(Box::into_raw(data) as *mut c_void) };
+        unsafe { schema.set_private_data(Box::into_raw(data).cast::<c_void>()) };
 
         drop(schema); // runs wrapping_release, which chains to the original
         assert!(WRAPPER_RAN.load(Ordering::SeqCst));
