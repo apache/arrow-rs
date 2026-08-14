@@ -920,7 +920,8 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
     let metadata_len = block.metaDataLength().to_usize().unwrap();
     let total_len = body_len.checked_add(metadata_len).unwrap();
 
-    let mut buf = MutableBuffer::from_len_zeroed(total_len);
+    let mut buf = MutableBuffer::try_from_len_zeroed(total_len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
     Ok(buf.into())
 }
@@ -1825,14 +1826,16 @@ const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
 fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
-    let mut buf = MutableBuffer::from_len_zeroed(len.min(MAX_PREALLOC_BYTES));
+    let mut buf = MutableBuffer::try_from_len_zeroed(len.min(MAX_PREALLOC_BYTES))
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let mut filled = 0;
     while filled < len {
         let target = buf.len();
         reader.read_exact(&mut buf.as_slice_mut()[filled..target])?;
         filled = target;
         if filled < len {
-            buf.resize(len.min(target.saturating_mul(2)), 0);
+            buf.try_resize(len.min(target.saturating_mul(2)), 0)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         }
     }
     Ok(buf)
