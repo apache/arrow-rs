@@ -23,7 +23,7 @@ use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{ByteArray, DataType, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
-use crate::encodings::fsst::{FSST_LENGTH_ENCODING_DELTA, SymbolTable, write_uleb128};
+use crate::encodings::fsst::{FSST_OFFSET_ENCODING_DELTA, SymbolTable};
 use crate::errors::{ParquetError, Result};
 
 /// Encoder for the [`FSST`](Encoding::FSST) encoding.
@@ -31,12 +31,16 @@ use crate::errors::{ParquetError, Result};
 /// Values are buffered until [`flush_buffer`](Encoder::flush_buffer), at which
 /// point a [`SymbolTable`] is trained over them and each value is compressed.
 ///
-/// The flushed page has four contiguous sections:
-/// 1. a header of three ULEB128 values — the length-array encoding id, the
-///    length-array byte size, and the symbol-table byte size;
-/// 2. the per-value compressed lengths, Delta-Binary-Packed;
-/// 3. the serialized [`SymbolTable`]; and
-/// 4. the concatenated compressed values (boundaries come from the lengths).
+/// The flushed page body follows the FSST spec proposal:
+/// 1. the symbol-table body (spec §3.3). The spec places this in a dedicated
+///    `SYMBOL_TABLE_PAGE` shared by all data pages of a column chunk; until
+///    that page type is plumbed through, it is emitted at the front of each
+///    data page as a self-describing interim stand-in;
+/// 2. the FSST header (spec §4.4): `offset_encoding` (`u8`), `num_values`
+///    (`i32` LE), `offset_array_length` (`i32` LE);
+/// 3. the offset array (spec §4.5): cumulative end offsets into the data
+///    section, Delta-Binary-Packed; and
+/// 4. the data section: concatenated compressed values.
 ///
 /// Only [`Type::BYTE_ARRAY`] is supported.
 pub struct FsstEncoder<T: DataType> {
@@ -102,8 +106,7 @@ impl<T: DataType> Encoder<T> for FsstEncoder<T> {
         if T::get_physical_type() != Type::BYTE_ARRAY {
             return Err(general_err!("FsstEncoder only supports ByteArrayType"));
         }
-        // Parquet counts values per page with an i32, so the encoder cannot
-        // produce more than that in a single flush.
+        // The FSST header stores num_values as an i32 (spec §4.4).
         if self.values.len() > i32::MAX as usize {
             return Err(general_err!(
                 "FSST can encode at most i32::MAX values, got {}",
@@ -113,36 +116,47 @@ impl<T: DataType> Encoder<T> for FsstEncoder<T> {
 
         let table = SymbolTable::train(self.values.iter().map(|v| v.data()));
 
-        // Compress each value, concatenating the payload and collecting the
-        // per-value compressed lengths for the length array.
-        let mut payload = Vec::with_capacity(self.buffered_bytes);
-        let mut lengths: Vec<i32> = Vec::with_capacity(self.values.len());
+        // Compress each value, concatenating the data section and collecting
+        // the cumulative end offset of each value (spec §4.5).
+        let mut data_section = Vec::with_capacity(self.buffered_bytes);
+        let mut end_offsets: Vec<i32> = Vec::with_capacity(self.values.len());
         let mut compressed = Vec::new();
         for value in &self.values {
             compressed.clear();
             table.compress(value.data(), &mut compressed);
-            lengths.push(compressed.len() as i32);
-            payload.extend_from_slice(&compressed);
+            data_section.extend_from_slice(&compressed);
+            // The data section is bounded to i32::MAX bytes (spec §4.6), so
+            // every end offset fits in an i32.
+            let end: i32 = data_section
+                .len()
+                .try_into()
+                .map_err(|_| general_err!("FSST: data section exceeds i32::MAX bytes"))?;
+            end_offsets.push(end);
         }
 
-        // Section 2: length array, Delta-Binary-Packed.
-        let mut length_encoder = DeltaBitPackEncoder::<Int32Type>::new();
-        length_encoder.put(&lengths)?;
-        let length_bytes = length_encoder.flush_buffer()?;
+        // Offset array, Delta-Binary-Packed.
+        let mut offset_encoder = DeltaBitPackEncoder::<Int32Type>::new();
+        offset_encoder.put(&end_offsets)?;
+        let offset_bytes = offset_encoder.flush_buffer()?;
+        let offset_array_length: i32 = offset_bytes
+            .len()
+            .try_into()
+            .map_err(|_| general_err!("FSST: offset array exceeds i32::MAX bytes"))?;
 
-        // Section 3: symbol table.
+        // Symbol-table body (interim in-page placement, see type-level docs).
         let mut symbol_bytes = Vec::with_capacity(table.serialized_size());
         table.serialize(&mut symbol_bytes);
 
-        // Section 1 (header) + sections 2-4, contiguous.
-        let mut out =
-            Vec::with_capacity(8 + length_bytes.len() + symbol_bytes.len() + payload.len());
-        write_uleb128(&mut out, FSST_LENGTH_ENCODING_DELTA as u64);
-        write_uleb128(&mut out, length_bytes.len() as u64);
-        write_uleb128(&mut out, symbol_bytes.len() as u64);
-        out.extend_from_slice(&length_bytes);
+        let mut out = Vec::with_capacity(
+            symbol_bytes.len() + 9 + offset_bytes.len() + data_section.len(),
+        );
         out.extend_from_slice(&symbol_bytes);
-        out.extend_from_slice(&payload);
+        // FSST header (spec §4.4).
+        out.push(FSST_OFFSET_ENCODING_DELTA);
+        out.extend_from_slice(&(self.values.len() as i32).to_le_bytes());
+        out.extend_from_slice(&offset_array_length.to_le_bytes());
+        out.extend_from_slice(&offset_bytes);
+        out.extend_from_slice(&data_section);
 
         self.values.clear();
         self.buffered_bytes = 0;

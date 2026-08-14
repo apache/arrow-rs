@@ -23,8 +23,14 @@ use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{DataType, Int32Type};
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
-use crate::encodings::fsst::{FSST_LENGTH_ENCODING_DELTA, SymbolTable, read_uleb128};
+use crate::encodings::fsst::{
+    FSST_OFFSET_ENCODING_DELTA, FSST_OFFSET_ENCODING_PLAIN, SymbolTable,
+};
 use crate::errors::{ParquetError, Result};
+
+/// Size, in bytes, of the FSST header (spec §4.4): `offset_encoding` (`u8`) +
+/// `num_values` (`i32` LE) + `offset_array_length` (`i32` LE).
+const FSST_HEADER_LEN: usize = 1 + 4 + 4;
 
 /// Decoder for the [`FSST`](Encoding::FSST) encoding.
 ///
@@ -33,14 +39,12 @@ use crate::errors::{ParquetError, Result};
 pub struct FsstDecoder<T: DataType> {
     /// Symbol table parsed from the page.
     table: SymbolTable,
-    /// Concatenated compressed payload (section 4).
+    /// Data section: concatenated compressed values.
     data: Bytes,
-    /// Per-value compressed lengths (section 2), decoded up front.
-    lengths: Vec<i32>,
+    /// Cumulative end offsets into `data`, one per value (spec §4.5).
+    end_offsets: Vec<i32>,
     /// Index of the next value to produce.
     cursor: usize,
-    /// Byte offset into `data` of the value at `cursor`.
-    offset: usize,
     _phantom: PhantomData<T>,
 }
 
@@ -56,10 +60,18 @@ impl<T: DataType> FsstDecoder<T> {
         Self {
             table: SymbolTable::default(),
             data: Bytes::new(),
-            lengths: Vec::new(),
+            end_offsets: Vec::new(),
             cursor: 0,
-            offset: 0,
             _phantom: PhantomData,
+        }
+    }
+
+    /// Byte offset into the data section where the value at `cursor` starts:
+    /// the end offset of the previous value, or `0` for the first.
+    fn value_start(&self) -> usize {
+        match self.cursor {
+            0 => 0,
+            i => self.end_offsets[i - 1] as usize,
         }
     }
 }
@@ -70,66 +82,116 @@ impl<T: DataType> Decoder<T> for FsstDecoder<T> {
             return Err(general_err!("FsstDecoder only supports ByteArrayType"));
         }
 
-        // Section 1: header.
-        let mut pos = 0;
-        let length_encoding = read_uleb128(&data, &mut pos)?;
-        if length_encoding != FSST_LENGTH_ENCODING_DELTA as u64 {
+        // Symbol-table body (spec §3.3), self-describing, at the front of the
+        // page as an interim stand-in for the SYMBOL_TABLE_PAGE.
+        let (table, table_len) = SymbolTable::deserialize(&data)?;
+
+        // FSST header (spec §4.4).
+        let header = data
+            .get(table_len..table_len + FSST_HEADER_LEN)
+            .ok_or_else(|| general_err!("FSST: truncated header"))?;
+        let offset_encoding = header[0];
+        let stored_num_values = i32::from_le_bytes(header[1..5].try_into().unwrap());
+        let offset_array_length = i32::from_le_bytes(header[5..9].try_into().unwrap());
+        if stored_num_values < 0 {
+            return Err(general_err!("FSST: negative num_values {}", stored_num_values));
+        }
+        if offset_array_length < 0 {
             return Err(general_err!(
-                "FSST: unsupported length-array encoding {length_encoding}"
+                "FSST: negative offset_array_length {}",
+                offset_array_length
             ));
         }
-        let length_size = read_uleb128(&data, &mut pos)? as usize;
-        let symbol_size = read_uleb128(&data, &mut pos)? as usize;
-
-        let length_end = pos + length_size;
-        let symbol_end = length_end + symbol_size;
-        let symbol_bytes = data
-            .get(length_end..symbol_end)
-            .ok_or_else(|| general_err!("FSST: truncated symbol table"))?;
-
-        // Section 2: length array, Delta-Binary-Packed.
-        let mut lengths = vec![0i32; num_values];
-        if num_values > 0 {
-            let length_bytes = data
-                .slice(pos..length_end);
-            let mut length_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-            length_decoder.set_data(length_bytes, num_values)?;
-            length_decoder.get(&mut lengths)?;
+        let stored_num_values = stored_num_values as usize;
+        if stored_num_values > num_values {
+            return Err(general_err!(
+                "FSST: header claims {} values but page holds at most {}",
+                stored_num_values,
+                num_values
+            ));
         }
 
-        // Section 3: symbol table.
-        let (table, _) = SymbolTable::deserialize(symbol_bytes)?;
+        let offsets_start = table_len + FSST_HEADER_LEN;
+        let offsets_end = offsets_start + offset_array_length as usize;
+        if data.len() < offsets_end {
+            return Err(general_err!("FSST: truncated offset array"));
+        }
 
-        // Section 4: compressed payload.
+        // Offset array (spec §4.5): cumulative end offsets into the data
+        // section, either plain little-endian i32 or Delta-Binary-Packed.
+        let mut end_offsets = vec![0i32; stored_num_values];
+        if stored_num_values > 0 {
+            match offset_encoding {
+                FSST_OFFSET_ENCODING_PLAIN => {
+                    let expected = stored_num_values * 4;
+                    if offset_array_length as usize != expected {
+                        return Err(general_err!(
+                            "FSST: plain offset array is {} bytes, expected {}",
+                            offset_array_length,
+                            expected
+                        ));
+                    }
+                    for (i, chunk) in data[offsets_start..offsets_end].chunks_exact(4).enumerate() {
+                        end_offsets[i] = i32::from_le_bytes(chunk.try_into().unwrap());
+                    }
+                }
+                FSST_OFFSET_ENCODING_DELTA => {
+                    let mut offset_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+                    offset_decoder.set_data(data.slice(offsets_start..offsets_end), stored_num_values)?;
+                    offset_decoder.get(&mut end_offsets)?;
+                }
+                other => {
+                    return Err(general_err!("FSST: unsupported offset encoding {}", other));
+                }
+            }
+        }
+
+        let data_section_len = data.len() - offsets_end;
+
+        // Spec §4.5/§10.2: end offsets are cumulative, so they must be
+        // non-negative, non-decreasing, and end exactly at the data section's
+        // end; anything else is corruption.
+        let mut prev = 0i32;
+        for &end in &end_offsets {
+            if end < prev {
+                return Err(general_err!(
+                    "FSST: offset array is not monotonically non-decreasing"
+                ));
+            }
+            prev = end;
+        }
+        if prev as usize != data_section_len {
+            return Err(general_err!(
+                "FSST: last end offset {} does not match data section size {}",
+                prev,
+                data_section_len
+            ));
+        }
+
         self.table = table;
-        self.data = data.slice(symbol_end..);
-        self.lengths = lengths;
+        self.data = data.slice(offsets_end..);
+        self.end_offsets = end_offsets;
         self.cursor = 0;
-        self.offset = 0;
         Ok(())
     }
 
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
-        let to_read = buffer.len().min(self.lengths.len() - self.cursor);
+        let to_read = buffer.len().min(self.values_left());
         let mut decompressed = Vec::new();
         for item in buffer.iter_mut().take(to_read) {
-            let len = self.lengths[self.cursor] as usize;
-            let end = self.offset + len;
-            let compressed = self
-                .data
-                .get(self.offset..end)
-                .ok_or_else(|| general_err!("FSST: truncated compressed value"))?;
+            let start = self.value_start();
+            let end = self.end_offsets[self.cursor] as usize;
+            // start <= end <= data.len() was validated in set_data.
             decompressed.clear();
-            self.table.decompress(compressed, &mut decompressed)?;
+            self.table.decompress(&self.data[start..end], &mut decompressed)?;
             item.set_from_bytes(Bytes::copy_from_slice(&decompressed));
-            self.offset = end;
             self.cursor += 1;
         }
         Ok(to_read)
     }
 
     fn values_left(&self) -> usize {
-        self.lengths.len() - self.cursor
+        self.end_offsets.len() - self.cursor
     }
 
     #[cold]
@@ -138,11 +200,9 @@ impl<T: DataType> Decoder<T> for FsstDecoder<T> {
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let to_skip = num_values.min(self.lengths.len() - self.cursor);
-        for _ in 0..to_skip {
-            self.offset += self.lengths[self.cursor] as usize;
-            self.cursor += 1;
-        }
+        // End offsets are cumulative, so skipping is O(1) (spec §10.2).
+        let to_skip = num_values.min(self.values_left());
+        self.cursor += to_skip;
         Ok(to_skip)
     }
 }
@@ -158,6 +218,23 @@ mod tests {
     use crate::encodings::encoding::fsst_encoder::FsstEncoder;
 
     use super::FsstDecoder;
+
+    /// Empty symbol-table body (spec §3.3): symbol_count 0 + zeroed histogram.
+    const EMPTY_SYMBOL_TABLE: [u8; 9] = [0; 9];
+
+    /// Build a page body with an empty symbol table, a plain-encoded offset
+    /// array, and the given data section.
+    fn plain_page(end_offsets: &[i32], data_section: &[u8]) -> Bytes {
+        let mut page = EMPTY_SYMBOL_TABLE.to_vec();
+        page.push(0); // offset_encoding: PLAIN
+        page.extend_from_slice(&(end_offsets.len() as i32).to_le_bytes());
+        page.extend_from_slice(&((end_offsets.len() * 4) as i32).to_le_bytes());
+        for end in end_offsets {
+            page.extend_from_slice(&end.to_le_bytes());
+        }
+        page.extend_from_slice(data_section);
+        page.into()
+    }
 
     #[test]
     fn encode_decode_roundtrip() {
@@ -185,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_many_values_exercises_length_array() {
+    fn roundtrip_many_values_exercises_offset_array() {
         let values: Vec<ByteArray> = (0..1000)
             .map(|i| ByteArray::from(format!("https://example.com/item/{i}").as_str()))
             .collect();
@@ -203,12 +280,57 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_length_encoding() {
-        // A header whose first ULEB128 (length-array encoding id) is not the
-        // expected Delta-Binary-Packed id must be rejected.
-        let bogus = Bytes::from_static(&[99, 0, 0]);
+    fn decodes_plain_offset_array() {
+        // With an empty symbol table every byte is escaped: "a" -> FF 61,
+        // "b" -> FF 62; end offsets [2, 4].
+        let page = plain_page(&[2, 4], &[0xFF, b'a', 0xFF, b'b']);
+
         let mut decoder = FsstDecoder::<ByteArrayType>::new();
-        assert!(decoder.set_data(bogus, 0).is_err());
+        decoder.set_data(page, 2).unwrap();
+
+        let mut out = vec![ByteArray::default(); 2];
+        assert_eq!(decoder.get(&mut out).unwrap(), 2);
+        assert_eq!(out, vec![ByteArray::from("a"), ByteArray::from("b")]);
+    }
+
+    #[test]
+    fn rejects_unknown_offset_encoding() {
+        let mut page = EMPTY_SYMBOL_TABLE.to_vec();
+        page.push(99); // offset_encoding: reserved
+        page.extend_from_slice(&1i32.to_le_bytes()); // num_values
+        page.extend_from_slice(&4i32.to_le_bytes()); // offset_array_length
+        page.extend_from_slice(&0i32.to_le_bytes()); // offset array
+
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(page.into(), 1).is_err());
+    }
+
+    #[test]
+    fn rejects_non_monotonic_offsets() {
+        let page = plain_page(&[4, 2], &[0xFF, b'a', 0xFF, b'b']);
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(page, 2).is_err());
+    }
+
+    #[test]
+    fn rejects_offsets_not_covering_data_section() {
+        // Last end offset (2) leaves 2 trailing bytes unaccounted for.
+        let page = plain_page(&[2], &[0xFF, b'a', 0xFF, b'b']);
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(page, 1).is_err());
+
+        // Last end offset (6) points past the end of the data section.
+        let page = plain_page(&[6], &[0xFF, b'a', 0xFF, b'b']);
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(page, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_header() {
+        let mut page = EMPTY_SYMBOL_TABLE.to_vec();
+        page.push(0); // offset_encoding only; num_values/offset_array_length missing
+        let mut decoder = FsstDecoder::<ByteArrayType>::new();
+        assert!(decoder.set_data(page.into(), 0).is_err());
     }
 
     #[test]

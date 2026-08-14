@@ -50,17 +50,16 @@ pub(crate) const FSST_MAX_SYMBOLS: usize = 255;
 /// Maximum length, in bytes, of a single symbol.
 pub(crate) const FSST_MAX_SYMBOL_LEN: usize = 8;
 
-/// FSST symbol-table format version, stored in the upper 32 bits of the leading
-/// `u64` of a serialized symbol table.
-const FSST_VERSION: u64 = 20190218;
+/// Fixed-size header of a serialized symbol-table body (spec §3.3):
+/// `symbol_count` (`u8`) + length histogram (`[u8; 8]`).
+const FSST_SYMBOL_TABLE_HEADER_LEN: usize = 1 + 8;
 
-/// Fixed-size prelude of a serialized symbol table: version (`u64`) +
-/// zero-terminated flag (`u8`) + length histogram (`[u8; 8]`).
-const FSST_SYMBOL_TABLE_PRELUDE_LEN: usize = 8 + 1 + 8;
+/// `offset_encoding` value for a plain (little-endian `i32`) offset array
+/// (spec §4.4).
+pub(crate) const FSST_OFFSET_ENCODING_PLAIN: u8 = 0;
 
-/// Identifier written in the page header for the encoding used by the length
-/// array. Matches `Encoding::DELTA_BINARY_PACKED`'s discriminant.
-pub(crate) const FSST_LENGTH_ENCODING_DELTA: u8 = 5;
+/// `offset_encoding` value for a Delta-Binary-Packed offset array (spec §4.4).
+pub(crate) const FSST_OFFSET_ENCODING_DELTA: u8 = 1;
 
 /// Number of passes used to grow the symbol table during training.
 const TRAINING_GENERATIONS: usize = 5;
@@ -75,41 +74,6 @@ fn pack(bytes: &[u8]) -> u64 {
     let mut buf = [0u8; 8];
     buf[..bytes.len()].copy_from_slice(bytes);
     u64::from_le_bytes(buf)
-}
-
-/// Append `value` to `out` as unsigned LEB128.
-pub(crate) fn write_uleb128(out: &mut Vec<u8>, mut value: u64) {
-    loop {
-        let byte = (value & 0x7f) as u8;
-        value >>= 7;
-        if value != 0 {
-            out.push(byte | 0x80);
-        } else {
-            out.push(byte);
-            return;
-        }
-    }
-}
-
-/// Read an unsigned LEB128 value from `data` starting at `*pos`, advancing
-/// `*pos` past the consumed bytes.
-pub(crate) fn read_uleb128(data: &[u8], pos: &mut usize) -> Result<u64> {
-    let mut result: u64 = 0;
-    let mut shift = 0;
-    loop {
-        let byte = *data
-            .get(*pos)
-            .ok_or_else(|| general_err!("FSST: truncated ULEB128 value"))?;
-        *pos += 1;
-        result |= ((byte & 0x7f) as u64) << shift;
-        if byte & 0x80 == 0 {
-            return Ok(result);
-        }
-        shift += 7;
-        if shift >= 64 {
-            return Err(general_err!("FSST: ULEB128 value overflows u64"));
-        }
-    }
 }
 
 /// A static symbol table mapping 1-byte codes to byte strings.
@@ -306,23 +270,21 @@ impl SymbolTable {
     /// Number of bytes [`serialize`](Self::serialize) will append, so callers
     /// can pre-size their output buffer and record the symbol-table size.
     pub(crate) fn serialized_size(&self) -> usize {
-        FSST_SYMBOL_TABLE_PRELUDE_LEN + self.symbols.iter().map(|s| s.len()).sum::<usize>()
+        FSST_SYMBOL_TABLE_HEADER_LEN + self.symbols.iter().map(|s| s.len()).sum::<usize>()
     }
 
-    /// Serialize the table in the FSST symbol-table format:
+    /// Serialize the table as a symbol-table body (spec §3.3):
     ///
-    /// 1. version (`u64` little-endian; the version number occupies the upper 32 bits),
-    /// 2. zero-terminated flag (`u8`; always `0` here),
-    /// 3. length histogram (`[u8; 8]`; `histogram[len - 1]` is the number of
+    /// 1. `symbol_count` (`u8`),
+    /// 2. length histogram (`[u8; 8]`; `histogram[len - 1]` is the number of
     ///    symbols of that length), then
-    /// 4. the symbol bytes, grouped by ascending length.
+    /// 3. the symbol bytes, concatenated in code order (codes are assigned in
+    ///    ascending length order).
     ///
     /// Relies on `self.symbols` being sorted by length (see [`train`](Self::train)).
     pub(crate) fn serialize(&self, out: &mut Vec<u8>) {
         debug_assert!(self.symbols.len() <= FSST_MAX_SYMBOLS);
-
-        out.extend_from_slice(&(FSST_VERSION << 32).to_le_bytes());
-        out.push(0); // not zero-terminated
+        out.push(self.symbols.len() as u8);
 
         let mut histogram = [0u8; 8];
         for symbol in &self.symbols {
@@ -336,18 +298,29 @@ impl SymbolTable {
         }
     }
 
-    /// Deserialize a table written by [`serialize`](Self::serialize), returning
-    /// the table and the number of bytes consumed.
+    /// Deserialize a symbol-table body written by [`serialize`](Self::serialize),
+    /// returning the table and the number of bytes consumed.
+    ///
+    /// Enforces the spec §3.4/§3.7 invariants: the histogram must sum to
+    /// `symbol_count` and the symbol data must be present in full.
     pub(crate) fn deserialize(data: &[u8]) -> Result<(Self, usize)> {
-        let prelude = data
-            .get(..FSST_SYMBOL_TABLE_PRELUDE_LEN)
-            .ok_or_else(|| general_err!("FSST: truncated symbol-table prelude"))?;
-        // Bytes 0..8 are the version and 8 the zero-terminated flag; neither
-        // affects decoding of the symbols below.
-        let histogram = &prelude[9..17];
+        let header = data
+            .get(..FSST_SYMBOL_TABLE_HEADER_LEN)
+            .ok_or_else(|| general_err!("FSST: truncated symbol-table header"))?;
+        let symbol_count = header[0] as usize;
+        let histogram = &header[1..9];
 
-        let mut symbols = Vec::new();
-        let mut i = FSST_SYMBOL_TABLE_PRELUDE_LEN;
+        let histogram_sum: usize = histogram.iter().map(|&count| count as usize).sum();
+        if histogram_sum != symbol_count {
+            return Err(general_err!(
+                "FSST: corrupt symbol table: length histogram sums to {}, expected symbol_count {}",
+                histogram_sum,
+                symbol_count
+            ));
+        }
+
+        let mut symbols = Vec::with_capacity(symbol_count);
+        let mut i = FSST_SYMBOL_TABLE_HEADER_LEN;
         for (idx, &count) in histogram.iter().enumerate() {
             let len = idx + 1;
             for _ in 0..count {
@@ -439,5 +412,28 @@ mod tests {
         let table = SymbolTable::default();
         let mut out = Vec::new();
         assert!(table.decompress(&[FSST_ESCAPE], &mut out).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_histogram_sum_mismatch() {
+        // symbol_count claims 2 symbols but the histogram sums to 1 (§3.7).
+        let mut body = vec![2u8];
+        body.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+        body.push(b'a');
+        assert!(SymbolTable::deserialize(&body).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_truncated_symbol_data() {
+        // Histogram promises one 3-byte symbol but only 2 bytes follow (§3.7).
+        let mut body = vec![1u8];
+        body.extend_from_slice(&[0, 0, 1, 0, 0, 0, 0, 0]);
+        body.extend_from_slice(b"ab");
+        assert!(SymbolTable::deserialize(&body).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_truncated_header() {
+        assert!(SymbolTable::deserialize(&[0u8; 5]).is_err());
     }
 }

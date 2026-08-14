@@ -454,7 +454,9 @@ enum Encoding {
   /// Frequently occurring substrings (up to 8 bytes) are replaced with
   /// single-byte codes drawn from a per-page symbol table, enabling random
   /// access to individual compressed values. Applies to BYTE_ARRAY data.
-  FSST = 10;
+  ///
+  /// Value 10 is reserved for ALP by the parquet-format FSST/ALP proposals.
+  FSST = 11;
 }
 );
 
@@ -615,7 +617,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         7 => Encoding::DELTA_BYTE_ARRAY,
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
-        10 => Encoding::FSST,
+        11 => Encoding::FSST,
         _ => panic!("Impossible encoding {val}"),
     }
 }
