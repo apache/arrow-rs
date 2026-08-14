@@ -551,7 +551,7 @@ fn prepare_field_for_flight(
                     send_dictionaries,
                 );
                 dictionary_tracker.next_dict_id();
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),

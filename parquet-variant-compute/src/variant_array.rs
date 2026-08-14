@@ -697,7 +697,6 @@ pub struct ShreddedVariantFieldArray {
     shredding_state: ShreddingState,
 }
 
-#[allow(unused)]
 impl ShreddedVariantFieldArray {
     /// Creates a new `ShreddedVariantFieldArray` from a [`StructArray`].
     ///
