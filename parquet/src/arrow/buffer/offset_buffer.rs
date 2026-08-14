@@ -95,6 +95,17 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     ) -> Result<()> {
         self.offsets.reserve(keys.len());
 
+        // Pre-size `values` from the dictionary's average value length: an O(1)
+        // hint, exact when values are uniformly sized, which is the large-value
+        // case this targets. `try_reserve` because a skewed dictionary (a few
+        // huge entries, keys mostly selecting small ones) can inflate the
+        // estimate far above the real output size, and the dictionary comes
+        // from an untrusted file; on failure we fall back to plain growth.
+        if let Some(dict_len) = dict_offsets.len().checked_sub(1).filter(|n| *n > 0) {
+            let estimate = (dict_values.len() / dict_len).saturating_mul(keys.len());
+            let _ = self.values.try_reserve(estimate);
+        }
+
         for key in keys {
             let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
@@ -238,6 +249,35 @@ mod tests {
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
             vec!["hello", "bar", "cd", "f", "ab", "e"]
         )
+    }
+
+    #[test]
+    fn test_offset_buffer_extend_from_dictionary_size_hint() {
+        // Empty dictionary: the values size hint must not divide by zero
+        let keys: [i32; 0] = [];
+        let dict_offsets: [i32; 0] = [];
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer
+            .extend_from_dictionary(&keys, &dict_offsets, &[])
+            .unwrap();
+        assert_eq!(buffer.len(), 0);
+
+        // Skewed dictionary: one large value and one small one, with every key
+        // selecting the small one. The average-based hint over-estimates here,
+        // which must not affect the gathered output.
+        let mut dict_values = vec![b'z'];
+        dict_values.extend(std::iter::repeat_n(b'a', 64 * 1024));
+        let dict_offsets = [0i32, 1, dict_values.len() as i32];
+
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
+        buffer
+            .extend_from_dictionary(&[0i32; 128], &dict_offsets, &dict_values)
+            .unwrap();
+
+        let array = buffer.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(strings.len(), 128);
+        assert!(strings.iter().all(|s| s == Some("z")));
     }
 
     #[test]
