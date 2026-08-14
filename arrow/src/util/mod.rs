@@ -25,6 +25,12 @@ pub use arrow_data::bit_mask;
 pub mod bench_util;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
+/// Re-export of the `rand` crate version used by this crate.
+///
+/// Use `arrow::util::rand` to import `StandardUniform`, `StdRng`, etc. when
+/// calling APIs in `bench_util` or `test_util` to avoid `rand` version mismatches.
+#[cfg(feature = "test_utils")]
+pub use rand;
 #[cfg(feature = "prettyprint")]
 pub use arrow_cast::pretty;
 pub mod string_writer;
