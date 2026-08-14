@@ -157,6 +157,8 @@ pub fn get_column_writer<'a>(
 /// Gets a typed column writer for the specific type `T`, by "up-casting" `col_writer` of
 /// non-generic type to a generic column writer type `ColumnWriterImpl`.
 ///
+/// # Panics
+///
 /// Panics if actual enum value for `col_writer` does not match the type `T`.
 pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnWriterImpl<T> {
     T::get_column_writer(col_writer).unwrap_or_else(|| {
@@ -593,6 +595,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             && !matches!(rep_levels, LevelDataRef::Materialized(_));
         let has_levels = !matches!(def_levels, LevelDataRef::Absent)
             || !matches!(rep_levels, LevelDataRef::Absent);
+
         // When both level vectors are compact (Uniform or Absent), there is no
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
@@ -601,6 +604,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         } else {
             self.props.write_batch_size()
         };
+        debug_assert!(base_batch_size > 0);
+
         let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);

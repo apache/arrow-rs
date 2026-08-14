@@ -95,19 +95,19 @@ const ENOSYS: i32 = 38;
 /// This was created by bindgen
 #[repr(C)]
 #[derive(Debug)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// C function to get schema from the stream
-    pub get_schema:
-        Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
+    get_schema: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
     /// C function to get next array from the stream
-    pub get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
+    get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
     /// C function to get the error from last operation on the stream
-    pub get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+    get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
     /// C function to release the stream
-    pub release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
-    /// Private data used by the stream
-    pub private_data: *mut c_void,
+    release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    /// Private data used by the stream, owned by the release callback.
+    private_data: *mut c_void,
 }
 
 unsafe impl Send for FFI_ArrowArrayStream {}
@@ -212,6 +212,45 @@ impl FFI_ArrowArrayStream {
             release: None,
             private_data: std::ptr::null_mut(),
         }
+    }
+
+    /// Returns the producer-provided release callback, if any.
+    pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
+        self.release
+    }
+
+    /// Returns the opaque producer-provided private data pointer.
+    pub fn private_data(&self) -> *mut c_void {
+        self.private_data
+    }
+
+    /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
+    ///
+    /// # Safety
+    ///
+    /// [`Drop`] calls this callback with a pointer to `self`. The new callback
+    /// must correctly release this stream (usually by chaining to the returned
+    /// one) and must match the [`FFI_ArrowArrayStream::private_data`] it reads.
+    /// A wrong callback is undefined behavior on drop.
+    pub unsafe fn set_release(
+        &mut self,
+        release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
+        std::mem::replace(&mut self.release, release)
+    }
+
+    /// Replaces the private data pointer, returning the previous one.
+    ///
+    /// # Safety
+    ///
+    /// The old pointer is returned without being freed; the caller owns it from
+    /// here. The new pointer must match what the current
+    /// [`FFI_ArrowArrayStream::release`] callback expects.
+    pub unsafe fn set_private_data(&mut self, private_data: *mut c_void) -> *mut c_void {
+        std::mem::replace(&mut self.private_data, private_data)
     }
 }
 
@@ -318,7 +357,6 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
 impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
-    #[allow(dead_code)]
     pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
@@ -565,5 +603,49 @@ mod tests {
         assert!(produced_batches[0].is_err());
 
         Ok(())
+    }
+
+    // A consumer wraps the release callback with its own, then chains back to
+    // the original on drop. This is the same wrap-release pattern the
+    // release/private_data accessors exist for (#9771).
+    static STREAM_WRAPPER_RAN: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    struct StreamWrapperData {
+        original_release: Option<unsafe extern "C" fn(*mut FFI_ArrowArrayStream)>,
+        original_private_data: *mut c_void,
+    }
+
+    unsafe extern "C" fn wrapping_release(stream: *mut FFI_ArrowArrayStream) {
+        use std::sync::atomic::Ordering;
+        let stream = unsafe { &mut *stream };
+        let data = unsafe { Box::from_raw(stream.private_data() as *mut StreamWrapperData) };
+        STREAM_WRAPPER_RAN.store(true, Ordering::SeqCst);
+        unsafe { stream.set_release(data.original_release) };
+        unsafe { stream.set_private_data(data.original_private_data) };
+        if let Some(release) = stream.release() {
+            unsafe { release(stream) };
+        }
+    }
+
+    #[test]
+    fn test_wrap_release_callback() {
+        use std::sync::atomic::Ordering;
+
+        let batch_reader = Box::new(TestRecordBatchReader::new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            Box::new(std::iter::empty()),
+        ));
+        let mut stream = FFI_ArrowArrayStream::new(batch_reader);
+
+        let data = Box::new(StreamWrapperData {
+            original_release: stream.release(),
+            original_private_data: stream.private_data(),
+        });
+        unsafe { stream.set_release(Some(wrapping_release)) };
+        unsafe { stream.set_private_data(Box::into_raw(data) as *mut c_void) };
+
+        drop(stream); // runs wrapping_release, which chains to the original
+        assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));
     }
 }

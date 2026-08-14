@@ -706,7 +706,11 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    ///
+    /// # Panics
+    /// If the value is `0`.
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
         self.data_page_row_count_limit = value;
         self
     }
@@ -720,7 +724,11 @@ impl WriterPropertiesBuilder {
     /// [`set_data_page_row_count_limit`](Self::set_data_page_row_count_limit)
     /// are checked between batches, and thus the write batch size value acts as an
     /// upper-bound on the enforcement granularity of other limits.
+    ///
+    /// # Panics
+    /// If the value is `0`.
     pub fn set_write_batch_size(mut self, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 write batch size");
         self.write_batch_size = value;
         self
     }
@@ -815,6 +823,10 @@ impl WriterPropertiesBuilder {
     /// * If `None`, there's no effective limit.
     ///
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -844,6 +856,10 @@ impl WriterPropertiesBuilder {
     /// [`WriterPropertiesBuilder::set_column_index_truncate_length`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -1528,6 +1544,9 @@ impl BloomFilterPropertiesBuilder {
 
     /// Builds [`BloomFilterProperties`].
     ///
+    ///
+    /// # Panics
+    ///
     /// Panics if the configured `fpp` is not in `(0.0, 1.0)` exclusive.
     /// Use [`Self::try_build`] for a non-panicking alternative.
     pub fn build(self) -> BloomFilterProperties {
@@ -2088,6 +2107,18 @@ mod tests {
     #[should_panic(expected = "Cannot have a 0 max row group bytes")]
     fn test_writer_properties_panic_on_zero_row_group_bytes() {
         let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 write batch size")]
+    fn test_writer_properties_panic_on_zero_write_batch_size() {
+        let _ = WriterProperties::builder().set_write_batch_size(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 data page row count limit")]
+    fn test_writer_properties_panic_on_zero_data_page_row_count_limit() {
+        let _ = WriterProperties::builder().set_data_page_row_count_limit(0);
     }
 
     #[test]

@@ -328,6 +328,9 @@ impl UnionArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         let (offsets, fields) = match self.offsets.as_ref() {
             // If dense union, slice offsets
@@ -378,7 +381,6 @@ impl UnionArray {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::type_complexity)]
     pub fn into_parts(
         self,
     ) -> (
@@ -1016,8 +1018,6 @@ enum SparseStrategy {
 #[repr(usize)]
 enum Mask {
     Zero = 0,
-    // false positive, see https://github.com/rust-lang/rust-clippy/issues/8043
-    #[allow(clippy::enum_clike_unportable_variant)]
     Max = usize::MAX,
 }
 

@@ -34,6 +34,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
@@ -177,7 +178,6 @@ pub struct ArrowJsonBatch {
 
 /// A struct that partially reads the Arrow JSON dictionary batch
 #[derive(Deserialize, Serialize, Debug, Clone)]
-#[allow(non_snake_case)]
 pub struct ArrowJsonDictionaryBatch {
     /// The unique identifier for the dictionary
     pub id: i64,
@@ -869,7 +869,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
@@ -1129,12 +1129,12 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary fields must have a dict_id value"),
