@@ -1127,18 +1127,23 @@ impl ArrowColumnWriter {
             let non_null = levels.non_null_indices();
             match array.as_any_dictionary_opt() {
                 Some(dict) => {
+                    // For dictionary arrays, hash the integer keys rather than the actual values.
+                    // Key cardinality equals value cardinality, so distinct-value counting stays
+                    // correct while avoiding the cost of hashing arbitrary-length values.
                     let keys = dict.keys();
                     let key_data = keys.to_data();
                     let offset = key_data.offset();
                     let width = arrow_key_byte_width(keys.data_type());
                     if width > 0 {
                         let buffer = key_data.buffers()[0].as_slice();
+                        // Only visit non-null rows to avoid counting nulls as a distinct value.
                         for &row in non_null {
                             let pos = (offset + row) * width;
                             seen.insert(hash_bytes(&buffer[pos..pos + width]));
                         }
                     }
                 }
+                // For plain arrays, hash the actual values directly.
                 None => update_distinct_values_seen(array.as_ref(), non_null, seen),
             }
         }
@@ -6176,12 +6181,17 @@ mod tests {
 
     #[test]
     fn test_number_distinct_values_exact_count() {
-        // 50 distinct Int32 values repeated across 100k rows — set tracking must be exact.
+        // 50 distinct Int32 values repeated across 100k rows, with every 7th row null.
+        // Nulls must not be counted as a distinct value.
         let cardinality = 50u32;
-        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(
-            (0..100_000u32).map(|i| (i % cardinality) as i32),
-        ));
-        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let array: ArrayRef = Arc::new(Int32Array::from_iter((0..100_000u32).map(|i| {
+            if i % 7 == 0 {
+                None
+            } else {
+                Some((i % cardinality) as i32)
+            }
+        })));
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
 
         let props = WriterProperties::builder()
@@ -6198,6 +6208,7 @@ mod tests {
             .statistics()
             .and_then(|s| s.distinct_count_opt())
             .expect("distinct_count should be set");
+        // Must equal cardinality exactly; nulls must not inflate the count.
         assert_eq!(count, cardinality as u64);
     }
 
