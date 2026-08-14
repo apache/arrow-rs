@@ -30,7 +30,7 @@ use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
 use hashbrown::hash_map::Entry;
 use std::hash::{BuildHasher, Hasher};
-use std::mem::size_of;
+use std::mem::{align_of, size_of};
 use std::ptr::write_unaligned;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
@@ -378,7 +378,13 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     scratch.resize(count * size_of::<u64>(), 0u8);
 
     let state = RandomState::new();
-    // SAFETY: scratch is sized to exactly count * size_of::<u64>() above
+
+    // Vec<u8> may have 1-byte alignment; from_raw_parts_mut requires u64 alignment below.
+    if scratch.as_ptr().align_offset(align_of::<u64>()) != 0 {
+        *scratch = vec![0u8; count * size_of::<u64>()];
+    }
+
+    // SAFETY: scratch is sized to exactly count * size_of::<u64>() and is u64-aligned
     let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr() as *mut u64, count) };
 
     for idx in 0..count {
