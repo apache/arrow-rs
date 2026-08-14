@@ -211,9 +211,11 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
-    /// Panics if the proposed key was a duplicate
-    ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the proposed key was a duplicate
     pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b, ObjectState<'b>> {
         self.try_new_object(key).unwrap()
     }
@@ -233,9 +235,11 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
-    /// Panics if the proposed key was a duplicate
-    ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the proposed key was a duplicate
     pub fn new_list<'b>(&'b mut self, key: &str) -> ListBuilder<'b, ObjectState<'b>> {
         self.try_new_list(key).unwrap()
     }

@@ -2771,7 +2771,7 @@ mod tests {
     use arrow_buffer::ScalarBuffer;
 
     use crate::MetadataVersion;
-    use crate::convert::fb_to_schema;
+    use crate::convert::try_fb_to_schema;
     use crate::reader::*;
     use crate::root_as_footer;
 
@@ -4630,7 +4630,7 @@ mod tests {
             let footer =
                 root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
-            let schema = fb_to_schema(footer.schema().unwrap());
+            let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
             // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
             // for `read_record_batch` later on to read the data in a zero-copy manner.
@@ -4682,7 +4682,7 @@ mod tests {
         let trailer_start = buffer.len() - 10;
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
         // to an aligned buffer in `ArrayDataBuilder.build_aligned`.

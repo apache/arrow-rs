@@ -1054,6 +1054,10 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the offset and length in bytes of the column chunk within the file
+    ///
+    /// # Panics
+    ///
+    /// Panics if the column start offset or the compressed size is negative
     pub fn byte_range(&self) -> (u64, u64) {
         let col_start = match self.dictionary_page_offset() {
             Some(dictionary_page_offset) => dictionary_page_offset,

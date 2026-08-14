@@ -25,6 +25,11 @@ use crate::bit_util::ceil;
 /// to be equal to the bits in `data` in the range `[offset_read..offset_read+len]`
 /// returns the number of `0` bits `data[offset_read..offset_read+len]`
 /// `offset_write`, `offset_read`, and `len` are in terms of bits
+///
+/// # Panics
+///
+/// Panics if `offset_write + len` exceeds `write_data.len() * 8`, or if
+/// `offset_read + len` exceeds `data.len() * 8`
 pub fn set_bits(
     write_data: &mut [u8],
     data: &[u8],

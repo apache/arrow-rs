@@ -1343,6 +1343,10 @@ pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
 
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` was not produced by the same [`RowConverter`] as `self`
     pub fn push(&mut self, row: Row<'_>) {
         assert!(
             Arc::ptr_eq(&row.config.fields, &self.config.fields),
@@ -1360,6 +1364,10 @@ impl Rows {
     }
 
     /// Returns the row at index `row`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.num_rows()`
     pub fn row(&self, row: usize) -> Row<'_> {
         self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }

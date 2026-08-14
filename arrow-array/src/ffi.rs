@@ -216,7 +216,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// returns a new buffer corresponding to the index `i` of the FFI array. It may not exist (null pointer).
 /// `bits` is the number of bits that the native type of this buffer has.
 /// The size of the buffer will be `ceil(self.length * bits, 8)`.
-/// # Panic
+/// # Panics
 /// This function panics if `i` is larger or equal to `n_buffers`.
 /// # Safety
 /// This function assumes that `ceil(self.length * bits, 8)` is the size of the buffer

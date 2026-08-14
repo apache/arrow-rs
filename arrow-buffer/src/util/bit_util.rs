@@ -20,6 +20,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
     num.checked_next_multiple_of(64)
@@ -28,6 +32,10 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
@@ -36,6 +44,10 @@ pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn get_bit(data: &[u8], i: usize) -> bool {
     data[i / 8] & (1 << (i % 8)) != 0
@@ -53,6 +65,10 @@ pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
 }
 
 /// Sets bit at position `i` for `data` to 1
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
     data[i / 8] |= 1 << (i % 8);
@@ -72,6 +88,10 @@ pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
 }
 
 /// Sets bit at position `i` for `data` to 0
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn unset_bit(data: &mut [u8], i: usize) {
     data[i / 8] &= !(1 << (i % 8));

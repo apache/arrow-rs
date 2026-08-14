@@ -738,7 +738,7 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     /// Returns an error if offset arithmetic overflows the underlying integer type.
     ///
-    /// # Panic
+    /// # Panics
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
@@ -762,7 +762,7 @@ impl<'a> MutableArrayData<'a> {
 
     /// Extends the in progress array with a region of the input arrays.
     ///
-    /// # Panic
+    /// # Panics
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays,
     /// `end` > the length of the `index`th array,

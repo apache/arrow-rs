@@ -305,7 +305,7 @@ impl RowSelection {
 
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {

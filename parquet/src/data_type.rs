@@ -217,6 +217,10 @@ impl ByteArray {
     }
 
     /// Gets length of the underlying byte buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, e.g. on a [`ByteArray::new`] instance
     #[inline]
     pub fn len(&self) -> usize {
         assert!(self.data.is_some());
@@ -224,12 +228,20 @@ impl ByteArray {
     }
 
     /// Checks if the underlying buffer is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, see [`Self::len`]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns slice of data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set
     #[inline]
     pub fn data(&self) -> &[u8] {
         self.data
@@ -245,6 +257,10 @@ impl ByteArray {
     }
 
     /// Returns `ByteArray` instance with slice of values for a data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, or if `start + len` is out of bounds
     #[inline]
     pub fn slice(&self, start: usize, len: usize) -> Self {
         Self::from(

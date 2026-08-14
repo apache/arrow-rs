@@ -512,6 +512,10 @@ impl BooleanBuffer {
     }
 
     /// Slices this [`BooleanBuffer`] by the provided `offset` and `length`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.bit_len,

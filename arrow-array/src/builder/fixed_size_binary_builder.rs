@@ -56,6 +56,10 @@ impl FixedSizeBinaryBuilder {
 
     /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of byte slices
     /// that can be appended without reallocating
+    ///
+    /// # Panics
+    ///
+    /// Panics if `byte_width < 0`
     pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
