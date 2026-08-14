@@ -274,6 +274,28 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         ree: r_ree_info.as_ref().map(|(_, info)| info),
     };
 
+    // Equality against an inlined constant is a scan of fixed-width integers
+    if matches!(op, Op::Equal | Op::NotEqual)
+        && l_side.dict.is_none()
+        && r_side.dict.is_none()
+        && l_side.ree.is_none()
+        && r_side.ree.is_none()
+    {
+        let sides = match (l_s, r_s) {
+            (false, true) => Some((l, r, &l_nulls, &r_nulls)),
+            (true, false) => Some((r, l, &r_nulls, &l_nulls)),
+            _ => None,
+        };
+        // A null constant makes every row null, which this path cannot express
+        if let Some((values, scalar, values_nulls, scalar_nulls)) = sides
+            && scalar_nulls.as_ref().is_none_or(|n| n.null_count() == 0)
+            && let Some(mask) = eq_inline_scalar(values, scalar, l_t, matches!(op, Op::NotEqual))
+        {
+            let nulls = values_nulls.clone().filter(|n| n.null_count() > 0);
+            return Ok(BooleanArray::new(mask, nulls));
+        }
+    }
+
     // Defer computation as may not be necessary
     let values = || -> BooleanBuffer {
         let d = downcast_primitive_array! {
@@ -368,6 +390,44 @@ impl SideInfo<'_> {
     fn has_indirection(&self) -> bool {
         self.dict.is_some() || self.ree.is_some()
     }
+}
+
+/// Longest constant whose length and bytes both fit a view's low 64 bits
+const MAX_LOW_HALF_LEN: u32 = 4;
+
+/// Compares every value of a byte-view array against an inlined constant
+///
+/// `None` for any other shape, which the generic path below then handles.
+fn eq_inline_scalar(
+    l: &dyn Array,
+    r: &dyn Array,
+    data_type: &DataType,
+    negate: bool,
+) -> Option<BooleanBuffer> {
+    let (values, needle) = match data_type {
+        DataType::Utf8View => (
+            l.as_string_view().views(),
+            *r.as_string_view().views().first()?,
+        ),
+        DataType::BinaryView => (
+            l.as_binary_view().views(),
+            *r.as_binary_view().views().first()?,
+        ),
+        _ => return None,
+    };
+    // Only a constant whose length and bytes fit the view's low half. Wider
+    // constants need the whole 128-bit view, and comparing that is slower than
+    // the generic path's early exit on a length mismatch.
+    let needle_len = needle as u32;
+    if needle_len > MAX_LOW_HALF_LEN {
+        return None;
+    }
+    let significant = u64::MAX >> (32 - needle_len * 8);
+    let needle = needle as u64 & significant;
+    Some(collect_bool(values.len(), negate, |idx| {
+        let view = unsafe { *values.get_unchecked(idx) };
+        view as u64 & significant == needle
+    }))
 }
 
 /// Perform a potentially vectored `op` on the provided `ArrayOrd`
@@ -1135,6 +1195,41 @@ mod tests {
             lt(&a, &b).unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
+    }
+
+    /// A null constant makes every row null, whatever the values are
+    #[test]
+    fn test_byte_view_eq_null_scalar() {
+        let a = arrow_array::StringViewArray::from(vec![Some(""), Some("x"), None]);
+        let scalar = arrow_array::StringViewArray::new_null(1);
+
+        let r = neq(&a, &Scalar::new(&scalar)).unwrap();
+
+        assert_eq!(r.null_count(), 3);
+    }
+
+    /// A null row's view is arbitrary, so validity decides, not bytes
+    #[test]
+    fn test_byte_view_eq_null_row() {
+        let a = arrow_array::StringViewArray::from(vec![Some(""), Some("x"), None]);
+        let scalar = arrow_array::StringViewArray::from(vec![""]);
+
+        let r = neq(&a, &Scalar::new(&scalar)).unwrap();
+
+        assert!(!r.value(0));
+        assert!(r.value(1));
+        assert!(r.is_null(2));
+    }
+
+    /// The constant may sit on either side; equality is symmetric
+    #[test]
+    fn test_byte_view_eq_scalar_either_side() {
+        let a =
+            arrow_array::StringViewArray::from(vec![Some(""), Some("xxxx"), Some("xxxxxxxxxxxxx")]);
+        let scalar = Scalar::new(arrow_array::StringViewArray::from(vec!["xxxx"]));
+
+        assert_eq!(eq(&a, &scalar).unwrap(), eq(&scalar, &a).unwrap());
+        assert_eq!(eq(&a, &scalar).unwrap().true_count(), 1);
     }
 
     #[test]
