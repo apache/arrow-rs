@@ -1541,8 +1541,8 @@ pub struct StreamReader<R> {
     /// This value is set to `true` the first time the reader's `next()` returns `None`.
     finished: bool,
 
-    /// Optional projection
-    projection: Option<(Vec<usize>, Schema)>,
+    /// Optional projection: column indices and the resulting projected schema
+    projection: Option<(Vec<usize>, SchemaRef)>,
 
     /// Should validation be skipped when reading data? Defaults to false.
     ///
@@ -1612,7 +1612,7 @@ impl<R: Read> StreamReader<R> {
 
         let projection = match projection {
             Some(projection_indices) => {
-                let schema = schema.project(&projection_indices)?;
+                let schema = Arc::new(schema.project(&projection_indices)?);
                 Some((projection_indices, schema))
             }
             _ => None,
@@ -1628,9 +1628,12 @@ impl<R: Read> StreamReader<R> {
         })
     }
 
-    /// Return the schema of the stream
+    /// Return the schema of the record batches produced by this reader
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        match &self.projection {
+            Some((_, projected_schema)) => projected_schema.clone(),
+            None => self.schema.clone(),
+        }
     }
 
     /// Check if the stream is finished
@@ -1786,7 +1789,7 @@ impl<R: Read> Iterator for StreamReader<R> {
 
 impl<R: Read> RecordBatchReader for StreamReader<R> {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.schema()
     }
 }
 
@@ -2372,6 +2375,26 @@ mod tests {
 
         let projection = vec![3, 2, 1];
         let mut reader = FileReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
+        let reader_schema = RecordBatchReader::schema(&reader);
+        let read_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(reader_schema, read_batch.schema());
+    }
+
+    #[test]
+    fn test_stream_reader_projected_schema_matches_batch_schema() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let projection = vec![3, 2, 1];
+        let mut reader = StreamReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
         let reader_schema = RecordBatchReader::schema(&reader);
         let read_batch = reader.next().unwrap().unwrap();
 
