@@ -826,13 +826,14 @@ mod tests {
             // TODO: avoid requiring snappy for this file
             #[cfg(feature = "snappy")]
             "avro/alltypes_plain.avro",
-            #[cfg(feature = "snappy")]
+            // Compression codecs are unsupported by Miri
+            #[cfg(all(feature = "snappy", not(miri)))]
             "avro/alltypes_plain.snappy.avro",
-            #[cfg(feature = "zstd")]
+            #[cfg(all(feature = "zstd", not(miri)))]
             "avro/alltypes_plain.zstandard.avro",
-            #[cfg(feature = "bzip2")]
+            #[cfg(all(feature = "bzip2", not(miri)))]
             "avro/alltypes_plain.bzip2.avro",
-            #[cfg(feature = "xz")]
+            #[cfg(all(feature = "xz", not(miri)))]
             "avro/alltypes_plain.xz.avro",
         ]
         .into_iter()
@@ -1883,8 +1884,8 @@ mod tests {
     /// Checks that `actual_meta` contains all of `expected_meta`, and any additional
     /// keys in `actual_meta` are from a permitted set.
     fn assert_metadata_is_superset(
-        expected_meta: &HashMap<String, String>,
-        actual_meta: &HashMap<String, String>,
+        expected_meta: &arrow_schema::Metadata,
+        actual_meta: &arrow_schema::Metadata,
         context: &str,
     ) {
         let allowed_additions: HashSet<&str> =
@@ -2686,6 +2687,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn comprehensive_e2e_test_roundtrip() -> Result<(), AvroError> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/comprehensive_e2e.avro");
@@ -3521,6 +3523,7 @@ mod tests {
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_roundtrip_float16_no_custom_widens_to_float32() {
         assert_round_trip_widened(
             Arc::new(Float16Array::from(vec![
@@ -3785,6 +3788,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn e2e_types_and_schema_alignment() -> Result<(), AvroError> {
         // Values are chosen to:
         // - exercise full UInt64 range when `avro_custom_types` is enabled

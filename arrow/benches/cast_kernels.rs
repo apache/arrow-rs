@@ -18,14 +18,12 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::cast;
@@ -137,7 +135,7 @@ fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
             builder.append_null()
         } else {
             builder.append_value(
-                rng.random_range(-999_999_999f32..999_999_999f32)
+                rng.random_range(-1_000_000_000_f32..1_000_000_000_f32)
                     .to_string(),
             )
         }
@@ -204,6 +202,34 @@ fn build_nested_dict_array(size: usize) -> ArrayRef {
     Arc::new(DictionaryArray::new(outer_keys, Arc::new(inner)))
 }
 
+// Keys for a `size` row dictionary, spread over `distinct` values so a cast has to touch
+// the whole values buffer rather than a contiguous prefix of it.
+fn dict_keys(size: usize, distinct: usize) -> UInt64Array {
+    let mut rng = seedable_rng();
+    let range = Uniform::new(0, distinct as u64).unwrap();
+    UInt64Array::from_iter_values((0..size).map(|_| rng.sample(range)))
+}
+
+// `Dictionary<UInt64, Utf8>` of `size` rows over `distinct` values, alternating between
+// values short enough to inline into a view and longer ones that reference the buffer.
+//
+// Different implementation paths may be taken based on the ratio of rows to distinct
+// values.
+fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
+    let values = StringArray::from_iter_values((0..distinct).map(|i| {
+        if i % 2 == 0 {
+            format!("val {i}")
+        } else {
+            format!("dictionary value {i:07}")
+        }
+    }));
+
+    Arc::new(DictionaryArray::new(
+        dict_keys(size, distinct),
+        Arc::new(values),
+    ))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -214,6 +240,7 @@ fn add_benchmark(c: &mut Criterion) {
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
+    let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
 
     let f64_array = build_array::<Float64Type>(512);
     let date64_array = build_array::<Date64Type>(512);
@@ -234,6 +261,15 @@ fn add_benchmark(c: &mut Criterion) {
     let nested_dict_array = build_nested_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+
+    // the dictionary is far larger than the array is long, as after a selective filter.
+    // `dict_array` above is the opposite shape, many rows over few dictionary values.
+    let sparse_dict_array = build_string_dict_array(1_024, 32_768);
+    let sparse_binary_dict_array = cast(
+        &sparse_dict_array,
+        &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Binary)),
+    )
+    .unwrap();
 
     let string_float_array_normal = build_string_float_array(5_000, 0.1);
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
@@ -300,6 +336,9 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast utf8 to f32", |b| {
         b.iter(|| cast_array(&f32_utf8_array, DataType::Float32))
     });
+    c.bench_function("cast utf8 to i32", |b| {
+        b.iter(|| cast_array(&i32_utf8_array, DataType::Int32))
+    });
     c.bench_function("cast i64 to string 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Utf8))
     });
@@ -349,6 +388,12 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast dict to string view", |b| {
         b.iter(|| cast_array(&dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast binary dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_binary_dict_array, DataType::Utf8View))
     });
     c.bench_function("cast nested dict to dict", |b| {
         b.iter(|| {

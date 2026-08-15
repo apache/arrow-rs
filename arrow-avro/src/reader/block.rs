@@ -80,7 +80,7 @@ impl BlockDecoder {
         while !buf.is_empty() {
             match self.state {
                 BlockDecoderState::Count => {
-                    if let Some(c) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(c) = self.vlq_decoder.long(&mut buf)? {
                         self.in_progress.count = c.try_into().map_err(|_| {
                             AvroError::ParseError(format!(
                                 "Block count cannot be negative, got {c}"
@@ -91,12 +91,18 @@ impl BlockDecoder {
                     }
                 }
                 BlockDecoderState::Size => {
-                    if let Some(c) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(c) = self.vlq_decoder.long(&mut buf)? {
                         self.bytes_remaining = c.try_into().map_err(|_| {
                             AvroError::ParseError(format!("Block size cannot be negative, got {c}"))
                         })?;
 
-                        self.in_progress.data.reserve(self.bytes_remaining);
+                        // Only reserve what the current input backs: the block size is
+                        // input specified so could be an extreme value (e.g. i64::MAX)
+                        // in case of corrupted/malicious input. The rest is reserved
+                        // lazily by `extend_from_slice` below as data arrives.
+                        self.in_progress
+                            .data
+                            .reserve(self.bytes_remaining.min(buf.len()));
                         self.state = BlockDecoderState::Data;
                     }
                 }
@@ -112,8 +118,10 @@ impl BlockDecoder {
                 }
                 BlockDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.in_progress.sync[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    // Fill from the front: the marker may arrive split across decode() calls.
+                    let offset = 16 - self.bytes_remaining;
+                    self.in_progress.sync[offset..offset + to_decode]
+                        .copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
@@ -146,5 +154,93 @@ impl BlockDecoder {
 
     pub(crate) fn bytes_remaining(&self) -> usize {
         self.bytes_remaining
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zig-zag encode `value` as an Avro `long` (variable-length integer).
+    fn encode_long(value: i64, out: &mut Vec<u8>) {
+        let mut n = ((value << 1) ^ (value >> 63)) as u64;
+        while n >= 0x80 {
+            out.push((n as u8) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+    }
+
+    #[test]
+    fn test_oversized_block_size_bounds_reserve() {
+        // A block advertising `i64::MAX` bytes must not reserve that up front when only
+        // a few payload bytes are present, or a crafted OCF aborts on a huge alloc (#10234).
+        let mut buf = Vec::new();
+        encode_long(1, &mut buf); // object count
+        encode_long(i64::MAX, &mut buf); // attacker-controlled block size
+        buf.extend_from_slice(&[0u8; 8]); // a handful of real bytes
+
+        let mut decoder = BlockDecoder::default();
+        let read = decoder.decode(&buf).unwrap();
+
+        assert_eq!(read, buf.len(), "all available input should be consumed");
+        assert!(
+            decoder.in_progress.data.capacity() <= buf.len(),
+            "capacity {} must stay bounded by available input {}, not the advertised i64::MAX",
+            decoder.in_progress.data.capacity(),
+            buf.len(),
+        );
+    }
+
+    #[test]
+    fn test_negative_block_size_errors() {
+        let mut buf = Vec::new();
+        encode_long(1, &mut buf); // object count
+        encode_long(-1, &mut buf); // invalid (negative) block size
+
+        let mut decoder = BlockDecoder::default();
+        let err = decoder.decode(&buf).unwrap_err();
+        assert!(
+            err.to_string().contains("Block size cannot be negative"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_well_formed_block_round_trips() {
+        // The capped reserve must not change decoding of a normal block.
+        let payload = [1u8, 2, 3, 4];
+        let sync = [7u8; 16];
+        let mut buf = Vec::new();
+        encode_long(2, &mut buf); // object count
+        encode_long(payload.len() as i64, &mut buf); // block size
+        buf.extend_from_slice(&payload);
+        buf.extend_from_slice(&sync);
+
+        let mut decoder = BlockDecoder::default();
+        assert_eq!(decoder.decode(&buf).unwrap(), buf.len());
+        let block = decoder.flush().expect("a complete block");
+        assert_eq!(block.count, 2);
+        assert_eq!(block.data, payload);
+        assert_eq!(block.sync, sync);
+    }
+
+    #[test]
+    fn test_sync_marker_split_across_decode_calls() {
+        // count=1 (zig-zag 0x02), size=1 (0x02), one data byte, 16-byte sync marker
+        let sync: [u8; 16] = core::array::from_fn(|i| i as u8);
+        let mut block_bytes = vec![0x02, 0x02, 0xAA];
+        block_bytes.extend_from_slice(&sync);
+
+        for chunk_size in 1..block_bytes.len() {
+            let mut decoder = BlockDecoder::default();
+            for chunk in block_bytes.chunks(chunk_size) {
+                decoder.decode(chunk).unwrap();
+            }
+            let block = decoder.flush().expect("complete block");
+            assert_eq!(block.count, 1);
+            assert_eq!(block.data, vec![0xAA]);
+            assert_eq!(block.sync, sync, "chunk_size {chunk_size}");
+        }
     }
 }

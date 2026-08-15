@@ -17,7 +17,6 @@
 
 use crate::error::ArrowError;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use crate::datatype::DataType;
 use crate::extension::CanonicalExtensionType;
 use crate::schema::SchemaBuilder;
 use crate::{
-    Fields, UnionFields, UnionMode,
+    Fields, Metadata, UnionFields, UnionMode,
     extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
 };
 
@@ -57,7 +56,7 @@ pub struct Field {
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
-    metadata: HashMap<String, String>,
+    metadata: Metadata,
 }
 
 impl std::fmt::Debug for Field {
@@ -128,31 +127,7 @@ impl Ord for Field {
             .cmp(other.name())
             .then_with(|| self.data_type.cmp(other.data_type()))
             .then_with(|| self.nullable.cmp(&other.nullable))
-            .then_with(|| {
-                // ensure deterministic key order
-                let mut keys: Vec<&String> =
-                    self.metadata.keys().chain(other.metadata.keys()).collect();
-                keys.sort();
-                for k in keys {
-                    match (self.metadata.get(k), other.metadata.get(k)) {
-                        (None, None) => {}
-                        (Some(_), None) => {
-                            return Ordering::Less;
-                        }
-                        (None, Some(_)) => {
-                            return Ordering::Greater;
-                        }
-                        (Some(v1), Some(v2)) => match v1.cmp(v2) {
-                            Ordering::Equal => {}
-                            other => {
-                                return other;
-                            }
-                        },
-                    }
-                }
-
-                Ordering::Equal
-            })
+            .then_with(|| self.metadata.cmp(&other.metadata))
     }
 }
 
@@ -161,14 +136,8 @@ impl Hash for Field {
         self.name.hash(state);
         self.data_type.hash(state);
         self.nullable.hash(state);
-
-        // ensure deterministic key order
-        let mut keys: Vec<&String> = self.metadata.keys().collect();
-        keys.sort();
-        for k in keys {
-            k.hash(state);
-            self.metadata.get(k).expect("key valid").hash(state);
-        }
+        // `Metadata` iterates in deterministic (sorted) key order
+        self.metadata.hash(state);
     }
 }
 
@@ -181,6 +150,18 @@ impl AsRef<Field> for Field {
 impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
+    /// Default field name for the entries field for Map
+    ///
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
+    pub const MAP_ENTRIES_FIELD_DEFAULT_NAME: &'static str = "entries";
+    /// Default field name for the key field for Map
+    ///
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
+    pub const MAP_KEY_FIELD_DEFAULT_NAME: &'static str = "key";
+    /// Default field name for the value field for Map
+    ///
+    /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
+    pub const MAP_VALUE_FIELD_DEFAULT_NAME: &'static str = "value";
 
     /// Creates a new field with the given name, data type, and nullability
     ///
@@ -190,14 +171,14 @@ impl Field {
     /// Field::new("field_name", DataType::Int32, true);
     /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field {
             name: name.into(),
             data_type,
             nullable,
             dict_id: 0,
             dict_is_ordered: false,
-            metadata: HashMap::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -231,14 +212,14 @@ impl Field {
         dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field {
             name: name.into(),
             data_type,
             nullable,
             dict_id,
             dict_is_ordered,
-            metadata: HashMap::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -368,25 +349,25 @@ impl Field {
 
     /// Sets the `Field`'s optional custom metadata.
     #[inline]
-    pub fn set_metadata(&mut self, metadata: HashMap<String, String>) {
-        self.metadata = metadata;
+    pub fn set_metadata(&mut self, metadata: impl Into<Metadata>) {
+        self.metadata = metadata.into();
     }
 
     /// Sets the metadata of this `Field` to be `metadata` and returns self
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(mut self, metadata: impl Into<Metadata>) -> Self {
         self.set_metadata(metadata);
         self
     }
 
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &HashMap<String, String> {
+    pub const fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
     /// Returns a mutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+    pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
 
@@ -464,11 +445,8 @@ impl Field {
     /// let field = Field::new("", DataType::Null, false);
     /// assert_eq!(field.extension_type_name(), None);
     ///
-    /// let field = Field::new("", DataType::Null, false).with_metadata(
-    ///    [(EXTENSION_TYPE_NAME_KEY.to_owned(), "example".to_owned())]
-    ///        .into_iter()
-    ///        .collect(),
-    /// );
+    /// let field = Field::new("", DataType::Null, false)
+    ///     .with_metadata([(EXTENSION_TYPE_NAME_KEY, "example")]);
     /// assert_eq!(field.extension_type_name(), Some("example"));
     /// ```
     pub fn extension_type_name(&self) -> Option<&str> {
@@ -491,11 +469,8 @@ impl Field {
     /// let field = Field::new("", DataType::Null, false);
     /// assert_eq!(field.extension_type_metadata(), None);
     ///
-    /// let field = Field::new("", DataType::Null, false).with_metadata(
-    ///    [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "example".to_owned())]
-    ///        .into_iter()
-    ///        .collect(),
-    /// );
+    /// let field = Field::new("", DataType::Null, false)
+    ///     .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "example")]);
     /// assert_eq!(field.extension_type_metadata(), Some("example"));
     /// ```
     pub fn extension_type_metadata(&self) -> Option<&str> {
@@ -579,7 +554,7 @@ impl Field {
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
     /// panics if this [`Field`] does not have this extension type.
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// This calls [`Field::try_extension_type`] and panics when it returns an
     /// error.
@@ -719,7 +694,7 @@ impl Field {
         self.fields()
             .into_iter()
             .filter(|&field| {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 let matching_dict_id = field.dict_id == id;
                 matches!(field.data_type(), DataType::Dictionary(_, _)) && matching_dict_id
             })
@@ -734,7 +709,7 @@ impl Field {
     )]
     pub const fn dict_id(&self) -> Option<i64> {
         match self.data_type {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             DataType::Dictionary(_, _) => Some(self.dict_id),
             _ => None,
         }
@@ -952,7 +927,7 @@ impl Field {
         && (self.nullable || !other.nullable)
         // make sure self.metadata is a superset of other.metadata
         && other.metadata.iter().all(|(k, v1)| {
-            self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
+            self.metadata.get(k).is_some_and(|v2| v1 == v2)
         })
     }
 
@@ -963,7 +938,7 @@ impl Field {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.data_type)
             + self.data_type.size()
             + self.name.capacity()
-            + (std::mem::size_of::<(String, String)>() * self.metadata.capacity())
+            + (std::mem::size_of::<(String, String)>() * self.metadata.len())
             + self
                 .metadata
                 .iter()
@@ -1009,6 +984,7 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashMap;
     use std::collections::hash_map::DefaultHasher;
 
     #[derive(Debug, Clone, Copy)]
@@ -1048,40 +1024,21 @@ mod test {
         let no_extension = Field::new("f", DataType::Null, false);
         assert!(!no_extension.has_valid_extension_type::<TestExtensionType>());
 
-        let matching_name = Field::new("f", DataType::Null, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                TestExtensionType::NAME.to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let matching_name = Field::new("f", DataType::Null, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, TestExtensionType::NAME)]);
         assert!(matching_name.has_valid_extension_type::<TestExtensionType>());
 
         let matching_name_with_invalid_metadata = Field::new("f", DataType::Null, false)
-            .with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_owned(),
-                        TestExtensionType::NAME.to_owned(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_owned(), "invalid".to_owned()),
-                ]
-                .into_iter()
-                .collect(),
-            );
+            .with_metadata([
+                (EXTENSION_TYPE_NAME_KEY, TestExtensionType::NAME),
+                (EXTENSION_TYPE_METADATA_KEY, "invalid"),
+            ]);
         assert!(
             !matching_name_with_invalid_metadata.has_valid_extension_type::<TestExtensionType>()
         );
 
-        let different_name = Field::new("f", DataType::Null, false).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                "some.other_extension".to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let different_name = Field::new("f", DataType::Null, false)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, "some.other_extension")]);
         assert!(!different_name.has_valid_extension_type::<TestExtensionType>());
     }
 
@@ -1096,7 +1053,7 @@ mod test {
     fn test_new_dict_with_string() {
         // Fields should allow owned Strings to support reuse
         let s = "c1";
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
     }
 
@@ -1235,7 +1192,7 @@ mod test {
 
     #[test]
     fn test_fields_with_dict_id() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1243,7 +1200,7 @@ mod test {
             10,
             false,
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict2 = Field::new_dict(
             "dict2",
             DataType::Dictionary(DataType::Int32.into(), DataType::Int8.into()),
@@ -1280,11 +1237,11 @@ mod test {
             false,
         );
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         for field in field.fields_with_dict_id(10) {
             assert_eq!(dict1, *field);
         }
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         for field in field.fields_with_dict_id(20) {
             assert_eq!(dict2, *field);
         }
@@ -1299,7 +1256,7 @@ mod test {
     #[test]
     fn test_field_comparison_case() {
         // dictionary-encoding properties not used for field comparison
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1307,7 +1264,7 @@ mod test {
             10,
             false,
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict2 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1319,7 +1276,7 @@ mod test {
         assert_eq!(dict1, dict2);
         assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict0",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1540,7 +1497,7 @@ mod test {
     #[test]
     fn test_field_with_nonempty_metadata_serde() {
         let mut metadata = HashMap::new();
-        metadata.insert("hi".to_owned(), "".to_owned());
+        metadata.insert("hi".to_owned(), String::new());
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)

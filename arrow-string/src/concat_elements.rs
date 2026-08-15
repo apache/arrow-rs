@@ -212,8 +212,12 @@ pub fn concat_elements_fixed_size_binary(
             result.append_null();
         } else {
             buffer.clear();
-            buffer.extend_from_slice(left.value(i));
-            buffer.extend_from_slice(right.value(i));
+            buffer
+                .try_extend_from_slice(left.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            buffer
+                .try_extend_from_slice(right.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             result.append_value(&buffer)?;
         }
     }
@@ -318,7 +322,7 @@ where
             // in `concat_elements_view_array`, so offset cannot exceed it.
             // Not using `u32::try_from` on each insertion makes a ~5% difference
             // in benchmarking
-            debug_assert!(offset <= i32::MAX as usize);
+            debug_assert!(i32::try_from(offset).is_ok());
             let view_offset: u32 = offset as u32;
 
             self.data.extend_from_slice(left);
@@ -343,14 +347,14 @@ where
         self,
         null_buffer: Option<NullBuffer>,
     ) -> Result<GenericByteViewArray<T>, ArrowError> {
-        if let Some(ref nulls) = null_buffer {
-            if nulls.len() != self.views.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "Null buffer length ({}) must match row count ({})",
-                    nulls.len(),
-                    self.views.len()
-                )));
-            }
+        if let Some(ref nulls) = null_buffer
+            && nulls.len() != self.views.len()
+        {
+            return Err(ArrowError::ComputeError(format!(
+                "Null buffer length ({}) must match row count ({})",
+                nulls.len(),
+                self.views.len()
+            )));
         }
 
         let buffers = if self.data.is_empty() {

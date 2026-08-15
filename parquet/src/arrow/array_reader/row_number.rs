@@ -45,14 +45,30 @@ impl RowNumberReader {
     ) -> Result<Self> {
         // Pass 1: Build a map from ordinal to first_row_index
         // This is O(M) where M is the total number of row groups in the file
-        let mut ordinal_to_offset: HashMap<i16, i64> = HashMap::new();
+        let mut ordinal_to_offset: HashMap<i32, i64> = HashMap::new();
         let mut first_row_index: i64 = 0;
+        let mut missing_ordinals: usize = 0;
 
         for rg in parquet_metadata.row_groups() {
             if let Some(ordinal) = rg.ordinal() {
                 ordinal_to_offset.insert(ordinal, first_row_index);
+            } else {
+                missing_ordinals += 1;
             }
             first_row_index += rg.num_rows();
+        }
+
+        // Mixed ordinals: refuse to compute row numbers for the whole file,
+        // even if every *selected* row group carries an ordinal. Otherwise the
+        // same file would yield row numbers or an error depending on which row
+        // groups a query's pruning happens to select.
+        if missing_ordinals > 0 && !ordinal_to_offset.is_empty() {
+            return Err(ParquetError::General(format!(
+                "Cannot compute row numbers: file has inconsistent row-group \
+                 ordinals ({} of {} row groups are missing the ordinal field)",
+                missing_ordinals,
+                parquet_metadata.num_row_groups(),
+            )));
         }
 
         // Pass 2: Build ranges in the order specified by the row_groups iterator
@@ -181,7 +197,16 @@ mod tests {
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
-    fn create_test_parquet_metadata(row_groups: Vec<(i16, i64)>) -> ParquetMetaData {
+    fn create_test_parquet_metadata(row_groups: Vec<(i32, i64)>) -> ParquetMetaData {
+        create_test_parquet_metadata_opt(
+            row_groups
+                .into_iter()
+                .map(|(ordinal, num_rows)| (Some(ordinal), num_rows))
+                .collect(),
+        )
+    }
+
+    fn create_test_parquet_metadata_opt(row_groups: Vec<(Option<i32>, i64)>) -> ParquetMetaData {
         let schema_descr = create_test_schema();
 
         let mut row_group_metas = vec![];
@@ -192,14 +217,14 @@ mod tests {
                 .map(|col| ColumnChunkMetaData::builder(col.clone()).build().unwrap())
                 .collect();
 
-            let row_group = RowGroupMetaData::builder(schema_descr.clone())
+            let mut builder = RowGroupMetaData::builder(schema_descr.clone())
                 .set_num_rows(num_rows)
-                .set_ordinal(ordinal)
                 .set_total_byte_size(100)
-                .set_column_metadata(columns)
-                .build()
-                .unwrap();
-            row_group_metas.push(row_group);
+                .set_column_metadata(columns);
+            if let Some(ordinal) = ordinal {
+                builder = builder.set_ordinal(ordinal);
+            }
+            row_group_metas.push(builder.build().unwrap());
         }
 
         let total_rows: i64 = row_group_metas.iter().map(|rg| rg.num_rows()).sum();
@@ -301,5 +326,48 @@ mod tests {
         assert_eq!(reader.skip_records(3).unwrap(), 3);
         assert_eq!(reader.read_records(4).unwrap(), 4);
         assert_eq!(consume_row_numbers(&mut reader), vec![3, 4, 5, 6]);
+    }
+
+    /// A file with *mixed* row-group ordinals must never produce row numbers —
+    /// even when every selected row group carries an ordinal. Otherwise the
+    /// same file would succeed or fail depending on which row groups a query's
+    /// pruning selects.
+    #[test]
+    fn test_mixed_ordinals_always_error() {
+        let metadata = create_test_parquet_metadata_opt(vec![
+            (Some(0), 2), // has ordinal
+            (None, 2),    // missing
+            (Some(2), 2), // has ordinal
+        ]);
+
+        // Select only row groups WITH ordinals — must still fail.
+        let selected = vec![&metadata.row_groups()[0], &metadata.row_groups()[2]];
+        let Err(err) = RowNumberReader::try_new(&metadata, selected.into_iter()) else {
+            panic!("mixed ordinals with ordinal-only selection must fail");
+        };
+        assert!(
+            err.to_string().contains("inconsistent row-group ordinals"),
+            "unexpected error: {err}"
+        );
+
+        // Selecting a row group without an ordinal fails too.
+        let selected = vec![&metadata.row_groups()[1]];
+        assert!(RowNumberReader::try_new(&metadata, selected.into_iter()).is_err());
+    }
+
+    /// A file where *no* row group carries an ordinal fails for any selection
+    /// (fresh decode sequential-fills, so this only occurs for
+    /// programmatically-built metadata).
+    #[test]
+    fn test_no_ordinals_error() {
+        let metadata = create_test_parquet_metadata_opt(vec![(None, 2), (None, 2)]);
+        let selected = vec![&metadata.row_groups()[0]];
+        let Err(err) = RowNumberReader::try_new(&metadata, selected.into_iter()) else {
+            panic!("row numbers without any ordinals must fail");
+        };
+        assert!(
+            err.to_string().contains("missing ordinal field"),
+            "unexpected error: {err}"
+        );
     }
 }

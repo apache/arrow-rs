@@ -48,7 +48,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = bool_buf.as_slice_mut();
 
     // if both array slots are valid, check if list contains primitive
@@ -88,7 +89,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = &mut bool_buf;
 
     for i in 0..left_len {
@@ -2469,6 +2471,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_eq_dyn_neq_dyn_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
         let array2 = Float16Array::from(
@@ -2499,6 +2502,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_lt_dyn_lt_eq_dyn_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
         let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
@@ -2530,6 +2534,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_gt_dyn_gt_eq_dyn_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
         let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
@@ -2560,6 +2565,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
         let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
         let scalar = Float16Array::new_scalar(f16::NAN);
@@ -2588,6 +2594,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
         let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
         let scalar = Float16Array::new_scalar(f16::NAN);
@@ -2617,6 +2624,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
         let array = Float16Array::from(vec![
            f16::NAN,
@@ -2858,6 +2866,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_eq_dyn_neq_dyn_dict_non_dict_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
         let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
@@ -2894,6 +2903,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_lt_dyn_lt_eq_dyn_dict_non_dict_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
         let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
@@ -2930,6 +2940,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
         let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
         let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);

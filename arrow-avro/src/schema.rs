@@ -20,8 +20,8 @@
 #[cfg(feature = "canonical_extension_types")]
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
-    UnionMode,
+    ArrowError, DataType, Field as ArrowField, IntervalUnit, Metadata, Schema as ArrowSchema,
+    TimeUnit, UnionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
@@ -177,7 +177,7 @@ pub(crate) enum Schema<'a> {
     /// A direct type name (primitive or reference)
     #[serde(borrow)]
     TypeName(TypeName<'a>),
-    /// A union of multiple schemas (e.g., ["null", "string"])
+    /// A union of multiple schemas (e.g., `["null", "string"]`)
     #[serde(borrow)]
     Union(Vec<Schema<'a>>),
     /// A complex type such as record, array, map, etc.
@@ -517,10 +517,8 @@ impl AvroSchema {
         let opts = options.unwrap_or_default();
         let order = opts.null_order.unwrap_or_default();
         let strip = opts.strip_metadata;
-        if !strip {
-            if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-                return Ok(AvroSchema::new(json.clone()));
-            }
+        if !strip && let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+            return Ok(AvroSchema::new(json.clone()));
         }
         let mut name_gen = NameGenerator::default();
         let fields_json = schema
@@ -1155,10 +1153,7 @@ fn is_internal_arrow_key(key: &str) -> bool {
 /// skipping keys that are Avro-reserved, internal Arrow keys, or
 /// nested under the `avro.schema.` namespace. Values that parse as
 /// JSON are inserted as JSON; otherwise the raw string is preserved.
-fn extend_with_passthrough_metadata(
-    target: &mut JsonMap<String, Value>,
-    metadata: &HashMap<String, String>,
-) {
+fn extend_with_passthrough_metadata(target: &mut JsonMap<String, Value>, metadata: &Metadata) {
     for (meta_key, meta_val) in metadata {
         if meta_key.starts_with("avro.") || is_internal_arrow_key(meta_key) {
             continue;
@@ -1318,7 +1313,7 @@ fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
 fn datatype_to_avro(
     dt: &DataType,
     field_name: &str,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
     strip: bool,
@@ -1915,7 +1910,7 @@ fn datatype_to_avro(
 fn process_datatype(
     dt: &DataType,
     field_name: &str,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
     is_nullable: bool,
@@ -2991,11 +2986,19 @@ mod tests {
         let avro_list = AvroSchema::try_from(&list_schema).unwrap();
         assert_json_contains(&avro_list.json_string, "\"type\":\"array\"");
         assert_json_contains(&avro_list.json_string, "\"items\"");
-        let value_field = ArrowField::new("value", DataType::Boolean, true);
+        let value_field = ArrowField::new(
+            arrow_schema::Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Boolean,
+            true,
+        );
         let entries_struct = ArrowField::new(
-            "entries",
+            arrow_schema::Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(
+                    arrow_schema::Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                ),
                 value_field.clone(),
             ])),
             false,
@@ -3193,11 +3196,19 @@ mod tests {
     #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_map_duration_value_extra() {
-        let val_field = ArrowField::new("value", DataType::Duration(TimeUnit::Second), true);
+        let val_field = ArrowField::new(
+            ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Duration(TimeUnit::Second),
+            true,
+        );
         let entries_struct = ArrowField::new(
-            "entries",
+            ArrowField::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(
+                    ArrowField::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                ),
                 val_field,
             ])),
             false,
@@ -3244,11 +3255,19 @@ mod tests {
         );
         let expected_b = ArrowField::new("b", DataType::List(Arc::new(expected_list_item)), false);
 
-        let expected_map_value = ArrowField::new("value", DataType::Float64, false);
+        let expected_map_value = ArrowField::new(
+            arrow_schema::Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Float64,
+            false,
+        );
         let expected_entries = ArrowField::new(
-            "entries",
+            arrow_schema::Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(Fields::from(vec![
-                ArrowField::new("key", DataType::Utf8, false),
+                ArrowField::new(
+                    arrow_schema::Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                ),
                 expected_map_value,
             ])),
             false,
@@ -3992,7 +4011,7 @@ mod tests {
         let err = schema.project(&[5]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("out of bounds") && msg.contains("5") && msg.contains("2"),
+            msg.contains("out of bounds") && msg.contains('5') && msg.contains('2'),
             "Expected out of bounds error, got: {msg}"
         );
     }
@@ -4011,7 +4030,7 @@ mod tests {
         let err = schema.project(&[1]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("out of bounds") && msg.contains("1"),
+            msg.contains("out of bounds") && msg.contains('1'),
             "Expected out of bounds error for edge case, got: {msg}"
         );
     }
@@ -4031,7 +4050,7 @@ mod tests {
         let err = schema.project(&[0, 1, 0]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("Duplicate projection index") && msg.contains("0"),
+            msg.contains("Duplicate projection index") && msg.contains('0'),
             "Expected duplicate index error, got: {msg}"
         );
     }
@@ -4050,7 +4069,7 @@ mod tests {
         let err = schema.project(&[1, 1]).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("Duplicate projection index") && msg.contains("1"),
+            msg.contains("Duplicate projection index") && msg.contains('1'),
             "Expected duplicate index error for consecutive duplicates, got: {msg}"
         );
     }

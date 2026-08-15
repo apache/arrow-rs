@@ -374,7 +374,7 @@ fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
-        if nulls.map(|n| n.is_null(idx)).unwrap_or_default() || a.is_null(key) {
+        if nulls.is_some_and(|n| n.is_null(idx)) || a.is_null(key) {
             return None;
         }
         Some(a.value(key))
@@ -464,7 +464,8 @@ mod tests {
     /// - `StringViewArray`
     /// - `DictionaryArray`
     macro_rules! test_utf8 {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+        ($(#[$attr:meta])* $test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            $(#[$attr])*
             #[test]
             fn $test_name() {
                 let expected = BooleanArray::from($expected);
@@ -554,7 +555,8 @@ mod tests {
     /// - `StringViewArray`
     /// - `DictionaryArray`
     macro_rules! test_utf8_scalar {
-        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+        ($(#[$attr:meta])* $test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            $(#[$attr])*
             #[test]
             fn $test_name() {
                 let expected = BooleanArray::from($expected);
@@ -661,6 +663,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_like_scalar_escape_testing,
         vec![
             "varchar(255)",
@@ -816,6 +819,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_like_scalar_one,
         vec![
             "arrow",
@@ -870,6 +874,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_nlike_escape_testing,
         vec![
             "varchar(255)",
@@ -954,6 +959,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_nlike_scalar_one,
         vec![
             "arrow",
@@ -968,6 +974,7 @@ mod tests {
     );
 
     test_utf8!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike,
         vec![
             "arrow",
@@ -984,6 +991,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         ilike_utf8_scalar_escape_testing,
         vec![
             "varchar(255)",
@@ -1054,6 +1062,7 @@ mod tests {
 
     // We only implement loose matching
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_unicode,
         vec![
             "FFkoß",
@@ -1072,6 +1081,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_unicode_starts,
         vec![
             "FFkoßsdlkdf",
@@ -1093,6 +1103,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_unicode_ends,
         vec![
             "sdlkdfFFkoß",
@@ -1114,6 +1125,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_unicode_contains,
         vec![
             "sdlkdfFkoßsdfs",
@@ -1163,6 +1175,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_unicode_complex,
         vec![
             "sdlkdfFooßsdfs",
@@ -1208,6 +1221,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_ilike_scalar_one,
         vec![
             "arrow",
@@ -1222,6 +1236,7 @@ mod tests {
     );
 
     test_utf8!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_nilike,
         vec![
             "arrow",
@@ -1238,6 +1253,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         nilike_utf8_scalar_escape_testing,
         vec![
             "varchar(255)",
@@ -1307,6 +1323,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_nilike_scalar_one,
         vec![
             "arrow",
@@ -1346,6 +1363,7 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_scalar_nullable_nlike,
         vec![
             Some("Earth"),
@@ -1418,6 +1436,7 @@ mod tests {
     );
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_null_like_pattern() {
         // Different patterns have different execution code paths
         for pattern in &[
@@ -1464,6 +1483,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_view_null_like_pattern() {
         // Different patterns have different execution code paths
         for pattern in &[
@@ -1576,6 +1596,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn like_escape() {
         // (value, pattern, expected)
         let test_cases = vec![
@@ -1817,6 +1838,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn like_escape_many() {
         // (value, pattern, expected)
         let test_cases = vec![

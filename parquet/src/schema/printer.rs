@@ -83,7 +83,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
                 out,
                 "  {}: {}",
                 kv.key,
-                kv.value.as_ref().unwrap_or(&"".to_owned())
+                kv.value.as_ref().unwrap_or(&String::new())
             );
         }
     }

@@ -236,6 +236,11 @@ impl StructBuilder {
     }
 
     /// Builds the `StructArray` and reset this builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of fields is not equal to the number of field builders, or
+    /// if the field builders do not all have length `self.len()`
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
         if self.fields.is_empty() {
@@ -248,6 +253,11 @@ impl StructBuilder {
     }
 
     /// Builds the `StructArray` without resetting the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of fields is not equal to the number of field builders, or
+    /// if the field builders do not all have length `self.len()`
     pub fn finish_cloned(&self) -> StructArray {
         self.validate_content();
 
@@ -313,6 +323,11 @@ impl StructBuilder {
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 }
 

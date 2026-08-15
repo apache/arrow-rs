@@ -143,12 +143,12 @@ impl PartialOrd for Int96 {
 impl Ord for Int96 {
     /// Order `Int96` correctly for (deprecated) timestamp types.
     ///
-    /// Note: this is done even though the Int96 type is deprecated and the
-    /// [spec does not define the sort order]
-    /// because some engines, notably Spark and Databricks Photon still write
-    /// Int96 timestamps and rely on their order for optimization.
+    /// Note: this is done even though the Int96 type is deprecated.
+    /// Because some engines, notably Spark and Databricks Photon, still write
+    /// Int96 timestamps, a new `ColumnOrder` variant has been added to
+    /// the Parquet specification. See [parquet-format/#584].
     ///
-    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
+    /// [parquet-format/#584]: https://github.com/apache/parquet-format/pull/584
     fn cmp(&self, other: &Self) -> Ordering {
         match self.get_days().cmp(&other.get_days()) {
             Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
@@ -217,6 +217,10 @@ impl ByteArray {
     }
 
     /// Gets length of the underlying byte buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, e.g. on a [`ByteArray::new`] instance
     #[inline]
     pub fn len(&self) -> usize {
         assert!(self.data.is_some());
@@ -224,12 +228,20 @@ impl ByteArray {
     }
 
     /// Checks if the underlying buffer is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, see [`Self::len`]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns slice of data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set
     #[inline]
     pub fn data(&self) -> &[u8] {
         self.data
@@ -245,6 +257,10 @@ impl ByteArray {
     }
 
     /// Returns `ByteArray` instance with slice of values for a data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, or if `start + len` is out of bounds
     #[inline]
     pub fn slice(&self, start: usize, len: usize) -> Self {
         Self::from(

@@ -89,6 +89,8 @@ pub fn get_column_reader(
 /// Gets a typed column reader for the specific type `T`, by "up-casting" `col_reader` of
 /// non-generic type to a generic column reader type `ColumnReaderImpl`.
 ///
+/// # Panics
+///
 /// Panics if actual enum value for `col_reader` does not match the type `T`.
 pub fn get_typed_column_reader<T: DataType>(col_reader: ColumnReader) -> ColumnReaderImpl<T> {
     T::get_column_reader(col_reader).unwrap_or_else(|| {
@@ -333,12 +335,12 @@ where
                         .then_some(metadata.num_levels)?
                 });
 
-                if let Some(rows) = rows {
-                    if rows <= remaining_records {
-                        self.page_reader.skip_next_page()?;
-                        remaining_records -= rows;
-                        continue;
-                    }
+                if let Some(rows) = rows
+                    && rows <= remaining_records
+                {
+                    self.page_reader.skip_next_page()?;
+                    remaining_records -= rows;
+                    continue;
                 }
                 // because self.num_buffered_values == self.num_decoded_values means
                 // we need reads a new page and set up the decoders for levels

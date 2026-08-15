@@ -76,8 +76,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
-            offsets_builder,
             value_builder,
+            offsets_builder,
             null_buffer_builder,
         }
     }
@@ -113,6 +113,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Appends a value of type `T` into the builder `n` times.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
         let bytes: &[u8] = value.as_ref().as_ref();
@@ -131,6 +135,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// - A `Some` value will append the value.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
         match value {
@@ -231,14 +239,29 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.value_builder.as_slice()
     }
 
+    /// Returns the current values buffer capacity, in bytes.
+    pub fn values_capacity(&self) -> usize {
+        self.value_builder.capacity()
+    }
+
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()
     }
 
+    /// Returns the current offsets buffer capacity, in offsets.
+    pub fn offsets_capacity(&self) -> usize {
+        self.offsets_builder.capacity()
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 
     /// Returns the current null buffer as a mutable slice

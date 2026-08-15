@@ -191,6 +191,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// let expected = &["hello", "world", "bingo", "bongo", "helloworldbingo"];
     /// assert_eq!(actual, expected);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer.len() >= u32::MAX`
     pub fn append_block(&mut self, buffer: Buffer) -> u32 {
         assert!(buffer.len() < u32::MAX as usize);
 
@@ -296,8 +300,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     }
 
     /// Returns the value at the given index
+    ///
     /// Useful if we want to know what value has been inserted to the builder
-    /// The index has to be smaller than `self.len()`, otherwise it will panic
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()`
     pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
@@ -359,36 +367,34 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 .max_deduplication_len
                 .map(|max_length| length <= max_length)
                 .unwrap_or(true);
-        if can_deduplicate {
-            if let Some((mut ht, hasher)) = self.string_tracker.take() {
-                let hash_val = hasher.hash_one(v);
-                let hasher_fn = |v: &_| hasher.hash_one(v);
+        if can_deduplicate && let Some((mut ht, hasher)) = self.string_tracker.take() {
+            let hash_val = hasher.hash_one(v);
+            let hasher_fn = |v: &_| hasher.hash_one(v);
 
-                let entry = ht.entry(
-                    hash_val,
-                    |idx| {
-                        let stored_value = self.get_value(*idx);
-                        v == stored_value
-                    },
-                    hasher_fn,
-                );
-                match entry {
-                    Entry::Occupied(occupied) => {
-                        // If the string already exists, we will directly use the view
-                        let idx = occupied.get();
-                        self.views_buffer.push(self.views_buffer[*idx]);
-                        self.null_buffer_builder.append_non_null();
-                        self.string_tracker = Some((ht, hasher));
-                        return Ok(());
-                    }
-                    Entry::Vacant(vacant) => {
-                        // o.w. we insert the (string hash -> view index)
-                        // the idx is current length of views_builder, as we are inserting a new view
-                        vacant.insert(self.views_buffer.len());
-                    }
+            let entry = ht.entry(
+                hash_val,
+                |idx| {
+                    let stored_value = self.get_value(*idx);
+                    v == stored_value
+                },
+                hasher_fn,
+            );
+            match entry {
+                Entry::Occupied(occupied) => {
+                    // If the string already exists, we will directly use the view
+                    let idx = occupied.get();
+                    self.views_buffer.push(self.views_buffer[*idx]);
+                    self.null_buffer_builder.append_non_null();
+                    self.string_tracker = Some((ht, hasher));
+                    return Ok(());
                 }
-                self.string_tracker = Some((ht, hasher));
+                Entry::Vacant(vacant) => {
+                    // o.w. we insert the (string hash -> view index)
+                    // the idx is current length of views_builder, as we are inserting a new view
+                    vacant.insert(self.views_buffer.len());
+                }
             }
+            self.string_tracker = Some((ht, hasher));
         }
 
         let required_cap = self.in_progress.len() + v.len();

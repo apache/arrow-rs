@@ -281,19 +281,20 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, AvroError> {
-        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-            if info.writer_is_union && !info.reader_is_union {
-                let mut clone = data_type.clone();
-                clone.resolution = None; // Build target base decoder without Union resolution
-                let target = Self::try_new_internal(&clone)?;
-                let decoder = Self::Union(
-                    UnionDecoderBuilder::new()
-                        .with_resolved_union(info.clone())
-                        .with_target(target)
-                        .build()?,
-                );
-                return Ok(decoder);
-            }
+        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+            && info.writer_is_union
+            && !info.reader_is_union
+        {
+            let mut clone = data_type.clone();
+            clone.resolution = None; // Build target base decoder without Union resolution
+            let target = Self::try_new_internal(&clone)?;
+            let decoder = Self::Union(
+                UnionDecoderBuilder::new()
+                    .with_resolved_union(info.clone())
+                    .with_target(target)
+                    .build()?,
+            );
+            return Ok(decoder);
         }
         Self::try_new_internal(data_type)
     }
@@ -323,8 +324,7 @@ impl Decoder {
             (Codec::Float64, Some(Promotion::FloatToDouble)) => {
                 Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Utf8, Some(Promotion::BytesToString))
-            | (Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
+            (Codec::Utf8 | Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
@@ -505,11 +505,15 @@ impl Decoder {
                 Self::Record(arrow_fields.into(), encodings, field_defaults, projector)
             }
             (Codec::Map(child), _) => {
-                let val_field = child.field_with_name("value");
+                let val_field = child.field_with_name(ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME);
                 let map_field = Arc::new(ArrowField::new(
-                    "entries",
+                    ArrowField::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(Fields::from(vec![
-                        ArrowField::new("key", DataType::Utf8, false),
+                        ArrowField::new(
+                            ArrowField::MAP_KEY_FIELD_DEFAULT_NAME,
+                            DataType::Utf8,
+                            false,
+                        ),
                         val_field,
                     ])),
                     false,
@@ -550,10 +554,10 @@ impl Decoder {
                 let mut builder = UnionDecoderBuilder::new()
                     .with_fields(fields.clone())
                     .with_branches(decoders);
-                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-                    if info.reader_is_union {
-                        builder = builder.with_resolved_union(info.clone());
-                    }
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref()
+                    && info.reader_is_union
+                {
+                    builder = builder.with_resolved_union(info.clone());
                 }
                 Self::Union(builder.build()?)
             }
@@ -1631,13 +1635,13 @@ impl Decoder {
                     )));
                 }
                 let final_len = moff.len() - 1;
-                if let Some(n) = &nulls {
-                    if n.len() != final_len {
-                        return Err(AvroError::InvalidArgument(format!(
-                            "Map array null buffer length {} != final map length {final_len}",
-                            n.len()
-                        )));
-                    }
+                if let Some(n) = &nulls
+                    && n.len() != final_len
+                {
+                    return Err(AvroError::InvalidArgument(format!(
+                        "Map array null buffer length {} != final map length {final_len}",
+                        n.len()
+                    )));
                 }
                 let entries_fields = match map_field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
@@ -2286,33 +2290,57 @@ fn process_blockwise(
         match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
-                let count = (-block_count) as usize;
+                // `unsigned_abs` avoids overflowing `-block_count` for `i64::MIN` (#10235)
+                let count = block_count.unsigned_abs() as usize;
                 // A negative count is followed by a long of the size in bytes
-                let size_in_bytes = buf.get_long()? as usize;
+                let raw_size = buf.get_long()?;
+                let size_in_bytes = usize::try_from(raw_size).map_err(|_| {
+                    AvroError::ParseError(format!("Block size cannot be negative, got {raw_size}"))
+                })?;
                 match negative_behavior {
                     NegativeBlockBehavior::ProcessItems => {
                         // Process items one-by-one after reading size
-                        for _ in 0..count {
-                            on_item(buf)?;
-                        }
+                        total = process_block_items(buf, count, total, &mut on_item)?;
                     }
                     NegativeBlockBehavior::SkipBySize => {
                         // Skip the entire block payload at once
                         let _ = buf.get_fixed(size_in_bytes)?;
+                        total = total.saturating_add(count);
                     }
                 }
-                total += count;
             }
             Ordering::Greater => {
                 let count = block_count as usize;
-                for _ in 0..count {
-                    on_item(buf)?;
-                }
-                total += count;
+                total = process_block_items(buf, count, total, &mut on_item)?;
             }
         }
     }
     Ok(total)
+}
+
+/// Decode `count` items, capping the running total at `i32::MAX` (the largest index
+/// an Arrow list/map offset holds). Otherwise a crafted `i64::MAX` count of a zero-byte
+/// item like `null` spins the loop forever (#10235); byte-consuming items self-terminate
+/// on cursor exhaustion, so valid blocks (including `array<null>`) are unaffected.
+#[inline]
+fn process_block_items(
+    buf: &mut AvroCursor,
+    count: usize,
+    total: usize,
+    on_item: &mut impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
+) -> Result<usize, AvroError> {
+    let Some(new_total) = total
+        .checked_add(count)
+        .filter(|&t| i32::try_from(t).is_ok())
+    else {
+        return Err(AvroError::ParseError(
+            "Capacity overflow when decoding array/map item blocks".to_string(),
+        ));
+    };
+    for _ in 0..count {
+        on_item(buf)?;
+    }
+    Ok(new_total)
 }
 
 #[inline]
@@ -3434,6 +3462,60 @@ mod tests {
         assert_eq!(values.value(2), 3);
     }
 
+    /// Zig-zag + unsigned-LEB128 encode, correct for all `i64` including `MIN`/`MAX`
+    /// (`encode_avro_long` loops forever on those two values).
+    fn encode_avro_long_extreme(value: i64) -> Vec<u8> {
+        let mut n = ((value << 1) ^ (value >> 63)) as u64;
+        let mut out = Vec::new();
+        while n >= 0x80 {
+            out.push((n as u8) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+        out
+    }
+
+    // `array<null>` is the worst case: items consume no bytes, so an unbounded
+    // `block_count` spins the item loop without ever advancing the cursor (#10235).
+    fn array_of_null_decoder() -> Decoder {
+        let list_dt = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Null))));
+        Decoder::try_new(&list_dt).unwrap()
+    }
+
+    #[test]
+    fn test_array_of_null_decodes() {
+        let mut decoder = array_of_null_decoder();
+        let mut data = encode_avro_long(3); // three null items
+        data.extend_from_slice(&encode_avro_long(0)); // empty-block terminator
+        decoder.decode(&mut AvroCursor::new(&data)).unwrap();
+    }
+
+    #[test]
+    fn test_array_block_count_i64_max_errors() {
+        // A positive `i64::MAX` block count must error rather than spin the item loop.
+        let mut decoder = array_of_null_decoder();
+        let mut data = encode_avro_long_extreme(i64::MAX); // item count
+        data.extend_from_slice(&encode_avro_long(0)); // empty-block terminator
+        let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
+        assert!(
+            err.to_string().contains("Capacity overflow"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_array_block_count_i64_min_errors() {
+        // `i64::MIN` previously overflowed `-block_count` before spinning the loop.
+        let mut decoder = array_of_null_decoder();
+        let mut data = encode_avro_long_extreme(i64::MIN); // negative item count
+        data.extend_from_slice(&encode_avro_long(0)); // block size in bytes
+        let err = decoder.decode(&mut AvroCursor::new(&data)).unwrap_err();
+        assert!(
+            err.to_string().contains("Capacity overflow"),
+            "unexpected error: {err}",
+        );
+    }
+
     #[test]
     fn test_nested_array_decoding() {
         let inner_ty = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Int32))));
@@ -4347,7 +4429,7 @@ mod tests {
     ) -> AvroDataType {
         let mut avro_children: Vec<AvroDataType> = Vec::with_capacity(children.len());
         let mut fields: Vec<arrow_schema::Field> = Vec::with_capacity(children.len());
-        for (codec, name, dt) in children.into_iter() {
+        for (codec, name, dt) in children {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));
         }

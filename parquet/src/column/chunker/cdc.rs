@@ -156,7 +156,7 @@ impl ContentDefinedChunker {
             ));
         }
 
-        let avg_chunk_size = (min_chunk_size + max_chunk_size) / 2;
+        let avg_chunk_size = min_chunk_size.midpoint(max_chunk_size);
         // Target size after subtracting the min-size skip window and dividing by the
         // number of hash tables (for central-limit-theorem normalization).
         let target_size = (avg_chunk_size - min_chunk_size) / NUM_GEARHASH_TABLES as i64;
@@ -715,9 +715,7 @@ mod tests {
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
         // Pattern: null at indices 0, 3, 6, 9, 12, 15, 18 → 7 nulls, 13 non-null
-        let def_levels: Vec<i16> = (0..num_levels)
-            .map(|i| if i % 3 == 0 { 0 } else { 1 })
-            .collect();
+        let def_levels: Vec<i16> = (0..num_levels).map(|i| i16::from(i % 3 != 0)).collect();
         let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
         let chunks = chunker.calculate(
@@ -744,6 +742,7 @@ mod tests {
 #[cfg(all(test, feature = "arrow"))]
 mod arrow_tests {
     use std::borrow::Borrow;
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use arrow::util::data_gen::create_random_batch;
@@ -811,17 +810,17 @@ mod arrow_tests {
                     let arr: BooleanArray = (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
-                                Some(val % 2 == 0)
+                                Some(val.is_multiple_of(2))
                             }
                         })
                         .collect();
                     Arc::new(arr)
                 } else {
                     let arr: BooleanArray = (0..length)
-                        .map(|i| Some(test_hash(seed, i as u64) % 2 == 0))
+                        .map(|i| Some(test_hash(seed, i as u64).is_multiple_of(2)))
                         .collect();
                     Arc::new(arr)
                 }
@@ -839,7 +838,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("str_{val}"))
@@ -858,7 +857,7 @@ mod arrow_tests {
                     (0..length)
                         .map(|i| {
                             let val = test_hash(seed, i as u64);
-                            if val % 10 == 0 {
+                            if val.is_multiple_of(10) {
                                 None
                             } else {
                                 Some(format!("bin_{val}").into_bytes())
@@ -877,7 +876,7 @@ mod arrow_tests {
                 let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::new(size);
                 for i in 0..length {
                     let val = test_hash(seed, i as u64);
-                    if nullable && val % 10 == 0 {
+                    if nullable && val.is_multiple_of(10) {
                         builder.append_null();
                     } else {
                         let s = format!("bin_{val}");
@@ -1263,22 +1262,24 @@ mod arrow_tests {
         for (left, right) in &diffs {
             let left_sum: i64 = left.iter().sum();
             let right_sum: i64 = right.iter().sum();
-            if left_sum == right_sum {
-                eq += 1;
-            } else if left_sum < right_sum {
-                larger += 1;
-                assert_eq!(
-                    left_sum + edit_length,
-                    right_sum,
-                    "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
-                );
-            } else {
-                smaller += 1;
-                assert_eq!(
-                    left_sum,
-                    right_sum + edit_length,
-                    "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
-                );
+            match left_sum.cmp(&right_sum) {
+                Ordering::Equal => eq += 1,
+                Ordering::Less => {
+                    larger += 1;
+                    assert_eq!(
+                        left_sum + edit_length,
+                        right_sum,
+                        "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
+                    );
+                }
+                Ordering::Greater => {
+                    smaller += 1;
+                    assert_eq!(
+                        left_sum,
+                        right_sum + edit_length,
+                        "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
+                    );
+                }
             }
         }
 

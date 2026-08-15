@@ -50,7 +50,7 @@ use std::sync::Arc;
 ///
 #[cfg_attr(
     feature = "arrow",
-    doc = r##"
+    doc = r#"
 ```rust
 # use std::ops::Range;
 # use bytes::Bytes;
@@ -98,7 +98,7 @@ loop {
 }
 # }
 ```
-"##
+"#
 )]
 ///
 /// # Example with "prefetching"
@@ -122,7 +122,7 @@ loop {
 /// for other reasons.
 #[cfg_attr(
     feature = "arrow",
-    doc = r##"
+    doc = r#"
 ```rust
 # use std::ops::Range;
 # use bytes::Bytes;
@@ -160,7 +160,7 @@ decoder.push_ranges(vec![0..file_len], vec![prefetched_bytes]).unwrap();
     }
 # }
 ```
-"##
+"#
 )]
 ///
 /// # Example using [`AsyncRead`]
@@ -172,7 +172,7 @@ decoder.push_ranges(vec![0..file_len], vec![prefetched_bytes]).unwrap();
 /// decoder.
 #[cfg_attr(
     feature = "arrow",
-    doc = r##"
+    doc = r#"
 ```rust
 # use std::ops::Range;
 # use bytes::Bytes;
@@ -215,7 +215,7 @@ async fn decode_metadata(
   }
 }
 ```
-"##
+"#
 )]
 /// [`AsyncRead`]: tokio::io::AsyncRead
 #[derive(Debug)]
@@ -343,7 +343,7 @@ impl ParquetMetaDataPushDecoder {
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
             ));
         }
-        self.buffers.push_ranges(ranges, buffers);
+        self.buffers.push_ranges(ranges, buffers)?;
         Ok(())
     }
 
@@ -354,7 +354,7 @@ impl ParquetMetaDataPushDecoder {
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
             ));
         }
-        self.buffers.push_range(range, buffer);
+        self.buffers.push_range(range, buffer)?;
         Ok(())
     }
 
@@ -733,7 +733,7 @@ mod tests {
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
     fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
-        match result.expect("Expected Ok(DecodeResult::NeedsData{ranges})") {
+        match result.expect("Expected Ok(DecodeResult::NeedsData(ranges))") {
             DecodeResult::NeedsData(ranges) => ranges,
             result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
         }
