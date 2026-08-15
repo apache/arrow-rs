@@ -1008,6 +1008,7 @@ macro_rules! define_variant_to_primitive_builder {
 
             // Add this to silence unused mut warning from macro-generated code
             // This is mainly for `FakeNullBuilder`
+            #[expect(clippy::allow_attributes)]
             #[allow(unused_mut)]
             fn finish(mut self) -> Result<ArrayRef> {
                 // If the builder produces T: Array, the compiler infers `<Arc<T> as From<T>>::from`
@@ -1463,10 +1464,11 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        let variant_array = VariantArray::from_parts(
+        // value-nulls are appended only alongside parent nulls, so the non-nullable
+        // `value` annotation is always valid here
+        let variant_array = VariantArray::from_parts_unshredded(
             self.metadata,
             Arc::new(self.builder.build()?),
-            None, // no typed_value column
             self.nulls.finish(),
         );
 

@@ -945,6 +945,10 @@ impl Date32Type {
     /// # Arguments
     ///
     /// * `i` - The Date32Type to convert
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(since = "58.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         Self::to_naive_date_opt(i)
@@ -979,6 +983,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `add_year_months_opt` instead, which returns an Option to handle overflow."
@@ -1016,6 +1024,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `add_day_time_opt` instead, which returns an Option to handle overflow."
@@ -1054,6 +1066,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `add_month_day_nano_opt` instead, which returns an Option to handle overflow."
@@ -1093,6 +1109,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `subtract_year_months_opt` instead, which returns an Option to handle overflow."
@@ -1130,6 +1150,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `subtract_day_time_opt` instead, which returns an Option to handle overflow."
@@ -1168,6 +1192,10 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
     #[deprecated(
         since = "58.0.0",
         note = "Use `subtract_month_day_nano_opt` instead, which returns an Option to handle overflow."

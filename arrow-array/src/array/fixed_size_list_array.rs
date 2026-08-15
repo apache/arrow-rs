@@ -339,6 +339,14 @@ impl FixedSizeListArray {
         (f, self.value_length, self.values, self.nulls)
     }
 
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
     /// Returns a reference to the values of this list.
     pub fn values(&self) -> &ArrayRef {
         &self.values
@@ -383,6 +391,9 @@ impl FixedSizeListArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,

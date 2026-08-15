@@ -216,7 +216,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// returns a new buffer corresponding to the index `i` of the FFI array. It may not exist (null pointer).
 /// `bits` is the number of bits that the native type of this buffer has.
 /// The size of the buffer will be `ceil(self.length * bits, 8)`.
-/// # Panic
+/// # Panics
 /// This function panics if `i` is larger or equal to `n_buffers`.
 /// # Safety
 /// This function assumes that `ceil(self.length * bits, 8)` is the size of the buffer
@@ -480,7 +480,7 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
+                #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i32;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
@@ -494,7 +494,7 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
+                #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1) as *const i64;
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize

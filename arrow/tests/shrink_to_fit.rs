@@ -112,11 +112,10 @@ pub static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator {
     allocator: std::alloc::System,
 };
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 // SAFETY:
 // We just do book-keeping and then let another allocator do all the actual work.
 unsafe impl std::alloc::GlobalAlloc for TrackingAllocator {
-    #[allow(clippy::let_and_return)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY:
         // Just deferring

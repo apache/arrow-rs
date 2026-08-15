@@ -349,7 +349,7 @@ impl Iterator for BitChunkIterator<'_> {
         }
 
         // cast to *const u64 should be fine since we are using read_unaligned below
-        #[allow(clippy::cast_ptr_alignment)]
+        #[expect(clippy::cast_ptr_alignment)]
         let raw_data = self.buffer.as_ptr() as *const u64;
 
         // bit-packed buffers are stored starting with the least-significant byte first
@@ -556,7 +556,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::assertions_on_constants)]
     fn test_unaligned_bit_chunk_iterator() {
         let buffer = Buffer::from(&[0xFF; 5]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 40);

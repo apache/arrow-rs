@@ -287,6 +287,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         )
     }
 
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::ListView(f) | DataType::LargeListView(f) => f,
+            _ => unreachable!(),
+        }
+    }
+
     /// Returns a reference to the offsets of this list
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`ScalarBuffer`]
@@ -335,7 +343,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
     /// # Panics
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value(&self, i: usize) -> ArrayRef {
         let offset = self.value_offsets()[i].as_usize();
         let length = self.value_sizes()[i].as_usize();
@@ -355,12 +363,18 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns the size for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_size(&self, i: usize) -> OffsetSize {
         self.value_sizes[i]
     }
 
     /// Returns the offset for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     pub fn value_offset(&self, i: usize) -> OffsetSize {
         self.value_offsets[i]
     }
@@ -381,6 +395,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),

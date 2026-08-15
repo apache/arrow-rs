@@ -920,7 +920,8 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
     let metadata_len = block.metaDataLength().to_usize().unwrap();
     let total_len = body_len.checked_add(metadata_len).unwrap();
 
-    let mut buf = MutableBuffer::from_len_zeroed(total_len);
+    let mut buf = MutableBuffer::try_from_len_zeroed(total_len)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
     Ok(buf.into())
 }
@@ -967,7 +968,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// # use arrow_array::*;
 /// # use arrow_array::types::Int32Type;
 /// # use arrow_buffer::Buffer;
-/// # use arrow_ipc::convert::fb_to_schema;
+/// # use arrow_ipc::convert::try_fb_to_schema;
 /// # use arrow_ipc::reader::{FileDecoder, read_footer_length};
 /// # use arrow_ipc::root_as_footer;
 /// # use arrow_ipc::writer::FileWriter;
@@ -995,7 +996,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
 /// let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 ///
-/// let back = fb_to_schema(footer.schema().unwrap());
+/// let back = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 /// assert_eq!(&back, schema.as_ref());
 ///
 /// let mut decoder = FileDecoder::new(schema, footer.version());
@@ -1256,7 +1257,12 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = crate::convert::fb_to_schema(ipc_schema);
+        let schema = Arc::new(crate::convert::try_fb_to_schema(ipc_schema)?);
+
+        let projected_schema = match &self.projection {
+            Some(projection) => Arc::new(schema.project(projection)?),
+            None => schema.clone(),
+        };
 
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
@@ -1268,7 +1274,7 @@ impl FileReaderBuilder {
             }
         }
 
-        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        let mut decoder = FileDecoder::new(schema, footer.version());
         if let Some(projection) = self.projection {
             decoder = decoder.with_projection(projection)
         }
@@ -1287,6 +1293,7 @@ impl FileReaderBuilder {
             current_block: 0,
             total_blocks,
             decoder,
+            schema: projected_schema,
             custom_metadata,
         })
     }
@@ -1343,6 +1350,9 @@ pub struct FileReader<R> {
     /// The decoder
     decoder: FileDecoder,
 
+    /// Schema of the record batches produced by this reader
+    schema: SchemaRef,
+
     /// The blocks in the file
     ///
     /// A block indicates the regions in the file to read to get data
@@ -1387,8 +1397,9 @@ impl<R: Read + Seek> FileReader<R> {
     /// # Errors
     ///
     /// An [`Err`] may be returned if:
-    /// - the file does not meet the Arrow Format footer requirements, or
-    /// - file endianness does not match the target endianness.
+    /// - the file does not meet the Arrow Format footer requirements,
+    /// - file endianness does not match the target endianness, or
+    /// - the projection contains an index outside the file schema.
     pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let builder = FileReaderBuilder {
             projection,
@@ -1407,9 +1418,9 @@ impl<R: Read + Seek> FileReader<R> {
         self.total_blocks
     }
 
-    /// Return the schema of the file
+    /// Return the schema of the record batches produced by this reader
     pub fn schema(&self) -> SchemaRef {
-        self.decoder.schema.clone()
+        self.schema.clone()
     }
 
     /// See to a specific [`RecordBatch`]
@@ -1594,7 +1605,7 @@ impl<R: Read> StreamReader<R> {
         let schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::ParseError("Failed to parse schema from message header".to_string())
         })?;
-        let schema = crate::convert::fb_to_schema(schema);
+        let schema = crate::convert::try_fb_to_schema(schema)?;
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1676,7 +1687,7 @@ impl<R: Read> StreamReader<R> {
                 let schema = message.header_as_schema().ok_or_else(|| {
                     ArrowError::ParseError("Failed to parse schema from message header".to_string())
                 })?;
-                let arrow_schema = crate::convert::fb_to_schema(schema);
+                let arrow_schema = crate::convert::try_fb_to_schema(schema)?;
                 IpcMessage::Schema(arrow_schema)
             }
             Message::MessageHeader::RecordBatch => {
@@ -1815,14 +1826,16 @@ const MAX_PREALLOC_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reads exactly `len` bytes of message body, without reserving `len` before reading it.
 fn read_body_bounded<R: Read>(reader: &mut R, len: usize) -> Result<MutableBuffer, ArrowError> {
-    let mut buf = MutableBuffer::from_len_zeroed(len.min(MAX_PREALLOC_BYTES));
+    let mut buf = MutableBuffer::try_from_len_zeroed(len.min(MAX_PREALLOC_BYTES))
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let mut filled = 0;
     while filled < len {
         let target = buf.len();
         reader.read_exact(&mut buf.as_slice_mut()[filled..target])?;
         filled = target;
         if filled < len {
-            buf.resize(len.min(target.saturating_mul(2)), 0);
+            buf.try_resize(len.min(target.saturating_mul(2)), 0)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         }
     }
     Ok(buf)
@@ -1945,7 +1958,7 @@ impl<R: Read> MessageReader<R> {
 mod tests {
     use std::io::Cursor;
 
-    use crate::convert::fb_to_schema;
+    use crate::convert::try_fb_to_schema;
     use crate::writer::{
         DictionaryTracker, IpcDataGenerator, IpcWriteOptions, unslice_run_array, write_message,
     };
@@ -2346,6 +2359,43 @@ mod tests {
     }
 
     #[test]
+    fn test_file_reader_projected_schema_matches_batch_schema() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let projection = vec![3, 2, 1];
+        let mut reader = FileReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
+        let reader_schema = RecordBatchReader::schema(&reader);
+        let read_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(reader_schema, read_batch.schema());
+    }
+
+    #[test]
+    fn test_file_reader_rejects_invalid_projection() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = FileReader::try_new(Cursor::new(buf), Some(vec![schema.fields().len()]));
+
+        assert!(matches!(result, Err(ArrowError::SchemaError(_))));
+    }
+
+    #[test]
     fn test_projection_duplicate_indices() {
         let schema = create_test_projection_schema();
         let batch = create_test_projection_batch_data(&schema);
@@ -2483,7 +2533,7 @@ mod tests {
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
             .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid footer: {e}")))?;
 
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         let mut decoder = unsafe {
             FileDecoder::new(Arc::new(schema), footer.version())
@@ -3607,7 +3657,7 @@ mod tests {
 
         let msg = parse_message(&schema_bytes).expect("parse_message");
         let ipc_schema = msg.header_as_schema().expect("header_as_schema");
-        let new_schema = fb_to_schema(ipc_schema);
+        let new_schema = try_fb_to_schema(ipc_schema).unwrap();
 
         assert_eq!(schema, new_schema);
     }

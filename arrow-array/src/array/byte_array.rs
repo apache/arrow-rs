@@ -214,6 +214,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    ///
+    /// # Panics
+    /// Panics if the iterator has no upper bound on its size hint, or if the total
+    /// length of the values exceeds `T::Offset::MAX`
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
@@ -359,6 +363,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,

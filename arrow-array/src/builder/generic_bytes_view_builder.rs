@@ -191,6 +191,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// let expected = &["hello", "world", "bingo", "bongo", "helloworldbingo"];
     /// assert_eq!(actual, expected);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer.len() >= u32::MAX`
     pub fn append_block(&mut self, buffer: Buffer) -> u32 {
         assert!(buffer.len() < u32::MAX as usize);
 
@@ -296,8 +300,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     }
 
     /// Returns the value at the given index
+    ///
     /// Useful if we want to know what value has been inserted to the builder
-    /// The index has to be smaller than `self.len()`, otherwise it will panic
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()`
     pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
