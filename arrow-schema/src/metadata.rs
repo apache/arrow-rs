@@ -153,11 +153,15 @@ impl Metadata {
     /// remain in their original (sorted) order.
     ///
     /// Clones the underlying map if (and only if) it is shared.
-    pub fn retain<F>(&mut self, eq: F)
+    pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&String, &mut String) -> bool,
     {
-        Arc::make_mut(self.0.get_or_insert_default()).retain(eq);
+        let Some(map) = self.0.as_mut() else { return };
+        Arc::make_mut(map).retain(&mut f);
+        if map.is_empty() {
+            self.0 = None;
+        }
     }
 }
 
@@ -458,6 +462,7 @@ mod tests {
         assert_eq!(format!("{metadata:?}"), r#"{"a": "1", "b": "2"}"#);
         assert_eq!(format!("{:?}", Metadata::new()), "{}");
     }
+
     #[test]
     fn test_retain() {
         let mut metadata =
@@ -467,6 +472,21 @@ mod tests {
 
         let result_map = Metadata::from([("c", "3"), ("d", "4"), ("e", "5")]);
         assert_eq!(metadata, result_map)
+    }
+
+    #[test]
+    fn test_retain_empty() {
+        let mut metadata = Metadata::new();
+        metadata.retain(|_, _| -> bool { true });
+        assert!(metadata.is_empty())
+    }
+
+    #[test]
+    fn test_retain_all_removed() {
+        let mut metadata = Metadata::from([("a", "1"), ("b", "2"), ("c", "3")]);
+        metadata.retain(|_, _| false);
+        assert!(metadata.is_empty());
+        assert!(metadata.0.is_none());
     }
 
     #[test]
