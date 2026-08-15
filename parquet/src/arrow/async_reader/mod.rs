@@ -576,10 +576,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// its physical type is not `BYTE_ARRAY` (the only physical type
     /// currently supported).
     ///
+    /// This can be used to inspect dictionary values when selecting or pruning
+    /// row groups before passing the selected indices to
+    /// [`ParquetRecordBatchStreamBuilder::with_row_groups`].
+    ///
     /// Note this does not verify that the *entire* column chunk is
     /// dictionary-encoded -- callers that need that guarantee (e.g. to treat
     /// the dictionary as an exhaustive set of the column's values) should
-    /// check the column chunk's page encoding statistics themselves.
+    /// check
+    /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`].
     pub async fn get_row_group_column_dictionary(
         &mut self,
         row_group_idx: usize,
@@ -893,6 +898,7 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
+    use crate::basic::Encoding;
     use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
@@ -1044,6 +1050,85 @@ mod tests {
         let dictionary = dictionary.as_any().downcast_ref::<StringArray>().unwrap();
         let dictionary_values: Vec<&str> = dictionary.iter().map(|v| v.unwrap()).collect();
         assert_eq!(dictionary_values, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[tokio::test]
+    async fn test_dictionary_selects_row_groups_without_reading_skipped_data() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let row_group_values = ["skip", "target"];
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut buf = Vec::new();
+        {
+            let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
+            for value in row_group_values {
+                let array: ArrayRef = Arc::new(StringArray::from(vec![value; 30]));
+                let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+                writer.write(&batch).unwrap();
+                writer.flush().unwrap();
+            }
+            writer.close().unwrap();
+        }
+
+        let async_reader = TestReader::new(Bytes::from(buf));
+        let requests = async_reader.requests.clone();
+        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
+        let metadata = builder.metadata().clone();
+        assert_eq!(metadata.num_row_groups(), 2);
+
+        let mut selected_row_groups = Vec::new();
+        let mut dictionary_ranges = Vec::new();
+        for row_group_idx in 0..metadata.num_row_groups() {
+            let column = metadata.row_group(row_group_idx).column(0);
+            let encoding_mask = column.page_encoding_stats_mask().unwrap();
+            assert!(
+                encoding_mask.is_only(Encoding::PLAIN_DICTIONARY)
+                    || encoding_mask.is_only(Encoding::RLE_DICTIONARY)
+            );
+
+            let dictionary_start = column.dictionary_page_offset().unwrap() as usize;
+            let data_start = column.data_page_offset() as usize;
+            dictionary_ranges.push(dictionary_start..data_start);
+
+            let dictionary = builder
+                .get_row_group_column_dictionary(row_group_idx, 0)
+                .await
+                .unwrap()
+                .unwrap();
+            let dictionary = dictionary.as_string::<i32>();
+            if dictionary.iter().any(|value| value == Some("target")) {
+                selected_row_groups.push(row_group_idx);
+            }
+        }
+        assert_eq!(selected_row_groups, vec![1]);
+
+        let batches: Vec<_> = builder
+            .with_row_groups(selected_row_groups)
+            .build()
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let values: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| batch.column(0).as_string::<i32>().iter())
+            .collect();
+        assert_eq!(values, vec![Some("target"); 30]);
+
+        let skipped_column = metadata.row_group(0).column(0);
+        let (skipped_start, skipped_len) = skipped_column.byte_range();
+        let skipped_data_range =
+            skipped_column.data_page_offset() as usize..(skipped_start + skipped_len) as usize;
+        let requests = requests.lock().unwrap();
+        for dictionary_range in dictionary_ranges {
+            assert!(requests.contains(&dictionary_range));
+        }
+        assert!(requests.iter().all(|request| {
+            request.end <= skipped_data_range.start || request.start >= skipped_data_range.end
+        }));
     }
 
     #[tokio::test]

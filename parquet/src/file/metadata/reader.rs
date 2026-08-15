@@ -480,10 +480,13 @@ impl ParquetMetaDataReader {
     /// its physical type is not `BYTE_ARRAY` (the only physical type
     /// currently supported).
     ///
+    /// This can be used to inspect dictionary values when selecting or pruning
+    /// row groups before reading their data pages.
+    ///
     /// Note this does not verify that the *entire* column chunk is
     /// dictionary-encoded (i.e. that the dictionary contains every value in
     /// the chunk) -- callers that need that guarantee should check
-    /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`] themselves.
+    /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`].
     #[cfg(feature = "arrow")]
     pub fn read_column_dictionary<R: ChunkReader>(
         reader: &R,
