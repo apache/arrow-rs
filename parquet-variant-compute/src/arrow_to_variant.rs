@@ -353,7 +353,7 @@ macro_rules! define_row_builder {
                     // legitimate compiler warnings if an infallible value transform fails to use
                     // its first extra field.
                     $(
-                        #[allow(unused)]
+                        #[expect(unused)]
                         $( let $field = &self.$field; )+
                     )?
 

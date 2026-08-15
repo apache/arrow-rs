@@ -1008,6 +1008,7 @@ macro_rules! define_variant_to_primitive_builder {
 
             // Add this to silence unused mut warning from macro-generated code
             // This is mainly for `FakeNullBuilder`
+            #[expect(clippy::allow_attributes)]
             #[allow(unused_mut)]
             fn finish(mut self) -> Result<ArrayRef> {
                 // If the builder produces T: Array, the compiler infers `<Arc<T> as From<T>>::from`

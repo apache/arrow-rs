@@ -245,6 +245,10 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
 /// Creates a random [`GenericStringArray`] of a given `size` and `null_density`
 /// filling it with random strings with lengths in the specified range,
 /// all starting with the provided `prefix`, generated using the provided `seed`.
+///
+/// # Panics
+///
+/// Panics if `min_str_len > max_str_len` or `prefix.len() > max_str_len`
 pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -619,6 +623,10 @@ where
 }
 
 /// Create primitive run array for given logical and physical array lengths
+///
+/// # Panics
+///
+/// Panics if `logical_array_len < physical_array_len`
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
     physical_array_len: usize,
@@ -653,6 +661,10 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
 /// Create string array to be used by run array builder. The string array
 /// will result in run array with physical length of `physical_array_len`
 /// and logical length of `logical_array_len`
+///
+/// # Panics
+///
+/// Panics if `logical_array_len < physical_array_len`
 pub fn create_string_array_for_runs(
     physical_array_len: usize,
     logical_array_len: usize,
@@ -733,6 +745,10 @@ pub fn create_binary_array_with_seed<Offset: OffsetSizeTrait>(
 /// filling it with random bytes with lengths in the specified range,
 /// all starting with the provided `prefix`, generated using the provided `seed`.
 ///
+///
+/// # Panics
+///
+/// Panics if `min_len > max_len` or `prefix.len() > max_len`
 pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -978,6 +994,10 @@ where
 ///
 /// Useful for building arrays and record batches in benchmarks without
 /// repeating per-type construction logic. Panics on unsupported types.
+///
+/// # Panics
+///
+/// Panics if `data_type` is not supported
 pub fn create_array_for_type(data_type: &DataType, size: usize, null_density: f32) -> ArrayRef {
     match data_type {
         DataType::Boolean => Arc::new(create_boolean_array(size, null_density, 0.5)),

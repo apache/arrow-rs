@@ -38,6 +38,7 @@ pub struct TestFlightServer {
 
 impl TestFlightServer {
     /// Create a `TestFlightServer`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
@@ -47,6 +48,7 @@ impl TestFlightServer {
 
     /// Return an [`FlightServiceServer`] that can be used with a
     /// [`Server`](tonic::transport::Server)
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn service(&self) -> FlightServiceServer<TestFlightServer> {
         // wrap up tonic goop
@@ -54,6 +56,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to handshake
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_handshake_response(&self, response: Result<HandshakeResponse, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -61,6 +64,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last handshake request sent to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_handshake_request(&self) -> Option<HandshakeRequest> {
         self.state
@@ -71,6 +75,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to get_flight_info
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_get_flight_info_response(&self, response: Result<FlightInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -78,6 +83,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last get_flight_info request sent to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_get_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
@@ -88,6 +94,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to poll_flight_info
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_poll_flight_info_response(&self, response: Result<PollInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -95,6 +102,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last poll_flight_info request sent to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_poll_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
@@ -105,6 +113,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_get`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -112,6 +121,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last do_get request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_do_get_request(&self) -> Option<Ticket> {
         self.state
@@ -122,6 +132,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_put`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_do_put_response(&self, response: Vec<Result<PutResult, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -129,6 +140,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last do_put request sent to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
         self.state
@@ -139,6 +151,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_exchange`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_do_exchange_response(&self, response: Vec<Result<FlightData, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -146,6 +159,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last do_exchange request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_do_exchange_request(&self) -> Option<Vec<FlightData>> {
         self.state
@@ -156,6 +170,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_flights`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_list_flights_response(&self, response: Vec<Result<FlightInfo, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -163,6 +178,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last list_flights request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_list_flights_request(&self) -> Option<Criteria> {
         self.state
@@ -173,6 +189,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `get_schema`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_get_schema_response(&self, response: Result<Schema, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -180,6 +197,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last get_schema request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_get_schema_request(&self) -> Option<FlightDescriptor> {
         self.state
@@ -190,6 +208,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_actions`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_list_actions_response(&self, response: Vec<Result<ActionType, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -197,6 +216,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last list_actions request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_list_actions_request(&self) -> Option<Empty> {
         self.state
@@ -207,6 +227,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_action`
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn set_do_action_response(&self, response: Vec<Result<arrow_flight::Result, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
@@ -214,6 +235,7 @@ impl TestFlightServer {
     }
 
     /// Take and return last do_action request send to the server,
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_do_action_request(&self) -> Option<Action> {
         self.state
@@ -224,6 +246,7 @@ impl TestFlightServer {
     }
 
     /// Returns the last metadata from a request received by the server
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub fn take_last_request_metadata(&self) -> Option<MetadataMap> {
         self.state

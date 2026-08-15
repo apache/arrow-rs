@@ -198,6 +198,10 @@ impl<'m> VariantMetadata<'m> {
     /// needed, instead of paying expensive full validation up front).
     ///
     /// [validate]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if basic sanity checking fails. Use [`Self::try_new`] for a fallible version.
     pub fn new(bytes: &'m [u8]) -> Self {
         Self::try_new_with_shallow_validation(bytes).expect("Invalid variant metadata")
     }
@@ -375,7 +379,9 @@ impl<'m> VariantMetadata<'m> {
     /// name is not present. The search cost is logarithmic if [`Self::is_sorted`] and linear
     /// otherwise.
     ///
-    /// WARNING: This method panics if the underlying bytes are [invalid].
+    /// # Panics
+    ///
+    /// Panics if the underlying bytes are [invalid].
     ///
     /// [invalid]: Self#Validation
     pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
@@ -402,6 +408,11 @@ impl<'m> VariantMetadata<'m> {
     /// [`Self::iter_try`] to avoid panics due to invalid data.
     ///
     /// [unvalidated]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying bytes are invalid. Use [`Self::iter_try`] for a
+    /// fallible version.
     pub fn iter(&self) -> impl Iterator<Item = &'m str> + '_ {
         self.iter_try()
             .map(|result| result.expect("Invalid metadata dictionary entry"))

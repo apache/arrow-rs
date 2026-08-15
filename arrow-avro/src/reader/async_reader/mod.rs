@@ -45,7 +45,7 @@ pub use spawn::SpawnedReader;
 mod store;
 
 use crate::errors::AvroError;
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
