@@ -162,6 +162,11 @@ required-features = ["arrow", "zstd", "experimental"]
 path = "./examples/alp_compression_stats.rs"
 
 [[example]]
+name = "alp_to_parquet"
+required-features = ["arrow", "zstd", "experimental"]
+path = "./examples/alp_to_parquet.rs"
+
+[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
