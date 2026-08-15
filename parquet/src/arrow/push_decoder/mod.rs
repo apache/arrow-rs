@@ -22,6 +22,7 @@ mod reader_builder;
 mod remaining;
 
 use crate::DecodeResult;
+pub use crate::arrow::arrow_reader::RowGroupSelection;
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
 };
@@ -249,6 +250,45 @@ impl ParquetPushDecoderBuilder {
         }
     }
 
+    /// Select row groups and rows using row-group-local coordinates.
+    ///
+    /// Entries are decoded in the supplied order, and omitted row groups are
+    /// skipped. A row group listed more than once is decoded once per entry.
+    /// A `None` selection reads the entire row group. A selection shorter
+    /// than its row group skips the trailing rows, while a selection longer
+    /// than its row group returns an error from [`Self::build`]. Each
+    /// selection retains its existing bitmap or selector representation.
+    ///
+    /// This configuration is mutually exclusive with
+    /// [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`]. Combining them returns an
+    /// error from [`Self::build`]. Calling this method more than once replaces
+    /// the previous row-group-local configuration.
+    ///
+    /// ```no_run
+    /// # use parquet::arrow::arrow_reader::RowSelection;
+    /// # use parquet::arrow::push_decoder::{ParquetPushDecoderBuilder, RowGroupSelection};
+    /// # fn configure(
+    /// #     builder: ParquetPushDecoderBuilder,
+    /// #     bitmap_selection: RowSelection,
+    /// #     selector_selection: RowSelection,
+    /// # ) -> ParquetPushDecoderBuilder {
+    /// builder.with_row_group_selections(vec![
+    ///     RowGroupSelection::new(0, Some(bitmap_selection)),
+    ///     RowGroupSelection::new(2, Some(selector_selection)),
+    ///     RowGroupSelection::new(3, None),
+    /// ])
+    /// # }
+    /// ```
+    pub fn with_row_group_selections(
+        mut self,
+        row_group_selections: Vec<RowGroupSelection>,
+    ) -> Self {
+        self.row_group_plan
+            .set_row_group_selections(row_group_selections);
+        self
+    }
+
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
@@ -257,10 +297,9 @@ impl ParquetPushDecoderBuilder {
             schema,
             fields,
             batch_size,
-            row_groups,
+            row_group_plan,
             projection,
             filter,
-            selection,
             limit,
             offset,
             metrics,
@@ -268,9 +307,6 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
         } = self;
 
-        // If no row groups were specified, read all of them
-        let row_groups =
-            row_groups.unwrap_or_else(|| (0..parquet_metadata.num_row_groups()).collect());
         let has_predicates = filter
             .as_ref()
             .is_some_and(|filter| !filter.predicates.is_empty());
@@ -294,12 +330,11 @@ impl ParquetPushDecoderBuilder {
         let remaining_row_groups = RemainingRowGroups::new(
             schema,
             parquet_metadata,
-            row_groups,
-            selection,
+            row_group_plan,
             RowBudget::new(offset, limit),
             has_predicates,
             row_group_reader_builder,
-        );
+        )?;
 
         Ok(ParquetPushDecoder {
             state: ParquetDecoderState::ReadingRowGroup {
@@ -311,14 +346,13 @@ impl ParquetPushDecoderBuilder {
 
 /// Reassemble a [`ParquetPushDecoderBuilder`] from a decoder's not-yet-decoded
 /// state — the inverse of [`ParquetPushDecoderBuilder::build`]. The rebuilt
-/// builder pins the remaining row groups and carries the remaining row
-/// selection, offset/limit budget, and buffered bytes.
+/// builder carries the remaining row-group plan, offset/limit budget, and
+/// buffered bytes.
 fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderBuilder {
     let RemainingRowGroupsParts {
         metadata,
         schema,
-        row_groups,
-        selection,
+        row_group_plan,
         offset,
         limit,
         reader_builder,
@@ -340,13 +374,9 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         schema,
         fields,
         batch_size,
-        // The frontier tracks remaining row groups explicitly, so the rebuilt
-        // builder always pins them (even if the original left `row_groups` as
-        // `None` meaning "all").
-        row_groups: Some(row_groups),
+        row_group_plan,
         projection,
         filter,
-        selection,
         row_selection_policy,
         limit,
         offset,
@@ -591,13 +621,20 @@ impl ParquetPushDecoder {
     /// }
     /// ```
     ///
-    /// The returned builder pins the not-yet-decoded row groups (via
-    /// [`with_row_groups`](ArrowReaderBuilder::with_row_groups)) and carries the
-    /// not-yet-consumed row selection and offset/limit budget, so rows from
-    /// already-decoded row groups are not produced again. Every other option —
-    /// projection, row filter, row selection policy, batch size, metrics,
-    /// predicate-cache size — is left exactly as the decoder had it and can be
-    /// overridden before [`build`](ParquetPushDecoderBuilder::build).
+    /// The returned builder preserves the not-yet-decoded row-group plan,
+    /// including any row-group-local selections, together with the remaining
+    /// offset/limit budget. Rows from already-decoded row groups are not
+    /// produced again. Every other option — projection, row filter, row
+    /// selection policy, batch size, metrics, predicate-cache size — is left
+    /// exactly as the decoder had it and can be overridden before
+    /// [`build`](ParquetPushDecoderBuilder::build).
+    ///
+    /// Because the preserved plan pins the remaining row groups, the mutual
+    /// exclusion documented on
+    /// [`with_row_group_selections`](ParquetPushDecoderBuilder::with_row_group_selections)
+    /// applies to the rebuilt builder as well: calling it on a builder rebuilt
+    /// from a decoder configured with `with_row_groups` / `with_row_selection`
+    /// (or vice versa) returns an error from `build`.
     ///
     /// # Errors
     ///
@@ -917,7 +954,9 @@ mod test {
     use super::*;
     use crate::DecodeResult;
     use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
-    use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+    use crate::arrow::push_decoder::{
+        ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
+    };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
     use crate::file::metadata::ParquetMetaDataPushDecoder;
@@ -926,6 +965,7 @@ mod test {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
+    use arrow_buffer::BooleanBuffer;
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use std::fmt::Debug;
@@ -1787,6 +1827,139 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
+    #[test]
+    fn test_decoder_row_group_local_selections() {
+        let bitmap_selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(
+            (0..45)
+                .map(|row_idx| (25..45).contains(&row_idx))
+                .collect::<Vec<_>>(),
+        ));
+        let rle_selection =
+            RowSelection::from(vec![RowSelector::skip(190), RowSelector::select(10)]);
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, Some(bitmap_selection)),
+                RowGroupSelection::new(0, Some(rle_selection)),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        // Row-group-local selections use local coordinates and preserve the
+        // supplied row-group order. The bitmap is intentionally shorter than
+        // RG1, so rows after its 45th local row are skipped.
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(225, 20));
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(190, 10));
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_row_group_local_selection_replaces_previous_configuration() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![RowGroupSelection::new(0, None)])
+            .with_row_group_selections(vec![RowGroupSelection::new(1, None)])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        // The second call replaces the first. `None` reads RG1 in full, and
+        // the omitted RG0 is skipped.
+        assert_eq!(
+            expect_data(decoder.try_decode()),
+            TEST_BATCH.slice(200, 200)
+        );
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_legacy_row_groups_and_row_selection_remain_composable() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_groups(vec![1])
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(25),
+                RowSelector::select(20),
+            ]))
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(225, 20));
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_row_group_local_selection_is_mutually_exclusive_with_legacy_configuration() {
+        let metadata = test_file_parquet_metadata();
+        let new_builder =
+            || ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata)).unwrap();
+        let local_selection = || vec![RowGroupSelection::new(0, None)];
+        let global_selection = || RowSelection::from(vec![RowSelector::select(1)]);
+        let assert_conflict = |builder: ParquetPushDecoderBuilder| {
+            let error = builder.build().unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Parquet error: with_row_group_selections cannot be combined with with_row_groups or with_row_selection"
+            );
+        };
+
+        assert_conflict(
+            new_builder()
+                .with_row_groups(vec![0])
+                .with_row_group_selections(local_selection()),
+        );
+        assert_conflict(
+            new_builder()
+                .with_row_group_selections(local_selection())
+                .with_row_groups(vec![0]),
+        );
+        assert_conflict(
+            new_builder()
+                .with_row_selection(global_selection())
+                .with_row_group_selections(local_selection()),
+        );
+        assert_conflict(
+            new_builder()
+                .with_row_group_selections(local_selection())
+                .with_row_selection(global_selection()),
+        );
+    }
+
+    #[test]
+    fn test_row_group_local_selection_validates_row_group_and_length_at_build() {
+        let metadata = test_file_parquet_metadata();
+
+        let error = ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata))
+            .unwrap()
+            .with_row_group_selections(vec![RowGroupSelection::new(
+                0,
+                Some(RowSelection::from(vec![RowSelector::select(201)])),
+            )])
+            .build()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "Row selection for row group 0 contains 201 rows, but the row group has 200"
+            ),
+            "unexpected error: {error}"
+        );
+
+        let error = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+            .unwrap()
+            .with_row_group_selections(vec![RowGroupSelection::new(2, None)])
+            .build()
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Row group index 2 out of bounds for file with 2 row groups"),
+            "unexpected error: {error}"
+        );
+    }
+
     /// `peek_next_row_group` reports the index of the row group the
     /// next `try_next_reader` call will hand back, matching the
     /// frontier's internal skip logic.
@@ -2149,6 +2322,46 @@ mod test {
         let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
         let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
         assert_eq!(batch1, TEST_BATCH.slice(200, 200));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    #[test]
+    fn test_into_builder_preserves_remaining_row_group_local_selections() {
+        let bitmap_selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(
+            (0..45)
+                .map(|row_idx| (25..45).contains(&row_idx))
+                .collect::<Vec<_>>(),
+        ));
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(
+                    0,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(190),
+                        RowSelector::select(10),
+                    ])),
+                ),
+                RowGroupSelection::new(1, Some(bitmap_selection)),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let reader0 = expect_data(decoder.try_next_reader());
+        let batches0: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
+        let batch0 = concat_batches(&TEST_BATCH.schema(), &batches0).unwrap();
+        assert_eq!(batch0, TEST_BATCH.slice(190, 10));
+
+        // Rebuilding must carry only RG1 and its still-local bitmap selection.
+        assert!(decoder.is_at_row_group_boundary());
+        assert_eq!(decoder.row_groups_remaining(), 1);
+        let mut decoder = decoder.into_builder().unwrap().build().unwrap();
+
+        let reader1 = expect_data(decoder.try_next_reader());
+        let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
+        let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
+        assert_eq!(batch1, TEST_BATCH.slice(225, 20));
         expect_finished(decoder.try_next_reader());
     }
 
