@@ -174,7 +174,7 @@ where
     }
 
     /// Returns number of records stored in buffer.
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn num_records(&self) -> usize {
         self.num_records
     }

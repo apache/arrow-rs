@@ -606,7 +606,7 @@ fn parse_v1_level(
             }
             Err(general_err!("not enough data to read levels"))
         }
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Encoding::BIT_PACKED => {
             let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
@@ -1290,7 +1290,7 @@ mod tests {
 
         // Helper function for the general case of `read_batch()` where `values`,
         // `def_levels` and `rep_levels` are always provided with enough space.
-        #[allow(clippy::too_many_arguments)]
+        #[expect(clippy::too_many_arguments)]
         fn test_read_batch_general(
             &mut self,
             desc: ColumnDescPtr,
@@ -1309,7 +1309,7 @@ mod tests {
 
         // Helper function to test `read_batch()` method with custom buffers for values,
         // definition and repetition levels.
-        #[allow(clippy::too_many_arguments)]
+        #[expect(clippy::too_many_arguments)]
         fn test_read_batch(
             &mut self,
             desc: ColumnDescPtr,

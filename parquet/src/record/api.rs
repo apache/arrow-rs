@@ -50,7 +50,7 @@ pub struct Row {
     fields: Vec<(String, Field)>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl Row {
     /// Constructs a `Row` from the list of `fields` and returns it.
     pub fn new(fields: Vec<(String, Field)>) -> Row {
@@ -326,7 +326,7 @@ pub struct List {
     elements: Vec<Field>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl List {
     /// Get the number of fields in this row
     pub fn len(&self) -> usize {
@@ -474,7 +474,7 @@ pub struct Map {
     entries: Vec<(Field, Field)>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl Map {
     /// Get the number of fields in this row
     pub fn len(&self) -> usize {
@@ -1022,7 +1022,7 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::many_single_char_names)]
+#[expect(clippy::many_single_char_names)]
 mod tests {
     use super::*;
 
@@ -2161,7 +2161,6 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::many_single_char_names)]
 mod api_tests {
     use super::{Row, make_list, make_map};
     use crate::record::Field;

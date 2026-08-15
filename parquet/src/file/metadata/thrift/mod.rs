@@ -1422,7 +1422,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     // needed for last_field_id w/o encryption
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
@@ -1613,7 +1613,7 @@ impl WriteThrift for RowGroupMetaData {
 impl WriteThrift for ColumnChunkMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {

@@ -2103,7 +2103,7 @@ mod tests {
                 // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
                 // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
                 // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "c31",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

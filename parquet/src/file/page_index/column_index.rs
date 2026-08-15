@@ -103,7 +103,7 @@ pub struct PrimitiveColumnIndex<T> {
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
@@ -322,7 +322,7 @@ pub struct ByteArrayColumnIndex {
 }
 
 impl ByteArrayColumnIndex {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
@@ -564,7 +564,7 @@ macro_rules! colidx_enum_func {
 /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum ColumnIndexMetaData {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,

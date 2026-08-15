@@ -324,7 +324,6 @@ impl ContentDefinedChunker {
             //   def_levels:    [1, 0, 1, 0, 1]
             //   level:          0  1  2  3  4
             //   value_offset:   0     1     2  (only increments on def==1)
-            #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
                 let def_level = def_levels
                     .value_at(offset)

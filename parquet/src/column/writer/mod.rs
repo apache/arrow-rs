@@ -539,7 +539,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
@@ -830,7 +830,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `#[inline(never)]` keeps this slow path — only reached for
     /// variable-width columns whose values need page splitting — out of
     /// the hot `write_batch_internal` loop.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline(never)]
     fn write_granular_chunk(
         &mut self,
@@ -1725,7 +1725,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 }
 
 #[inline]
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
