@@ -19,7 +19,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
@@ -128,7 +128,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
-    hash_scratch: Vec<u8>,
+    hash_scratch: MutableBuffer,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -147,7 +147,7 @@ where
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
-            hash_scratch: Vec::new(),
+            hash_scratch: MutableBuffer::new(0),
         }
     }
 }
@@ -455,7 +455,7 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut Vec::new())
+            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -528,7 +528,7 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut Vec::new())
+            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -565,7 +565,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
         let array = output
-            .into_array(None, &data_type, &mut Vec::new())
+            .into_array(None, &data_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -611,7 +611,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
         let array = output
-            .into_array(None, &data_type, &mut Vec::new())
+            .into_array(None, &data_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -675,7 +675,11 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type, &mut Vec::new())
+                .into_array(
+                    Some(Buffer::from(&[0])),
+                    &data_type,
+                    &mut MutableBuffer::new(0),
+                )
                 .unwrap();
 
             assert_eq!(array.len(), 8);
@@ -690,7 +694,11 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type, &mut Vec::new())
+                .into_array(
+                    Some(Buffer::from(&[0])),
+                    &data_type,
+                    &mut MutableBuffer::new(0),
+                )
                 .unwrap();
 
             assert_eq!(array.len(), 8);

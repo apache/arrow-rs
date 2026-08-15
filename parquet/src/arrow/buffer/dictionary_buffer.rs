@@ -24,13 +24,13 @@ use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait, cast::AsArray, make_array,
     types::ArrowDictionaryKeyType,
 };
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
 use hashbrown::hash_map::Entry;
 use std::hash::{BuildHasher, Hasher};
-use std::mem::{align_of, size_of};
+use std::mem::size_of;
 use std::ptr::write_unaligned;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::Arc;
@@ -131,7 +131,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
         self,
         null_buffer: Option<Buffer>,
         data_type: &ArrowType,
-        hash_scratch: &mut Vec<u8>,
+        hash_scratch: &mut MutableBuffer,
     ) -> Result<ArrayRef> {
         assert!(matches!(data_type, ArrowType::Dictionary(_, _)));
 
@@ -372,19 +372,14 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     Ok(Arc::new(dict_array))
 }
 
-fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &mut Vec<u8>) {
+fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &mut MutableBuffer) {
     let count = offsets.len().saturating_sub(1);
     scratch.clear();
     scratch.resize(count * size_of::<u64>(), 0u8);
 
     let state = RandomState::new();
 
-    // Vec<u8> may have 1-byte alignment; from_raw_parts_mut requires u64 alignment below.
-    if scratch.as_ptr().align_offset(align_of::<u64>()) != 0 {
-        *scratch = vec![0u8; count * size_of::<u64>()];
-    }
-
-    // SAFETY: scratch is sized to exactly count * size_of::<u64>() and is u64-aligned
+    // SAFETY: MutableBuffer is 64-byte aligned; scratch is sized to exactly count * size_of::<u64>()
     let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr() as *mut u64, count) };
 
     for idx in 0..count {
@@ -446,7 +441,7 @@ mod tests {
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
         let array = split
-            .into_array(Some(null_buffer), &dict_type, &mut Vec::new())
+            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -481,7 +476,7 @@ mod tests {
             .extend_from_slice(&[0, 1, 0, 1]);
 
         let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
-            .into_array(None, &dict_type, &mut Vec::new())
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -513,7 +508,7 @@ mod tests {
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
         let err = buffer
-            .into_array(None, &dict_type, &mut Vec::new())
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
             .unwrap_err()
             .to_string();
         assert!(
