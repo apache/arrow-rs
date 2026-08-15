@@ -128,6 +128,22 @@ impl Metadata {
         self.0 = None;
     }
 
+    /// Returns a reference to the underlying [`Arc`], or `None` if the map is empty.
+    ///
+    /// Useful for pointer-based deduplication (e.g. memory accounting) where
+    /// callers need to detect clones that share the same allocation.
+    pub fn as_arc(&self) -> Option<&Arc<BTreeMap<String, String>>> {
+        self.0.as_ref()
+    }
+
+    /// Consumes `self` and returns the underlying [`Arc`], or `None` if the map is empty.
+    ///
+    /// Useful for zero-copy conversion into wrapper types that also store an
+    /// `Arc<BTreeMap<String, String>>` internally.
+    pub fn into_arc(self) -> Option<Arc<BTreeMap<String, String>>> {
+        self.0
+    }
+
     /// Returns an iterator over the entries, sorted by key.
     pub fn iter(&self) -> MetadataIter<'_> {
         self.0
@@ -437,6 +453,30 @@ mod tests {
         metadata.extend([("a", "1"), ("b", "2")]);
         assert_eq!(metadata.len(), 2);
         assert!(clone.is_empty());
+    }
+
+    #[test]
+    fn test_as_arc_into_arc() {
+        let empty = Metadata::new();
+        assert!(empty.as_arc().is_none());
+        assert!(empty.into_arc().is_none());
+
+        // Non-empty metadata exposes the same Arc via as_arc / into_arc
+        let metadata = Metadata::from([("a", "1")]);
+        let arc_ref = metadata.as_arc().expect("non-empty");
+        assert_eq!(arc_ref.get("a").map(String::as_str), Some("1"));
+
+        let clone = metadata.clone();
+        // Clones share the same allocation
+        assert!(Arc::ptr_eq(
+            metadata.as_arc().unwrap(),
+            clone.as_arc().unwrap()
+        ));
+
+        let arc = metadata.into_arc().expect("non-empty");
+        assert_eq!(arc.get("a").map(String::as_str), Some("1"));
+        // into_arc gives back the same Arc (no copy)
+        assert!(Arc::ptr_eq(&arc, clone.as_arc().unwrap()));
     }
 
     #[test]
