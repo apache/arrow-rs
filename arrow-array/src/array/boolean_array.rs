@@ -607,22 +607,20 @@ impl BooleanArray {
             return self;
         };
 
-        let mut_buffer_result = self.values.into_inner().into_mutable();
-        match mut_buffer_result {
+        let mut_buffer_result = self.values.try_into_builder();
+        let mut builder = match mut_buffer_result {
             Ok(mut mutable_buffer) => {
-                for i in end..len {
-                    bit_util::unset_bit(mutable_buffer.as_slice_mut(), i);
-                }
-                let boolean_buf = BooleanBuffer::new(mutable_buffer.into(), 0, len);
-                BooleanArray::new(boolean_buf, self.nulls)
+                mutable_buffer.truncate(end);
+                mutable_buffer
             }
             Err(buf) => {
                 let mut builder = BooleanBufferBuilder::new(len);
-                builder.append_buffer(&BooleanBuffer::new(buf, 0, end));
-                builder.append_n(len - end, false);
-                BooleanArray::new(builder.finish(), self.nulls)
+                builder.append_buffer(&buf.slice(0, end));
+                builder
             }
-        }
+        };
+        builder.append_n(len - end, false);
+        BooleanArray::new(builder.finish(), self.nulls)
     }
 
     /// Deconstruct this array into its constituent parts
