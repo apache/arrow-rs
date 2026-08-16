@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
-use crate::filter::{FilterPredicate, FilterSelection, filter_null_mask};
+use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -165,15 +165,11 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         filter: &FilterPredicate,
         source_nulls: Option<&NullBuffer>,
     ) {
-        let Some((null_count, nulls)) = filter_null_mask(source_nulls, filter) else {
+        if let Some(nulls) = filter.filter_nulls(source_nulls) {
+            self.nulls.append_buffer(&nulls);
+        } else {
             self.nulls.append_n_non_nulls(filter.count());
-            return;
-        };
-
-        let nulls = unsafe {
-            NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
-        };
-        self.nulls.append_buffer(&nulls);
+        }
     }
 
     /// Append views to self.views, updating the buffer index if necessary
@@ -466,6 +462,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         let s = source.as_byte_view::<B>();
+        // The source views reference no external buffers, so they must all be
+        // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
@@ -473,7 +471,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             return Ok(());
         }
 
-        // Match the filter kernel: filter views/nulls, but reuse data buffers.
+        // The views reference external buffers, so match the filter kernel:
+        // filter the views/nulls, but reuse the source's data buffers rather
+        // than copying the referenced string data.
         let filtered = filter.filter(source.as_ref())?;
         let filtered = filtered.as_byte_view::<B>();
 

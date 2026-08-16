@@ -666,6 +666,10 @@ impl WriterBuilder {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::verbose_file_reads,
+    reason = "`tempfile::tempfile()` has no path, so the contents can only be read back through the handle"
+)]
 mod tests {
     use super::*;
 
@@ -735,14 +739,14 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = r#"c1,c2,c3,c4,c5,c6,c7
+        let expected = r"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
-"#;
+";
         assert_eq!(expected, str::from_utf8(&buffer).unwrap());
     }
 
@@ -796,7 +800,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = r#"c1,c2,c3,c4
+        let expected = r"c1,c2,c3,c4
 -3.335724,-3.335724,-3.335724,-3.335724
 2.179404,2.179404,2.179404,2.179404
 ,,,
@@ -805,7 +809,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 2.179404,2.179404,2.179404,2.179404
 ,,,
 0.290472,0.290472,0.290472,0.290472
-"#;
+";
         assert_eq!(expected, str::from_utf8(&buffer).unwrap());
     }
 

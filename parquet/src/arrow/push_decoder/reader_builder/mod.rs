@@ -158,10 +158,10 @@ impl RowBudget {
             *offset = offset.saturating_sub(rows_before_budget - rows_after_budget);
         }
 
-        if rows_after_budget != 0 {
-            if let Some(limit) = &mut self.limit {
-                *limit -= rows_after_budget;
-            }
+        if rows_after_budget != 0
+            && let Some(limit) = &mut self.limit
+        {
+            *limit -= rows_after_budget;
         }
 
         self
@@ -351,8 +351,12 @@ impl RowGroupReaderBuilder {
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
-    pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.buffers.push_ranges(ranges, buffers);
+    pub fn push_data(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+        buffers: Vec<Bytes>,
+    ) -> Result<(), ParquetError> {
+        self.buffers.push_ranges(ranges, buffers)
     }
 
     /// True iff the inner state is `Finished`. This is the only state in

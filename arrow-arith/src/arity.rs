@@ -421,7 +421,6 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    #[allow(deprecated)]
     fn test_unary_f64_slice() {
         let input = Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);

@@ -190,6 +190,17 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
 
+In addition to the lints that `clippy` enables by default, we enable a few extra ones in
+`[workspace.lints]` in the root `Cargo.toml`. Every crate in the workspace opts in to those with:
+
+```toml
+[lints]
+workspace = true
+```
+
+New crates should include that section, and new lints should be added to `[workspace.lints]`
+rather than to individual crates, so that they apply everywhere.
+
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
 Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
@@ -231,31 +242,6 @@ If your PR proposes a performance improvement, include a summary of the benchmar
 If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
 
 [#9729]: https://github.com/apache/arrow-rs/pull/9729
-
-## Git Pre-Commit Hook
-
-We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
-
-Suppose you are in the root directory of the project.
-
-First check if the file already exists:
-
-```bash
-ls -l .git/hooks/pre-commit
-```
-
-If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
-the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
-
-```bash
-ln -s  ../../pre-commit.sh .git/hooks/pre-commit
-```
-
-If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
-
-```bash
-git commit --no-verify -m "... commit message ..."
-```
 
 ## AI Generated Submissions
 

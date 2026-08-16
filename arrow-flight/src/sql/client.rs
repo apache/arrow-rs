@@ -19,7 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_ipc::MessageHeader;
-use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::root_as_message;
 use arrow_schema::SchemaRef;
@@ -183,7 +183,7 @@ where
                 .map_err(|_| ArrowError::ParseError("Can't read auth header".to_string()))?;
             let bearer = "Bearer ";
             if !auth.starts_with(bearer) {
-                return Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
+                Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
             }
             let auth = auth[bearer.len()..].to_string();
             self.token = Some(auth);
@@ -441,6 +441,10 @@ where
     }
 
     /// Explicitly shut down and clean up the client.
+    #[expect(
+        clippy::unused_async,
+        reason = "public API: dropping `async` would break callers that `.await` it"
+    )]
     pub async fn close(&mut self) -> Result<()> {
         // TODO: consume self instead of &mut self to explicitly prevent reuse?
         Ok(())
@@ -587,10 +591,9 @@ where
                 .await?
                 .message()
                 .await?
+                && let Some(handle) = self.unpack_prepared_statement_handle(&result)?
             {
-                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
-                    self.handle = handle;
-                }
+                self.handle = handle;
             }
         }
         Ok(())
@@ -661,7 +664,7 @@ pub fn arrow_data_from_flight_data(
                 )
             })?;
 
-            let arrow_schema = fb_to_schema(ipc_schema);
+            let arrow_schema = try_fb_to_schema(ipc_schema)?;
             Ok(ArrowFlightData::Schema(arrow_schema))
         }
         MessageHeader::DictionaryBatch => {

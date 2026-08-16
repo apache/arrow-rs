@@ -63,6 +63,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len > buffer.len() * 8`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
         let mut s = Self {
@@ -80,6 +84,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Sets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
@@ -90,6 +98,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Gets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)

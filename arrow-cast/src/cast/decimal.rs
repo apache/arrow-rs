@@ -157,7 +157,7 @@ impl DecimalCast for i256 {
 /// exceeds the supported precomputed precision table `O::MAX_FOR_EACH_PRECISION`.
 /// In that case, the caller should treat this as an overflow for the output scale
 /// and handle it accordingly (e.g., return a cast error).
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn make_upscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
@@ -206,7 +206,7 @@ where
 /// In this scenario, any value would round to zero (e.g., dividing by 10^k where k exceeds the
 /// available precision). Callers should therefore produce zero values (preserving nulls) rather
 /// than returning an error.
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
@@ -370,7 +370,7 @@ where
         let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
             f_fallible(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
             })
         })?
     };
@@ -671,7 +671,9 @@ where
                                 T::DATA_TYPE,
                             ))
                         })
-                        .and_then(|v| T::validate_decimal_precision(v, precision, scale).map(|_| v))
+                        .and_then(|v| {
+                            T::validate_decimal_precision(v, precision, scale).map(|()| v)
+                        })
                 })
                 .transpose()
             })
@@ -801,7 +803,7 @@ where
                             v
                         ))
                     })
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)

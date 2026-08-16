@@ -413,7 +413,7 @@ impl TapeDecoder {
                     iter.skip_whitespace();
                     *state = match next!(iter) {
                         b'"' => DecoderState::String,
-                        b @ b'-' | b @ b'0'..=b'9' => {
+                        b @ (b'-' | b'0'..=b'9') => {
                             self.bytes.push(b);
                             DecoderState::Number
                         }
@@ -715,7 +715,7 @@ fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
                 .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
         }
         _ => Err(ArrowError::JsonError(format!(
-            "Invalid UTF-16 surrogate pair. High: {high:#02X}, Low: {low:#02X}"
+            "Invalid UTF-16 surrogate pair. High: {high:#04X}, Low: {low:#04X}"
         ))),
     }
 }

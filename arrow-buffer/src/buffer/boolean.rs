@@ -512,6 +512,10 @@ impl BooleanBuffer {
     }
 
     /// Slices this [`BooleanBuffer`] by the provided `offset` and `length`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.bit_len,
@@ -1035,7 +1039,7 @@ mod tests {
             .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
             .collect::<Vec<_>>();
         let base = bytes.as_ptr() as usize;
-        let shift = (0..8).find(|s| (base + s) % 8 != 0).unwrap();
+        let shift = (0..8).find(|s| !(base + s).is_multiple_of(8)).unwrap();
         let misaligned = &bytes[shift..];
 
         // Case 1: fallback path with `remainder.is_empty() == true`

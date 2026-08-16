@@ -39,7 +39,7 @@ arrow-row = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-schema = { workspace = true }
 arrow-string = { workspace = true, optional = true }
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1", optional = true }
@@ -62,8 +62,6 @@ all-features = true
 [features]
 default = []
 flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell"]
-# TODO: Remove in the next release
-flight-sql-experimental = ["flight-sql"]
 tls-aws-lc= ["tonic/tls-aws-lc"]
 tls-native-roots = ["tonic/tls-native-roots"]
 tls-ring = ["tonic/tls-ring"]
@@ -83,8 +81,6 @@ http-body = "1.0.0"
 hyper-util = "0.1"
 pin-project-lite = "0.2"
 tempfile = "3.3"
-tracing-log = { version = "0.2" }
-tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "env-filter", "fmt"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = { version = "0.5.0", features = ["util"] }
@@ -112,3 +108,6 @@ required-features = ["cli", "flight-sql", "tls-ring"]
 name = "flight"
 path = "benches/flight.rs"
 harness = false
+
+[lints]
+workspace = true

@@ -80,13 +80,13 @@ impl MapArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for MapArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for MapArray, expected {len} got {}",
+                n.len(),
+            )));
         }
         if field.is_nullable() || entries.null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(
@@ -146,6 +146,31 @@ impl MapArray {
         Self::try_new(field, offsets, entries, nulls, ordered).unwrap()
     }
 
+    /// Create a new [`MapArray`] from the provided parts without validation.
+    ///
+    /// # Safety
+    /// - `offsets.len() - 1 == nulls.len()` if `nulls` is `Some`
+    /// - `offsets.last() <= entries.len()`
+    /// - `entries` has exactly 2 columns and its keys column is non-nullable
+    /// - `field.data_type() == entries.data_type()`
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(field, offsets, entries, nulls, ordered);
+        }
+        Self {
+            data_type: DataType::Map(field, ordered),
+            nulls,
+            entries,
+            value_offsets: offsets,
+        }
+    }
+
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(
         self,
@@ -161,6 +186,25 @@ impl MapArray {
             _ => unreachable!(),
         };
         (f, self.value_offsets, self.entries, self.nulls, ordered)
+    }
+
+    /// The field that describes the entries of this map.
+    ///
+    /// The field's type is always a [`DataType::Struct`] of the key and value fields,
+    /// see [`Self::entries_fields`].
+    pub fn entries_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::Map(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Are the entries of this map sorted by key?
+    pub fn ordered(&self) -> bool {
+        match &self.data_type {
+            DataType::Map(_, ordered) => *ordered,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the offsets of this map
@@ -241,6 +285,9 @@ impl MapArray {
     }
 
     /// Returns the length for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_length(&self, i: usize) -> i32 {
         let offsets = self.value_offsets();
@@ -248,6 +295,9 @@ impl MapArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -411,7 +461,6 @@ impl MapArray {
     /// // Or you could fill the last 2 generics manually for the key array item and value array item
     /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map, ordered);
     ///```
-    #[allow(clippy::type_complexity)]
     pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
         input: Vec<Option<Entries<K, Option<V>>>>,
         ordered: bool,

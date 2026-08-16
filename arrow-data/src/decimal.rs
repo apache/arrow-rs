@@ -896,7 +896,7 @@ pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999,
 ];
 
-/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum `ialue that can
+/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum value that can
 /// be stored in a [`Decimal32`] value of precision `p`.
 ///
 /// # Notes

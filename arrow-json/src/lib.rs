@@ -80,6 +80,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -101,7 +102,7 @@ use serde_json::{Number, Value};
 /// Writer will produce. For example, if the RecordBatch Schema is
 /// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
-/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
+/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with [`StructMode::ListOnly`]
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
 /// rows formatted similarly.
 ///
@@ -276,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(invalid_from_utf8)]
+    #[expect(invalid_from_utf8)]
     fn test_json_roundtrip_binary() {
         let not_utf8: &[u8] = b"Not UTF8 \xa0\xa1!";
         assert!(str::from_utf8(not_utf8).is_err());

@@ -22,7 +22,7 @@ use crate::errors::AvroError;
 use crate::schema::{AvroSchema, AvroSchemaOptions, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::Schema;
-use rand::RngCore;
+use rand::Rng;
 use std::fmt::Debug;
 use std::io::Write;
 

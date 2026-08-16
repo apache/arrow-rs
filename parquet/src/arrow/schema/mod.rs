@@ -269,8 +269,10 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
             match arrow_ipc::root_as_message(slice) {
                 Ok(message) => message
                     .header_as_schema()
-                    .map(arrow_ipc::convert::fb_to_schema)
-                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
+                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema"))
+                    .and_then(|schema| {
+                        arrow_ipc::convert::try_fb_to_schema(schema).map_err(Into::into)
+                    }),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
@@ -420,7 +422,7 @@ pub struct ArrowSchemaConverter<'a> {
     schema_root: &'a str,
     /// Should we coerce Arrow types to compatible Parquet types?
     ///
-    /// See docs on [Self::with_coerce_types]`
+    /// See docs on [`Self::with_coerce_types`]
     coerce_types: bool,
 }
 
@@ -1880,7 +1882,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new(
@@ -1890,7 +1892,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "ts_milli",

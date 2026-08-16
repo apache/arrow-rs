@@ -109,7 +109,7 @@ fn main() -> Result<()> {
     let mut array_builder = UInt64Builder::new();
     let mut last_log = Instant::now();
     for i in 0..args.iterations {
-        if Instant::now() - last_log > Duration::new(10, 0) {
+        if last_log.elapsed() > Duration::new(10, 0) {
             last_log = Instant::now();
             eprintln!(
                 "{} Iteration {}/{}. RSS = {}",
