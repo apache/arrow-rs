@@ -70,6 +70,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("has_false(nulls_all_true, {len})"), |b| {
             b.iter(|| hint::black_box(&with_nulls).has_false());
         });
+        // take_n_true: mixed true/false
+        let bool_vec: Vec<bool> = (0..len)
+            .map(|idx| if idx % 3 == 0 { false } else { true })
+            .collect();
+        let mixed_boolean_array_unique = BooleanArray::from(bool_vec.clone());
+        c.bench_function(&format!("take_n_true({})", len / 2), |b| {
+            b.iter(|| hint::black_box(&mixed_boolean_array_unique));
+        });
+        let mixed_boolean_array_shared = BooleanArray::from(bool_vec);
+        let shared_array = mixed_boolean_array_shared.clone();
+        c.bench_function(&format!("take_n_true({})", len / 2), |b| {
+            b.iter(|| hint::black_box(&shared_array));
+        });
     }
 }
 
