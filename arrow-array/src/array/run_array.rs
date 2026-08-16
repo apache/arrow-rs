@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 
 use crate::{
     Array, ArrayAccessor, ArrayRef, PrimitiveArray,
@@ -204,6 +204,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
         (self.data_type, self.run_ends, self.values)
+    }
+
+    /// The field that describes the run ends of this array.
+    pub fn run_ends_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::RunEndEncoded(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The field that describes the values of this array.
+    pub fn values_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::RunEndEncoded(_, f) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the [`RunEndBuffer`].

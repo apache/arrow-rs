@@ -339,6 +339,14 @@ impl FixedSizeListArray {
         (f, self.value_length, self.values, self.nulls)
     }
 
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
     /// Returns a reference to the values of this list.
     pub fn values(&self) -> &ArrayRef {
         &self.values
