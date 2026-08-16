@@ -72,9 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         // take_n_true: mixed true/false
-        let bool_vec: Vec<bool> = (0..len)
-            .map(|idx| if idx % 3 == 0 { false } else { true })
-            .collect();
+        let bool_vec: Vec<bool> = (0..len).map(|idx| idx % 3 != 0).collect();
         c.bench_function(&format!("take_n_true({})", len / 2), |b| {
             b.iter_batched(
                 || BooleanArray::from(bool_vec.clone()), // fresh buffer, strong_count == 1
