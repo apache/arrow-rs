@@ -306,6 +306,16 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         &self.buffers
     }
 
+    /// Returns shared ownership of the buffers storing non-inline values
+    ///
+    /// This operation is `O(1)` and does not clone the individual buffers or
+    /// their contents. See [`Self::data_buffers`] to inspect the buffers
+    /// without taking shared ownership.
+    #[inline]
+    pub fn data_buffers_shared(&self) -> Arc<[Buffer]> {
+        Arc::clone(&self.buffers)
+    }
+
     /// Returns the element at index `i`
     ///
     /// Note: This method does not check for nulls and the value is arbitrary
