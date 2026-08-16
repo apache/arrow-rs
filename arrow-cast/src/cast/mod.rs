@@ -348,6 +348,19 @@ pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowErro
     cast_with_options(array, to_type, &CastOptions::default())
 }
 
+/// Convert an integer to a decimal native value without wrapping.
+///
+/// `AsPrimitive` / `as` silently truncates when the source is wider than `M`
+/// (for example `5_000_000_000i64 as i32`). All integer sources fit in `i128`,
+/// so go through that and then use [`DecimalCast`] which is range-checked.
+fn integer_to_decimal_native<I, M>(value: I) -> Option<M>
+where
+    I: NumCast,
+    M: DecimalCast,
+{
+    num_cast::<I, i128>(value).and_then(M::from_decimal)
+}
+
 fn cast_integer_to_decimal<
     T: ArrowPrimitiveType,
     D: DecimalType + ArrowPrimitiveType<Native = M>,
@@ -360,8 +373,8 @@ fn cast_integer_to_decimal<
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<M>,
-    M: ArrowNativeTypeOp,
+    <T as ArrowPrimitiveType>::Native: NumCast,
+    M: ArrowNativeTypeOp + DecimalCast,
 {
     let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
@@ -372,31 +385,38 @@ where
         ))
     })?;
 
+    let overflow = |v: T::Native| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {}({precision}, {scale}). Overflowing on {v:?}",
+            D::PREFIX,
+        ))
+    };
+
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .ok()
+                integer_to_decimal_native::<_, M>(v)
+                    .and_then(|v| v.div_checked(scale_factor).ok())
                     .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
+                integer_to_decimal_native::<_, M>(v)
+                    .ok_or_else(|| overflow(v))
+                    .and_then(|v| v.div_checked(scale_factor))
                     .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
         }
     } else {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .ok()
+                integer_to_decimal_native::<_, M>(v)
+                    .and_then(|v| v.mul_checked(scale_factor).ok())
                     .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
+                integer_to_decimal_native::<_, M>(v)
+                    .ok_or_else(|| overflow(v))
+                    .and_then(|v| v.mul_checked(scale_factor))
                     .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
         }
@@ -10598,6 +10618,99 @@ mod tests {
             },
         );
         assert!(casted_array.is_err());
+    }
+
+    #[test]
+    fn test_cast_integer_to_decimal32_does_not_truncate() {
+        let array = Int64Array::from(vec![5_000_000_000i64, 10_000_000_000, 42]);
+        let safe = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_with_options(&array, &DataType::Decimal32(9, 0), &safe).unwrap();
+        let result = result.as_primitive::<Decimal32Type>();
+        assert!(
+            result.is_null(0),
+            "5e9 must not wrap to {}",
+            result.value(0)
+        );
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), 42);
+
+        let err = cast_with_options(&array, &DataType::Decimal32(9, 0), &unsafe_opts)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("5000000000"),
+            "unsafe error should report the original value, got {err}"
+        );
+        assert!(
+            !err.contains("705032704"),
+            "unsafe error must not report the i32-truncated value, got {err}"
+        );
+
+        let result = cast_with_options(&array, &DataType::Decimal128(9, 0), &safe).unwrap();
+        let result = result.as_primitive::<Decimal128Type>();
+        assert!(result.is_null(0));
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), 42);
+    }
+
+    #[test]
+    fn test_cast_uint_to_decimal32_does_not_wrap() {
+        let array = UInt32Array::from(vec![4_000_000_000u32]);
+        let safe = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_with_options(&array, &DataType::Decimal32(9, 0), &safe).unwrap();
+        let result = result.as_primitive::<Decimal32Type>();
+        assert!(
+            result.is_null(0),
+            "u32 4e9 must not wrap to {}",
+            result.value(0)
+        );
+
+        let err = cast_with_options(&array, &DataType::Decimal32(9, 0), &unsafe_opts)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("4000000000"),
+            "unsafe error should report the original value, got {err}"
+        );
+
+        let result = cast_with_options(&array, &DataType::Decimal128(9, 0), &safe).unwrap();
+        assert!(result.is_null(0));
+        assert!(cast_with_options(&array, &DataType::Decimal128(9, 0), &unsafe_opts).is_err());
+    }
+
+    #[test]
+    fn test_cast_uint64_max_to_decimal64_does_not_wrap() {
+        let array = UInt64Array::from(vec![u64::MAX]);
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let err = cast_with_options(&array, &DataType::Decimal64(18, 0), &unsafe_opts)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !err.contains("-1"),
+            "u64::MAX must not wrap to -1, got {err}"
+        );
+
+        assert!(cast_with_options(&array, &DataType::Decimal128(18, 0), &unsafe_opts).is_err());
     }
 
     #[test]
