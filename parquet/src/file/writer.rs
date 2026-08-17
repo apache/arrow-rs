@@ -2192,20 +2192,12 @@ mod tests {
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();
 
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1); // 1 row group
-        assert_eq!(offset_index[0].len(), 2); // 2 columns
-
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 column
-
-        let a_idx = &column_index[0][0];
+        let a_idx = reader.metadata().page_index().unwrap().column_index(0, 0);
         assert!(
             matches!(a_idx, Some(ColumnIndexMetaData::INT32(_))),
             "{a_idx:?}"
         );
-        let b_idx = &column_index[0][1];
+        let b_idx = reader.metadata().page_index().unwrap().column_index(0, 1);
         assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
@@ -2282,35 +2274,30 @@ mod tests {
         );
 
         // check histogram in column index as well
-        assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1);
-        assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = &column_index[0][0] {
-            assert_eq!(index.num_pages(), 1);
-            index
-        } else {
-            unreachable!()
-        };
+        assert!(reader.metadata().page_index().is_some());
+        let page_index = reader.metadata().page_index().unwrap();
+        let col_idx =
+            if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = page_index.column_index(0, 0) {
+                assert_eq!(index.num_pages(), 1);
+                index
+            } else {
+                unreachable!()
+            };
 
         assert!(col_idx.repetition_level_histogram(0).is_none());
         assert!(col_idx.definition_level_histogram(0).is_some());
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1);
-        assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].is_some());
+        assert!(page_index.offset_index(0, 0).is_some());
         assert!(
-            offset_index[0][0]
-                .as_ref()
+            page_index
+                .offset_index(0, 0)
                 .unwrap()
                 .unencoded_byte_array_data_bytes
                 .is_some()
         );
-        let page_sizes = offset_index[0][0]
-            .as_ref()
+        let page_sizes = page_index
+            .offset_index(0, 0)
             .unwrap()
             .unencoded_byte_array_data_bytes
             .as_ref()
@@ -2485,12 +2472,13 @@ mod tests {
         check_def_hist(column.definition_level_histogram().unwrap().values());
         check_rep_hist(column.repetition_level_histogram().unwrap().values());
 
+        assert!(reader.metadata().page_index().is_some());
+        let page_index = reader.metadata().page_index().unwrap();
+
         // check histogram in column index as well
-        assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1);
-        assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Some(ColumnIndexMetaData::INT32(index)) = &column_index[0][0] {
+        assert!(page_index.has_column_indexes());
+        let col_idx = if let Some(ColumnIndexMetaData::INT32(index)) = page_index.column_index(0, 0)
+        {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2500,13 +2488,10 @@ mod tests {
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
         check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1);
-        assert_eq!(offset_index[0].len(), 1);
+        assert!(page_index.has_offset_indexes());
         assert!(
-            offset_index[0][0]
-                .as_ref()
+            page_index
+                .offset_index(0, 0)
                 .unwrap()
                 .unencoded_byte_array_data_bytes
                 .is_none()
@@ -2672,12 +2657,13 @@ mod tests {
         let output = Vec::<u8>::new();
         let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
 
-        let column_indexes = metadata.column_index();
-        let offset_indexes = metadata.offset_index();
+        let page_index = metadata.page_index();
 
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            let rg_column_indexes = column_indexes.and_then(|ci| ci.get(rg_idx));
-            let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
+            let rg_column_indexes =
+                page_index.and_then(|pi| pi.column_indexes_for_rowgroup(rg_idx));
+            let rg_offset_indexes =
+                page_index.and_then(|pi| pi.offset_indexes_for_rowgroup(rg_idx));
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
                 let column_index = rg_column_indexes.and_then(|row| {
@@ -2731,9 +2717,14 @@ mod tests {
             let min = stats.min_bytes_opt().expect("min stats missing");
             let max = stats.max_bytes_opt().expect("max stats missing");
 
-            let col_idx = metadata.column_index().expect("column index not present");
-            let Some(ColumnIndexMetaData::INT96(col0)) = &col_idx[0][0] else {
-                panic!("expected INT96 stats")
+            assert!(
+                metadata
+                    .page_index()
+                    .is_some_and(|pi| pi.has_column_indexes())
+            );
+            let col0 = match metadata.page_index().unwrap().column_index(0, 0) {
+                Some(ColumnIndexMetaData::INT96(index)) => index,
+                _ => panic!("expected INT96 stats"),
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");
             let col_max = col0.max_value(0).expect("ColumnIndex max not present");

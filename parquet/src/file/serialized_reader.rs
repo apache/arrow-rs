@@ -312,7 +312,10 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
         Ok(Box::new(SerializedRowGroupReader::new(
             f,
             row_group_metadata,
-            self.metadata.offset_index().map(|x| x[i].as_slice()),
+            self.metadata
+                .page_index()
+                .map(|pi| pi.offset_indexes_for_rowgroup(i))
+                .unwrap_or(None),
             props,
         )?))
     }

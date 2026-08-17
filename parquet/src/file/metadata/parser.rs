@@ -23,7 +23,7 @@
 use crate::errors::ParquetError;
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ColumnChunkMetaData, PageIndex, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -233,22 +233,38 @@ pub(crate) fn decode_metadata(
     parquet_metadata_from_bytes(buf, options)
 }
 
-/// Parses column index from the provided bytes and adds it to the metadata.
+/// Parses page index from the provided bytes and adds it to the metadata.
 ///
 /// Arguments
 /// * `metadata` - The ParquetMetaData to which the parsed column index will be added.
 /// * `column_index_policy` - The policy for handling column index parsing (e.g.,
 ///   Required, Optional, Skip).
+/// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
+///   Required, Optional, Skip).
 /// * `bytes` - The byte slice containing the column index data.
 /// * `start_offset` - The offset where `bytes` begin in the file.
-pub(crate) fn parse_column_index(
+pub(crate) fn parse_page_index(
     metadata: &mut ParquetMetaData,
     column_index_policy: PageIndexPolicy,
+    offset_index_policy: PageIndexPolicy,
     bytes: &Bytes,
     start_offset: u64,
 ) -> crate::errors::Result<()> {
+    let column_indexes = parse_column_index(metadata, column_index_policy, bytes, start_offset)?;
+    let offset_indexes = parse_offset_index(metadata, offset_index_policy, bytes, start_offset)?;
+    let page_index = PageIndex::new(column_indexes, offset_indexes);
+    metadata.set_page_index(Some(page_index));
+    Ok(())
+}
+
+fn parse_column_index(
+    metadata: &ParquetMetaData,
+    column_index_policy: PageIndexPolicy,
+    bytes: &Bytes,
+    start_offset: u64,
+) -> crate::errors::Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
     if column_index_policy == PageIndexPolicy::Skip {
-        return Ok(());
+        return Ok(None);
     }
     let index = metadata
         .row_groups()
@@ -277,18 +293,17 @@ pub(crate) fn parse_column_index(
         })
         .collect::<crate::errors::Result<Vec<_>>>()?;
 
-    metadata.set_column_index(Some(index));
-    Ok(())
+    Ok(Some(index))
 }
 
-pub(crate) fn parse_offset_index(
-    metadata: &mut ParquetMetaData,
+fn parse_offset_index(
+    metadata: &ParquetMetaData,
     offset_index_policy: PageIndexPolicy,
     bytes: &Bytes,
     start_offset: u64,
-) -> crate::errors::Result<()> {
+) -> crate::errors::Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
     if offset_index_policy == PageIndexPolicy::Skip {
-        return Ok(());
+        return Ok(None);
     }
     let row_groups = metadata.row_groups();
     let mut all_indexes = Vec::with_capacity(row_groups.len());
@@ -321,6 +336,5 @@ pub(crate) fn parse_offset_index(
         }
         all_indexes.push(row_group_indexes);
     }
-    metadata.set_offset_index(Some(all_indexes));
-    Ok(())
+    Ok(Some(all_indexes))
 }

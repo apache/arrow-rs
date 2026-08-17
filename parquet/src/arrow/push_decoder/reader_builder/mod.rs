@@ -854,10 +854,9 @@ impl RowGroupReaderBuilder {
         row_group_idx: usize,
     ) -> Option<&[Option<OffsetIndexMetaData>]> {
         self.metadata
-            .offset_index()
-            .filter(|index| !index.is_empty())
-            .and_then(|index| index.get(row_group_idx))
-            .map(|columns| columns.as_slice())
+            .page_index()
+            .map(|pi| pi.offset_indexes_for_rowgroup(row_group_idx))
+            .unwrap_or(None)
     }
 }
 

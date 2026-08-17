@@ -162,6 +162,33 @@ impl PageIndex {
         }
     }
 
+    /// Returns whether the offset indexes are present
+    ///
+    /// Returns `true` if `self.offset_indexes` is `Some`. This does
+    /// not indicate if any specific `OffsetIndex`s are present.
+    pub fn has_offset_indexes(&self) -> bool {
+        self.offset_indexes.is_some()
+    }
+
+    /// Returns whether the column indexes are present
+    ///
+    /// Returns `true` if `self.column_indexes` is `Some`. This does
+    /// not indicate if any specific `ColumnIndex`s are present.
+    pub fn has_column_indexes(&self) -> bool {
+        self.column_indexes.is_some()
+    }
+
+    /// Returns the column indexes for a given row group
+    pub fn column_indexes_for_rowgroup(
+        &self,
+        row_group: usize,
+    ) -> Option<&[Option<ColumnIndexMetaData>]> {
+        match self.column_indexes.as_ref() {
+            None => None,
+            Some(indexes) => indexes.get(row_group).map(|ci| ci.as_slice()),
+        }
+    }
+
     /// Returns the column index struct for a given row group and column
     pub fn column_index(
         &self,
@@ -173,6 +200,17 @@ impl PageIndex {
             rg.get(column_idx)?.as_ref()
         } else {
             None
+        }
+    }
+
+    /// Returns the offset indexes for a given row group
+    pub fn offset_indexes_for_rowgroup(
+        &self,
+        row_group: usize,
+    ) -> Option<&[Option<OffsetIndexMetaData>]> {
+        match self.offset_indexes.as_ref() {
+            None => None,
+            Some(indexes) => indexes.get(row_group).map(|oi| oi.as_slice()),
         }
     }
 

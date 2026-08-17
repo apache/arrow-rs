@@ -447,7 +447,9 @@ mod tests {
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
         // With preload=true, indexes should be loaded since the test file has them
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
+        assert!(metadata.page_index().unwrap().has_column_indexes());
+        assert!(metadata.page_index().unwrap().has_offset_indexes());
     }
 
     #[tokio::test]
@@ -468,7 +470,7 @@ mod tests {
 
         // With Optional policy, it will TRY to load indexes but won't fail if they don't exist
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
     }
 
     #[tokio::test]
@@ -496,8 +498,8 @@ mod tests {
         // Both should succeed (no panic/error)
         // metadata1 (Skip) uses preload=false -> Skip policy
         // metadata2 (Optional) overrides preload=false -> Optional policy
-        assert!(metadata1.column_index().is_none());
-        assert!(metadata2.column_index().is_some());
+        assert!(metadata1.page_index().is_none());
+        assert!(metadata2.page_index().is_some());
     }
 
     #[tokio::test]
@@ -516,6 +518,8 @@ mod tests {
         // With no options provided, preload flags (true) should be respected
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
+        assert!(metadata.page_index().unwrap().has_column_indexes());
+        assert!(metadata.page_index().unwrap().has_offset_indexes());
     }
 }

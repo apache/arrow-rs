@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::file::metadata::thrift::FileMeta;
-use crate::file::metadata::{
-    ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
-};
+use crate::file::metadata::{ColumnChunkMetaData, PageIndex, RowGroupMetaData};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::{
     basic::ColumnOrder,
@@ -136,7 +134,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the column indexes and transform to `Option<ParquetColumnIndex>`
-    fn finalize_column_indexes(&mut self) -> Result<Option<ParquetColumnIndex>> {
+    fn finalize_column_indexes(&mut self) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
         let column_indexes = std::mem::take(&mut self.column_indexes);
 
         // Write column indexes to file
@@ -157,7 +155,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
-    fn finalize_offset_indexes(&mut self) -> Result<Option<ParquetOffsetIndex>> {
+    fn finalize_offset_indexes(&mut self) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
         // Write offset indexes to file
@@ -256,8 +254,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
         let builder = ParquetMetaDataBuilder::new(file_metadata)
-            .set_column_index(column_indexes)
-            .set_offset_index(offset_indexes);
+            .set_page_index(Some(PageIndex::new(column_indexes, offset_indexes)));
 
         Ok(match unencrypted_row_groups {
             Some(rg) => builder.set_row_groups(rg).build(),
@@ -445,8 +442,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let column_indexes = self.metadata.column_index().cloned();
-        let offset_indexes = self.metadata.offset_index().cloned();
+        let page_index = self.metadata.page_index().cloned();
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
@@ -457,12 +453,18 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        if let Some(column_indexes) = column_indexes {
-            encoder = encoder.with_column_indexes(column_indexes);
-        }
+        if let Some(PageIndex {
+            column_indexes,
+            offset_indexes,
+        }) = page_index
+        {
+            if let Some(column_indexes) = column_indexes {
+                encoder = encoder.with_column_indexes(column_indexes);
+            }
 
-        if let Some(offset_indexes) = offset_indexes {
-            encoder = encoder.with_offset_indexes(offset_indexes);
+            if let Some(offset_indexes) = offset_indexes {
+                encoder = encoder.with_offset_indexes(offset_indexes);
+            }
         }
 
         if let Some(key_value_metadata) = key_value_metadata {
