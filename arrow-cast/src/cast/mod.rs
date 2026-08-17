@@ -351,14 +351,31 @@ pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowErro
 /// Convert an integer to a decimal native value without wrapping.
 ///
 /// `AsPrimitive` / `as` silently truncates when the source is wider than `M`
-/// (for example `5_000_000_000i64 as i32`). All integer sources fit in `i128`,
-/// so go through that and then use [`DecimalCast`] which is range-checked.
+/// (for example `5_000_000_000i64 as i32`). All integer sources fit in `i128`
+/// losslessly, which [`DecimalCast`] then converts to the decimal native type
+/// with a range check.
 fn integer_to_decimal_native<I, M>(value: I) -> Option<M>
 where
-    I: NumCast,
+    I: Into<i128>,
     M: DecimalCast,
 {
-    num_cast::<I, i128>(value).and_then(M::from_decimal)
+    M::from_decimal(value.into())
+}
+
+/// Scale an integer down in its native type before narrowing it to the decimal
+/// native type.
+///
+/// If the scale factor cannot be represented by the input type, it is larger
+/// than every possible input value and integer division therefore produces
+/// zero.
+fn scale_integer_down<I>(value: I, scale: u32) -> Option<I>
+where
+    I: ArrowNativeTypeOp,
+{
+    match I::usize_as(10).pow_checked(scale) {
+        Ok(scale_factor) => value.div_checked(scale_factor).ok(),
+        Err(_) => Some(I::ZERO),
+    }
 }
 
 fn cast_integer_to_decimal<
@@ -373,18 +390,9 @@ fn cast_integer_to_decimal<
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    <T as ArrowPrimitiveType>::Native: NumCast,
+    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + Into<i128>,
     M: ArrowNativeTypeOp + DecimalCast,
 {
-    let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}({}, {}). The scale causes overflow.",
-            D::PREFIX,
-            precision,
-            scale,
-        ))
-    })?;
-
     let overflow = |v: T::Native| {
         ArrowError::CastError(format!(
             "Cannot cast to {}({precision}, {scale}). Overflowing on {v:?}",
@@ -395,18 +403,27 @@ where
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                integer_to_decimal_native::<_, M>(v)
-                    .and_then(|v| v.div_checked(scale_factor).ok())
+                scale_integer_down(v, scale.unsigned_abs() as _)
+                    .and_then(integer_to_decimal_native::<_, M>)
                     .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                integer_to_decimal_native::<_, M>(v)
+                scale_integer_down(v, scale.unsigned_abs() as _)
+                    .and_then(integer_to_decimal_native::<_, M>)
                     .ok_or_else(|| overflow(v))
-                    .and_then(|v| v.div_checked(scale_factor))
                     .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
         }
     } else {
+        let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}({}, {}). The scale causes overflow.",
+                D::PREFIX,
+                precision,
+                scale,
+            ))
+        })?;
+
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
                 integer_to_decimal_native::<_, M>(v)
@@ -2430,14 +2447,6 @@ fn cast_to_decimal<D, M>(
 where
     D: DecimalType + ArrowPrimitiveType<Native = M>,
     M: ArrowNativeTypeOp + DecimalCast,
-    u8: num_traits::AsPrimitive<M>,
-    u16: num_traits::AsPrimitive<M>,
-    u32: num_traits::AsPrimitive<M>,
-    u64: num_traits::AsPrimitive<M>,
-    i8: num_traits::AsPrimitive<M>,
-    i16: num_traits::AsPrimitive<M>,
-    i32: num_traits::AsPrimitive<M>,
-    i64: num_traits::AsPrimitive<M>,
 {
     use DataType::*;
     // cast data to decimal
@@ -10681,6 +10690,28 @@ mod tests {
         assert!(result.is_null(0));
         assert!(result.is_null(1));
         assert_eq!(result.value(2), 42);
+    }
+
+    #[test]
+    fn test_cast_integer_to_decimal32_scales_before_narrowing() {
+        let array = Int64Array::from(vec![5_000_000_000i64]);
+        let safe = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let data_type = DataType::Decimal32(9, -1);
+
+        let result = cast_with_options(&array, &data_type, &safe).unwrap();
+        let result = result.as_primitive::<Decimal32Type>();
+        assert_eq!(result.value(0), 500_000_000);
+
+        let result = cast_with_options(&array, &data_type, &unsafe_opts).unwrap();
+        let result = result.as_primitive::<Decimal32Type>();
+        assert_eq!(result.value(0), 500_000_000);
     }
 
     #[test]
