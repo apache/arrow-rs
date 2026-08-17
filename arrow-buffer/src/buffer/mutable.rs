@@ -802,7 +802,10 @@ impl MutableBuffer {
     /// for the same reasons as [`MutableBuffer::reserve`].
     ///
     /// # Safety
-    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`
+    /// and that `I::next()` does not panic, or `set_len` will leave the buffer
+    /// in an inconsistent state, exposing uninitialized/stale bytes as though
+    /// they were valid.
     #[inline]
     pub unsafe fn extend_bool_trusted_len<I: Iterator<Item = bool>>(
         &mut self,
