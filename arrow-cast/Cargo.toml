@@ -78,10 +78,6 @@ name = "parse_decimal"
 harness = false
 
 [[bench]]
-name = "integer_to_decimal"
-harness = false
-
-[[bench]]
 name = "format_temporal"
 harness = false
 

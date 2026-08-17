@@ -362,22 +362,6 @@ where
     M::from_decimal(value.into())
 }
 
-/// Scale an integer down in its native type before narrowing it to the decimal
-/// native type.
-///
-/// If the scale factor cannot be represented by the input type, it is larger
-/// than every possible input value and integer division therefore produces
-/// zero.
-fn scale_integer_down<I>(value: I, scale: u32) -> Option<I>
-where
-    I: ArrowNativeTypeOp,
-{
-    match I::usize_as(10).pow_checked(scale) {
-        Ok(scale_factor) => value.div_checked(scale_factor).ok(),
-        Err(_) => Some(I::ZERO),
-    }
-}
-
 fn cast_integer_to_decimal<
     T: ArrowPrimitiveType,
     D: DecimalType + ArrowPrimitiveType<Native = M>,
@@ -401,18 +385,30 @@ where
     };
 
     let array = if scale < 0 {
-        match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| {
-                scale_integer_down(v, scale.unsigned_abs() as _)
+        // Compute the scale factor once in the source type. Scaling before the
+        // checked conversion permits values that only fit the decimal native
+        // type after scaling.
+        let scale_factor = T::Native::usize_as(10)
+            .pow_checked(scale.unsigned_abs() as u32)
+            .ok();
+
+        match (scale_factor, cast_options.safe) {
+            (Some(scale_factor), true) => array.unary_opt::<_, D>(|v| {
+                v.div_checked(scale_factor)
+                    .ok()
                     .and_then(integer_to_decimal_native::<_, M>)
                     .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
             }),
-            false => array.try_unary::<_, D, _>(|v| {
-                scale_integer_down(v, scale.unsigned_abs() as _)
+            (Some(scale_factor), false) => array.try_unary::<_, D, _>(|v| {
+                v.div_checked(scale_factor)
+                    .ok()
                     .and_then(integer_to_decimal_native::<_, M>)
                     .ok_or_else(|| overflow(v))
                     .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
             })?,
+            // A scale factor that overflows the source type is larger than all
+            // source values, so integer division produces zero.
+            (None, _) => array.unary::<_, D>(|_| M::ZERO),
         }
     } else {
         let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
