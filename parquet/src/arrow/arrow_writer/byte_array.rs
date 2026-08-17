@@ -394,9 +394,7 @@ impl DictEncoder {
         buffer.push(self.bit_width());
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
 
         self.indices.clear();
 

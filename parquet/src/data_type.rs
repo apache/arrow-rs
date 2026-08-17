@@ -792,9 +792,7 @@ pub(crate) mod private {
             _: &mut W,
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
-            for value in values {
-                bit_writer.put_value(*value as u64, 1)
-            }
+            bit_writer.put_batch(values, 1);
             Ok(())
         }
 

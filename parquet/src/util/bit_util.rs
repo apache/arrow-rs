@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{unpack8, unpack16, unpack32, unpack64};
+use crate::util::bit_pack::{pack8, pack16, pack32, pack64, unpack8, unpack16, unpack32, unpack64};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
@@ -44,26 +44,39 @@ pub trait FromBytes: Sized {
     fn from_le_bytes(bs: Self::Buffer) -> Self;
 }
 
-/// Types that can be decoded from bitpacked representations.
+/// Types that can be converted to and from bitpacked representations.
 ///
 /// This is implemented for primitive types and bool that can be
-/// directly converted from a u64 value. Types like Int96, ByteArray,
+/// directly converted from and to a u64 value. Types like Int96, ByteArray,
 /// and FixedLenByteArray that cannot be represented in 64 bits do not
 /// implement this trait.
-pub trait FromBitpacked {
+pub trait BitPacking {
     /// The maximum number of bits that are allowed to be converted to this type.
     /// This is at most the size of the type in bits, but could be less, for example
     /// for the boolean type.
     const BIT_CAPACITY: usize;
-    /// How many values are converted by one call to `unpack_batch`.
+    /// How many values are converted by one call to `unpack_batch` or `pack_batch`.
     const BATCH_SIZE: usize;
+
     /// Convert directly from a u64 value by truncation, avoiding byte slice copies.
     fn from_u64(v: u64) -> Self;
+
+    /// Convert directly to a u64. Values wider than `num_bits` are permitted,
+    /// the packing routines only use the low `num_bits` bits.
+    fn to_u64(&self) -> u64;
 
     /// Converts multiple bitpacked values from `input` to `output`.
     /// The `output` slice needs to have space for at least `BATCH_SIZE` elements,
     /// otherwise this method will panic.
     fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize)
+    where
+        Self: Sized;
+
+    /// Packs the first `BATCH_SIZE` values of `input` into `output`.
+    /// `input` needs to contain at least `BATCH_SIZE` elements and `output` needs
+    /// space for at least `num_bits * BATCH_SIZE / 8` bytes, otherwise this
+    /// method will panic.
+    fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize)
     where
         Self: Sized;
 }
@@ -84,12 +97,12 @@ macro_rules! from_le_bytes {
     };
 }
 
-macro_rules! from_bitpacked {
-    ($($ty: ty => $unpack: path),*) => {
+macro_rules! bit_packing {
+    ($($ty: ty => ($unpack: path, $pack: path)),*) => {
         $(
-            impl FromBitpacked for $ty {
+            impl BitPacking for $ty {
                 const BIT_CAPACITY: usize = std::mem::size_of::<$ty>() * 8;
-                // this has to match the signature of the unpack* functions
+                // this has to match the signature of the unpack*/pack* functions
                 const BATCH_SIZE: usize = std::mem::size_of::<$ty>() * 8;
 
                 #[inline]
@@ -98,20 +111,38 @@ macro_rules! from_bitpacked {
                 }
 
                 #[inline]
+                fn to_u64(&self) -> u64 {
+                    *self as u64
+                }
+
+                #[inline]
                 fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
                     $unpack(input, (&mut output[..Self::BATCH_SIZE]).try_into().unwrap(), num_bits)
+                }
+
+                #[inline]
+                fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
+                    $pack((&input[..Self::BATCH_SIZE]).try_into().unwrap(), output, num_bits)
                 }
             }
         )*
     }
 }
 
-macro_rules! from_bitpacked_delegate {
+macro_rules! bit_packing_delegate {
     ($($ty: ty => $delegate: ty),*) => {
         $(
-            impl FromBitpacked for $ty {
-                const BIT_CAPACITY: usize = <$delegate as FromBitpacked>::BIT_CAPACITY;
-                const BATCH_SIZE: usize = <$delegate as FromBitpacked>::BATCH_SIZE;
+            // Guard against misusages of this macro, this fails already at
+            // compile-time if the types are not compatible.
+            const _: () = assert!(
+                std::mem::size_of::<$ty>() == std::mem::size_of::<$delegate>()
+                    && std::mem::align_of::<$ty>() == std::mem::align_of::<$delegate>(),
+                "types need to have the same size and alignment"
+            );
+
+            impl BitPacking for $ty {
+                const BIT_CAPACITY: usize = <$delegate as BitPacking>::BIT_CAPACITY;
+                const BATCH_SIZE: usize = <$delegate as BitPacking>::BATCH_SIZE;
 
                 #[inline]
                 fn from_u64(v: u64) -> Self {
@@ -119,19 +150,22 @@ macro_rules! from_bitpacked_delegate {
                 }
 
                 #[inline]
+                fn to_u64(&self) -> u64 {
+                    *self as u64
+                }
+
+                #[inline]
                 fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
-                    // Guard against misusages of this macro, due to the const block this will fail
-                    // already at compile-time if the types are not compatible.
-                    const {
-                        assert!(
-                            std::mem::size_of::<$ty>() == std::mem::size_of::<$delegate>()
-                            && std::mem::align_of::<$ty>() == std::mem::align_of::<$delegate>(),
-                            "types need to have the same size and alignment"
-                        );
-                    }
                     // Safety: ty and delegate have the same size and alignment, and this macro is only used for types that have transmutable bit patterns.
                     let output: &mut [$delegate] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<$delegate>(), output.len()) };
                     <$delegate>::unpack_batch(input, output, num_bits);
+                }
+
+                #[inline]
+                fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
+                    // Safety: ty and delegate have the same size and alignment, and this macro is only used for types that have transmutable bit patterns.
+                    let input: &[$delegate] = unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<$delegate>(), input.len()) };
+                    <$delegate>::pack_batch(input, output, num_bits);
                 }
             }
         )*
@@ -139,18 +173,27 @@ macro_rules! from_bitpacked_delegate {
 }
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
-from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32);
+bit_packing!(
+    u8 => (unpack8, pack8),
+    u16 => (unpack16, pack16),
+    u32 => (unpack32, pack32)
+);
 
-// `u64` is written out by hand: the `as` cast the macro uses would be a no-op here,
+// `u64` is written out by hand: the `as` casts the macro uses would be no-ops here,
 // and it is the only instantiation for which that is true.
-impl FromBitpacked for u64 {
+impl BitPacking for u64 {
     const BIT_CAPACITY: usize = std::mem::size_of::<u64>() * 8;
-    // this has to match the signature of the unpack* functions
+    // this has to match the signature of the unpack*/pack* functions
     const BATCH_SIZE: usize = std::mem::size_of::<u64>() * 8;
 
     #[inline]
     fn from_u64(v: u64) -> Self {
         v
+    }
+
+    #[inline]
+    fn to_u64(&self) -> u64 {
+        *self
     }
 
     #[inline]
@@ -161,16 +204,30 @@ impl FromBitpacked for u64 {
             num_bits,
         )
     }
-}
-from_bitpacked_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
 
-impl FromBitpacked for bool {
+    #[inline]
+    fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
+        pack64(
+            (&input[..Self::BATCH_SIZE]).try_into().unwrap(),
+            output,
+            num_bits,
+        )
+    }
+}
+bit_packing_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
+
+impl BitPacking for bool {
     const BIT_CAPACITY: usize = 1;
-    const BATCH_SIZE: usize = <u8 as FromBitpacked>::BATCH_SIZE;
+    const BATCH_SIZE: usize = <u8 as BitPacking>::BATCH_SIZE;
 
     #[inline]
     fn from_u64(v: u64) -> Self {
         v != 0
+    }
+
+    #[inline]
+    fn to_u64(&self) -> u64 {
+        *self as u64
     }
 
     #[inline]
@@ -183,6 +240,16 @@ impl FromBitpacked for bool {
             std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len())
         };
         u8::unpack_batch(input, output, num_bits);
+    }
+
+    #[inline]
+    fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
+        assert!(num_bits == 1);
+        // Safety: bool is a single byte that is guaranteed to be 0 or 1, so it
+        // can always be read as a u8.
+        let input: &[u8] =
+            unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<u8>(), input.len()) };
+        u8::pack_batch(input, output, num_bits);
     }
 }
 
@@ -510,6 +577,98 @@ impl BitWriter {
         }
     }
 
+    /// Writes all values in `batch` in bit-packed form, `num_bits` bits per
+    /// value.
+    ///
+    /// Equivalent to repeatedly calling [`BitWriter::put_value`] with the same
+    /// `num_bits`, but faster because it dispatches to SIMD-friendly
+    /// fixed-width packing routines whenever possible.
+    ///
+    /// Unlike [`BitWriter::put_value`], values wider than `num_bits` are
+    /// permitted, only the `num_bits` least significant bits of each value are
+    /// written.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if
+    /// - `num_bits` is larger than the bit-capacity of `T`
+    pub fn put_batch<T: BitPacking>(&mut self, batch: &[T], num_bits: usize) {
+        assert_ne!(T::BIT_CAPACITY, 0);
+        assert!(num_bits <= T::BIT_CAPACITY);
+
+        let mask = match num_bits {
+            64 => u64::MAX,
+            _ => (1 << num_bits) - 1,
+        };
+
+        let mut i = 0;
+
+        // First fill the accumulator up to a byte boundary
+        while !self.bit_offset.is_multiple_of(8) {
+            match batch.get(i) {
+                Some(v) => self.put_value(v.to_u64() & mask, num_bits),
+                None => return,
+            }
+            i += 1;
+        }
+
+        // Move the accumulator's whole bytes out, so packed blocks can be
+        // appended directly to the buffer. Lossless because the offset is
+        // byte-aligned
+        self.flush();
+
+        // Pack whole blocks directly into the buffer
+        let blocks = (batch.len() - i) / T::BATCH_SIZE;
+        let block_bytes = num_bits * T::BATCH_SIZE / 8;
+        let mut offset = self.buffer.len();
+        self.buffer.resize(offset + blocks * block_bytes, 0);
+        for _ in 0..blocks {
+            T::pack_batch(&batch[i..], &mut self.buffer[offset..], num_bits);
+            offset += block_bytes;
+            i += T::BATCH_SIZE;
+        }
+
+        // Try to write smaller batches if possible
+        if size_of::<T>() > 4 && batch.len() - i >= 32 && num_bits <= 32 {
+            let mut in_buf = [0_u32; 32];
+            for (j, v) in in_buf.iter_mut().enumerate() {
+                *v = (batch[i + j].to_u64() & mask) as u32;
+            }
+            let start = self.buffer.len();
+            self.buffer.resize(start + 4 * num_bits, 0);
+            pack32(&in_buf, &mut self.buffer[start..], num_bits);
+            i += 32;
+        }
+
+        if size_of::<T>() > 2 && batch.len() - i >= 16 && num_bits <= 16 {
+            let mut in_buf = [0_u16; 16];
+            for (j, v) in in_buf.iter_mut().enumerate() {
+                *v = (batch[i + j].to_u64() & mask) as u16;
+            }
+            let start = self.buffer.len();
+            self.buffer.resize(start + 2 * num_bits, 0);
+            pack16(&in_buf, &mut self.buffer[start..], num_bits);
+            i += 16;
+        }
+
+        if size_of::<T>() > 1 && batch.len() - i >= 8 && num_bits <= 8 {
+            let mut in_buf = [0_u8; 8];
+            for (j, v) in in_buf.iter_mut().enumerate() {
+                *v = (batch[i + j].to_u64() & mask) as u8;
+            }
+            let start = self.buffer.len();
+            self.buffer.resize(start + num_bits, 0);
+            pack8(&in_buf, &mut self.buffer[start..], num_bits);
+            i += 8;
+        }
+
+        // Write any trailing values
+        while i < batch.len() {
+            self.put_value(batch[i].to_u64() & mask, num_bits);
+            i += 1;
+        }
+    }
+
     /// Writes the first `num_bytes` little-endian bytes of `val` to the
     /// writer at the next byte boundary.
     ///
@@ -665,7 +824,7 @@ impl BitReader {
     /// Returns `None` if there are fewer than `num_bits` bits left in the
     /// buffer; otherwise `Some(value)`. On `None` the reader's position is
     /// left unchanged.
-    pub fn get_value<T: FromBitpacked>(&mut self, num_bits: usize) -> Option<T> {
+    pub fn get_value<T: BitPacking>(&mut self, num_bits: usize) -> Option<T> {
         debug_assert!(num_bits <= 64);
         debug_assert!(num_bits <= size_of::<T>() * 8);
 
@@ -715,7 +874,7 @@ impl BitReader {
     ///
     /// This function panics if
     /// - `num_bits` is larger than the bit-capacity of `T`
-    pub fn get_batch<T: FromBitpacked>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
+    pub fn get_batch<T: BitPacking>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
         debug_assert!(num_bits <= size_of::<T>() * 8);
 
         let mut values_to_read = batch.len();
@@ -1337,7 +1496,7 @@ mod tests {
 
     fn test_get_batch_helper<T>(total: usize, num_bits: usize)
     where
-        T: FromBitpacked + Default + Clone + Debug + Eq,
+        T: BitPacking + Default + Clone + Debug + Eq,
     {
         assert!(num_bits <= 64);
         let num_bytes = ceil(num_bits, 8);
@@ -1373,6 +1532,80 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_put_batch() {
+        const SIZE: &[usize] = &[1, 7, 8, 31, 32, 33, 128, 129];
+        for s in SIZE {
+            // Exercise every bit width for each type, the narrow widths on the
+            // wider types cover the smaller-batch packing paths
+            for i in 0..=8 {
+                test_put_batch_helper::<u8>(*s, i);
+                test_put_batch_helper::<i8>(*s, i);
+            }
+            for i in 0..=16 {
+                test_put_batch_helper::<u16>(*s, i);
+                test_put_batch_helper::<i16>(*s, i);
+            }
+            for i in 0..=32 {
+                test_put_batch_helper::<u32>(*s, i);
+                test_put_batch_helper::<i32>(*s, i);
+            }
+            for i in 0..=64 {
+                test_put_batch_helper::<u64>(*s, i);
+                test_put_batch_helper::<i64>(*s, i);
+            }
+            // `bool` only supports a bit width of 1.
+            test_put_batch_helper::<bool>(*s, 1);
+        }
+    }
+
+    fn test_put_batch_helper<T>(total: usize, num_bits: usize)
+    where
+        T: BitPacking + Default + Copy + Debug + Eq,
+    {
+        let mask = match num_bits {
+            64 => u64::MAX,
+            _ => (1 << num_bits) - 1,
+        };
+
+        let values: Vec<T> = random_numbers::<u64>(total)
+            .iter()
+            .map(|v| T::from_u64(v & mask))
+            .collect();
+
+        // `put_batch` must produce bit-identical output to `put_value`, from
+        // both byte-aligned and unaligned starting positions
+        for misalignment in [0, 1, 3] {
+            let mut expected = BitWriter::new(ceil(num_bits * total, 8));
+            let mut actual = BitWriter::new(ceil(num_bits * total, 8));
+
+            for _ in 0..misalignment {
+                expected.put_value(1, 3);
+                actual.put_value(1, 3);
+            }
+
+            for v in &values {
+                expected.put_value(v.to_u64() & mask, num_bits);
+            }
+            actual.put_batch(&values, num_bits);
+
+            assert_eq!(
+                expected.flush_buffer(),
+                actual.flush_buffer(),
+                "num_bits = {num_bits}, total = {total}, misalignment = {misalignment}"
+            );
+        }
+
+        // And round-trip through `get_batch`
+        let mut writer = BitWriter::new(ceil(num_bits * total, 8));
+        writer.put_batch(&values, num_bits);
+        let mut reader = BitReader::from(writer.consume());
+        let mut batch = vec![T::default(); total];
+        let values_read = reader.get_batch::<T>(&mut batch, num_bits);
+        assert_eq!(values_read, total);
+        assert_eq!(batch, values, "num_bits = {num_bits}, total = {total}");
     }
 
     #[test]
