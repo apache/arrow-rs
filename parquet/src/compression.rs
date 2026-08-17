@@ -194,7 +194,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
             ))
         }
         CodecType::UNCOMPRESSED => Ok(None),
-        _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
+        CodecType::LZO => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
 }
 
@@ -546,7 +546,7 @@ mod zstd_codec {
                         .flatten()
                         .map(|size| size as usize)
                 })
-                .unwrap_or(input_buf.len().saturating_mul(4));
+                .unwrap_or_else(|| input_buf.len().saturating_mul(4));
             output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
@@ -936,9 +936,8 @@ mod tests {
     #[test]
     fn test_codec_zstd() {
         // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
-        for level in [ZstdLevel::MINIMUM_LEVEL]
-            .into_iter()
-            .chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        for level in
+            std::iter::once(ZstdLevel::MINIMUM_LEVEL).chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
         {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));

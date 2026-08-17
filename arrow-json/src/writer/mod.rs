@@ -2317,7 +2317,7 @@ mod tests {
                 };
                 // check that the fields are supported
                 let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
-                for f in fields.iter() {
+                for f in &fields {
                     match f.data_type() {
                         DataType::Null => {}
                         DataType::Int32 => {}

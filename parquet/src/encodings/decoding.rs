@@ -2266,14 +2266,14 @@ mod tests {
         let mut decoder = get_decoder::<T>(col_descr, encoding).expect("get decoder");
         decoder.set_data(bytes, data.len()).expect("ok to set data");
 
+        let skipped = decoder.skip(skip).expect("ok to skip");
+
         if skip >= data.len() {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, data.len());
 
             let skipped_again = decoder.skip(skip).expect("ok to skip again");
             assert_eq!(skipped_again, 0);
         } else {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, skip);
 
             let remaining = data.len() - skip;

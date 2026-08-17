@@ -50,7 +50,7 @@ const DEFAULT_CAPACITY: usize = 1024;
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
     ($size:expr, $buf:expr, $builder:expr, $N:expr, $Int:ty) => {{
-        let bytes = read_decimal_bytes_be::<{ $N }>($buf, $size)?;
+        let bytes = read_decimal_bytes_be::<{ $N }>($buf, *$size)?;
         $builder.append_value(<$Int>::from_be_bytes(bytes));
     }};
 }
@@ -2364,17 +2364,17 @@ fn flush_primitive<T: ArrowPrimitiveType>(
 #[inline]
 fn read_decimal_bytes_be<const N: usize>(
     buf: &mut AvroCursor<'_>,
-    size: &Option<usize>,
+    size: Option<usize>,
 ) -> Result<[u8; N], AvroError> {
     match size {
-        Some(n) if *n == N => {
+        Some(n) if n == N => {
             let raw = buf.get_fixed(N)?;
             let mut arr = [0u8; N];
             arr.copy_from_slice(raw);
             Ok(arr)
         }
         Some(n) => {
-            let raw = buf.get_fixed(*n)?;
+            let raw = buf.get_fixed(n)?;
             sign_cast_to::<N>(raw)
         }
         None => {
@@ -2513,7 +2513,7 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
-        for field_proj in self.writer_projections.iter() {
+        for field_proj in &self.writer_projections {
             match field_proj {
                 FieldProjection::ToReader(index) => encodings[*index].decode(buf)?,
                 FieldProjection::Skip(skipper) => skipper.skip(buf)?,
@@ -2716,7 +2716,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Struct(fields) => {
-                for f in fields.iter() {
+                for f in fields {
                     f.skip(buf)?
                 }
                 Ok(())

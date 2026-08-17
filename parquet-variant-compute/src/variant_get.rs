@@ -283,7 +283,6 @@ fn shredded_get_path(
                 }
                 shredding_state = state;
                 path_index += 1;
-                continue;
             }
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();

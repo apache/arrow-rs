@@ -593,7 +593,7 @@ impl UnionFields {
         let mut output: Vec<_> = self.iter().map(|(id, f)| (id, f.clone())).collect();
         for (field_type_id, from_field) in other.iter() {
             let mut is_new_field = true;
-            for (self_type_id, self_field) in output.iter_mut() {
+            for (self_type_id, self_field) in &mut output {
                 if from_field == self_field {
                     // If the nested fields in two unions are the same, they must have same
                     // type id.

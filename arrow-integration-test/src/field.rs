@@ -27,7 +27,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
     match *json {
         Value::Object(ref map) => {
             let name = match map.get("name") {
-                Some(Value::String(name)) => name.to_string(),
+                Some(Value::String(name)) => name.clone(),
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Field missing 'name' attribute".to_string(),

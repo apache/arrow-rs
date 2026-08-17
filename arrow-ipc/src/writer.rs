@@ -3209,7 +3209,7 @@ mod tests {
         // Dict field with id 2
         #[expect(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 0, false);
-        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
+        let union_fields = std::iter::once((0, Arc::new(dctfield))).collect();
 
         let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
         let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();

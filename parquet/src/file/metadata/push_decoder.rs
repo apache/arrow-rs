@@ -383,7 +383,6 @@ impl ParquetMetaDataPushDecoder {
                     let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
                     self.state = DecodeState::ReadingMetadata(footer_tail);
-                    continue;
                 }
 
                 DecodeState::ReadingMetadata(footer_tail) => {
@@ -404,7 +403,6 @@ impl ParquetMetaDataPushDecoder {
                     // Note: ReadingPageIndex first checks if page indexes are needed
                     // and is a no-op if not
                     self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
-                    continue;
                 }
 
                 DecodeState::ReadingPageIndex(mut metadata) => {

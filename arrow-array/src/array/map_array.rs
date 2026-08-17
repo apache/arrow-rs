@@ -313,6 +313,15 @@ impl MapArray {
     }
 }
 
+impl<'a> IntoIterator for &'a MapArray {
+    type Item = Option<StructArray>;
+    type IntoIter = MapArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        MapArrayIter::new(self)
+    }
+}
+
 impl From<ArrayData> for MapArray {
     fn from(data: ArrayData) -> Self {
         Self::try_new_from_array_data(data)

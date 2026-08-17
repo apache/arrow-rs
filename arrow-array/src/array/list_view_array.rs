@@ -449,6 +449,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListViewArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListViewArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListViewArrayIter::<'a, OffsetSize>::new(self)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<OffsetSize> {
     type Item = ArrayRef;
 

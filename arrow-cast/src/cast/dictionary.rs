@@ -136,7 +136,7 @@ fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteVie
     let values_have_nulls = values.null_count() != 0;
     let mut builder = GenericByteViewBuilder::<T>::with_capacity(keys.len());
     builder.append_block(value_buffer.clone());
-    for i in keys.iter() {
+    for i in keys {
         match i {
             Some(v) => {
                 let idx = v.to_usize().ok_or_else(|| {
@@ -456,7 +456,7 @@ where
         .ok_or_else(|| {
             ArrowError::ComputeError("Internal Error: Cannot cast to StringViewArray".to_string())
         })?;
-    for v in string_view.iter() {
+    for v in string_view {
         match v {
             Some(v) => {
                 b.append(v)?;
@@ -487,7 +487,7 @@ where
         .ok_or_else(|| {
             ArrowError::ComputeError("Internal Error: Cannot cast to BinaryViewArray".to_string())
         })?;
-    for v in binary_view.iter() {
+    for v in binary_view {
         match v {
             Some(v) => {
                 b.append(v)?;
