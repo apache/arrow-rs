@@ -1755,8 +1755,9 @@ mod tests {
                 row_group_metadata,
                 file_reader
                     .metadata
-                    .offset_index()
-                    .map(|x| x[row_group].as_slice()),
+                    .page_index()
+                    .map(|pi| pi.offset_indexes_for_rowgroup(row_group))
+                    .unwrap_or(None),
                 props,
             )?
         };
@@ -2070,8 +2071,7 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.column_index().unwrap().len(), 1);
-        assert_eq!(metadata.offset_index().unwrap().len(), 1);
+        assert!(metadata.page_index().is_some());
 
         // true, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -2083,8 +2083,7 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert!(metadata.column_index().is_none());
-        assert!(metadata.offset_index().is_none());
+        assert!(metadata.page_index().is_none());
 
         // false, true predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -2096,8 +2095,7 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert!(metadata.column_index().is_none());
-        assert!(metadata.offset_index().is_none());
+        assert!(metadata.page_index().is_none());
 
         // false, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -2109,8 +2107,7 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert!(metadata.column_index().is_none());
-        assert!(metadata.offset_index().is_none());
+        assert!(metadata.page_index().is_none());
         Ok(())
     }
 
@@ -2156,13 +2153,15 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let column_index = metadata.column_index().unwrap();
+        let page_index = metadata.page_index().expect("page index should be present");
 
         // only one row group
-        assert_eq!(column_index.len(), 1);
-        let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = &column_index[0][0] else {
-            unreachable!()
-        };
+        let index =
+            if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = page_index.column_index(0, 0) {
+                index
+            } else {
+                unreachable!()
+            };
 
         assert_eq!(index.boundary_order, BoundaryOrder::ASCENDING);
 
@@ -2174,11 +2173,14 @@ mod tests {
         assert_eq!(b"Hello", min.as_bytes());
         assert_eq!(b"today", max.as_bytes());
 
-        let offset_indexes = metadata.offset_index().unwrap();
         // only one row group
-        assert_eq!(offset_indexes.len(), 1);
-        let offset_index = &offset_indexes[0];
-        let page_offset = &offset_index[0].as_ref().unwrap().page_locations()[0];
+        let offset_index = page_index
+            .offset_index(0, 0)
+            .expect("offset index should be present");
+        let page_offset = offset_index
+            .page_locations()
+            .get(0)
+            .expect("offset index too small");
 
         assert_eq!(4, page_offset.offset);
         assert_eq!(152, page_offset.compressed_page_size);
@@ -2198,15 +2200,14 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let column_index = metadata.column_index().unwrap();
-        let row_group_offset_indexes = &metadata.offset_index().unwrap()[0];
+        let page_index = metadata.page_index().unwrap();
+        let row_group_offset_indexes = page_index.offset_indexes_for_rowgroup(0).unwrap();
 
         // only one row group
-        assert_eq!(column_index.len(), 1);
         let row_group_metadata = metadata.row_group(0);
 
         //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
-        let ci = column_index[0][0].as_ref().unwrap();
+        let ci = page_index.column_index(0, 0).unwrap();
         assert!(!ci.is_sorted());
         assert!(matches!(
             ci.get_boundary_order(),
@@ -2231,7 +2232,7 @@ mod tests {
             unreachable!()
         }
         //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
-        let ci = column_index[0][1].as_ref().unwrap();
+        let ci = page_index.column_index(0, 1).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::BOOLEAN(index) = ci {
             assert_eq!(index.num_pages(), 82);
@@ -2247,7 +2248,7 @@ mod tests {
             unreachable!()
         }
         //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
-        let ci = column_index[0][2].as_ref().unwrap();
+        let ci = page_index.column_index(0, 2).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::INT32(index) = ci {
             check_native_page_index(
@@ -2268,7 +2269,7 @@ mod tests {
             unreachable!()
         }
         //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
-        let ci = column_index[0][3].as_ref().unwrap();
+        let ci = page_index.column_index(0, 3).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::INT32(index) = ci {
             check_native_page_index(
@@ -2289,7 +2290,7 @@ mod tests {
             unreachable!()
         }
         //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
-        let ci = column_index[0][4].as_ref().unwrap();
+        let ci = page_index.column_index(0, 4).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::INT32(index) = ci {
             check_native_page_index(
@@ -2310,7 +2311,7 @@ mod tests {
             unreachable!()
         }
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
-        let ci = column_index[0][5].as_ref().unwrap();
+        let ci = page_index.column_index(0, 5).unwrap();
         assert!(!ci.is_sorted());
         if let ColumnIndexMetaData::INT64(index) = ci {
             check_native_page_index(
@@ -2331,7 +2332,7 @@ mod tests {
             unreachable!()
         }
         //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
-        let ci = column_index[0][6].as_ref().unwrap();
+        let ci = page_index.column_index(0, 6).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::FLOAT(index) = ci {
             check_native_page_index(
@@ -2352,7 +2353,7 @@ mod tests {
             unreachable!()
         }
         //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
-        let ci = column_index[0][7].as_ref().unwrap();
+        let ci = page_index.column_index(0, 7).unwrap();
         assert!(!ci.is_sorted());
         if let ColumnIndexMetaData::DOUBLE(index) = ci {
             check_native_page_index(
@@ -2373,7 +2374,7 @@ mod tests {
             unreachable!()
         }
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
-        let ci = column_index[0][8].as_ref().unwrap();
+        let ci = page_index.column_index(0, 8).unwrap();
         assert!(!ci.is_sorted());
         if let ColumnIndexMetaData::BYTE_ARRAY(index) = ci {
             check_byte_array_page_index(
@@ -2394,7 +2395,7 @@ mod tests {
             unreachable!()
         }
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
-        let ci = column_index[0][9].as_ref().unwrap();
+        let ci = page_index.column_index(0, 9).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::BYTE_ARRAY(index) = ci {
             check_byte_array_page_index(
@@ -2416,9 +2417,9 @@ mod tests {
         }
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         // this columns lacks an index
-        assert!(column_index[0][10].is_none());
+        assert!(page_index.column_index(0, 10).is_none());
         //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
-        let ci = column_index[0][11].as_ref().unwrap();
+        let ci = page_index.column_index(0, 11).unwrap();
         assert!(ci.is_sorted());
         if let ColumnIndexMetaData::INT32(index) = ci {
             check_native_page_index(
@@ -2439,7 +2440,7 @@ mod tests {
             unreachable!()
         }
         //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
-        let ci = column_index[0][12].as_ref().unwrap();
+        let ci = page_index.column_index(0, 12).unwrap();
         assert!(!ci.is_sorted());
         if let ColumnIndexMetaData::INT32(index) = ci {
             check_native_page_index(
@@ -2718,15 +2719,9 @@ mod tests {
         let b = Bytes::from(out);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(b, options).unwrap();
-        let index = reader.metadata().column_index().unwrap();
+        let page_index = reader.metadata().page_index().unwrap();
 
-        // 1 row group
-        assert_eq!(index.len(), 1);
-        let c = &index[0];
-        // 1 column
-        assert_eq!(c.len(), 1);
-
-        match &c[0] {
+        match page_index.column_index(0, 0) {
             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v)) => {
                 assert_eq!(v.num_pages(), 1);
                 assert_eq!(v.null_count(0).unwrap(), 1);
@@ -2850,15 +2845,14 @@ mod tests {
         assert_eq!(metadata.row_group(0).ordinal(), Some(2));
 
         // check we only got the relevant page indexes
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
-        assert_eq!(metadata.column_index().unwrap().len(), 1);
-        assert_eq!(metadata.offset_index().unwrap().len(), 1);
-        let col_idx = metadata.column_index().unwrap();
-        let off_idx = metadata.offset_index().unwrap();
+        assert!(metadata.page_index().is_some());
+        assert!(metadata.page_index().unwrap().has_column_indexes());
+        assert!(metadata.page_index().unwrap().has_offset_indexes());
+        let page_index = metadata.page_index().unwrap();
+
         let col_stats = metadata.row_group(0).column(0).statistics().unwrap();
-        let pg_idx = &col_idx[0][0];
-        let off_idx_i = &off_idx[0][0];
+        let pg_idx = page_index.column_index(0, 0);
+        let off_idx_i = page_index.offset_index(0, 0);
 
         // test that we got the index matching the row group
         match pg_idx {
@@ -2893,17 +2887,16 @@ mod tests {
         assert_eq!(metadata.row_group(1).ordinal(), Some(3));
 
         // check we only got the relevant page indexes
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
-        assert_eq!(metadata.column_index().unwrap().len(), 2);
-        assert_eq!(metadata.offset_index().unwrap().len(), 2);
-        let col_idx = metadata.column_index().unwrap();
-        let off_idx = metadata.offset_index().unwrap();
+        assert!(metadata.page_index().is_some());
+        assert!(metadata.page_index().unwrap().has_column_indexes());
+        assert!(metadata.page_index().unwrap().has_offset_indexes());
 
-        for (i, col_idx_i) in col_idx.iter().enumerate().take(metadata.num_row_groups()) {
-            let col_stats = metadata.row_group(i).column(0).statistics().unwrap();
-            let pg_idx = &col_idx_i[0];
-            let off_idx_i = &off_idx[i][0];
+        let page_index = metadata.page_index().unwrap();
+
+        for rg_idx in 0..metadata.num_row_groups() {
+            let col_stats = metadata.row_group(rg_idx).column(0).statistics().unwrap();
+            let pg_idx = page_index.column_index(rg_idx, 0);
+            let off_idx_i = page_index.offset_index(rg_idx, 0);
 
             // test that we got the index matching the row group
             match pg_idx {
@@ -2919,7 +2912,7 @@ mod tests {
             // check offset index matches too
             assert_eq!(
                 off_idx_i.as_ref().unwrap().page_locations[0].offset,
-                metadata.row_group(i).column(0).data_page_offset()
+                metadata.row_group(rg_idx).column(0).data_page_offset()
             );
         }
     }

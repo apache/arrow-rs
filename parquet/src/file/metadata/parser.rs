@@ -250,6 +250,11 @@ pub(crate) fn parse_page_index(
     bytes: &Bytes,
     start_offset: u64,
 ) -> crate::errors::Result<()> {
+    if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
+    {
+        return Ok(());
+    }
+    // FIXME(ets): if both indexes are None, should we not set page index?
     let column_indexes = parse_column_index(metadata, column_index_policy, bytes, start_offset)?;
     let offset_indexes = parse_offset_index(metadata, offset_index_policy, bytes, start_offset)?;
     let page_index = PageIndex::new(column_indexes, offset_indexes);
