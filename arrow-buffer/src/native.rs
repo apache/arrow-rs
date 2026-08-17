@@ -22,6 +22,9 @@ mod private {
     pub trait Sealed {}
 }
 
+// Required so that `[T]` satisfies the `Sealed` supertrait of `ToByteSlice`.
+impl<T: ArrowNativeType> private::Sealed for [T] {}
+
 /// Trait expressing a Rust type that has the same in-memory representation as
 /// Arrow.
 ///
@@ -265,7 +268,7 @@ impl ArrowNativeType for IntervalDayTime {
 }
 
 /// Allows conversion from supported Arrow types to a byte slice.
-pub trait ToByteSlice {
+pub trait ToByteSlice: private::Sealed {
     /// Converts this instance into a byte slice
     fn to_byte_slice(&self) -> &[u8];
 }
