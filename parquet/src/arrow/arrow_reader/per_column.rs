@@ -350,6 +350,24 @@ impl PerColumnReader {
             ));
         }
 
+        // Columns that resolve to the same threshold can never disagree, and
+        // disagreement is the only thing the split executor is here to
+        // exploit. Thresholds come from column metadata, so settling this up
+        // front avoids the per-row-group pass over the selection entirely —
+        // that pass is what made `AutoPerColumn` cost more than the global
+        // policy on wide, uniformly typed scans.
+        if let Some((threshold, unmodelled, row_group_count)) =
+            shared_threshold(row_groups, &projected_fields)
+        {
+            let strategy = selection.auto_selection_strategy(threshold);
+            metrics.record_shared_row_selection_decision(
+                strategy,
+                unmodelled,
+                row_group_count * column_count,
+            );
+            return Ok(PerColumnDecision::Fallback(strategy));
+        }
+
         let (row_group_rows, strategies, uniform) =
             plan_strategies(row_groups, selection, &projected_fields, metrics, planner)?;
         if let Some(strategy) = uniform {
@@ -481,6 +499,39 @@ impl ArrayReader for PerColumnReader {
     }
 }
 
+/// Returns the threshold every projected column resolves to in every row
+/// group, plus whether any of them got there through the compatibility
+/// fallback and how many row groups were inspected. `None` means the columns
+/// disagree and real per-column planning is needed.
+///
+/// Reads column metadata only; it never walks the selection.
+fn shared_threshold(
+    row_groups: &dyn RowGroups,
+    fields: &[&ParquetField],
+) -> Option<(usize, bool, usize)> {
+    let mut shared: Option<usize> = None;
+    let mut unmodelled = false;
+    let mut row_group_count = 0usize;
+    for row_group in row_groups.row_groups() {
+        row_group_count += 1;
+        for field in fields {
+            let threshold = match metadata_run_threshold(field, row_group) {
+                Some(threshold) => threshold,
+                None => {
+                    unmodelled = true;
+                    DEFAULT_ROW_SELECTION_THRESHOLD
+                }
+            };
+            match shared {
+                Some(previous) if previous != threshold => return None,
+                Some(_) => {}
+                None => shared = Some(threshold),
+            }
+        }
+    }
+    shared.map(|threshold| (threshold, unmodelled, row_group_count))
+}
+
 fn plan_strategies(
     row_groups: &dyn RowGroups,
     selection: &RowSelection,
@@ -503,6 +554,11 @@ fn plan_strategies(
     let mut strategies = vec![RowSelectionStrategy::Selectors; row_groups.len() * column_count];
     let mut first_active = None;
     let mut uniform = true;
+    // Tracked apart from `uniform`: a plan whose columns all agree inside every
+    // row group buys nothing from the split executor, even when two row groups
+    // reach different strategies. Only genuine column-level disagreement is
+    // worth the split path.
+    let mut columns_disagree = false;
 
     for (row_group_index, (row_group, &statistics)) in
         row_groups.iter().zip(&selection_statistics).enumerate()
@@ -512,6 +568,7 @@ fn plan_strategies(
         }
 
         let fallback = statistics.auto_selection_strategy(DEFAULT_ROW_SELECTION_THRESHOLD);
+        let mut row_group_strategy: Option<RowSelectionStrategy> = None;
         for (column_index, field) in fields.iter().enumerate() {
             let context = ColumnSelectionContext {
                 field,
@@ -522,6 +579,11 @@ fn plan_strategies(
             let strategy = planned.unwrap_or(fallback);
             metrics.record_row_selection_decision(strategy, planned.is_none());
             strategies[row_group_index * column_count + column_index] = strategy;
+            match row_group_strategy {
+                Some(previous) if previous != strategy => columns_disagree = true,
+                Some(_) => {}
+                None => row_group_strategy = Some(strategy),
+            }
             match first_active {
                 Some(first) if first != strategy => uniform = false,
                 None => first_active = Some(strategy),
@@ -538,7 +600,11 @@ fn plan_strategies(
         }
     }
 
-    Ok((row_group_rows, strategies, uniform.then_some(first_active)))
+    Ok((
+        row_group_rows,
+        strategies,
+        (uniform || !columns_disagree).then_some(first_active),
+    ))
 }
 
 /// Computes row-group-local run statistics in one pass over either selection

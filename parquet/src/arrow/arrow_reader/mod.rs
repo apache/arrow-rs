@@ -4731,7 +4731,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_auto_per_column_cross_row_group_metadata_planning() {
+    fn test_auto_per_column_defers_when_columns_share_a_threshold() {
         let batch = RecordBatch::try_from_iter([
             (
                 "left",
@@ -4785,8 +4785,14 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(actual, expected);
-        assert_eq!(metrics.row_selection_selector_decisions(), Some(2));
-        assert_eq!(metrics.row_selection_mask_decisions(), Some(2));
+        // Both columns are `Int32`, so they resolve to the same threshold and
+        // can never disagree. Splitting the plan would then only separate one
+        // row group from the other, which the split executor cannot exploit,
+        // so the policy defers to the global decision instead of paying for a
+        // per-row-group pass over the selection. All four decisions (two
+        // columns times two row groups) are therefore the same.
+        assert_eq!(metrics.row_selection_selector_decisions(), Some(0));
+        assert_eq!(metrics.row_selection_mask_decisions(), Some(4));
         assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
 
         let read_filtered = |policy| {

@@ -141,6 +141,19 @@ impl ArrowReaderMetrics {
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Records `count` identical decisions at once, for the case where every
+    /// projected column shares a threshold and the per-column loop is skipped.
+    pub(crate) fn record_shared_row_selection_decision(
+        &self,
+        strategy: RowSelectionStrategy,
+        fallback: bool,
+        count: usize,
+    ) {
+        for _ in 0..count {
+            self.record_row_selection_decision(strategy, fallback);
+        }
+    }
+
     pub(crate) fn record_row_selection_decision(
         &self,
         strategy: RowSelectionStrategy,
