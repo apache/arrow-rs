@@ -181,20 +181,20 @@ pub(crate) fn verify_encryption_test_data(
 /// Verifies that the column and offset indexes were successfully read from an
 /// encrypted test file.
 pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
-    let offset_index = metadata.offset_index().unwrap();
+    assert!(metadata.page_index().is_some());
+    let page_index = metadata.page_index().unwrap();
+    let offset_index = page_index.offset_indexes_for_rowgroup(0).unwrap();
     // 1 row group, 8 columns
-    assert_eq!(offset_index.len(), 1);
-    assert_eq!(offset_index[0].len(), 8);
+    assert_eq!(offset_index.len(), 8);
     // Check float column, which is encrypted in the non-uniform test file
     let float_col_idx = 4;
-    let offset_index = &offset_index[0][float_col_idx];
+    let offset_index = &offset_index[float_col_idx];
     assert_eq!(offset_index.as_ref().unwrap().page_locations.len(), 1);
     assert!(offset_index.as_ref().unwrap().page_locations[0].offset > 0);
 
-    let column_index = metadata.column_index().unwrap();
-    assert_eq!(column_index.len(), 1);
-    assert_eq!(column_index[0].len(), 8);
-    let column_index = &column_index[0][float_col_idx];
+    let column_index = page_index.column_indexes_for_rowgroup(0).unwrap();
+    assert_eq!(column_index.len(), 8);
+    let column_index = &column_index[float_col_idx];
 
     match column_index {
         Some(parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index)) => {

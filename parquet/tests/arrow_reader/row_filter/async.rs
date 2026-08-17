@@ -311,7 +311,12 @@ async fn test_mask_nested_projection_with_different_page_boundaries() {
     )
     .await
     .unwrap();
-    let page_first_rows = builder.metadata().offset_index().unwrap()[0]
+    let page_first_rows = builder
+        .metadata()
+        .page_index()
+        .unwrap()
+        .offset_indexes_for_rowgroup(0)
+        .unwrap()
         .iter()
         .map(|column| {
             column
