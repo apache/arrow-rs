@@ -64,8 +64,7 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 ///     .with_page_index_policy(PageIndexPolicy::Required);
 /// reader.try_parse(&file).unwrap();
 /// let metadata = reader.finish().unwrap();
-/// assert!(metadata.column_index().is_some());
-/// assert!(metadata.offset_index().is_some());
+/// assert!(metadata.page_index().is_some());
 /// ```
 #[derive(Default, Debug)]
 pub struct ParquetMetaDataReader {
