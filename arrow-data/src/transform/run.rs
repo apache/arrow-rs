@@ -70,7 +70,8 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
             mutable.child_data[0]
                 .data
                 .buffer1
-                .extend_from_slice(new_value.to_byte_slice());
+                .try_extend_from_slice(new_value.to_byte_slice())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         }};
     }
 

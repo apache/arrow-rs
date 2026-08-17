@@ -194,7 +194,9 @@ impl StreamDecoder {
                     }
 
                     let to_read = buffer.len().min(len - self.buf.len());
-                    self.buf.extend_from_slice(&buffer[..to_read]);
+                    self.buf
+                        .try_extend_from_slice(&buffer[..to_read])
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     buffer.advance(to_read);
                     if self.buf.len() == len {
                         let message = MessageBuffer::try_new(std::mem::take(&mut self.buf).into())?;
@@ -211,7 +213,9 @@ impl StreamDecoder {
                         body
                     } else {
                         let to_read = buffer.len().min(body_length - self.buf.len());
-                        self.buf.extend_from_slice(&buffer[..to_read]);
+                        self.buf
+                            .try_extend_from_slice(&buffer[..to_read])
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                         buffer.advance(to_read);
 
                         if self.buf.len() != body_length {
@@ -382,7 +386,7 @@ mod tests {
             "test1",
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Arc::new(Field::new_dict(
                     "values".to_string(),
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

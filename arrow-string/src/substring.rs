@@ -381,7 +381,11 @@ where
             let end = end.as_usize();
             &data[start..end]
         })
-        .for_each(|slice| new_values.extend_from_slice(slice));
+        .try_for_each(|slice| {
+            new_values
+                .try_extend_from_slice(slice)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })?;
 
     let offsets = OffsetBuffer::new(new_offsets.into());
     let values = new_values.into();
@@ -426,7 +430,11 @@ fn fixed_size_binary_substring(
             let offset = idx * array.value_size();
             (offset + new_start, offset + new_start + new_len)
         })
-        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
+        .try_for_each(|(start, end)| {
+            new_values
+                .try_extend_from_slice(&data[start..end])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })?;
 
     let mut nulls = array
         .nulls()
