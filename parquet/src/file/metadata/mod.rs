@@ -230,12 +230,10 @@ impl PageIndex {
 
     /// Returns the expected number of data pages for a given row group and column
     pub fn num_data_pages(&self, row_group_idx: usize, column_idx: usize) -> Option<usize> {
-        // FIXME(ets): should we also check column index if offset index is None?
-        Some(
-            self.offset_index(row_group_idx, column_idx)?
-                .page_locations()
-                .len(),
-        )
+        match self.offset_index(row_group_idx, column_idx) {
+            Some(offset_index) => Some(offset_index.page_locations.len()),
+            None => Some(self.column_index(row_group_idx, column_idx)?.num_pages() as usize),
+        }
     }
 
     /// Returns the [`PageLocation`]s for a given row group and column

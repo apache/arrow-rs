@@ -5087,9 +5087,6 @@ mod tests {
         assert!(b_col.statistics().is_none());
 
         let page_index = reader.metadata().page_index().unwrap();
-        // FIXME(ets): is it worth adding these?
-        //assert_eq!(column_index.len(), 1); // 1 row group
-        //assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = page_index.column_index(0, 0);
         assert!(a_idx.is_none(), "{a_idx:?}");

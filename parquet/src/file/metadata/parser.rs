@@ -254,9 +254,12 @@ pub(crate) fn parse_page_index(
     {
         return Ok(());
     }
-    // FIXME(ets): if both indexes are None, should we not set page index?
     let column_indexes = parse_column_index(metadata, column_index_policy, bytes, start_offset)?;
     let offset_indexes = parse_offset_index(metadata, offset_index_policy, bytes, start_offset)?;
+    // this likely shouldn't happen, but check just in case
+    if column_indexes.is_none() && offset_indexes.is_none() {
+        return Ok(());
+    }
     let page_index = PageIndex::new(column_indexes, offset_indexes);
     metadata.set_page_index(Some(page_index));
     Ok(())
