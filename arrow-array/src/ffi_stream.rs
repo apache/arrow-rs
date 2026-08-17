@@ -619,7 +619,7 @@ mod tests {
     unsafe extern "C" fn wrapping_release(stream: *mut FFI_ArrowArrayStream) {
         use std::sync::atomic::Ordering;
         let stream = unsafe { &mut *stream };
-        let data = unsafe { Box::from_raw(stream.private_data() as *mut StreamWrapperData) };
+        let data = unsafe { Box::from_raw(stream.private_data().cast::<StreamWrapperData>()) };
         STREAM_WRAPPER_RAN.store(true, Ordering::SeqCst);
         unsafe { stream.set_release(data.original_release) };
         unsafe { stream.set_private_data(data.original_private_data) };
@@ -643,7 +643,7 @@ mod tests {
             original_private_data: stream.private_data(),
         });
         unsafe { stream.set_release(Some(wrapping_release)) };
-        unsafe { stream.set_private_data(Box::into_raw(data) as *mut c_void) };
+        unsafe { stream.set_private_data(Box::into_raw(data).cast::<c_void>()) };
 
         drop(stream); // runs wrapping_release, which chains to the original
         assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));
