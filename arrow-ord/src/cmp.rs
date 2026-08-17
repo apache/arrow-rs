@@ -860,6 +860,10 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+///
+/// # Panics
+///
+/// Panics if `left_idx >= left.len()` or `right_idx >= right.len()`
 #[inline(always)]
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,

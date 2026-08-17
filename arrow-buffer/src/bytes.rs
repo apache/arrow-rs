@@ -218,7 +218,7 @@ impl PartialEq for Bytes {
 
 impl Debug for Bytes {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len,)?;
+        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len)?;
 
         f.debug_list().entries(self.iter()).finish()?;
 

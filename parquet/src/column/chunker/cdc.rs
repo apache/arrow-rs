@@ -1024,7 +1024,7 @@ mod arrow_tests {
                     crate::basic::PageType::DICTIONARY_PAGE => {
                         info.has_dictionary_page = true;
                     }
-                    _ => {}
+                    crate::basic::PageType::INDEX_PAGE => {}
                 }
             }
             result.push(info);

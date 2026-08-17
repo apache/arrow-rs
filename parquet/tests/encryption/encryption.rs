@@ -631,7 +631,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -644,7 +644,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -743,7 +743,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -756,7 +756,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -783,7 +783,7 @@ fn test_write_non_uniform_encryption() {
         let file = File::open(path).unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();
@@ -1089,7 +1089,7 @@ fn write_and_read_stats(
 
     // Check column statistics produced at write time are available in full
     let row_group = metadata.row_group(0);
-    for column in row_group.columns().iter() {
+    for column in row_group.columns() {
         check_column_stats(column, true);
     }
 

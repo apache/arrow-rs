@@ -132,7 +132,7 @@ impl From<&Field> for ArrowJsonField {
         };
 
         Self {
-            name: field.name().to_string(),
+            name: field.name().clone(),
             field_type: data_type_to_json(field.data_type()),
             nullable: field.is_nullable(),
             children: vec![],

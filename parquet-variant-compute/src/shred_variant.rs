@@ -639,11 +639,11 @@ impl VariantSchemaNode {
                 // Ensure this node is a Struct node
                 let children = match self {
                     Self::Struct(children) => children,
-                    _ => {
+                    Self::Leaf(_) => {
                         *self = Self::Struct(BTreeMap::new());
                         match self {
                             Self::Struct(children) => children,
-                            _ => unreachable!(),
+                            Self::Leaf(_) => unreachable!(),
                         }
                     }
                 };

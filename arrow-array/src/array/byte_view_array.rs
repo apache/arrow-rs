@@ -357,7 +357,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
         debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
         unsafe {
-            std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
+            std::slice::from_raw_parts(
+                std::ptr::from_ref::<u128>(view)
+                    .cast::<u8>()
+                    .wrapping_add(4),
+                len,
+            )
         }
     }
 
@@ -459,6 +464,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -1510,7 +1518,7 @@ mod tests {
             } else {
                 // random length between 0 and twice the inline limit
                 let len = rng.random_range(0..(MAX_INLINE_VIEW_LEN * 2));
-                let s: String = "A".repeat(len as usize);
+                let s = "A".repeat(len as usize);
                 builder.append_option(Some(&s));
                 original.push(Some(s));
             }

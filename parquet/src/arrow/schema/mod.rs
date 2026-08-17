@@ -269,8 +269,10 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
             match arrow_ipc::root_as_message(slice) {
                 Ok(message) => message
                     .header_as_schema()
-                    .map(arrow_ipc::convert::fb_to_schema)
-                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
+                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema"))
+                    .and_then(|schema| {
+                        arrow_ipc::convert::try_fb_to_schema(schema).map_err(Into::into)
+                    }),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
@@ -2270,10 +2272,7 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_roundtrip_lists() -> Result<()> {
-        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata = HashMap::from([("Key".to_string(), "Value".to_string())]);
 
         let schema = Schema::new_with_metadata(
             vec![

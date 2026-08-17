@@ -284,7 +284,7 @@ fn build_field_index(fields: &Fields) -> Option<HashMap<String, usize>> {
     for (idx, field) in fields.iter().enumerate() {
         let name = field.name();
         if !map.contains_key(name) {
-            map.insert(name.to_string(), idx);
+            map.insert(name.clone(), idx);
         }
     }
     Some(map)

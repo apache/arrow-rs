@@ -229,7 +229,7 @@ impl RowSelection {
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
             RowSelectionInner::Mask(m) => Some(m.mask()),
-            _ => None,
+            RowSelectionInner::Selectors(_) => None,
         }
     }
 
@@ -305,7 +305,7 @@ impl RowSelection {
 
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {

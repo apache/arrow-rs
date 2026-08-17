@@ -902,16 +902,16 @@ where
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
         IterationStrategy::Slices(slices) => {
-            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
-            filter.extend_slices(slices.iter().cloned())
+            filter.extend_offsets_slices(slices.iter().copied(), predicate.count);
+            filter.extend_slices(slices.iter().copied())
         }
         IterationStrategy::IndexIterator => {
             filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => {
-            filter.extend_offsets_idx(indices.iter().cloned());
-            filter.extend_idx(indices.iter().cloned())
+            filter.extend_offsets_idx(indices.iter().copied());
+            filter.extend_idx(indices.iter().copied())
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
@@ -1788,7 +1788,7 @@ mod tests {
             .take(mask_len)
             .collect();
 
-        let buffer = Buffer::from_iter(bools.iter().cloned());
+        let buffer = Buffer::from_iter(bools.iter().copied());
 
         let truncated_length = mask_len - offset - truncate;
 
@@ -1909,7 +1909,7 @@ mod tests {
                 .take(array_len + filter_offset - filter_truncate)
                 .collect();
 
-            let predicate = BooleanArray::from_iter(bools.iter().cloned().map(Some));
+            let predicate = BooleanArray::from_iter(bools.iter().copied().map(Some));
 
             // Offset predicate
             let predicate = predicate.slice(filter_offset, array_len - filter_truncate);
@@ -1918,7 +1918,7 @@ mod tests {
 
             // Test i32
             let values = gen_primitive(array_len + array_offset, valid_percent);
-            let src = Int32Array::from_iter(values.iter().cloned());
+            let src = Int32Array::from_iter(values.iter().copied());
 
             let src = src.slice(array_offset, array_len);
             let src = src.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -1928,7 +1928,7 @@ mod tests {
             let array = filtered.as_any().downcast_ref::<Int32Array>().unwrap();
             let actual: Vec<_> = array.iter().collect();
 
-            assert_eq!(actual, filter_rust(values.iter().cloned(), bools));
+            assert_eq!(actual, filter_rust(values.iter().copied(), bools));
 
             // Test string
             let strings = gen_strings(array_len + array_offset, valid_percent, 0..20);
