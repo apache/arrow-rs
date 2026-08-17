@@ -2179,7 +2179,7 @@ mod tests {
             .expect("offset index should be present");
         let page_offset = offset_index
             .page_locations()
-            .get(0)
+            .first()
             .expect("offset index too small");
 
         assert_eq!(4, page_offset.offset);
