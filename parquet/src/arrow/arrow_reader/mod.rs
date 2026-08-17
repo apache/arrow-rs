@@ -67,12 +67,8 @@ pub const DEFAULT_BATCH_SIZE: usize = 1024;
 /// A row group and its optional row-group-local [`RowSelection`].
 ///
 /// A `None` selection reads the entire row group. Omitting a row group skips
-/// it. Entries supplied to
-/// [`ParquetPushDecoderBuilder::with_row_group_selections`] are decoded in the
-/// supplied order.
-///
-/// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
-#[derive(Debug, Clone)]
+/// it. Entries are decoded in the supplied order.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowGroupSelection {
     pub(crate) row_group_index: usize,
     pub(crate) selection: Option<RowSelection>,
@@ -102,9 +98,9 @@ impl RowGroupSelection {
 /// Row-selection configuration shared by the Arrow reader builders.
 ///
 /// `Global` is the legacy configuration formed by `with_row_groups` and
-/// `with_row_selection`. `PerRowGroup` is available only through the push
-/// decoder builder. The two configurations are intentionally mutually
-/// exclusive.
+/// `with_row_selection`. `PerRowGroup` is available through the push decoder
+/// and async stream builders. The two configurations are intentionally
+/// mutually exclusive.
 #[derive(Debug)]
 pub(crate) enum RowGroupPlan {
     Global {
@@ -163,7 +159,8 @@ impl RowGroupPlan {
                 selection,
             } => Ok((row_groups, selection)),
             Self::PerRowGroup(_) => Err(ParquetError::General(
-                "Row-group-local selections are only supported by the push decoder".to_string(),
+                "Row-group-local selections are not supported by the synchronous reader"
+                    .to_string(),
             )),
             Self::Conflicting => Err(Self::conflict_error()),
         }
@@ -255,6 +252,20 @@ pub struct ArrowReaderBuilder<T> {
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // `row_groups` and `selection` straddle `projection`/`filter` so that the
+        // legacy configuration keeps its historical field order; only the
+        // row-group-local fields are new.
+        let (row_groups, selection, row_group_selections) = match &self.row_group_plan {
+            RowGroupPlan::Global {
+                row_groups,
+                selection,
+            } => (Some(row_groups), Some(selection), None),
+            RowGroupPlan::PerRowGroup(row_group_selections) => {
+                (None, None, Some(row_group_selections))
+            }
+            RowGroupPlan::Conflicting => (None, None, None),
+        };
+
         let mut builder = f.debug_struct("ArrowReaderBuilder<T>");
         builder
             .field("input", &self.input)
@@ -262,25 +273,22 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("schema", &self.schema)
             .field("fields", &self.fields)
             .field("batch_size", &self.batch_size);
-        match &self.row_group_plan {
-            RowGroupPlan::Global {
-                row_groups,
-                selection,
-            } => {
-                builder
-                    .field("row_groups", row_groups)
-                    .field("selection", selection);
-            }
-            RowGroupPlan::PerRowGroup(row_group_selections) => {
-                builder.field("row_group_selections", row_group_selections);
-            }
-            RowGroupPlan::Conflicting => {
-                builder.field("row_group_selection_configuration", &"conflicting");
-            }
+        if let Some(row_groups) = row_groups {
+            builder.field("row_groups", row_groups);
+        }
+        if let Some(row_group_selections) = row_group_selections {
+            builder.field("row_group_selections", row_group_selections);
+        }
+        if matches!(self.row_group_plan, RowGroupPlan::Conflicting) {
+            builder.field("row_group_plan", &format_args!("conflicting"));
         }
         builder
             .field("projection", &self.projection)
-            .field("filter", &self.filter)
+            .field("filter", &self.filter);
+        if let Some(selection) = selection {
+            builder.field("selection", selection);
+        }
+        builder
             .field("row_selection_policy", &self.row_selection_policy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
@@ -342,10 +350,11 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// This is also called row group filtering
     ///
-    /// On a
-    /// [`ParquetPushDecoderBuilder`](crate::arrow::push_decoder::ParquetPushDecoderBuilder),
-    /// this cannot be combined with `with_row_group_selections`; attempting to
-    /// do so returns an error from `build`.
+    /// On [`ParquetPushDecoderBuilder`] and async stream builders, which
+    /// additionally offer `with_row_group_selections`, this cannot be combined
+    /// with that method; attempting to do so returns an error from `build`.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
     pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
         self.row_group_plan.set_row_groups(row_groups);
         self
@@ -384,10 +393,11 @@ impl<T> ArrowReaderBuilder<T> {
     /// applying the row selection, and therefore rows from skipped row groups
     /// should not be included in the [`RowSelection`] (see example below)
     ///
-    /// On a
-    /// [`ParquetPushDecoderBuilder`](crate::arrow::push_decoder::ParquetPushDecoderBuilder),
-    /// this cannot be combined with `with_row_group_selections`; attempting to
-    /// do so returns an error from `build`.
+    /// On [`ParquetPushDecoderBuilder`] and async stream builders, which
+    /// additionally offer `with_row_group_selections`, this cannot be combined
+    /// with that method; attempting to do so returns an error from `build`.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See

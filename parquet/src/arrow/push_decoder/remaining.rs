@@ -226,6 +226,9 @@ impl RowGroupFrontier {
             let Some(row_group_idx) = self.queued.front() else {
                 return Ok(None);
             };
+            // A global selection can be exhausted before its row-group queue.
+            // Per-row-group selections have no shared cursor to exhaust; empty
+            // local selections are discarded by the `selected_rows == 0` path below.
             if self.budget.is_exhausted()
                 || matches!(
                     &self.queued,

@@ -53,6 +53,10 @@ pub use metadata::*;
 mod spawn;
 pub use spawn::SpawnedReader;
 
+/// Re-exported so [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]
+/// can be used without importing from another module.
+pub use crate::arrow::arrow_reader::RowGroupSelection;
+
 #[cfg(feature = "object_store")]
 mod store;
 
@@ -644,6 +648,29 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
+    /// Select row groups and rows using row-group-local coordinates.
+    ///
+    /// Entries are decoded in the supplied order, omitted row groups are
+    /// skipped, and a `None` selection reads the whole row group. This is
+    /// mutually exclusive with [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`]; combining them returns an
+    /// error from [`Self::build`].
+    ///
+    /// See [`ParquetPushDecoderBuilder::with_row_group_selections`] for the
+    /// full semantics (duplicate and short selections, offset/limit
+    /// interaction) and a worked example; this builder forwards its
+    /// configuration to the push decoder unchanged.
+    ///
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
+    pub fn with_row_group_selections(
+        mut self,
+        row_group_selections: Vec<RowGroupSelection>,
+    ) -> Self {
+        self.row_group_plan
+            .set_row_group_selections(row_group_selections);
+        self
+    }
+
     /// Build a new [`ParquetRecordBatchStream`]
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
@@ -1048,6 +1075,49 @@ mod tests {
                 offset_1 as usize..(offset_1 + length_1) as usize,
                 offset_2 as usize..(offset_2 + length_2) as usize
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_async_reader_row_group_local_selections() {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..6)) as ArrayRef,
+        )])
+        .unwrap();
+        let mut data = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let stream = ParquetRecordBatchStreamBuilder::new(TestReader::new(data.into()))
+            .await
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, Some(RowSelection::from(vec![RowSelector::select(1)]))),
+                RowGroupSelection::new(
+                    0,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(1),
+                        RowSelector::select(2),
+                    ])),
+                ),
+            ])
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches[0].column(0).as_primitive::<Int32Type>().values(),
+            &[3]
+        );
+        assert_eq!(
+            batches[1].column(0).as_primitive::<Int32Type>().values(),
+            &[1, 2]
         );
     }
 

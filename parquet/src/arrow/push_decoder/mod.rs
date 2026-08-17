@@ -257,7 +257,17 @@ impl ParquetPushDecoderBuilder {
     /// A `None` selection reads the entire row group. A selection shorter
     /// than its row group skips the trailing rows, while a selection longer
     /// than its row group returns an error from [`Self::build`]. Each
-    /// selection retains its existing bitmap or selector representation.
+    /// selection is passed through without being re-partitioned, so no
+    /// conversion between the bitmap and selector representations is forced
+    /// (how the selection is then materialized while reading is still governed
+    /// by [`ArrowReaderBuilder::with_row_selection_policy`]).
+    ///
+    /// [`ArrowReaderBuilder::with_offset`] and
+    /// [`ArrowReaderBuilder::with_limit`] apply after the row-group-local
+    /// selections and any [`ArrowReaderBuilder::with_row_filter`], across the
+    /// plan as a whole and in the supplied order: the offset skips the first N
+    /// remaining rows and the limit caps the total rows emitted, regardless of
+    /// which row group they come from.
     ///
     /// This configuration is mutually exclusive with
     /// [`ArrowReaderBuilder::with_row_groups`] and
@@ -1853,6 +1863,151 @@ mod test {
         assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(225, 20));
         assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(190, 10));
         expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_row_group_local_selections_respect_offset_and_limit() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, None),
+                RowGroupSelection::new(0, None),
+            ])
+            .with_offset(195)
+            .with_limit(10)
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(395, 5));
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(0, 5));
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_row_group_local_selections_allow_duplicate_row_groups() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(0, None),
+            ])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let expected = TEST_BATCH.slice(0, 200);
+        assert_eq!(expect_data(decoder.try_decode()), expected);
+        assert_eq!(expect_data(decoder.try_decode()), expected);
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_short_row_group_local_selection_skips_trailing_rows() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![RowGroupSelection::new(
+                1,
+                Some(RowSelection::from(vec![
+                    RowSelector::skip(5),
+                    RowSelector::select(3),
+                ])),
+            )])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(205, 3));
+        expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_empty_row_group_local_selections_read_nothing() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![])
+            .build()
+            .unwrap();
+
+        expect_finished(decoder.try_decode());
+    }
+
+    /// A `RowFilter` narrows each row group's local selection rather than
+    /// replacing it: the predicate is evaluated against the locally selected
+    /// rows, including when the selection is shorter than its row group and
+    /// the row groups are supplied out of order.
+    ///
+    /// RG1 contributes local rows 10..20 ("a" 210..220), all of which pass
+    /// `a > 195`; RG0 contributes local rows 190..200 ("a" 190..200), of which
+    /// only 196..200 pass.
+    fn row_group_local_selections_with_filter() -> ParquetPushDecoderBuilder {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        // Values in column "a" range 0..399
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            |batch: RecordBatch| {
+                let scalar_195 = Int64Array::new_scalar(195);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_195)
+            },
+        );
+
+        builder
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(
+                    1,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(10),
+                        RowSelector::select(10),
+                    ])),
+                ),
+                RowGroupSelection::new(
+                    0,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(190),
+                        RowSelector::select(10),
+                    ])),
+                ),
+            ])
+    }
+
+    #[test]
+    fn test_row_group_local_selections_with_row_filter() {
+        let mut decoder = row_group_local_selections_with_filter().build().unwrap();
+        prefetch_test_file(&mut decoder);
+
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(210, 10));
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(196, 4));
+        expect_finished(decoder.try_decode());
+    }
+
+    /// `into_builder` mid-scan must carry both the row filter and the
+    /// still-local selection of the not-yet-decoded row group, so the rebuilt
+    /// decoder produces exactly what an uninterrupted scan would have.
+    #[test]
+    fn test_into_builder_preserves_local_selections_with_row_filter() {
+        let mut decoder = row_group_local_selections_with_filter().build().unwrap();
+        prefetch_test_file(&mut decoder);
+
+        let reader1 = expect_data(decoder.try_next_reader());
+        let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
+        let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
+        assert_eq!(batch1, TEST_BATCH.slice(210, 10));
+
+        // Only RG0 and its local `skip(190) + select(10)` remain.
+        assert!(decoder.is_at_row_group_boundary());
+        assert_eq!(decoder.row_groups_remaining(), 1);
+        let mut decoder = decoder.into_builder().unwrap().build().unwrap();
+
+        let reader0 = expect_data(decoder.try_next_reader());
+        let batches0: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
+        let batch0 = concat_batches(&TEST_BATCH.schema(), &batches0).unwrap();
+        assert_eq!(batch0, TEST_BATCH.slice(196, 4));
+        expect_finished(decoder.try_next_reader());
     }
 
     #[test]
