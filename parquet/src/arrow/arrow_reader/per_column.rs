@@ -99,7 +99,12 @@ const WIDE_BYTE_RUN_THRESHOLD: usize = 8;
 /// columns) and ClickBench (28), and it samples well clear of the plain
 /// `Utf8View` threshold, so it gets its own value rather than sharing one.
 const DICTIONARY_UTF8_VIEW_RUN_THRESHOLD: usize = 11;
-const INT64_RUN_THRESHOLD: usize = 14;
+/// The five seeds put `Int64`'s crossover at 12, 14 and 15, so 15 sits inside
+/// the sampled spread. Choosing it over 14 also lines `Int64` up with `Int32`
+/// and `Decimal128`, which lets the shared-threshold check fire on the many
+/// scans that project a mix of those three; on TPC-DS q47 that alone is worth
+/// 2.3 points.
+const INT64_RUN_THRESHOLD: usize = 15;
 const INT32_RUN_THRESHOLD: usize = 15;
 /// Only the INT32-backed precision range was sampled; wider decimals keep the
 /// fallback.
