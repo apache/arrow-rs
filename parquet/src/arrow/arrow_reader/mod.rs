@@ -4852,12 +4852,12 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(data);
 
-        // Average run length 8 is below the sampled Int32 and narrow Utf8View
+        // Average run length 12 is below the sampled Int32 and narrow Utf8View
         // thresholds, but above the FixedSizeBinary(32) and wide Utf8View
         // thresholds.
         let selection = RowSelection::from(
-            (0..16)
-                .flat_map(|_| [RowSelector::skip(8), RowSelector::select(8)])
+            (0..10)
+                .flat_map(|_| [RowSelector::skip(12), RowSelector::select(12)])
                 .collect::<Vec<_>>(),
         );
         let expected = ParquetRecordBatchReaderBuilder::try_new(data.clone())

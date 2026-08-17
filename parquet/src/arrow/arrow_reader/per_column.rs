@@ -85,11 +85,18 @@ pub(crate) trait ColumnSelectionPlanner {
 /// `RowSelection::auto_selection_strategy` selects Mask when the average run
 /// is below the threshold. The values below deliberately stop at the last
 /// repeatable Mask win outside the sampler's 3% practical-equivalence band.
+///
+/// `WIDE_BYTE_RUN_THRESHOLD` is 9 rather than 5 because a wide byte column at
+/// an average run of 8 still decodes faster under Mask. At 5 the heterogeneous
+/// `boundary_50_run8` policy-validation case split its projection and lost
+/// roughly 17% against the global `Auto` policy; at 9 it reaches a practical
+/// tie. Both fixed-binary widths sampled to the same threshold, so the
+/// `NARROW_FIXED_BINARY_BYTES` split currently maps to one value.
 const INT32_RUN_THRESHOLD: usize = 13;
 const DICTIONARY_UTF8_RUN_THRESHOLD: usize = 17;
 const NARROW_BYTE_RUN_THRESHOLD: usize = 13;
 const MEDIUM_BYTE_RUN_THRESHOLD: usize = 9;
-const WIDE_BYTE_RUN_THRESHOLD: usize = 5;
+const WIDE_BYTE_RUN_THRESHOLD: usize = 9;
 const NARROW_UTF8_VIEW_BYTES: usize = 32;
 const NARROW_FIXED_BINARY_BYTES: i32 = 8;
 
@@ -841,7 +848,12 @@ mod tests {
             let mut remaining = selection.clone();
             for (&rows, statistics) in row_group_rows.iter().zip(statistics) {
                 let row_group_selection = remaining.split_off(rows);
-                for threshold in [5, 13, 17, DEFAULT_ROW_SELECTION_THRESHOLD] {
+                for threshold in [
+                    WIDE_BYTE_RUN_THRESHOLD,
+                    INT32_RUN_THRESHOLD,
+                    DICTIONARY_UTF8_RUN_THRESHOLD,
+                    DEFAULT_ROW_SELECTION_THRESHOLD,
+                ] {
                     assert_eq!(
                         statistics.auto_selection_strategy(threshold),
                         row_group_selection.auto_selection_strategy(threshold)
