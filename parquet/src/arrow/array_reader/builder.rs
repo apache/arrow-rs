@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use arrow_schema::{DataType, Fields, SchemaBuilder};
+use arrow_schema::{DataType, FieldRef, Fields, SchemaBuilder};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
@@ -195,6 +195,52 @@ impl<'a> ArrayReaderBuilder<'a> {
             .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
 
         Ok(reader)
+    }
+
+    /// Build one reader for each projected top-level Arrow field.
+    ///
+    /// Nested fields remain a single reader subtree so definition and
+    /// repetition levels are never split across row-selection strategies.
+    pub(crate) fn build_top_level_array_readers(
+        &self,
+        field: Option<&ParquetField>,
+        mask: &ProjectionMask,
+    ) -> Result<Vec<(FieldRef, Box<dyn ArrayReader>)>> {
+        let Some(field) = field else {
+            return Ok(Vec::new());
+        };
+        let DataType::Struct(arrow_fields) = &field.arrow_type else {
+            return Err(general_err!(
+                "Internal Error: top-level Parquet field must be a struct"
+            ));
+        };
+        let children = field.children().ok_or_else(|| {
+            general_err!("Internal Error: top-level Parquet field has no children")
+        })?;
+        if arrow_fields.len() != children.len() {
+            return Err(general_err!(
+                "Internal Error: Arrow/Parquet top-level field count mismatch"
+            ));
+        }
+
+        let mut readers = Vec::with_capacity(children.len());
+        for (arrow_field, parquet_field) in arrow_fields.iter().zip(children) {
+            let Some(reader) = self.build_reader(ReaderArgs {
+                field: parquet_field,
+                mask,
+                padding_threshold: None,
+            })? else {
+                continue;
+            };
+            let field = Arc::new(
+                arrow_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(reader.get_data_type().clone()),
+            );
+            readers.push((field, reader));
+        }
+        Ok(readers)
     }
 
     /// Return the total number of rows

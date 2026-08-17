@@ -57,6 +57,7 @@ pub use read_plan::{PredicateOptions, ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
+pub(crate) mod per_column;
 mod read_plan;
 pub(crate) mod selection;
 pub mod statistics;
@@ -1237,26 +1238,77 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
 
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                let array_reader_builder = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_batch_size(batch_size)
-                    .with_parquet_metadata(&reader.metadata)
-                    .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    .with_parquet_metadata(&reader.metadata);
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                if matches!(row_selection_policy, RowSelectionPolicy::AutoPerColumn) {
+                    let predicate_reader = match per_column::PerColumnReader::try_new(
+                        &reader,
+                        &array_reader_builder,
+                        fields.as_deref(),
+                        predicate.projection(),
+                        &plan_builder,
+                        batch_size,
+                        &metrics,
+                    )? {
+                        per_column::PerColumnDecision::Engaged(reader) => {
+                            ParquetRecordBatchReader::new_per_column(reader, batch_size)
+                        }
+                        per_column::PerColumnDecision::Fallback(strategy) => {
+                            let array_reader = array_reader_builder
+                                .build_array_reader(fields.as_deref(), predicate.projection())?;
+                            ParquetRecordBatchReader::new(
+                                array_reader,
+                                plan_builder
+                                    .clone()
+                                    .with_row_selection_policy(strategy.into_policy())
+                                    .build(),
+                            )
+                        }
+                    };
+                    plan_builder =
+                        plan_builder.with_predicate_reader(predicate_reader, predicate.as_mut())?;
+                } else {
+                    let array_reader = array_reader_builder
+                        .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                }
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-            .with_batch_size(batch_size)
-            .with_parquet_metadata(&reader.metadata)
-            .build_array_reader(fields.as_deref(), &projection)?;
-
-        let read_plan = plan_builder
+        let mut plan_builder = plan_builder
             .limited(reader.num_rows())
             .with_offset(offset)
             .with_limit(limit)
-            .build_limited()
-            .build();
+            .build_limited();
+
+        let array_reader_builder = ArrayReaderBuilder::new(&reader, &metrics)
+            .with_batch_size(batch_size)
+            .with_parquet_metadata(&reader.metadata);
+
+        if matches!(row_selection_policy, RowSelectionPolicy::AutoPerColumn) {
+            match per_column::PerColumnReader::try_new(
+                &reader,
+                &array_reader_builder,
+                fields.as_deref(),
+                &projection,
+                &plan_builder,
+                batch_size,
+                &metrics,
+            )? {
+                per_column::PerColumnDecision::Engaged(reader) => {
+                    return Ok(ParquetRecordBatchReader::new_per_column(reader, batch_size));
+                }
+                per_column::PerColumnDecision::Fallback(strategy) => {
+                    plan_builder = plan_builder.with_row_selection_policy(strategy.into_policy());
+                }
+            }
+        }
+
+        let array_reader =
+            array_reader_builder.build_array_reader(fields.as_deref(), &projection)?;
+        let read_plan = plan_builder.build();
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
@@ -1649,6 +1701,10 @@ impl ParquetRecordBatchReader {
         }
     }
 
+    pub(crate) fn new_per_column(reader: per_column::PerColumnReader, batch_size: usize) -> Self {
+        Self::new(Box::new(reader), ReadPlanBuilder::new(batch_size).build())
+    }
+
     #[inline(always)]
     pub(crate) fn batch_size(&self) -> usize {
         self.read_plan.batch_size()
@@ -1669,9 +1725,10 @@ pub(crate) mod tests {
     use rand::{Rng, RngExt, SeedableRng, random, rng};
     use tempfile::tempfile;
 
+    use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
     };
     use crate::arrow::schema::{
         add_encoded_arrow_schema_to_metadata,
@@ -4671,6 +4728,352 @@ pub(crate) mod tests {
             .unwrap();
         assert_ne!(1024, num_rows);
         assert_eq!(reader.read_plan.batch_size(), num_rows as usize);
+    }
+
+    #[test]
+    fn test_auto_per_column_cross_row_group_metadata_planning() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "left",
+                Arc::new(Int32Array::from_iter_values(0..256)) as ArrayRef,
+            ),
+            (
+                "right",
+                Arc::new(Int32Array::from_iter_values(1000..1256)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(128))
+            .build();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+
+        // Row group 0 has two long runs (Selectors); row group 1 alternates
+        // every row (Mask). With batch size 31 the first
+        // output batch crosses the row-group/strategy boundary.
+        let mut selectors = vec![RowSelector::select(1), RowSelector::skip(127)];
+        for _ in 0..64 {
+            selectors.push(RowSelector::select(1));
+            selectors.push(RowSelector::skip(1));
+        }
+        let selection = RowSelection::from(selectors);
+
+        let expected = ParquetRecordBatchReaderBuilder::try_new(data.clone())
+            .unwrap()
+            .with_batch_size(31)
+            .with_row_selection(selection.clone())
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let actual = ParquetRecordBatchReaderBuilder::try_new(data.clone())
+            .unwrap()
+            .with_batch_size(31)
+            .with_metrics(metrics.clone())
+            .with_row_selection(selection.clone())
+            .with_row_selection_policy(RowSelectionPolicy::AutoPerColumn)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(metrics.row_selection_selector_decisions(), Some(2));
+        assert_eq!(metrics.row_selection_mask_decisions(), Some(2));
+        assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
+
+        let read_filtered = |policy| {
+            let builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+            let predicate_projection = ProjectionMask::leaves(builder.parquet_schema(), [0]);
+            let predicate = ArrowPredicateFn::new(predicate_projection, |batch: RecordBatch| {
+                let values = batch.column(0).as_primitive::<types::Int32Type>();
+                Ok(BooleanArray::from(
+                    values
+                        .values()
+                        .iter()
+                        .map(|value| value % 3 == 0)
+                        .collect::<Vec<_>>(),
+                ))
+            });
+            builder
+                .with_batch_size(31)
+                .with_row_selection(selection.clone())
+                .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+                .with_row_selection_policy(policy)
+                .build()
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            read_filtered(RowSelectionPolicy::AutoPerColumn),
+            read_filtered(RowSelectionPolicy::Selectors)
+        );
+    }
+
+    #[test]
+    fn test_auto_per_column_metadata_model_can_mix_columns() {
+        let rows = 256;
+        let mut wide = FixedSizeBinaryBuilder::with_capacity(rows, 32);
+        for row in 0..rows {
+            wide.append_value([row as u8; 32]).unwrap();
+        }
+        let mut narrow_view = StringViewBuilder::with_capacity(rows);
+        let mut wide_view = StringViewBuilder::with_capacity(rows);
+        let narrow_value = "n".repeat(16);
+        let wide_value = "w".repeat(64);
+        for _ in 0..rows {
+            narrow_view.append_value(&narrow_value);
+            wide_view.append_value(&wide_value);
+        }
+        let batch = RecordBatch::try_from_iter([
+            (
+                "cheap",
+                Arc::new(Int32Array::from_iter_values(0..rows as i32)) as ArrayRef,
+            ),
+            ("wide", Arc::new(wide.finish()) as ArrayRef),
+            ("narrow_view", Arc::new(narrow_view.finish()) as ArrayRef),
+            ("wide_view", Arc::new(wide_view.finish()) as ArrayRef),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .build();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+
+        // Average run length 8 is below the sampled Int32 and narrow Utf8View
+        // thresholds, but above the FixedSizeBinary(32) and wide Utf8View
+        // thresholds.
+        let selection = RowSelection::from(
+            (0..16)
+                .flat_map(|_| [RowSelector::skip(8), RowSelector::select(8)])
+                .collect::<Vec<_>>(),
+        );
+        let expected = ParquetRecordBatchReaderBuilder::try_new(data.clone())
+            .unwrap()
+            .with_batch_size(64)
+            .with_row_selection(selection.clone())
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let actual = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_batch_size(64)
+            .with_metrics(metrics.clone())
+            .with_row_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::AutoPerColumn)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(metrics.row_selection_mask_decisions(), Some(2));
+        assert_eq!(metrics.row_selection_selector_decisions(), Some(2));
+        assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
+    }
+
+    #[test]
+    fn test_auto_per_column_dictionary_encoded_view_uses_fallback() {
+        let rows = 256;
+        let mut values = StringViewBuilder::with_capacity(rows);
+        let value = "dictionary-value".repeat(4);
+        for _ in 0..rows {
+            values.append_value(&value);
+        }
+        let batch =
+            RecordBatch::try_from_iter([("view", Arc::new(values.finish()) as ArrayRef)]).unwrap();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+        let selection = RowSelection::from(
+            (0..16)
+                .flat_map(|_| [RowSelector::skip(8), RowSelector::select(8)])
+                .collect::<Vec<_>>(),
+        );
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let actual = ParquetRecordBatchReaderBuilder::try_new(data.clone())
+            .unwrap()
+            .with_metrics(metrics.clone())
+            .with_row_selection(selection.clone())
+            .with_row_selection_policy(RowSelectionPolicy::AutoPerColumn)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let expected = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_row_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(metrics.row_selection_mask_decisions(), Some(1));
+        assert_eq!(metrics.row_selection_fallback_decisions(), Some(1));
+    }
+
+    #[test]
+    fn test_auto_per_column_keeps_nested_field_as_one_subtree() {
+        let mut list_builder = ListBuilder::new(Int32Builder::new());
+        for value in 0..256 {
+            if value % 7 == 0 {
+                list_builder.append_null();
+            } else {
+                list_builder.append_value([Some(value), Some(value + 1)]);
+            }
+        }
+        let batch = RecordBatch::try_from_iter([
+            ("nested", Arc::new(list_builder.finish()) as ArrayRef),
+            (
+                "value",
+                Arc::new(Int32Array::from_iter_values(0..256)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(128))
+            .build();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+
+        let mut selectors = vec![RowSelector::select(1), RowSelector::skip(127)];
+        for _ in 0..64 {
+            selectors.push(RowSelector::select(1));
+            selectors.push(RowSelector::skip(1));
+        }
+        let selection = RowSelection::from(selectors);
+        let read = |policy| {
+            ParquetRecordBatchReaderBuilder::try_new(data.clone())
+                .unwrap()
+                .with_batch_size(31)
+                .with_row_selection(selection.clone())
+                .with_row_selection_policy(policy)
+                .build()
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+
+        assert_eq!(
+            read(RowSelectionPolicy::AutoPerColumn),
+            read(RowSelectionPolicy::Selectors)
+        );
+    }
+
+    #[test]
+    fn test_auto_per_column_random_differential() {
+        let strings =
+            StringArray::from_iter_values((0..320).map(|value| format!("value-{value:03}")));
+        let batch = RecordBatch::try_from_iter([
+            (
+                "left",
+                Arc::new(Int32Array::from_iter_values(0..320)) as ArrayRef,
+            ),
+            ("text", Arc::new(strings) as ArrayRef),
+            (
+                "right",
+                Arc::new(Int64Array::from_iter_values(10_000..10_320)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(64))
+            .build();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+        let schema_builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+        let mut rng = StdRng::seed_from_u64(0xA170_C011);
+
+        for case in 0..32 {
+            let mut bits = Vec::with_capacity(320);
+            let mut selected = rng.random_range(0..2) == 0;
+            while bits.len() < 320 {
+                let run = rng.random_range(1..80).min(320 - bits.len());
+                bits.extend(std::iter::repeat_n(selected, run));
+                selected = !selected;
+            }
+            // Keep both the empty-tail and non-empty-tail cases in the corpus,
+            // but ensure every selection has at least one output row.
+            let forced_selected = case % bits.len();
+            bits[forced_selected] = true;
+
+            let selection = if case % 2 == 0 {
+                RowSelection::from(BooleanBuffer::from(bits.clone()))
+            } else {
+                let mut selectors = Vec::new();
+                let mut start = 0;
+                while start < bits.len() {
+                    let value = bits[start];
+                    let mut end = start + 1;
+                    while end < bits.len() && bits[end] == value {
+                        end += 1;
+                    }
+                    selectors.push(RowSelector {
+                        row_count: end - start,
+                        skip: !value,
+                    });
+                    start = end;
+                }
+                RowSelection::from(selectors)
+            };
+            let selected_rows = bits.iter().filter(|&&value| value).count();
+            let offset = rng.random_range(0..selected_rows + 6);
+            let limit = rng.random_range(0..selected_rows + 6);
+            let batch_size = rng.random_range(1..48);
+            let projected = match case % 3 {
+                0 => vec![0, 1, 2],
+                1 => vec![0, 2],
+                _ => vec![1],
+            };
+            let projection = ProjectionMask::leaves(schema_builder.parquet_schema(), projected);
+
+            let read = |policy| {
+                ParquetRecordBatchReaderBuilder::try_new(data.clone())
+                    .unwrap()
+                    .with_projection(projection.clone())
+                    .with_batch_size(batch_size)
+                    .with_row_selection(selection.clone())
+                    .with_row_selection_policy(policy)
+                    .with_offset(offset)
+                    .with_limit(limit)
+                    .build()
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap()
+            };
+            assert_eq!(
+                read(RowSelectionPolicy::AutoPerColumn),
+                read(RowSelectionPolicy::Selectors),
+                "case {case}, batch_size {batch_size}, offset {offset}, limit {limit}"
+            );
+        }
     }
 
     #[test]

@@ -42,12 +42,14 @@ mod boolean;
 mod cursor;
 mod ranges;
 mod selector;
+mod window;
 
 use algebra::{
     and_then_mask, and_then_row_selections, and_then_selectors_with_mask, intersect_masks,
     intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
+pub(crate) use boolean::mask_run_count;
 use boolean::{
     MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
 };
@@ -56,6 +58,9 @@ pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
 use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
+pub(crate) use window::{BatchWindow, RowSelectionExecutionPlan};
+
+pub(crate) const DEFAULT_ROW_SELECTION_THRESHOLD: usize = 32;
 
 /// [`RowSelection`] represents selecting a subset of rows
 /// when scanning a parquet file.

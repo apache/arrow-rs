@@ -21,6 +21,9 @@ mod filter;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::per_column::{
+    PerColumnDecision, PerColumnReader, loaded_row_ranges_for_top_level_fields,
+};
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
@@ -542,7 +545,7 @@ impl RowGroupReaderBuilder {
                 }
 
                 // Make a request for the data needed to evaluate the current predicate
-                let predicate = filter_info.current();
+                let predicate_projection = filter_info.current().projection().clone();
 
                 // need to fetch pages the column needs for decoding, figure
                 // that out based on the current selection and projection
@@ -551,7 +554,7 @@ impl RowGroupReaderBuilder {
                     row_count,
                     self.batch_size,
                     &self.metadata,
-                    predicate.projection(), // use the predicate's projection
+                    &predicate_projection, // use the predicate's projection
                 )
                 .with_selection(plan_builder.selection())
                 // Fetch predicate columns; expand selection only for cached predicate columns
@@ -599,35 +602,26 @@ impl RowGroupReaderBuilder {
                     budget,
                 } = row_group_info;
 
-                let predicate = filter_info.current();
+                let predicate_projection = filter_info.current().projection().clone();
 
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
                     &self.metadata,
-                    predicate.projection(),
+                    &predicate_projection,
                     &mut self.buffers,
                 )?;
 
                 let cache_options = filter_info.cache_builder().producer();
 
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .with_parquet_metadata(&self.metadata);
 
                 // Auto resolution and loaded ranges are projection-specific, so restore the
                 // configured policy before preparing each predicate.
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-
-                // Prepare selection execution for pages pruned during fetch.
-                plan_builder = prepare_selection_for_page_skipping(
-                    plan_builder,
-                    predicate.projection(),
-                    self.row_group_offset_index(row_group_idx),
-                    row_count,
-                );
 
                 // When this is the final predicate in the chain and an output
                 // limit is set, tell the filter evaluation to stop once enough
@@ -637,15 +631,69 @@ impl RowGroupReaderBuilder {
                     .then(|| budget.selected_row_limit())
                     .flatten();
 
-                // Evaluate the filter via `with_predicate_options`, opting into
-                // early termination when this is the final predicate and an
-                // output limit was set.
-                let mut predicate_options =
-                    PredicateOptions::new(array_reader, filter_info.current_mut());
-                if let Some(limit) = predicate_limit {
-                    predicate_options = predicate_options.with_limit(limit, row_count);
+                if matches!(self.row_selection_policy, RowSelectionPolicy::AutoPerColumn) {
+                    let loaded_row_ranges = loaded_row_ranges_for_top_level_fields(
+                        self.fields.as_deref(),
+                        &predicate_projection,
+                        plan_builder.selection(),
+                        row_group.offset_index,
+                        row_count,
+                    );
+                    let predicate_reader = match PerColumnReader::try_new_with_loaded_ranges(
+                        &row_group,
+                        &array_reader_builder,
+                        self.fields.as_deref(),
+                        &predicate_projection,
+                        &plan_builder,
+                        self.batch_size,
+                        &self.metrics,
+                        loaded_row_ranges,
+                    )? {
+                        PerColumnDecision::Engaged(reader) => {
+                            ParquetRecordBatchReader::new_per_column(reader, self.batch_size)
+                        }
+                        PerColumnDecision::Fallback(strategy) => {
+                            let predicate_plan = prepare_selection_for_page_skipping(
+                                plan_builder
+                                    .clone()
+                                    .with_row_selection_policy(strategy.into_policy()),
+                                &predicate_projection,
+                                row_group.offset_index,
+                                row_count,
+                            )
+                            .build();
+                            let array_reader = array_reader_builder.build_array_reader(
+                                self.fields.as_deref(),
+                                &predicate_projection,
+                            )?;
+                            ParquetRecordBatchReader::new(array_reader, predicate_plan)
+                        }
+                    };
+                    plan_builder = plan_builder.with_predicate_reader_options(
+                        predicate_reader,
+                        filter_info.current_mut(),
+                        predicate_limit,
+                        row_count,
+                    )?;
+                } else {
+                    // Prepare selection execution for pages pruned during fetch.
+                    plan_builder = prepare_selection_for_page_skipping(
+                        plan_builder,
+                        &predicate_projection,
+                        self.row_group_offset_index(row_group_idx),
+                        row_count,
+                    );
+                    let array_reader = array_reader_builder
+                        .build_array_reader(self.fields.as_deref(), &predicate_projection)?;
+                    // Evaluate the filter via `with_predicate_options`, opting
+                    // into early termination for the final predicate.
+                    let mut predicate_options =
+                        PredicateOptions::new(array_reader, filter_info.current_mut());
+                    if let Some(limit) = predicate_limit {
+                        predicate_options = predicate_options.with_limit(limit, row_count);
+                    }
+                    plan_builder = plan_builder.with_predicate_options(predicate_options)?;
                 }
-                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -729,12 +777,17 @@ impl RowGroupReaderBuilder {
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                plan_builder = prepare_selection_for_page_skipping(
-                    plan_builder,
-                    &self.projection,
-                    self.row_group_offset_index(row_group_idx),
-                    row_count,
-                );
+                // AutoPerColumn is lowered only after the top-level fields have
+                // been planned in WaitingOnData. Existing policies retain the
+                // projection-wide preparation path exactly.
+                if !matches!(self.row_selection_policy, RowSelectionPolicy::AutoPerColumn) {
+                    plan_builder = prepare_selection_for_page_skipping(
+                        plan_builder,
+                        &self.projection,
+                        self.row_group_offset_index(row_group_idx),
+                        row_count,
+                    );
+                }
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -784,23 +837,68 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                let plan = plan_builder.build();
-
                 // if we have any cached results, connect them up
-                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                let cache_options: Option<CacheOptions<'_>> = cache_info
+                    .as_ref()
+                    .map(|cache_info| cache_info.builder().consumer());
+                let mut array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
                     .with_parquet_metadata(&self.metadata);
-                let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options: CacheOptions = cache_info.builder().consumer();
-                    array_reader_builder
-                        .with_cache_options(Some(&cache_options))
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                } else {
-                    array_reader_builder
-                        .build_array_reader(self.fields.as_deref(), &self.projection)
-                }?;
+                if let Some(cache_options) = cache_options.as_ref() {
+                    array_reader_builder =
+                        array_reader_builder.with_cache_options(Some(cache_options));
+                }
 
-                let reader = ParquetRecordBatchReader::new(array_reader, plan);
+                let mut plan_builder = plan_builder;
+                if matches!(
+                    plan_builder.row_selection_policy(),
+                    RowSelectionPolicy::AutoPerColumn
+                ) {
+                    let loaded_row_ranges = loaded_row_ranges_for_top_level_fields(
+                        self.fields.as_deref(),
+                        &self.projection,
+                        plan_builder.selection(),
+                        row_group.offset_index,
+                        row_count,
+                    );
+                    match PerColumnReader::try_new_with_loaded_ranges(
+                        &row_group,
+                        &array_reader_builder,
+                        self.fields.as_deref(),
+                        &self.projection,
+                        &plan_builder,
+                        self.batch_size,
+                        &self.metrics,
+                        loaded_row_ranges,
+                    )? {
+                        PerColumnDecision::Engaged(reader) => {
+                            let reader =
+                                ParquetRecordBatchReader::new_per_column(reader, self.batch_size);
+                            return Ok(NextState::result(
+                                RowGroupDecoderState::Finished,
+                                RowGroupBuildResult::Data {
+                                    batch_reader: reader,
+                                    remaining_budget: budget,
+                                },
+                            ));
+                        }
+                        PerColumnDecision::Fallback(strategy) => {
+                            plan_builder =
+                                plan_builder.with_row_selection_policy(strategy.into_policy());
+                            plan_builder = prepare_selection_for_page_skipping(
+                                plan_builder,
+                                &self.projection,
+                                row_group.offset_index,
+                                row_count,
+                            );
+                        }
+                    }
+                }
+
+                let array_reader = array_reader_builder
+                    .build_array_reader(self.fields.as_deref(), &self.projection)?;
+
+                let reader = ParquetRecordBatchReader::new(array_reader, plan_builder.build());
                 NextState::result(
                     RowGroupDecoderState::Finished,
                     RowGroupBuildResult::Data {

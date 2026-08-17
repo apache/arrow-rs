@@ -243,6 +243,42 @@ pub(super) fn mask_has_at_least_runs(mask: &BooleanBuffer, min_runs: usize) -> b
     run_count + usize::from(last_end < total_rows) >= min_runs
 }
 
+/// Counts alternating set and unset runs using word-sized transition masks.
+///
+/// Unlike [`MaskRunIter`], this does not enumerate every set slice, which is
+/// important when a highly fragmented mask is used for cost-model statistics.
+pub(crate) fn mask_run_count(mask: &BooleanBuffer) -> usize {
+    if mask.is_empty() {
+        return 0;
+    }
+
+    let chunks = mask.bit_chunks();
+    let mut previous_bit = None;
+    let mut transitions = 0usize;
+    let mut count_word = |word: u64, bits: usize| {
+        if bits == 0 {
+            return;
+        }
+        // Bits are packed least-significant first. Supplying the first bit as
+        // its own predecessor excludes the start of the mask from the
+        // transition count; subsequent words use the preceding word's tail.
+        let preceding = previous_bit.unwrap_or(word & 1);
+        let valid = if bits == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << bits) - 1
+        };
+        transitions += ((word ^ ((word << 1) | preceding)) & valid).count_ones() as usize;
+        previous_bit = Some((word >> (bits - 1)) & 1);
+    };
+
+    for word in chunks.iter() {
+        count_word(word, 64);
+    }
+    count_word(chunks.remainder_bits(), chunks.remainder_len());
+    transitions + 1
+}
+
 /// Split a mask into `(head, tail)` at `row_count`, preserving an empty mask tail
 /// when the split point is past the end.
 pub(super) fn split_off_mask(
@@ -753,6 +789,7 @@ mod tests {
     fn test_mask_has_at_least_runs() {
         fn assert_run_count(bits: Vec<bool>, expected_runs: usize) {
             let mask = BooleanBuffer::from(bits);
+            assert_eq!(mask_run_count(&mask), expected_runs);
             for min_runs in 0..=expected_runs + 2 {
                 assert_eq!(
                     mask_has_at_least_runs(&mask, min_runs),
@@ -771,8 +808,31 @@ mod tests {
         // Exercise the unaligned iterator path as mask-backed selections can be slices.
         let mask = BooleanBuffer::from(vec![true, false, false, true, true, false, true, true])
             .slice(1, 6);
+        assert_eq!(mask_run_count(&mask), 4);
         for min_runs in 0..=6 {
             assert_eq!(mask_has_at_least_runs(&mask, min_runs), 4 >= min_runs);
+        }
+    }
+
+    #[test]
+    fn test_mask_run_count_fuzzes_word_boundaries_and_offsets() {
+        let mut rand = rng();
+        for _ in 0..500 {
+            let prefix = rand.random_range(0..16);
+            let len = rand.random_range(0..512);
+            let bits = (0..prefix + len)
+                .map(|_| rand.random_bool(0.5))
+                .collect::<Vec<_>>();
+            let expected = if len == 0 {
+                0
+            } else {
+                1 + bits[prefix..prefix + len]
+                    .windows(2)
+                    .filter(|pair| pair[0] != pair[1])
+                    .count()
+            };
+            let mask = BooleanBuffer::from(bits).slice(prefix, len);
+            assert_eq!(mask_run_count(&mask), expected);
         }
     }
 
