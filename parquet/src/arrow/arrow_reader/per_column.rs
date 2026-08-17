@@ -16,11 +16,21 @@
 // under the License.
 
 //! Internal per-column row-selection planning and execution.
+//!
+//! Planning resolves one [`RowSelectionStrategy`] per row group and projected
+//! top-level Arrow field, from the selection's run statistics and a
+//! metadata-only cost model. If every decision agrees, planning declines and
+//! the caller keeps the existing global execution path.
+//!
+//! Execution gives each top-level field its own reader and replays the same
+//! compiled chunks through all of them, one lane per field. Lanes issue
+//! different reads and skips but must advance in lockstep; see the
+//! [`window`](super::selection) module for that invariant.
 
 use super::metrics::ArrowReaderMetrics;
 use super::selection::{
-    BatchWindow, DEFAULT_ROW_SELECTION_THRESHOLD, LoadedRowRanges, RowSelectionExecutionPlan,
-    RowSelectionStrategy, mask_run_count,
+    BatchWindow, ColumnInstruction, DEFAULT_ROW_SELECTION_THRESHOLD, LoadedRowRanges,
+    RowSelectionExecutionPlan, RowSelectionStrategy, mask_run_count,
 };
 use super::{ReadPlanBuilder, RowSelection, RowSelectionPolicy};
 use crate::arrow::ProjectionMask;
@@ -588,33 +598,33 @@ fn read_column_batch(
     let mut filter_mask = needs_filter.then(|| BooleanBufferBuilder::new(batch.selected_rows));
 
     for chunk in chunks {
-        match plan.strategy(chunk, column_idx) {
-            RowSelectionStrategy::Selectors => {
-                for selector in plan.selector_instructions(chunk) {
-                    if selector.skip {
-                        exact_skip(reader, selector.row_count)?;
-                    } else {
-                        exact_read(reader, selector.row_count)?;
+        let mut consumed_rows = 0usize;
+        for instruction in plan.lower_chunk(chunk, column_idx)? {
+            match instruction {
+                ColumnInstruction::Skip(rows) => {
+                    exact_skip(reader, rows)?;
+                    consumed_rows += rows;
+                }
+                ColumnInstruction::Read { rows, mask } => {
+                    exact_read(reader, rows)?;
+                    consumed_rows += rows;
+                    if let Some(filter_mask) = filter_mask.as_mut() {
+                        match mask {
+                            Some(mask) => filter_mask.append_buffer(&mask),
+                            None => filter_mask.append_n(rows, true),
+                        }
                     }
                 }
-                if let Some(filter_mask) = filter_mask.as_mut() {
-                    filter_mask.append_n(chunk.selected_rows, true);
-                }
             }
-            RowSelectionStrategy::Mask => {
-                let mask_chunks = plan.mask_execution_chunks(chunk, column_idx)?;
-                let mut consumed_rows = 0usize;
-                for mask_chunk in mask_chunks {
-                    exact_skip(reader, mask_chunk.initial_skip)?;
-                    exact_read(reader, mask_chunk.row_count)?;
-                    consumed_rows += mask_chunk.initial_skip + mask_chunk.row_count;
-                    filter_mask
-                        .as_mut()
-                        .expect("mask strategy requires a filter")
-                        .append_buffer(&mask_chunk.mask);
-                }
-                exact_skip(reader, chunk.physical_rows.len() - consumed_rows)?;
-            }
+        }
+        // Lanes that advance by different amounts misalign the output columns
+        // without necessarily changing any column's length, so check here
+        // rather than relying on the batch-level length checks alone.
+        if consumed_rows != chunk.physical_rows.len() {
+            return Err(general_err!(
+                "Internal Error: column {column_idx} consumed {consumed_rows} rows of a {}-row chunk",
+                chunk.physical_rows.len()
+            ));
         }
     }
 

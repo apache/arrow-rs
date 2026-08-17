@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 /// Policy for picking a strategy to materialize [`RowSelection`] during execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RowSelectionPolicy {
     /// Use a queue of [`RowSelector`] values
     Selectors,

@@ -58,7 +58,7 @@ pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
 use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
-pub(crate) use window::{BatchWindow, RowSelectionExecutionPlan};
+pub(crate) use window::{BatchWindow, ColumnInstruction, RowSelectionExecutionPlan};
 
 pub(crate) const DEFAULT_ROW_SELECTION_THRESHOLD: usize = 32;
 

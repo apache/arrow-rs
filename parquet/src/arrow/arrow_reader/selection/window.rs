@@ -21,6 +21,20 @@
 //! selection owns lazy, symmetric selector and mask representations shared by
 //! every top-level column reader. Columns retain only their ordinal and choose
 //! how to replay each row-group chunk.
+//!
+//! # Alignment invariant
+//!
+//! Think of the compiled chunks as an instruction stream and each projected
+//! column as a lane. A lane interprets the stream through its own strategy, so
+//! two lanes issue different reads and skips for the same chunk. What every
+//! lane must agree on is how far it advances: the instructions returned by
+//! [`RowSelectionExecutionPlan::lower_chunk`] always consume exactly
+//! `chunk.physical_rows.len()` physical rows.
+//!
+//! This is the only thing keeping columns row-aligned once they stop sharing a
+//! strategy, so lowering is centralised here rather than spread across the
+//! execution loop. A Mask lane in particular must still skip the rows it chose
+//! not to decode, even though they contribute nothing to its own output.
 
 use super::boolean::boolean_mask_from_selectors;
 use super::{
@@ -107,6 +121,86 @@ pub(crate) struct MaskExecutionChunk {
     pub(crate) mask: BooleanBuffer,
 }
 
+/// One decode instruction for a single column inside one [`BatchWindowChunk`].
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ColumnInstruction {
+    /// Advance the column reader by `rows` rows without decoding them.
+    Skip(usize),
+    /// Decode `rows` rows.
+    ///
+    /// `mask` selects which of those rows reach the output. `None` means every
+    /// decoded row is selected and no filtering is required.
+    Read {
+        rows: usize,
+        mask: Option<BooleanBuffer>,
+    },
+}
+
+/// The instruction stream for one column inside one chunk.
+///
+/// See the [module documentation](self) for the alignment invariant these
+/// instructions maintain.
+#[derive(Debug)]
+pub(crate) enum ChunkInstructions<'a> {
+    Selectors(SelectorWindowIter<'a>),
+    Mask {
+        fragments: std::vec::IntoIter<MaskExecutionChunk>,
+        /// Fragment whose leading skip was emitted but whose read was not.
+        pending: Option<MaskExecutionChunk>,
+        /// Physical rows of the chunk not yet accounted for.
+        remaining: usize,
+    },
+}
+
+impl Iterator for ChunkInstructions<'_> {
+    type Item = ColumnInstruction;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Selectors(selectors) => selectors.next().map(|selector| {
+                if selector.skip {
+                    ColumnInstruction::Skip(selector.row_count)
+                } else {
+                    ColumnInstruction::Read {
+                        rows: selector.row_count,
+                        mask: None,
+                    }
+                }
+            }),
+            Self::Mask {
+                fragments,
+                pending,
+                remaining,
+            } => {
+                let fragment = match pending.take() {
+                    Some(fragment) => fragment,
+                    None => {
+                        let Some(fragment) = fragments.next() else {
+                            // Rows after the last selected row in this chunk.
+                            // Decoding stops there, but the lane still has to
+                            // advance past them.
+                            return (*remaining != 0)
+                                .then(|| ColumnInstruction::Skip(std::mem::take(remaining)));
+                        };
+                        *remaining -= fragment.initial_skip;
+                        if fragment.initial_skip != 0 {
+                            let initial_skip = fragment.initial_skip;
+                            *pending = Some(fragment);
+                            return Some(ColumnInstruction::Skip(initial_skip));
+                        }
+                        fragment
+                    }
+                };
+                *remaining -= fragment.row_count;
+                Some(ColumnInstruction::Read {
+                    rows: fragment.row_count,
+                    mask: Some(fragment.mask),
+                })
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RowSelectionExecutionPlan {
     selection: SelectionRepresentations,
@@ -190,10 +284,29 @@ impl RowSelectionExecutionPlan {
         self.strategies[chunk.row_group * self.column_count + column_idx]
     }
 
-    pub(crate) fn selector_instructions(
+    /// Lower one chunk into the decode instructions for one column.
+    ///
+    /// The returned instructions consume exactly `chunk.physical_rows.len()`
+    /// physical rows whichever strategy the column uses. See the [module
+    /// documentation](self) for why that matters.
+    pub(crate) fn lower_chunk(
         &self,
         chunk: &BatchWindowChunk,
-    ) -> impl Iterator<Item = RowSelector> + '_ {
+        column_idx: usize,
+    ) -> Result<ChunkInstructions<'_>> {
+        match self.strategy(chunk, column_idx) {
+            RowSelectionStrategy::Selectors => Ok(ChunkInstructions::Selectors(
+                self.selector_instructions(chunk),
+            )),
+            RowSelectionStrategy::Mask => Ok(ChunkInstructions::Mask {
+                fragments: self.mask_execution_chunks(chunk, column_idx)?.into_iter(),
+                pending: None,
+                remaining: chunk.physical_rows.len(),
+            }),
+        }
+    }
+
+    fn selector_instructions(&self, chunk: &BatchWindowChunk) -> SelectorWindowIter<'_> {
         SelectorWindowIter {
             selectors: self.selection.selectors(),
             position: chunk.selector_start,
@@ -207,7 +320,11 @@ impl RowSelectionExecutionPlan {
     /// wholly contained in a loaded range; `initial_skip` is measured from the
     /// end of the previous fragment (or the start of `chunk`). Callers must
     /// skip any trailing rows not covered by the returned fragments.
-    pub(crate) fn mask_execution_chunks(
+    ///
+    /// Fragments are trimmed to the first and last selected row of their range,
+    /// so unselected rows at either end are skipped rather than decoded and
+    /// filtered away.
+    fn mask_execution_chunks(
         &self,
         chunk: &BatchWindowChunk,
         column_idx: usize,
@@ -230,18 +347,27 @@ impl RowSelectionExecutionPlan {
                 return;
             }
 
-            let Some(first_selected) = (start..end).find(|&row| mask.value(row)) else {
+            // Trim to the first and last selected row. Leading rows would be
+            // decoded ahead of the first output row and trailing rows after
+            // the last one; both are cheaper to skip. Trailing rows matter at
+            // row-group boundaries, where a chunk can end in a long skip run.
+            let window = mask.slice(start, end - start);
+            let mut selected = window.set_slices();
+            let Some((first, first_end)) = selected.next() else {
                 return;
             };
-            let row_count = end - first_selected;
-            let fragment_mask = mask.slice(first_selected, row_count);
+            let last_end = selected.last().map_or(first_end, |(_, last_end)| last_end);
+
+            let row_count = last_end - first;
+            let fragment_mask = window.slice(first, row_count);
             selected_rows += fragment_mask.count_set_bits();
+            let first_selected = start + first;
             fragments.push(MaskExecutionChunk {
                 initial_skip: first_selected - cursor,
                 row_count,
                 mask: fragment_mask,
             });
-            cursor = end;
+            cursor = first_selected + row_count;
         };
 
         match &self.loaded_row_ranges[matrix_idx] {
@@ -382,7 +508,8 @@ fn advance_selector_position(position: &mut SelectorPosition, selector_rows: usi
     }
 }
 
-struct SelectorWindowIter<'a> {
+#[derive(Debug)]
+pub(crate) struct SelectorWindowIter<'a> {
     selectors: &'a [RowSelector],
     position: SelectorPosition,
     end: SelectorPosition,
@@ -539,14 +666,108 @@ mod tests {
         let chunk = &plan.chunks(plan.batch(0).unwrap())[0];
         let fragments = plan.mask_execution_chunks(chunk, 0).unwrap();
         assert_eq!(fragments.len(), 2);
+        // Both fragments stop at their last selected row, so the unselected
+        // tail of the first loaded range moves into the next initial skip.
         assert_eq!(fragments[0].initial_skip, 1);
+        assert_eq!(fragments[0].row_count, 1);
+        assert_eq!(fragments[0].mask, BooleanBuffer::from(vec![true]));
+        assert_eq!(fragments[1].initial_skip, 8);
+        assert_eq!(fragments[1].row_count, 1);
+        assert_eq!(fragments[1].mask, BooleanBuffer::from(vec![true]));
+    }
+
+    #[test]
+    fn mask_fragments_skip_a_trailing_run_at_a_row_group_boundary() {
+        // Row group 0 selects two early rows and then skips to its boundary,
+        // while row group 1 keeps the batch going. Without a trailing trim the
+        // chunk would decode all 12 rows of row group 0 to emit 2.
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(9),
+            RowSelector::select(4),
+        ]);
+        let plan = RowSelectionExecutionPlan::try_new(
+            selection,
+            &[12, 4],
+            1,
+            vec![RowSelectionStrategy::Mask; 2],
+            None,
+            8,
+        )
+        .unwrap();
+
+        let chunks = plan.chunks(plan.batch(0).unwrap());
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].physical_rows, 0..12);
+
+        let fragments = plan.mask_execution_chunks(&chunks[0], 0).unwrap();
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].initial_skip, 0);
         assert_eq!(fragments[0].row_count, 3);
         assert_eq!(
             fragments[0].mask,
-            BooleanBuffer::from(vec![true, false, false])
+            BooleanBuffer::from(vec![true, false, true])
         );
-        assert_eq!(fragments[1].initial_skip, 6);
-        assert_eq!(fragments[1].row_count, 1);
-        assert_eq!(fragments[1].mask, BooleanBuffer::from(vec![true]));
+
+        // The lane still advances across the whole chunk.
+        assert_eq!(
+            plan.lower_chunk(&chunks[0], 0).unwrap().collect::<Vec<_>>(),
+            vec![
+                ColumnInstruction::Read {
+                    rows: 3,
+                    mask: Some(BooleanBuffer::from(vec![true, false, true])),
+                },
+                ColumnInstruction::Skip(9),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowered_instructions_consume_every_physical_row_of_a_chunk() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(2),
+            RowSelector::select(2),
+            RowSelector::skip(3),
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(2),
+        ]);
+        let plan = RowSelectionExecutionPlan::try_new(
+            selection,
+            &[7, 7],
+            2,
+            vec![
+                RowSelectionStrategy::Selectors,
+                RowSelectionStrategy::Mask,
+                RowSelectionStrategy::Mask,
+                RowSelectionStrategy::Selectors,
+            ],
+            None,
+            4,
+        )
+        .unwrap();
+
+        let mut batch_idx = 0;
+        while let Some(batch) = plan.batch(batch_idx) {
+            for chunk in plan.chunks(batch) {
+                for column_idx in 0..2 {
+                    let instructions = plan.lower_chunk(chunk, column_idx).unwrap();
+                    let (rows, selected) =
+                        instructions.fold((0, 0), |(rows, selected), item| match item {
+                            ColumnInstruction::Skip(skip) => (rows + skip, selected),
+                            ColumnInstruction::Read { rows: read, mask } => (
+                                rows + read,
+                                selected + mask.map_or(read, |mask| mask.count_set_bits()),
+                            ),
+                        });
+                    assert_eq!(rows, chunk.physical_rows.len());
+                    assert_eq!(selected, chunk.selected_rows);
+                }
+            }
+            batch_idx += 1;
+        }
+        assert_ne!(batch_idx, 0);
     }
 }
