@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(!metadata.page_index().is_none()); // of course, we did not read the page index
+        assert!(metadata.page_index().is_none()); // of course, we did not read the page index
     }
 
     static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
