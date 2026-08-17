@@ -1166,14 +1166,8 @@ mod tests {
 
     #[test]
     fn convert_schema_round_trip() {
-        let md: HashMap<String, String> = [("Key".to_string(), "value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
-        let field_md: HashMap<String, String> = [("k".to_string(), "v".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let md = HashMap::from([("Key".to_string(), "value".to_string())]);
+        let field_md = HashMap::from([("k".to_string(), "v".to_string())]);
         let schema = Schema::new_with_metadata(
             vec![
                 Field::new("uint8", DataType::UInt8, false).with_metadata(field_md),

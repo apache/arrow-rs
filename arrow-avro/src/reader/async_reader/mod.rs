@@ -363,7 +363,6 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                                 future,
                                 next_behaviour: FetchNextBehaviour::ContinueDecoding,
                             };
-                            continue;
                         }
                         FetchNextBehaviour::ContinueDecoding => {
                             self.reader_state = ReaderState::DecodingBlock {
@@ -482,7 +481,6 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                         future,
                         next_behaviour: FetchNextBehaviour::ContinueDecoding,
                     };
-                    continue;
                 }
                 ReaderState::ReadingBatches {
                     reader,

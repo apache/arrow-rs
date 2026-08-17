@@ -392,7 +392,7 @@ impl RepetitionLevelDecoderImpl {
     /// and returns the number of "complete" records along with the corresponding number of values
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(&mut self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
+    fn count_records(&self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
         let mut records_read = 0;
 
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);

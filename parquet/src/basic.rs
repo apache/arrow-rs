@@ -249,7 +249,7 @@ impl GeographyType {
     ///
     /// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
     pub fn algorithm(&self) -> Option<EdgeInterpolationAlgorithm> {
-        self.algorithm.or(Some(Default::default()))
+        Some(self.algorithm.unwrap_or_default())
     }
 }
 
@@ -724,7 +724,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<i32>), Pa
     }
 }
 
-fn check_level_is_none(level: &Option<i32>) -> Result<(), ParquetError> {
+fn check_level_is_none(level: Option<i32>) -> Result<(), ParquetError> {
     if level.is_some() {
         return Err(ParquetError::General(
             "compression level is not supported".to_string(),
@@ -748,11 +748,11 @@ impl FromStr for Compression {
 
         let c = match codec {
             "UNCOMPRESSED" | "uncompressed" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::UNCOMPRESSED
             }
             "SNAPPY" | "snappy" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::SNAPPY
             }
             "GZIP" | "gzip" => {
@@ -760,7 +760,7 @@ impl FromStr for Compression {
                 Compression::GZIP(GzipLevel::try_new(level.try_into()?)?)
             }
             "LZO" | "lzo" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZO
             }
             "BROTLI" | "brotli" => {
@@ -768,7 +768,7 @@ impl FromStr for Compression {
                 Compression::BROTLI(BrotliLevel::try_new(level.try_into()?)?)
             }
             "LZ4" | "lz4" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZ4
             }
             "ZSTD" | "zstd" => {
@@ -776,7 +776,7 @@ impl FromStr for Compression {
                 Compression::ZSTD(ZstdLevel::try_new(level)?)
             }
             "LZ4_RAW" | "lz4_raw" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZ4_RAW
             }
             _ => {
@@ -856,7 +856,7 @@ impl EdgeInterpolationAlgorithm {
             Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
             Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
             Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
-            unknown => Err(general_err!(
+            unknown @ Self::_Unknown(_) => Err(general_err!(
                 "Unknown edge interpolation algorithm: {}",
                 unknown
             )),

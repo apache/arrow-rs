@@ -233,7 +233,7 @@ impl ColumnCloseResult {
                 .build()?;
             if let Some(offset_index) = self.offset_index.as_mut() {
                 let mut offset = dictionary_len as i64;
-                for location in offset_index.page_locations.iter_mut() {
+                for location in &mut offset_index.page_locations {
                     location.offset = offset;
                     offset += location.compressed_page_size as i64;
                 }
@@ -327,7 +327,7 @@ impl<T: Default> ColumnMetrics<T> {
     /// Sum `page_histogram` into `chunk_histogram`
     fn update_histogram(
         chunk_histogram: &mut Option<LevelHistogram>,
-        page_histogram: &Option<LevelHistogram>,
+        page_histogram: Option<&LevelHistogram>,
     ) {
         if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
             chunk_hist.add(page_hist);
@@ -339,11 +339,11 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
         ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
-            &page_metrics.definition_level_histogram,
+            page_metrics.definition_level_histogram.as_ref(),
         );
         ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
-            &page_metrics.repetition_level_histogram,
+            page_metrics.repetition_level_histogram.as_ref(),
         );
     }
 
@@ -572,7 +572,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -1652,7 +1652,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
                 self.column_metrics.dictionary_page_offset = Some(page_spec.offset);
             }
-            _ => {}
+            PageType::INDEX_PAGE => {}
         }
     }
 
@@ -3562,8 +3562,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_zero_only() {
-        let input = [f16::ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -3575,8 +3574,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_neg_zero_only() {
-        let input = [f16::NEG_ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::NEG_ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -5052,7 +5050,7 @@ mod tests {
                 PageType::DICTIONARY_PAGE => {
                     collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
                 }
-                _ => {}
+                PageType::INDEX_PAGE => {}
             }
         }
         collected

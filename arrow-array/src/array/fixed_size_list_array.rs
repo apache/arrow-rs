@@ -463,6 +463,15 @@ impl FixedSizeListArray {
     }
 }
 
+impl<'a> IntoIterator for &'a FixedSizeListArray {
+    type Item = Option<ArrayRef>;
+    type IntoIter = FixedSizeListIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FixedSizeListIter::new(self)
+    }
+}
+
 impl From<ArrayData> for FixedSizeListArray {
     fn from(data: ArrayData) -> Self {
         let (data_type, len, nulls, offset, _buffers, child_data) = data.into_parts();

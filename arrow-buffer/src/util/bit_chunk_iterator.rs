@@ -160,7 +160,7 @@ impl<'a> UnalignedBitChunk<'a> {
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()
-            .chain(self.chunks.iter().cloned())
+            .chain(self.chunks.iter().copied())
             .chain(self.suffix)
     }
 
@@ -170,9 +170,18 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
+impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
+    type Item = u64;
+    type IntoIter = UnalignedBitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// Iterator over an [`UnalignedBitChunk`]
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
+    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Copied<std::slice::Iter<'a, u64>>>,
     std::option::IntoIter<u64>,
 >;
 
@@ -338,6 +347,15 @@ impl<'a> IntoIterator for BitChunks<'a> {
     }
 }
 
+impl<'a> IntoIterator for &BitChunks<'a> {
+    type Item = u64;
+    type IntoIter = BitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Iterator for BitChunkIterator<'_> {
     type Item = u64;
 
@@ -350,7 +368,7 @@ impl Iterator for BitChunkIterator<'_> {
 
         // cast to *const u64 should be fine since we are using read_unaligned below
         #[expect(clippy::cast_ptr_alignment)]
-        let raw_data = self.buffer.as_ptr() as *const u64;
+        let raw_data = self.buffer.as_ptr().cast::<u64>();
 
         // bit-packed buffers are stored starting with the least-significant byte first
         // so when reading as u64 on a big-endian machine, the bytes need to be swapped
@@ -364,7 +382,7 @@ impl Iterator for BitChunkIterator<'_> {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
             let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
+                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
 
             (current >> bit_offset) | (next << (64 - bit_offset))
         };
@@ -714,7 +732,7 @@ mod tests {
                 .take(mask_len)
                 .collect();
 
-            let buffer = Buffer::from_iter(bools.iter().cloned());
+            let buffer = Buffer::from_iter(bools.iter().copied());
 
             let max_offset = 64.min(mask_len);
             let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);

@@ -605,7 +605,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, false, true, true, false, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -711,7 +711,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[true, false, false, true, true, true, true, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -1063,7 +1063,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data

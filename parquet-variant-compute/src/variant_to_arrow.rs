@@ -650,7 +650,7 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
         capacity: usize,
     ) -> Result<Self> {
         let mut field_builders = Vec::with_capacity(fields.len());
-        for field in fields.iter() {
+        for field in fields {
             field_builders.push(make_typed_variant_to_arrow_row_builder(
                 field.data_type(),
                 cast_options,

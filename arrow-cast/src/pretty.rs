@@ -206,7 +206,7 @@ fn create_table(
     }
 
     for batch in results {
-        let schema = schema_opt.as_ref().unwrap_or(batch.schema_ref());
+        let schema = schema_opt.as_ref().unwrap_or_else(|| batch.schema_ref());
 
         // Could be a custom schema that was provided.
         if batch.columns().len() != schema.fields().len() {

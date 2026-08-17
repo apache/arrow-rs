@@ -350,7 +350,7 @@ impl ReadPlanBuilder {
 
         let row_selection_cursor = selection
             .map(|s| build_cursor(s.trim(), selection_strategy, loaded_row_ranges))
-            .unwrap_or(RowSelectionCursor::new_all());
+            .unwrap_or_else(RowSelectionCursor::new_all);
 
         ReadPlan {
             batch_size,

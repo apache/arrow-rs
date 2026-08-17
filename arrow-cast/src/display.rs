@@ -147,7 +147,7 @@ impl Hash for FormatOptions<'_> {
         self.types_info.hash(state);
         self.quoted_strings.hash(state);
         self.formatter_factory
-            .map(|f| f as *const dyn ArrayFormatterFactory)
+            .map(std::ptr::from_ref::<dyn ArrayFormatterFactory>)
             .hash(state);
     }
 }
@@ -971,7 +971,7 @@ impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
         let years = (interval / 12_f64).floor();
         let month = interval - (years * 12_f64);
 
-        write!(f, "{years} years {month} mons",)?;
+        write!(f, "{years} years {month} mons")?;
         Ok(())
     }
 }

@@ -123,12 +123,12 @@ impl TreeBuilder {
                 curr_def_level += 1;
                 curr_rep_level += 1;
             }
-            _ => {}
+            Repetition::REQUIRED => {}
         }
 
         path.push(String::from(field.name()));
         let reader = if field.is_primitive() {
-            let col_path = ColumnPath::new(path.to_vec());
+            let col_path = ColumnPath::new(path.clone());
             let orig_index = *paths
                 .get(&col_path)
                 .ok_or(general_err!("Path {:?} not found", col_path))?;

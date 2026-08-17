@@ -121,10 +121,9 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
 
 #[inline]
 fn primitive_source<T: ArrowPrimitiveType>(
-    source: &Option<ArrayRef>,
+    source: Option<&ArrayRef>,
 ) -> Result<&PrimitiveArray<T>, ArrowError> {
     Ok(source
-        .as_ref()
         .ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
@@ -153,7 +152,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         self.ensure_capacity();
 
-        let s = primitive_source::<T>(&self.source)?;
+        let s = primitive_source::<T>(self.source.as_ref())?;
 
         // add nulls if necessary
         if let Some(nulls) = s.nulls().as_ref() {
@@ -176,7 +175,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         match filter.selection() {
             FilterSelection::Indices(indices) => {
                 self.ensure_capacity();
-                let s = primitive_source::<T>(&self.source)?;
+                let s = primitive_source::<T>(self.source.as_ref())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
                 self.current.reserve(filter.count());
@@ -190,7 +189,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             }
             FilterSelection::Slices(slices) => {
                 self.ensure_capacity();
-                let s = primitive_source::<T>(&self.source)?;
+                let s = primitive_source::<T>(self.source.as_ref())?;
 
                 append_filtered_nulls(&mut self.nulls, s.nulls(), filter);
                 self.current.reserve(filter.count());
