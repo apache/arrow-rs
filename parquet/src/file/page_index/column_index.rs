@@ -549,9 +549,9 @@ macro_rules! colidx_enum_func {
 
 /// Parsed [`ColumnIndex`] information for a Parquet file.
 ///
-/// See [`ParquetColumnIndex`] for more information.
+/// See [`PageIndex`] for more information.
 ///
-/// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+/// [`PageIndex`]: crate::file::metadata::PageIndex
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 #[expect(non_camel_case_types)]

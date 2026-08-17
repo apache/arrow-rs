@@ -254,40 +254,6 @@ impl PageIndex {
     }
 }
 
-/*
-/// Page level statistics for each column chunk of each row group.
-///
-/// This structure is an in-memory representation of multiple [`ColumnIndex`]
-/// structures in a parquet file footer, as described in the Parquet [PageIndex
-/// documentation]. Each [`ColumnIndex`] holds statistics about all the pages in a
-/// particular column chunk.
-///
-/// `column_index[row_group_number][column_number]` holds the optional
-/// [`ColumnIndex`] corresponding to column `column_number` of row group
-/// `row_group_number`. This will be `None` if no index is present for the given
-/// column chunk.
-///
-/// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
-/// column in the third row group of the parquet file.
-///
-/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-pub type ParquetColumnIndex = Vec<Vec<Option<ColumnIndexMetaData>>>;
-
-/// [`OffsetIndexMetaData`] for each column chunk of each row group
-///
-/// This structure is the parsed representation of the [`OffsetIndex`] from the
-/// Parquet file footer, as described in the Parquet [PageIndex documentation].
-///
-/// `offset_index[row_group_number][column_number]` holds
-/// the optional [`OffsetIndexMetaData`] corresponding to column
-/// `column_number`of row group `row_group_number`. This will be `None` if no index
-/// is present for the given column chunk.
-///
-/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetOffsetIndex = Vec<Vec<Option<OffsetIndexMetaData>>>;*/
-
 /// Parsed metadata for a single Parquet file
 ///
 /// This structure is stored in the footer of Parquet files, in the format
@@ -297,7 +263,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Option<OffsetIndexMetaData>>>;*/
 /// The fields of this structure are:
 /// * [`FileMetaData`]: Information about the overall file (such as the schema) (See [`Self::file_metadata`])
 /// * [`RowGroupMetaData`]: Information about each Row Group (see [`Self::row_groups`])
-/// * [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]: Optional "Page Index" structures (see [`Self::column_index`] and [`Self::offset_index`])
+/// * [`PageIndex`]: Optional "Page Index" structures (see [`Self::page_index`])
 ///
 /// This structure is read by the various readers in this crate or can be read
 /// directly from a file using the [`ParquetMetaDataReader`] struct.

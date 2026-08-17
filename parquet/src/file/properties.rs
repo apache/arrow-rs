@@ -1089,7 +1089,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Setting this value to `true` can greatly increase the size of the resulting Parquet
     /// file while yielding very little added benefit. Most modern Parquet implementations
-    /// will use the min/max values stored in the [`ParquetColumnIndex`] rather than
+    /// will use the min/max values stored in the [`PageIndex`] rather than
     /// those in the page header.
     ///
     /// # Note
@@ -1100,7 +1100,7 @@ impl WriterPropertiesBuilder {
     /// specification. See [issue #7580] for more details.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
-    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`PageIndex`]: crate::file::metadata::PageIndex
     /// [`Page`]: EnabledStatistics::Page
     /// [issue #7580]: https://github.com/apache/arrow-rs/issues/7580
     pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
@@ -1374,10 +1374,10 @@ pub enum EnabledStatistics {
     /// Setting this option will store one set of statistics for each relevant
     /// column for each row group. In addition, this will enable the writing
     /// of the column index (the offset index is always written regardless of
-    /// this setting). See [`ParquetColumnIndex`] for
+    /// this setting). See [`PageIndex`] for
     /// more information.
     ///
-    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`PageIndex`]: crate::file::metadata::PageIndex
     Page,
 }
 
