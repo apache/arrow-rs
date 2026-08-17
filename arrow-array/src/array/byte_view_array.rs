@@ -306,13 +306,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         &self.buffers
     }
 
-    /// Returns shared ownership of the buffers storing non-inline values
+    /// Returns a cloned `Arc` of the buffers storing non-inline string or binary data.
     ///
-    /// This operation is `O(1)` and does not clone the individual buffers or
-    /// their contents. See [`Self::data_buffers`] to inspect the buffers
-    /// without taking shared ownership.
+    /// This is useful when needing to construct a new byte view array from this existing
+    /// array, but [`into_parts`] is not feasible (e.g. need to keep both arrays around),
+    /// and trying to reconstruct the buffers from [`data_buffers`] would require a
+    /// `Vec` allocation and cloning of each buffer element, which can be expensive
+    /// if there is a large number of buffers.
+    ///
+    /// This operation is `O(1)` and clones only the collection's `Arc`.
+    ///
+    /// [`into_parts`]: Self::into_parts
+    /// [`data_buffers`]: Self::data_buffers
     #[inline]
-    pub fn data_buffers_shared(&self) -> Arc<[Buffer]> {
+    pub fn data_buffers_cloned(&self) -> Arc<[Buffer]> {
         Arc::clone(&self.buffers)
     }
 

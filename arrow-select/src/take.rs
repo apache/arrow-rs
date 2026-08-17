@@ -636,7 +636,7 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
-    let buffers = array.data_buffers_shared();
+    let buffers = array.data_buffers_cloned();
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
     Ok(unsafe { GenericByteViewArray::new_unchecked(new_views, buffers, new_nulls) })
 }
@@ -1805,8 +1805,8 @@ mod tests {
         let actual = take(&array, &index, None).unwrap();
 
         assert_eq!(actual.len(), index.len());
-        let actual_buffers = actual.as_byte_view::<T>().data_buffers_shared();
-        let input_buffers = array.data_buffers_shared();
+        let actual_buffers = actual.as_byte_view::<T>().data_buffers_cloned();
+        let input_buffers = array.data_buffers_cloned();
         assert!(Arc::ptr_eq(&actual_buffers, &input_buffers));
 
         let expected = {

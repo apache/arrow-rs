@@ -934,7 +934,7 @@ fn filter_byte_view<T: ByteViewType>(
 ) -> GenericByteViewArray<T> {
     let new_view_buffer = filter_native(array.views(), predicate);
     let views = ScalarBuffer::new(new_view_buffer, 0, predicate.count);
-    let buffers = array.data_buffers_shared();
+    let buffers = array.data_buffers_cloned();
     let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: each view is copied unchanged from `array.views()` and `buffers`
@@ -1297,8 +1297,8 @@ mod tests {
             let actual = filter(&array, &predicate).unwrap();
 
             assert_eq!(actual.len(), 3);
-            let actual_buffers = actual.as_byte_view::<T>().data_buffers_shared();
-            let input_buffers = array.data_buffers_shared();
+            let actual_buffers = actual.as_byte_view::<T>().data_buffers_cloned();
+            let input_buffers = array.data_buffers_cloned();
             assert!(Arc::ptr_eq(&actual_buffers, &input_buffers));
 
             let expected = {

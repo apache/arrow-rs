@@ -17,11 +17,10 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::{BenchmarkId, Criterion};
+use criterion::Criterion;
 
 use rand::RngExt;
 
-use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::compute::{TakeOptions, take, take_record_batch};
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
@@ -70,26 +69,6 @@ fn bench_take_record_batch(batch: &RecordBatch, indices: &UInt32Array) {
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
     hint::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
-}
-
-/// Creates an array whose buffer entries all share the same payload allocation.
-///
-/// Views reference every entry in turn, isolating the cost of cloning the buffer
-/// collection from the size of the underlying string payload.
-fn create_string_view_array_with_buffers(size: usize, buffer_count: usize) -> StringViewArray {
-    const VALUE: &[u8] = b"a string longer than twelve bytes";
-
-    let buffer = Buffer::from(VALUE);
-    let buffers = vec![buffer; buffer_count];
-    let views = (0..size)
-        .map(|i| {
-            ByteView::new(VALUE.len() as u32, &VALUE[..4])
-                .with_buffer_index((i % buffer_count) as u32)
-                .as_u128()
-        })
-        .collect::<ScalarBuffer<_>>();
-
-    StringViewArray::new(views, buffers, None)
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -226,18 +205,6 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take stringview null values null indices 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
-
-    let indices = create_random_index(8192, 0.0);
-    let mut group = c.benchmark_group("take stringview by buffer count");
-    for buffer_count in [1, 16, 256, 4096] {
-        let values = create_string_view_array_with_buffers(8192, buffer_count);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(buffer_count),
-            &buffer_count,
-            |b, _| b.iter(|| bench_take(&values, &indices)),
-        );
-    }
-    group.finish();
 
     let values = create_primitive_list_array::<i32, Int32Type>(512, 0.0, 0.0, 20);
     let indices = create_random_index(512, 0.0);
