@@ -75,39 +75,26 @@ impl Args {
                 ParquetError::General(format!("Failed to find column {}", self.column))
             })?;
 
-        // Column index data for all row groups and columns
-        let column_index = reader
+        let page_index = reader
             .metadata()
-            .column_index()
-            .ok_or_else(|| ParquetError::General("Column index not found".to_string()))?;
-
-        // Offset index data for all row groups and columns
-        let offset_index = reader
-            .metadata()
-            .offset_index()
-            .ok_or_else(|| ParquetError::General("Offset index not found".to_string()))?;
+            .page_index()
+            .ok_or_else(|| ParquetError::General("Page index not found".to_string()))?;
 
         // Iterate through each row group
-        for (row_group_idx, ((column_indices, offset_indices), row_group)) in column_index
-            .iter()
-            .zip(offset_index)
-            .zip(reader.metadata().row_groups())
-            .enumerate()
-        {
+        for row_group_idx in 0..reader.metadata().num_row_groups() {
+            let row_group = reader.metadata().row_group(row_group_idx);
             println!("Row Group: {row_group_idx}");
-            let offset_index = offset_indices.get(column_idx).ok_or_else(|| {
-                ParquetError::General(format!(
-                    "No offset index for row group {row_group_idx} column chunk {column_idx}"
-                ))
-            })?.as_ref().ok_or_else(|| {
-                ParquetError::General(format!(
-                    "Offset index is None for row group {row_group_idx} column chunk {column_idx}"
-                ))
-            })?;
+            let offset_index = page_index
+                .offset_index(row_group_idx, column_idx)
+                .ok_or_else(|| {
+                    ParquetError::General(format!(
+                        "No offset index for row group {row_group_idx} column chunk {column_idx}"
+                    ))
+                })?;
 
             let row_counts =
                 compute_row_counts(offset_index.page_locations(), row_group.num_rows());
-            match column_indices[column_idx].as_ref() {
+            match page_index.column_index(row_group_idx, column_idx) {
                 None => println!("NO INDEX"),
                 Some(ColumnIndexMetaData::BOOLEAN(v)) => {
                     print_index::<bool>(v, offset_index, &row_counts)?

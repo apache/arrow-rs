@@ -226,33 +226,16 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .unwrap();
 
                     if data_page_row_count_limit.is_some() {
-                        let column_page_index = reader
+                        let page_index = reader
                             .metadata()
-                            .column_index()
-                            .expect("File should have column page indices");
+                            .page_index()
+                            .expect("File should have page indices");
 
-                        let column_offset_index = reader
-                            .metadata()
-                            .offset_index()
-                            .expect("File should have column offset indices");
-
-                        let _ = converter.data_page_mins(
-                            column_page_index,
-                            column_offset_index,
-                            &row_group_indices,
-                        );
-                        let _ = converter.data_page_maxes(
-                            column_page_index,
-                            column_offset_index,
-                            &row_group_indices,
-                        );
-                        let _ = converter.data_page_null_counts(
-                            column_page_index,
-                            column_offset_index,
-                            &row_group_indices,
-                        );
+                        let _ = converter.data_page_mins(page_index, &row_group_indices);
+                        let _ = converter.data_page_maxes(page_index, &row_group_indices);
+                        let _ = converter.data_page_null_counts(page_index, &row_group_indices);
                         let _ = converter.data_page_row_counts(
-                            column_offset_index,
+                            page_index,
                             row_groups,
                             &row_group_indices,
                         );
