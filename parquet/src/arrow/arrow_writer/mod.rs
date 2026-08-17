@@ -818,7 +818,13 @@ impl ArrowPageWriter {
         self.page_encryptor.as_mut()
     }
 
+    // Mirrors the signature of the encryption-enabled version above, so that the
+    // callers do not need a `cfg` of their own.
     #[cfg(not(feature = "encryption"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "mirrors the encryption-enabled signature"
+    )]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
@@ -1368,7 +1374,7 @@ impl ArrowColumnWriterFactory {
     ) -> Result<Box<ArrowPageWriter>> {
         let column_path = column_descriptor.path().string();
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &self.file_encryptor,
+            self.file_encryptor.as_ref(),
             self.row_group_index,
             column_index,
             &column_path,
@@ -1691,7 +1697,7 @@ fn write_leaf(
                         let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices.iter().copied())
                     }
-                    _ => {
+                    IntervalUnit::MonthDayNano => {
                         return Err(ParquetError::NYI(format!(
                             "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
                         )));
@@ -4445,7 +4451,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ];
-        let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt32Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4491,7 +4497,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ];
-        let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt64Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4694,7 +4700,7 @@ mod tests {
                     .unwrap()
                     .values()
                     .iter()
-                    .cloned()
+                    .copied()
             })
             .collect();
 

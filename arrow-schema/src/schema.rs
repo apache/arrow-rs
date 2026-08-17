@@ -1221,26 +1221,17 @@ mod tests {
     #[test]
     fn test_try_merge_field_with_metadata() {
         // 1. Different values for the same key should cause error.
-        let metadata1: HashMap<String, String> = [("foo".to_string(), "bar".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata1 = HashMap::from([("foo".to_string(), "bar".to_string())]);
         let f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata1);
 
-        let metadata2: HashMap<String, String> = [("foo".to_string(), "baz".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("foo".to_string(), "baz".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])]).is_err());
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: HashMap<String, String> = [("missing".to_string(), "value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("missing".to_string(), "value".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
@@ -1303,10 +1294,7 @@ mod tests {
                     // new field
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
         ])
         .unwrap();
@@ -1327,10 +1315,7 @@ mod tests {
                     ),
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>()
+                HashMap::from([("foo".to_string(), "bar".to_string())])
             )
         );
 
@@ -1385,17 +1370,11 @@ mod tests {
         let res = Schema::try_merge(vec![
             Schema::new_with_metadata(
                 vec![Field::new("first_name", DataType::Utf8, false)],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
             Schema::new_with_metadata(
                 vec![Field::new("last_name", DataType::Utf8, false)],
-                [("foo".to_string(), "baz".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "baz".to_string())]),
             ),
         ])
         .unwrap_err();

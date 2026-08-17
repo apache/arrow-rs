@@ -123,7 +123,7 @@ fn parse_string_iter<
 /// Casts generic string arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
 pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType>(
     array: &dyn Array,
-    to_tz: &Option<Arc<str>>,
+    to_tz: Option<&Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_string::<O>();
@@ -134,13 +134,13 @@ pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType
         }
         None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
     };
-    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+    Ok(Arc::new(out.with_timezone_opt(to_tz.cloned())))
 }
 
 /// Casts string view arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
 pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
     array: &dyn Array,
-    to_tz: &Option<Arc<str>>,
+    to_tz: Option<&Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_string_view();
@@ -151,7 +151,7 @@ pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
         }
         None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
     };
-    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+    Ok(Arc::new(out.with_timezone_opt(to_tz.cloned())))
 }
 
 fn cast_string_to_timestamp_impl<

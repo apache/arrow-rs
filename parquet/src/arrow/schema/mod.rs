@@ -2272,10 +2272,7 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_roundtrip_lists() -> Result<()> {
-        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata = HashMap::from([("Key".to_string(), "Value".to_string())]);
 
         let schema = Schema::new_with_metadata(
             vec![

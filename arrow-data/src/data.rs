@@ -529,7 +529,7 @@ impl ArrayData {
         let mut result: usize = 0;
         let layout = layout(&self.data_type);
 
-        for spec in layout.buffers.iter() {
+        for spec in &layout.buffers {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
                     // Offset buffers contain len+1 elements: one boundary per element
@@ -863,7 +863,7 @@ impl ArrayData {
             }
         }
         // align children data recursively
-        for data in self.child_data.iter_mut() {
+        for data in &mut self.child_data {
             data.align_buffers()
         }
     }
@@ -1695,7 +1695,7 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let values = self.typed_buffer::<T>(0, self.len)?;
-        let mut prev_value: i64 = 0_i64;
+        let mut prev_value = 0_i64;
         values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
             let value: i64 = inp_value.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(

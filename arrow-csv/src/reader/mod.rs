@@ -472,7 +472,7 @@ pub fn infer_schema_from_files(
         ..Default::default()
     };
 
-    for fname in files.iter() {
+    for fname in files {
         let f = File::open(fname)?;
         let (schema, records_read) = format.infer_schema(f, Some(records_to_read))?;
         if records_read == 0 {
@@ -2678,7 +2678,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            Err(ArrowError::CsvError(e)) => e.contains("incorrect number of fields"),
             _ => false,
         });
     }
@@ -2907,8 +2907,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::InvalidArgumentError(e)) =>
-                e.to_string().contains("contains null values"),
+            Err(ArrowError::InvalidArgumentError(e)) => e.contains("contains null values"),
             _ => false,
         });
     }

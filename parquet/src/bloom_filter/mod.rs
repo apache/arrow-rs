@@ -446,7 +446,7 @@ impl Sbbf {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
-                self.0.as_ptr() as *const u8,
+                self.0.as_ptr().cast::<u8>(),
                 self.0.len() * size_of::<Block>(),
             )
         };
@@ -1050,7 +1050,7 @@ mod tests {
             }
 
             // --- Per-hash verification of the two lemmas ---
-            for &h in hashes.iter() {
+            for &h in &hashes {
                 // mask(h as u32) gives the 8-bit pattern that this hash sets
                 // inside whichever block it lands in. It uses only the lower
                 // 32 bits of h, so it's the same regardless of filter size.

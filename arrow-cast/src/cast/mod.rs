@@ -1297,20 +1297,28 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 parse_string::<Time64NanosecondType, i32>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Second, to_tz) => cast_string_to_timestamp::<
+                i32,
+                TimestampSecondType,
+            >(array, to_tz.as_ref(), cast_options),
             Timestamp(TimeUnit::Millisecond, to_tz) => cast_string_to_timestamp::<
                 i32,
                 TimestampMillisecondType,
-            >(array, to_tz, cast_options),
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Timestamp(TimeUnit::Microsecond, to_tz) => cast_string_to_timestamp::<
                 i32,
                 TimestampMicrosecondType,
-            >(array, to_tz, cast_options),
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_string_to_timestamp::<
+                i32,
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_string_to_year_month_interval::<i32>(array, cast_options)
             }
@@ -1354,17 +1362,23 @@ pub fn cast_with_options(
                 parse_string_view::<Time64NanosecondType>(array, cast_options)
             }
             Timestamp(TimeUnit::Second, to_tz) => {
-                cast_view_to_timestamp::<TimestampSecondType>(array, to_tz, cast_options)
+                cast_view_to_timestamp::<TimestampSecondType>(array, to_tz.as_ref(), cast_options)
             }
-            Timestamp(TimeUnit::Millisecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampMillisecondType>(array, to_tz, cast_options)
-            }
-            Timestamp(TimeUnit::Microsecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampMicrosecondType>(array, to_tz, cast_options)
-            }
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_view_to_timestamp::<TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Millisecond, to_tz) => cast_view_to_timestamp::<
+                TimestampMillisecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Microsecond, to_tz) => cast_view_to_timestamp::<
+                TimestampMicrosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_view_to_timestamp::<
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_view_to_year_month_interval(array, cast_options)
             }
@@ -1416,20 +1430,28 @@ pub fn cast_with_options(
             Time64(TimeUnit::Nanosecond) => {
                 parse_string::<Time64NanosecondType, i64>(array, cast_options)
             }
-            Timestamp(TimeUnit::Second, to_tz) => {
-                cast_string_to_timestamp::<i64, TimestampSecondType>(array, to_tz, cast_options)
-            }
+            Timestamp(TimeUnit::Second, to_tz) => cast_string_to_timestamp::<
+                i64,
+                TimestampSecondType,
+            >(array, to_tz.as_ref(), cast_options),
             Timestamp(TimeUnit::Millisecond, to_tz) => cast_string_to_timestamp::<
                 i64,
                 TimestampMillisecondType,
-            >(array, to_tz, cast_options),
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Timestamp(TimeUnit::Microsecond, to_tz) => cast_string_to_timestamp::<
                 i64,
                 TimestampMicrosecondType,
-            >(array, to_tz, cast_options),
-            Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, to_tz, cast_options)
-            }
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
+            Timestamp(TimeUnit::Nanosecond, to_tz) => cast_string_to_timestamp::<
+                i64,
+                TimestampNanosecondType,
+            >(
+                array, to_tz.as_ref(), cast_options
+            ),
             Interval(IntervalUnit::YearMonth) => {
                 cast_string_to_year_month_interval::<i64>(array, cast_options)
             }
@@ -2854,7 +2876,7 @@ where
 
     let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
 
-    for val in view_array.iter() {
+    for val in &view_array {
         byte_array_builder.append_option(val);
     }
 
@@ -7735,7 +7757,7 @@ mod tests {
     {
         let string_view_array = {
             let mut builder = StringViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for s in VIEW_TEST_DATA.iter() {
+            for s in &VIEW_TEST_DATA {
                 builder.append_option(*s);
             }
             builder.finish()
@@ -7770,7 +7792,7 @@ mod tests {
     {
         let view_array = {
             let mut builder = BinaryViewBuilder::new().with_fixed_block_size(8); // multiple buffers.
-            for s in VIEW_TEST_DATA.iter() {
+            for s in &VIEW_TEST_DATA {
                 builder.append_option(*s);
             }
             builder.finish()
@@ -9848,7 +9870,7 @@ mod tests {
             3,
         )) as ArrayRef;
 
-        for (values, lengths) in cases.iter() {
+        for (values, lengths) in &cases {
             let array = Arc::new(ListArray::new(
                 field.clone(),
                 OffsetBuffer::from_lengths(lengths.clone()),
@@ -9923,7 +9945,7 @@ mod tests {
             3,
         )) as ArrayRef;
 
-        for (values, offsets, lengths) in cases.iter() {
+        for (values, offsets, lengths) in &cases {
             let array = Arc::new(ListViewArray::new(
                 field.clone(),
                 offsets.clone().into(),
@@ -11615,11 +11637,8 @@ mod tests {
             format_options: FormatOptions::default(),
         };
 
-        let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
-            &array,
-            &None::<Arc<str>>,
-            &cast_options,
-        );
+        let result =
+            cast_string_to_timestamp::<i32, TimestampNanosecondType>(&array, None, &cast_options);
 
         let err = result.unwrap_err();
         assert_eq!(

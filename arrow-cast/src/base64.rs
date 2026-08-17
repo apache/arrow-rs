@@ -72,7 +72,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     offsets.push(O::usize_as(0));
     let mut offset = 0;
 
-    for v in array.iter() {
+    for v in array {
         if let Some(v) = v {
             let len = engine.decode_slice(v, &mut buffer[offset..]).unwrap();
             // This cannot overflow as `len` is less than `v.len()` and `a` is valid
@@ -152,7 +152,7 @@ mod tests {
             output_buf: &mut [u8],
         ) -> Result<usize, base64::EncodeSliceError> {
             let len = BASE64_STANDARD.encode_slice(input, output_buf)?;
-            for b in output_buf[..len].iter_mut() {
+            for b in &mut output_buf[..len] {
                 *b = 0xFF; // invalid UTF-8, but correct length
             }
             Ok(len)
