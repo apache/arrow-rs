@@ -1134,8 +1134,12 @@ mod tests {
             .schema_descr()
             .num_columns();
         for rgidx in 0..num_rowgroups {
+            let column_index = page_index.column_indexes_for_rowgroup(rgidx);
+            let offset_index = page_index.offset_indexes_for_rowgroup(rgidx);
+            assert!(column_index.is_some_and(|ci| ci.len() == num_columns));
+            assert!(offset_index.is_some_and(|oi| oi.len() == num_columns));
+            // some column indexes are not defined, but all offset indexes should be
             for colidx in 0..num_columns {
-                assert!(page_index.column_index(rgidx, colidx).is_some());
                 assert!(page_index.offset_index(rgidx, colidx).is_some());
             }
         }
