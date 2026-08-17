@@ -25,16 +25,23 @@ use serde_json::{Value, json};
 use sysinfo::System;
 
 use super::cli::Cli;
-use super::model::{ExperimentManifest, OUTPUT_SCHEMA_VERSION, stable_hash};
+use super::model::{OUTPUT_SCHEMA_VERSION, stable_hash};
 
 pub(crate) struct JsonlOutput {
     writer: BufWriter<File>,
     completed: HashSet<String>,
+    validation_warnings: HashSet<String>,
+    validation_inconclusive: HashSet<String>,
     pub(crate) resumed_records: usize,
 }
 
 impl JsonlOutput {
-    pub(crate) fn open(cli: &Cli, manifest: &ExperimentManifest) -> Result<Self, String> {
+    pub(crate) fn open(
+        cli: &Cli,
+        manifest_id: &str,
+        experiment_count: usize,
+        mandatory_count: usize,
+    ) -> Result<Self, String> {
         let machine = machine_info();
         if let Some(parent) = cli.output.parent()
             && !parent.as_os_str().is_empty()
@@ -48,15 +55,17 @@ impl JsonlOutput {
         }
 
         if cli.resume {
-            let completed = read_resume_state(cli, manifest, &machine.signature)?;
-            let resumed_records = completed.len();
+            let state = read_resume_state(cli, manifest_id, &machine.signature)?;
+            let resumed_records = state.completed.len();
             let file = OpenOptions::new()
                 .append(true)
                 .open(&cli.output)
                 .map_err(|error| format!("failed to append {}: {error}", cli.output.display()))?;
             return Ok(Self {
                 writer: BufWriter::new(file),
-                completed,
+                completed: state.completed,
+                validation_warnings: state.validation_warnings,
+                validation_inconclusive: state.validation_inconclusive,
                 resumed_records,
             });
         }
@@ -74,16 +83,18 @@ impl JsonlOutput {
         let mut output = Self {
             writer: BufWriter::new(file),
             completed: HashSet::new(),
+            validation_warnings: HashSet::new(),
+            validation_inconclusive: HashSet::new(),
             resumed_records: 0,
         };
         output.write(&json!({
             "record_type": "manifest",
             "schema_version": OUTPUT_SCHEMA_VERSION,
-            "manifest_id": manifest.id,
+            "manifest_id": manifest_id,
             "stage": cli.stage.as_str(),
             "seed": cli.seed,
-            "experiment_count": manifest.experiments.len(),
-            "mandatory_count": manifest.mandatory_count,
+            "experiment_count": experiment_count,
+            "mandatory_count": mandatory_count,
             "sampling": cli.sampling_json(),
             "machine_signature": machine.signature,
             "machine": machine.details,
@@ -102,11 +113,35 @@ impl JsonlOutput {
         self.completed.insert(experiment_id.to_string());
     }
 
+    pub(crate) fn mark_validation_warning(&mut self, experiment_id: &str) {
+        self.validation_warnings.insert(experiment_id.to_string());
+    }
+
+    pub(crate) fn validation_warning_count(&self) -> usize {
+        self.validation_warnings.len()
+    }
+
+    pub(crate) fn mark_validation_inconclusive(&mut self, experiment_id: &str) {
+        self.validation_inconclusive
+            .insert(experiment_id.to_string());
+    }
+
+    pub(crate) fn validation_inconclusive_count(&self) -> usize {
+        self.validation_inconclusive.len()
+    }
+
     pub(crate) fn write(&mut self, value: &Value) -> Result<(), String> {
         serde_json::to_writer(&mut self.writer, value).map_err(|error| error.to_string())?;
         self.writer.write_all(b"\n").map_err(to_string)?;
         self.writer.flush().map_err(to_string)
     }
+}
+
+#[derive(Default)]
+struct ResumeState {
+    completed: HashSet<String>,
+    validation_warnings: HashSet<String>,
+    validation_inconclusive: HashSet<String>,
 }
 
 struct MachineInfo {
@@ -165,12 +200,12 @@ fn command_output(command: &str, args: &[&str]) -> Option<String> {
 
 fn read_resume_state(
     cli: &Cli,
-    manifest: &ExperimentManifest,
+    manifest_id: &str,
     machine_signature: &str,
-) -> Result<HashSet<String>, String> {
+) -> Result<ResumeState, String> {
     let file = File::open(&cli.output)
         .map_err(|error| format!("failed to read {}: {error}", cli.output.display()))?;
-    let mut completed = HashSet::new();
+    let mut state = ResumeState::default();
     let mut header_seen = false;
     for (line_idx, line) in BufReader::new(file).lines().enumerate() {
         let line = line.map_err(to_string)?;
@@ -181,7 +216,7 @@ fn read_resume_state(
             .map_err(|error| format!("invalid JSONL at line {}: {error}", line_idx + 1))?;
         match value.get("record_type").and_then(Value::as_str) {
             Some("manifest") if !header_seen => {
-                validate_header(cli, manifest, machine_signature, &value)?;
+                validate_header(cli, manifest_id, machine_signature, &value)?;
                 header_seen = true;
             }
             Some("experiment") => {
@@ -191,7 +226,21 @@ fn read_resume_state(
                         .pointer("/experiment/experiment_id")
                         .and_then(Value::as_str)
                 {
-                    completed.insert(id.to_string());
+                    state.completed.insert(id.to_string());
+                    if value
+                        .pointer("/summary/stability_warning")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        state.validation_warnings.insert(id.to_string());
+                    }
+                    if value
+                        .pointer("/summary/practical_decision")
+                        .and_then(Value::as_str)
+                        == Some("inconclusive")
+                    {
+                        state.validation_inconclusive.insert(id.to_string());
+                    }
                 }
             }
             _ => {}
@@ -203,12 +252,12 @@ fn read_resume_state(
             cli.output.display()
         ));
     }
-    Ok(completed)
+    Ok(state)
 }
 
 fn validate_header(
     cli: &Cli,
-    manifest: &ExperimentManifest,
+    manifest_id: &str,
     machine_signature: &str,
     header: &Value,
 ) -> Result<(), String> {
@@ -221,7 +270,7 @@ fn validate_header(
         (
             "manifest_id",
             header.get("manifest_id").cloned(),
-            json!(manifest.id),
+            json!(manifest_id),
         ),
         (
             "stage",

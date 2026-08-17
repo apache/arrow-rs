@@ -19,6 +19,7 @@ mod cli;
 mod fixture;
 mod model;
 mod output;
+mod policy_validation;
 mod sampling;
 
 use std::time::Instant;
@@ -27,7 +28,7 @@ use serde_json::{Value, json};
 
 use self::cli::{Cli, ParseOutcome};
 use self::fixture::FixtureCache;
-use self::model::ExperimentManifest;
+use self::model::{ExperimentManifest, Stage};
 use self::output::JsonlOutput;
 use self::sampling::{SampledPoint, sample_point};
 
@@ -35,8 +36,16 @@ pub(crate) fn run() -> Result<(), String> {
     let ParseOutcome::Run(cli) = Cli::parse()? else {
         return Ok(());
     };
+    if cli.stage == Stage::PolicyValidation {
+        return policy_validation::run(cli);
+    }
     let manifest = ExperimentManifest::generate(cli.stage, &cli.kinds, cli.seed)?;
-    let mut output = JsonlOutput::open(&cli, &manifest)?;
+    let mut output = JsonlOutput::open(
+        &cli,
+        &manifest.id,
+        manifest.experiments.len(),
+        manifest.mandatory_count,
+    )?;
     println!(
         "row-selection sampler: stage={}, manifest={}, experiments={}, output={}",
         cli.stage,

@@ -21,6 +21,7 @@
 //! resumable observations for offline analysis instead of producing a single
 //! benchmark summary.
 
+mod row_selection_policy_common;
 mod row_selection_policy_sampler;
 
 fn main() {

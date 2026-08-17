@@ -19,9 +19,12 @@
 
 # Row-selection policy sampler
 
-This bench-only binary collects paired `Mask` and `Selectors` observations for
-one projected column at a time. It does not change the production
-`AutoPerColumn` planner.
+This bench-only binary collects paired observations for two related questions:
+
+- `Mask` versus `Selectors` for one projected column at a time
+- end-to-end `Auto` versus `AutoPerColumn` over a heterogeneous projection
+
+It does not change the production `AutoPerColumn` planner.
 
 Fixtures and Parquet metadata are built before measurement. Each observation
 times reader construction through complete batch consumption against preloaded
@@ -65,6 +68,44 @@ cargo bench -p parquet --features arrow,async \
 The refinement defaults use a 3% practical decision band. This prevents tiny,
 unstable differences near the boundary from being treated as decisive wins.
 
+Validate the complete policy decision over the same heterogeneous cases used
+by the Criterion benchmark:
+
+```shell
+cargo bench -p parquet --features arrow,async \
+  --bench arrow_reader_row_selection_policy_sampler -- \
+  --stage policy-validation \
+  --output /tmp/row-selection-policy-validation.jsonl
+```
+
+Use repeatable `--case` filters to isolate a workload, for example
+`--case boundary_50_run8`. This stage measures `Auto` and `AutoPerColumn` in
+randomized two-pair blocks, so each block contains both execution orders. Its
+defaults use 20 warmup pairs, 20--60 measured pairs, 16 complete scans per
+timed observation, a 3% practical decision band, and an `Auto` control after
+every four measured pairs.
+
+Each policy-validation record includes the raw pairs, periodic controls,
+bootstrap confidence interval, execution-order effect, and the actual
+Mask/Selectors/fallback decision counts made by `AutoPerColumn`. The final
+`run_end.validation_passed` is false if any point exceeds 10% control drift or
+a 5% execution-order effect. `run_end.promotion_eligible` additionally requires
+that no point remains statistically inconclusive; a practical tie is a valid
+conclusion and is not considered inconclusive.
+
+Inspect the decisions and the final gate with:
+
+```shell
+jq -c 'select(.record_type == "experiment") |
+  {case: .experiment.case, summary, decisions: .policy_decisions}' \
+  /tmp/row-selection-policy-validation.jsonl
+
+jq 'select(.record_type == "run_end") |
+  {validation_passed, promotion_eligible, validation_warning_points,
+   inconclusive_points, remaining_experiments}' \
+  /tmp/row-selection-policy-validation.jsonl
+```
+
 Validate sparse page loading through the public push decoder:
 
 ```shell
@@ -93,15 +134,21 @@ incomplete timeout records are retried. Resume rejects a different schema,
 manifest, stage, seed, or machine signature. A mandatory fixture error aborts
 the run; an optional fixture error is recorded as `unsupported` so the rest of
 the manifest can continue. The sampler never silently substitutes one policy
-for the other.
+for the other. Policy-validation stability warnings are retained across resume
+and continue to make the final validation gate fail.
 
 ## Promoting measurements into the planner
 
 Treat effects inside the refinement stage's 3% decision band as ties. Before a
 threshold changes production planning, repeat the same manifest on a warm
 machine, require control drift below 10%, and check that the practical winner
-is stable. Rules apply only to sampled Arrow/encoding families; unmodeled,
-nested, or ambiguous metadata must retain the compatibility fallback.
+is stable. A stable single-column refinement is necessary but not sufficient:
+the corresponding `policy-validation` run must also finish with
+`validation_passed: true`. Sequential Criterion policy groups are useful for
+throughput reporting, but are not promotion evidence because they do not
+cancel cross-window drift. Rules apply only to sampled Arrow/encoding families;
+unmodeled, nested, or ambiguous metadata must retain the compatibility
+fallback.
 
 Use `--help` for sampling, filtering, confidence, and checkpoint options. Raw
 JSONL files are machine-specific experiment artifacts and are not intended to

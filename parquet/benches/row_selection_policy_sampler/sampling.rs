@@ -214,8 +214,15 @@ pub(crate) fn sample_point(
         });
 
         if samples.len() >= cli.min_pairs {
-            let (_, ci_low, ci_high) =
-                bootstrap_log_ratio(&samples, cli.bootstrap_samples, seed ^ samples.len() as u64);
+            let log_ratios = samples
+                .iter()
+                .map(|sample| sample.log_ratio)
+                .collect::<Vec<_>>();
+            let (_, ci_low, ci_high) = bootstrap_median_ci(
+                &log_ratios,
+                cli.bootstrap_samples,
+                seed ^ samples.len() as u64,
+            );
             if ci_low > cli.decision_band || ci_high < -cli.decision_band {
                 stop_reason = "direction_confident";
                 break;
@@ -231,8 +238,12 @@ pub(crate) fn sample_point(
         }
     }
 
+    let log_ratios = samples
+        .iter()
+        .map(|sample| sample.log_ratio)
+        .collect::<Vec<_>>();
     let (median_log_ratio, ci_low, ci_high) =
-        bootstrap_log_ratio(&samples, cli.bootstrap_samples, seed ^ 0xb007_57a9);
+        bootstrap_median_ci(&log_ratios, cli.bootstrap_samples, seed ^ 0xb007_57a9);
     let summary = SampleSummary {
         median_mask_ns: median(samples.iter().map(|sample| sample.mask_ns as f64).collect()),
         median_selectors_ns: median(
@@ -478,16 +489,12 @@ fn measure(
     Ok(u64::try_from(nanos.max(1)).unwrap_or(u64::MAX))
 }
 
-fn bootstrap_log_ratio(
-    samples: &[PairSample],
+pub(crate) fn bootstrap_median_ci(
+    observed: &[f64],
     bootstrap_samples: usize,
     seed: u64,
 ) -> (f64, f64, f64) {
-    let observed = samples
-        .iter()
-        .map(|sample| sample.log_ratio)
-        .collect::<Vec<_>>();
-    let estimate = median(observed.clone());
+    let estimate = median(observed.to_vec());
     let mut rng = StdRng::seed_from_u64(seed);
     let mut bootstrapped = Vec::with_capacity(bootstrap_samples);
     for _ in 0..bootstrap_samples {
@@ -505,7 +512,7 @@ fn bootstrap_log_ratio(
     (estimate, bootstrapped[low_idx], bootstrapped[high_idx])
 }
 
-fn median(mut values: Vec<f64>) -> f64 {
+pub(crate) fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
     if values.len().is_multiple_of(2) {

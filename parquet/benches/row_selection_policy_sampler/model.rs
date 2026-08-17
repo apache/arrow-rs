@@ -32,6 +32,7 @@ pub(crate) enum Stage {
     Smoke,
     Pilot,
     Refinement,
+    PolicyValidation,
     PageValidation,
 }
 
@@ -41,9 +42,10 @@ impl Stage {
             "smoke" => Ok(Self::Smoke),
             "pilot" => Ok(Self::Pilot),
             "refinement" => Ok(Self::Refinement),
+            "policy-validation" => Ok(Self::PolicyValidation),
             "page-validation" => Ok(Self::PageValidation),
             _ => Err(format!(
-                "unknown stage '{value}', expected smoke, pilot, refinement, or page-validation"
+                "unknown stage '{value}', expected smoke, pilot, refinement, policy-validation, or page-validation"
             )),
         }
     }
@@ -53,6 +55,7 @@ impl Stage {
             Self::Smoke => "smoke",
             Self::Pilot => "pilot",
             Self::Refinement => "refinement",
+            Self::PolicyValidation => "policy-validation",
             Self::PageValidation => "page-validation",
         }
     }
@@ -312,6 +315,9 @@ impl ExperimentManifest {
             Stage::Smoke => smoke_experiments(&kinds),
             Stage::Pilot => pilot_experiments(&kinds, seed),
             Stage::Refinement => refinement_experiments(&kinds, seed),
+            Stage::PolicyValidation => {
+                return Err("policy-validation uses its dedicated heterogeneous manifest".into());
+            }
             Stage::PageValidation => page_validation_experiments(&kinds),
         };
         if experiments.is_empty() {

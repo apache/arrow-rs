@@ -36,6 +36,7 @@ pub(crate) struct Cli {
     pub(crate) output: PathBuf,
     pub(crate) resume: bool,
     pub(crate) kinds: Vec<FixtureKind>,
+    pub(crate) cases: Vec<String>,
     pub(crate) min_pairs: usize,
     pub(crate) max_pairs: usize,
     pub(crate) warmup_pairs: usize,
@@ -44,6 +45,7 @@ pub(crate) struct Cli {
     pub(crate) target_ci_width: f64,
     pub(crate) point_timeout: Duration,
     pub(crate) inner_iterations: usize,
+    pub(crate) control_interval_pairs: usize,
     pub(crate) ephemeral_output: bool,
 }
 
@@ -56,6 +58,7 @@ impl Cli {
         let mut output = None;
         let mut resume = false;
         let mut kinds = Vec::new();
+        let mut cases = Vec::new();
         let mut min_pairs = None;
         let mut max_pairs = None;
         let mut warmup_pairs = None;
@@ -63,7 +66,8 @@ impl Cli {
         let mut decision_band = None;
         let mut target_ci_width = None;
         let mut point_timeout_seconds = 60.0;
-        let mut inner_iterations = 1usize;
+        let mut inner_iterations = None;
+        let mut control_interval_pairs = None;
         let mut ephemeral_output = false;
 
         while let Some(arg) = args.next() {
@@ -99,6 +103,7 @@ impl Cli {
                 "--kind" => {
                     kinds.push(FixtureKind::parse(&next_string(&mut args, "--kind")?)?);
                 }
+                "--case" => cases.push(next_string(&mut args, "--case")?),
                 "--min-pairs" => {
                     min_pairs = Some(parse_usize(
                         &next_string(&mut args, "--min-pairs")?,
@@ -142,10 +147,16 @@ impl Cli {
                     )?;
                 }
                 "--inner-iterations" => {
-                    inner_iterations = parse_usize(
+                    inner_iterations = Some(parse_usize(
                         &next_string(&mut args, "--inner-iterations")?,
                         "--inner-iterations",
-                    )?;
+                    )?);
+                }
+                "--control-interval-pairs" => {
+                    control_interval_pairs = Some(parse_usize(
+                        &next_string(&mut args, "--control-interval-pairs")?,
+                        "--control-interval-pairs",
+                    )?);
                 }
                 _ => return Err(format!("unknown argument '{arg}', use --help")),
             }
@@ -163,6 +174,9 @@ impl Cli {
         let budget_seconds = budget_seconds.unwrap_or(defaults.budget_seconds);
         let decision_band = decision_band.unwrap_or(defaults.decision_band);
         let target_ci_width = target_ci_width.unwrap_or(defaults.target_ci_width);
+        let inner_iterations = inner_iterations.unwrap_or(defaults.inner_iterations);
+        let control_interval_pairs =
+            control_interval_pairs.unwrap_or(defaults.control_interval_pairs);
 
         if !budget_seconds.is_finite() || budget_seconds <= 0.0 {
             return Err("--budget-seconds must be finite and greater than zero".into());
@@ -185,8 +199,30 @@ impl Cli {
         if inner_iterations == 0 {
             return Err("--inner-iterations must be greater than zero".into());
         }
+        if control_interval_pairs == 0 {
+            return Err("--control-interval-pairs must be greater than zero".into());
+        }
         let mut seen = HashSet::new();
         kinds.retain(|kind| seen.insert(*kind));
+        let mut seen = HashSet::new();
+        cases.retain(|case| seen.insert(case.clone()));
+
+        if stage == Stage::PolicyValidation && !kinds.is_empty() {
+            return Err("--kind is not supported by policy-validation; use --case".into());
+        }
+        if stage != Stage::PolicyValidation && !cases.is_empty() {
+            return Err("--case is only supported by policy-validation".into());
+        }
+        if stage == Stage::PolicyValidation
+            && (!min_pairs.is_multiple_of(2)
+                || !max_pairs.is_multiple_of(2)
+                || !control_interval_pairs.is_multiple_of(2))
+        {
+            return Err(
+                "policy-validation pair counts and control interval must be even to preserve balanced execution-order blocks"
+                    .into(),
+            );
+        }
 
         if ephemeral_output && output.is_some() {
             return Err("--test cannot be combined with --output".into());
@@ -203,6 +239,7 @@ impl Cli {
             output,
             resume,
             kinds,
+            cases,
             min_pairs,
             max_pairs,
             warmup_pairs,
@@ -211,6 +248,7 @@ impl Cli {
             target_ci_width,
             point_timeout: Duration::from_secs_f64(point_timeout_seconds),
             inner_iterations,
+            control_interval_pairs,
             ephemeral_output,
         }))
     }
@@ -226,7 +264,9 @@ impl Cli {
             "target_ci_width": self.target_ci_width,
             "point_timeout_seconds": self.point_timeout.as_secs_f64(),
             "inner_iterations": self.inner_iterations,
+            "control_interval_pairs": self.control_interval_pairs,
             "kind_filters": self.kinds.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(),
+            "case_filters": &self.cases,
         })
     }
 }
@@ -239,6 +279,8 @@ struct SamplingDefaults {
     bootstrap_samples: usize,
     decision_band: f64,
     target_ci_width: f64,
+    inner_iterations: usize,
+    control_interval_pairs: usize,
 }
 
 impl SamplingDefaults {
@@ -252,6 +294,8 @@ impl SamplingDefaults {
                 bootstrap_samples: 100,
                 decision_band: 0.0,
                 target_ci_width: 0.05,
+                inner_iterations: 1,
+                control_interval_pairs: 4,
             },
             Stage::Pilot => Self {
                 budget_seconds: 300.0,
@@ -261,6 +305,8 @@ impl SamplingDefaults {
                 bootstrap_samples: 400,
                 decision_band: 0.0,
                 target_ci_width: 0.05,
+                inner_iterations: 1,
+                control_interval_pairs: 4,
             },
             Stage::Refinement => Self {
                 budget_seconds: 300.0,
@@ -270,6 +316,19 @@ impl SamplingDefaults {
                 bootstrap_samples: 600,
                 decision_band: 0.03,
                 target_ci_width: 0.04,
+                inner_iterations: 1,
+                control_interval_pairs: 4,
+            },
+            Stage::PolicyValidation => Self {
+                budget_seconds: 300.0,
+                min_pairs: 20,
+                max_pairs: 60,
+                warmup_pairs: 20,
+                bootstrap_samples: 1_000,
+                decision_band: 0.03,
+                target_ci_width: 0.03,
+                inner_iterations: 16,
+                control_interval_pairs: 4,
             },
             Stage::PageValidation => Self {
                 budget_seconds: 60.0,
@@ -279,6 +338,8 @@ impl SamplingDefaults {
                 bootstrap_samples: 200,
                 decision_band: 0.0,
                 target_ci_width: 0.05,
+                inner_iterations: 1,
+                control_interval_pairs: 4,
             },
         }
     }
@@ -346,7 +407,7 @@ Usage:
     --bench arrow_reader_row_selection_policy_sampler -- [OPTIONS]
 
 Options:
-  --stage <smoke|pilot|refinement|page-validation>
+  --stage <smoke|pilot|refinement|policy-validation|page-validation>
                                            Sampling stage (default: smoke)
   --smoke                                 Alias for --stage smoke
   --test                                  Ephemeral smoke run used by validation
@@ -356,14 +417,18 @@ Options:
   --resume                                Resume an existing matching JSONL file
   --kind <KIND>                           Repeatable type filter: int32,
                                            string-view, dictionary, fixed-binary
+  --case <CASE>                           Repeatable policy-validation case filter
   --min-pairs <N>                         Minimum measured pairs per point
+                                           (even for policy-validation)
   --max-pairs <N>                         Maximum measured pairs per point
+                                           (even for policy-validation)
   --warmup-pairs <N>                      Untimed warmup pairs per point
   --bootstrap-samples <N>                 Bootstrap resamples for the median CI
   --decision-band <LOG_RATIO>             Early-stop band around zero
   --target-ci-width <LOG_RATIO>           Precision early-stop threshold
   --point-timeout-seconds <SECONDS>       Mark a slow point incomplete
   --inner-iterations <N>                  Full scans per timed observation
+  --control-interval-pairs <N>            Even policy-validation control cadence
   -h, --help                              Print this help
 "
     );
