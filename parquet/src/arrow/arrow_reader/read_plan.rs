@@ -315,15 +315,11 @@ impl ReadPlanBuilder {
         if all_selected {
             return Ok(self);
         }
-        let raw = if matches!(self.row_selection_policy, RowSelectionPolicy::AutoPerColumn)
-            || self
-                .selection
-                .as_ref()
-                .is_some_and(|s| s.as_mask().is_some())
+        let raw = if self
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.as_mask().is_some())
         {
-            // Per-column execution needs both views. Keep predicate output in
-            // its native bitmap form and materialize selectors only if a
-            // column actually chooses that strategy.
             RowSelection::from_boolean_buffer(filters_to_boolean_buffer(&filters))
         } else {
             RowSelection::from_filters(&filters)
@@ -792,39 +788,50 @@ mod tests {
     }
 
     #[test]
-    fn auto_per_column_predicate_keeps_bitmap_backing() {
+    fn auto_per_column_predicate_output_matches_the_default_policy() {
         use crate::arrow::ProjectionMask;
         use crate::arrow::array_reader::StructArrayReader;
         use crate::arrow::array_reader::test_util::make_int32_page_reader;
         use crate::arrow::arrow_reader::ArrowPredicateFn;
         use arrow_schema::{DataType as ArrowType, Field, Fields};
 
-        let data: Vec<i32> = (0..6).collect();
-        let levels = vec![0; data.len()];
-        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
-        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
-            "c0",
-            ArrowType::Int32,
-            false,
-        )]));
-        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
-        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |_| {
-            Ok(BooleanArray::from(vec![
-                true, false, true, false, true, false,
-            ]))
-        });
+        // Per-column planning may decline after the predicate has run, so its
+        // predicate output must cost no more than the default policy's. It also
+        // does not benefit from mask backing: compiling the execution windows
+        // always consumes selectors, while the mask is built lazily and only
+        // when some column actually picks that strategy.
+        let selection_for = |policy| {
+            let data: Vec<i32> = (0..6).collect();
+            let levels = vec![0; data.len()];
+            let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+            let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+                "c0",
+                ArrowType::Int32,
+                false,
+            )]));
+            let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+            let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |_| {
+                Ok(BooleanArray::from(vec![
+                    true, false, true, false, true, false,
+                ]))
+            });
+            ReadPlanBuilder::new(16)
+                .with_row_selection_policy(policy)
+                .with_predicate_options(PredicateOptions::new(
+                    Box::new(struct_reader),
+                    &mut predicate,
+                ))
+                .unwrap()
+                .selection()
+                .cloned()
+                .unwrap()
+        };
 
-        let builder = ReadPlanBuilder::new(16)
-            .with_row_selection_policy(RowSelectionPolicy::AutoPerColumn)
-            .with_predicate_options(PredicateOptions::new(
-                Box::new(struct_reader),
-                &mut predicate,
-            ))
-            .unwrap();
-
-        let selection = builder.selection().unwrap();
-        assert!(selection.as_mask().is_some());
-        assert_eq!(selection.row_count(), 3);
+        let per_column = selection_for(RowSelectionPolicy::AutoPerColumn);
+        let default = selection_for(RowSelectionPolicy::default());
+        assert_eq!(per_column.row_count(), 3);
+        assert_eq!(per_column, default);
+        assert_eq!(per_column.as_mask().is_some(), default.as_mask().is_some());
     }
 
     #[test]
