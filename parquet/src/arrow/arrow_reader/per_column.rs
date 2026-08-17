@@ -65,7 +65,7 @@ pub(crate) struct RowSelectionStatistics {
 impl RowSelectionStatistics {
     #[inline]
     fn auto_selection_strategy(self, threshold: usize) -> RowSelectionStrategy {
-        debug_assert!(threshold >= WIDE_BYTE_RUN_THRESHOLD);
+        debug_assert!(threshold >= MIN_RUN_THRESHOLD);
         if self.run_count == 0 || self.physical_rows < self.run_count.saturating_mul(threshold) {
             RowSelectionStrategy::Mask
         } else {
@@ -86,19 +86,34 @@ pub(crate) trait ColumnSelectionPlanner {
 /// is below the threshold. The values below deliberately stop at the last
 /// repeatable Mask win outside the sampler's 3% practical-equivalence band.
 ///
-/// `WIDE_BYTE_RUN_THRESHOLD` is 9 rather than 5 because a wide byte column at
-/// an average run of 8 still decodes faster under Mask. At 5 the heterogeneous
-/// `boundary_50_run8` policy-validation case split its projection and lost
-/// roughly 17% against the global `Auto` policy; at 9 it reaches a practical
-/// tie. Both fixed-binary widths sampled to the same threshold, so the
-/// `NARROW_FIXED_BINARY_BYTES` split currently maps to one value.
-const INT32_RUN_THRESHOLD: usize = 13;
+/// The values below were resampled on aarch64 with unit resolution over runs
+/// 1..=16 across five seeds, restricted to the sampler's `balanced-grid` shape
+/// family (`skip == select`), which is the only family that varies run length
+/// without also varying selectivity. Every sampled family crosses between 4
+/// and 16, so that window is where one type's threshold can differ from
+/// another's; beyond it the choice is uniformly `Selectors`.
+const FIXED_BINARY_RUN_THRESHOLD: usize = 5;
+const WIDE_BYTE_RUN_THRESHOLD: usize = 8;
+/// Dictionary-encoded `Utf8View` used to fall through to the compatibility
+/// fallback. It is the single largest unmodeled slice of both TPC-DS (31
+/// columns) and ClickBench (28), and it samples well clear of the plain
+/// `Utf8View` threshold, so it gets its own value rather than sharing one.
+const DICTIONARY_UTF8_VIEW_RUN_THRESHOLD: usize = 11;
+const INT64_RUN_THRESHOLD: usize = 14;
+const INT32_RUN_THRESHOLD: usize = 15;
+/// Only the INT32-backed precision range was sampled; wider decimals keep the
+/// fallback.
+const DECIMAL128_INT32_RUN_THRESHOLD: usize = 15;
+const DECIMAL128_INT32_MAX_PRECISION: u8 = 9;
+const DATE32_RUN_THRESHOLD: usize = 16;
+/// Inherited from the earlier x86_64 sampling: neither `Dictionary(Int32,
+/// Utf8)` nor narrow `Utf8View` occurs in TPC-DS or ClickBench, so this pass
+/// did not resample them.
 const DICTIONARY_UTF8_RUN_THRESHOLD: usize = 17;
 const NARROW_BYTE_RUN_THRESHOLD: usize = 13;
-const MEDIUM_BYTE_RUN_THRESHOLD: usize = 9;
-const WIDE_BYTE_RUN_THRESHOLD: usize = 9;
+/// Smallest value any arm can return, used to guard the strategy helper.
+const MIN_RUN_THRESHOLD: usize = FIXED_BINARY_RUN_THRESHOLD;
 const NARROW_UTF8_VIEW_BYTES: usize = 32;
-const NARROW_FIXED_BINARY_BYTES: i32 = 8;
 
 struct MetadataColumnSelectionPlanner;
 
@@ -117,18 +132,17 @@ fn metadata_run_threshold(field: &ParquetField, row_group: &RowGroupMetaData) ->
     };
     match &field.arrow_type {
         DataType::Int32 => Some(INT32_RUN_THRESHOLD),
+        DataType::Int64 => Some(INT64_RUN_THRESHOLD),
+        DataType::Date32 => Some(DATE32_RUN_THRESHOLD),
+        DataType::Decimal128(precision, _) if *precision <= DECIMAL128_INT32_MAX_PRECISION => {
+            Some(DECIMAL128_INT32_RUN_THRESHOLD)
+        }
         DataType::Dictionary(key, value)
             if key.as_ref() == &DataType::Int32 && value.as_ref() == &DataType::Utf8 =>
         {
             Some(DICTIONARY_UTF8_RUN_THRESHOLD)
         }
-        DataType::FixedSizeBinary(width) if *width > 0 => {
-            Some(if *width <= NARROW_FIXED_BINARY_BYTES {
-                MEDIUM_BYTE_RUN_THRESHOLD
-            } else {
-                WIDE_BYTE_RUN_THRESHOLD
-            })
-        }
+        DataType::FixedSizeBinary(width) if *width > 0 => Some(FIXED_BINARY_RUN_THRESHOLD),
         DataType::Utf8View => {
             let column = row_group.columns().get(*col_idx)?;
             if column.encodings().any(|encoding| {
@@ -137,7 +151,7 @@ fn metadata_run_threshold(field: &ParquetField, row_group: &RowGroupMetaData) ->
                     Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
                 )
             }) {
-                return None;
+                return Some(DICTIONARY_UTF8_VIEW_RUN_THRESHOLD);
             }
             let values = usize::try_from(column.num_values()).ok()?;
             let bytes = usize::try_from(column.uncompressed_size()).ok()?;
@@ -810,11 +824,29 @@ mod tests {
         );
         assert_eq!(
             metadata_run_threshold(&primitive_field(DataType::FixedSizeBinary(8)), &row_group,),
-            Some(MEDIUM_BYTE_RUN_THRESHOLD)
+            Some(FIXED_BINARY_RUN_THRESHOLD)
         );
         assert_eq!(
             metadata_run_threshold(&primitive_field(DataType::FixedSizeBinary(32)), &row_group,),
-            Some(WIDE_BYTE_RUN_THRESHOLD)
+            Some(FIXED_BINARY_RUN_THRESHOLD)
+        );
+        assert_eq!(
+            metadata_run_threshold(&primitive_field(DataType::Int64), &row_group),
+            Some(INT64_RUN_THRESHOLD)
+        );
+        assert_eq!(
+            metadata_run_threshold(&primitive_field(DataType::Date32), &row_group),
+            Some(DATE32_RUN_THRESHOLD)
+        );
+        assert_eq!(
+            metadata_run_threshold(&primitive_field(DataType::Decimal128(7, 2)), &row_group),
+            Some(DECIMAL128_INT32_RUN_THRESHOLD)
+        );
+        // Beyond the INT32-backed precision range Parquet switches physical
+        // storage, which this pass did not sample.
+        assert_eq!(
+            metadata_run_threshold(&primitive_field(DataType::Decimal128(20, 2)), &row_group),
+            None
         );
 
         let unmodeled = ParquetField {

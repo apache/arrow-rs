@@ -72,19 +72,25 @@ pub(crate) enum FixtureKind {
     Int32,
     Int64,
     Float64,
+    Decimal128,
+    Date32,
     String,
     StringView,
+    DictStringView,
     Dictionary,
     FixedBinary,
 }
 
 impl FixtureKind {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Int32,
         Self::Int64,
         Self::Float64,
+        Self::Decimal128,
+        Self::Date32,
         Self::String,
         Self::StringView,
+        Self::DictStringView,
         Self::Dictionary,
         Self::FixedBinary,
     ];
@@ -94,13 +100,17 @@ impl FixtureKind {
             "int32" => Ok(Self::Int32),
             "int64" => Ok(Self::Int64),
             "float64" => Ok(Self::Float64),
+            "decimal128" => Ok(Self::Decimal128),
+            "date32" => Ok(Self::Date32),
             "string" => Ok(Self::String),
             "string-view" => Ok(Self::StringView),
+            "dict-string-view" => Ok(Self::DictStringView),
             "dictionary" => Ok(Self::Dictionary),
             "fixed-binary" => Ok(Self::FixedBinary),
             _ => Err(format!(
-                "unknown kind '{value}', expected int32, int64, float64, string, \
-                 string-view, dictionary, or fixed-binary"
+                "unknown kind '{value}', expected int32, int64, float64, decimal128, \
+                 date32, string, string-view, dict-string-view, dictionary, or \
+                 fixed-binary"
             )),
         }
     }
@@ -110,8 +120,11 @@ impl FixtureKind {
             Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::Float64 => "float64",
+            Self::Decimal128 => "decimal128",
+            Self::Date32 => "date32",
             Self::String => "string",
             Self::StringView => "string-view",
+            Self::DictStringView => "dict-string-view",
             Self::Dictionary => "dictionary",
             Self::FixedBinary => "fixed-binary",
         }
@@ -155,7 +168,10 @@ impl FixtureSpec {
         let (value_width, dictionary_cardinality) = match kind {
             FixtureKind::Int32 => (4, 0),
             FixtureKind::Int64 | FixtureKind::Float64 => (8, 0),
+            FixtureKind::Decimal128 => (16, 0),
+            FixtureKind::Date32 => (4, 0),
             FixtureKind::String | FixtureKind::StringView => (64, 0),
+            FixtureKind::DictStringView => (32, 256),
             FixtureKind::Dictionary => (32, 256),
             FixtureKind::FixedBinary => (32, 0),
         };
@@ -599,12 +615,15 @@ fn fixture_variants(kinds: &[FixtureKind]) -> Vec<FixtureSpec> {
         let widths: &[usize] = match kind {
             FixtureKind::Int32 => &[4],
             FixtureKind::Int64 | FixtureKind::Float64 => &[8],
+            FixtureKind::Decimal128 => &[16],
+            FixtureKind::Date32 => &[4],
             FixtureKind::String | FixtureKind::StringView => &[16, 64, 256],
+            FixtureKind::DictStringView => &[16, 64],
             FixtureKind::Dictionary => &[16, 64],
             FixtureKind::FixedBinary => &[8, 32],
         };
         let cardinalities: &[usize] = match kind {
-            FixtureKind::Dictionary => &[16, 1_024],
+            FixtureKind::Dictionary | FixtureKind::DictStringView => &[16, 1_024],
             _ => &[0],
         };
         for &rows in &[16_384, 65_536] {
@@ -696,9 +715,15 @@ fn refinement_experiments(kinds: &[FixtureKind], seed: u64) -> Vec<Experiment> {
 fn refinement_shapes() -> Vec<(&'static str, usize, usize)> {
     let mut shapes = Vec::new();
     shapes.extend(
-        [1, 2, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 64]
-            .into_iter()
-            .map(|run| ("balanced-grid", run, run)),
+        // Dense through 16: every sampled Arrow family crosses between 2 and
+        // 16, so unit resolution there is what separates one type's threshold
+        // from another's. Beyond 16 the choice is uniformly Selectors and a
+        // coarse grid is enough to confirm it.
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 64,
+        ]
+        .into_iter()
+        .map(|run| ("balanced-grid", run, run)),
     );
     shapes.extend(
         [15, 31, 47, 63, 95]

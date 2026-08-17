@@ -21,8 +21,8 @@ use std::sync::Arc;
 use arrow_array::builder::{FixedSizeBinaryBuilder, StringBuilder, StringViewBuilder};
 use arrow_array::types::Int32Type;
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, Float64Array, Int32Array, Int64Array, RecordBatch,
-    StringArray,
+    Array, ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Float64Array, Int32Array,
+    Int64Array, RecordBatch, StringArray,
 };
 use arrow_cast::display::array_value_to_string;
 use arrow_schema::{DataType, Field, Schema};
@@ -53,7 +53,10 @@ impl Fixture {
         )]));
         let properties = WriterProperties::builder()
             .set_compression(Compression::UNCOMPRESSED)
-            .set_dictionary_enabled(spec.kind == FixtureKind::Dictionary)
+            .set_dictionary_enabled(matches!(
+                spec.kind,
+                FixtureKind::Dictionary | FixtureKind::DictStringView
+            ))
             .set_max_row_group_row_count(Some(spec.rows))
             .set_data_page_row_count_limit(spec.page_rows)
             .set_statistics_enabled(EnabledStatistics::Page)
@@ -191,11 +194,20 @@ fn validate_spec(spec: &FixtureSpec) -> Result<(), String> {
         FixtureKind::Int64 | FixtureKind::Float64 if spec.value_width != 8 => {
             Err("64-bit primitive fixtures require value_width=8".into())
         }
-        FixtureKind::Dictionary if spec.dictionary_cardinality == 0 => {
+        FixtureKind::Decimal128 if spec.value_width != 16 => {
+            Err("Decimal128 fixtures require value_width=16".into())
+        }
+        FixtureKind::Date32 if spec.value_width != 4 => {
+            Err("Date32 fixtures require value_width=4".into())
+        }
+        FixtureKind::Dictionary | FixtureKind::DictStringView
+            if spec.dictionary_cardinality == 0 =>
+        {
             Err("dictionary fixtures require a non-zero cardinality".into())
         }
         FixtureKind::String
         | FixtureKind::StringView
+        | FixtureKind::DictStringView
         | FixtureKind::Dictionary
         | FixtureKind::FixedBinary
             if spec.value_width == 0 =>
@@ -211,8 +223,12 @@ fn data_type(spec: &FixtureSpec) -> DataType {
         FixtureKind::Int32 => DataType::Int32,
         FixtureKind::Int64 => DataType::Int64,
         FixtureKind::Float64 => DataType::Float64,
+        FixtureKind::Decimal128 => DataType::Decimal128(DECIMAL128_PRECISION, DECIMAL128_SCALE),
+        FixtureKind::Date32 => DataType::Date32,
         FixtureKind::String => DataType::Utf8,
-        FixtureKind::StringView => DataType::Utf8View,
+        // Same Arrow type as `StringView`; the writer property is what makes
+        // this one dictionary-encoded in Parquet.
+        FixtureKind::StringView | FixtureKind::DictStringView => DataType::Utf8View,
         FixtureKind::Dictionary => {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         }
@@ -231,6 +247,13 @@ fn build_batch(spec: &FixtureSpec, schema: Arc<Schema>) -> Result<RecordBatch, S
         FixtureKind::Float64 => Arc::new(Float64Array::from_iter(
             (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(float64_value(row))),
         )),
+        FixtureKind::Decimal128 => Arc::new(
+            Decimal128Array::from_iter(
+                (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(decimal128_value(row))),
+            )
+            .with_precision_and_scale(DECIMAL128_PRECISION, DECIMAL128_SCALE)
+            .map_err(|error| error.to_string())?,
+        ),
         FixtureKind::String => {
             let mut builder = StringBuilder::with_capacity(spec.rows, spec.rows * spec.value_width);
             for row in 0..spec.rows {
@@ -242,6 +265,9 @@ fn build_batch(spec: &FixtureSpec, schema: Arc<Schema>) -> Result<RecordBatch, S
             }
             Arc::new(builder.finish())
         }
+        FixtureKind::Date32 => Arc::new(Date32Array::from_iter(
+            (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(date32_value(row))),
+        )),
         FixtureKind::StringView => {
             let mut builder = StringViewBuilder::with_capacity(spec.rows);
             for row in 0..spec.rows {
@@ -249,6 +275,20 @@ fn build_batch(spec: &FixtureSpec, schema: Arc<Schema>) -> Result<RecordBatch, S
                     builder.append_null();
                 } else {
                     builder.append_value(string_value(row, spec.value_width, 0x51));
+                }
+            }
+            Arc::new(builder.finish())
+        }
+        FixtureKind::DictStringView => {
+            // Values are drawn from a small pool so the writer actually picks
+            // dictionary encoding, which is the case the planner rejects today.
+            let mut builder = StringViewBuilder::with_capacity(spec.rows);
+            for row in 0..spec.rows {
+                if is_null(spec, row) {
+                    builder.append_null();
+                } else {
+                    let key = row.wrapping_mul(31) % spec.dictionary_cardinality;
+                    builder.append_value(string_value(key, spec.value_width, 0xd1));
                 }
             }
             Arc::new(builder.finish())
@@ -292,6 +332,23 @@ fn is_null(spec: &FixtureSpec, row: usize) -> bool {
 
 fn int32_value(row: usize) -> i32 {
     row.wrapping_mul(31).wrapping_add(17) as i32
+}
+
+/// Matches the TPC-DS money columns (`Decimal128(7, 2)`), which are the widest
+/// unmodeled slice of that schema.
+const DECIMAL128_PRECISION: u8 = 7;
+const DECIMAL128_SCALE: i8 = 2;
+
+/// Stays inside `DECIMAL128_PRECISION`: the modulus is the largest prime below
+/// `10^7`, so every value has at most seven decimal digits.
+fn decimal128_value(row: usize) -> i128 {
+    (int64_value(row) % 9_999_991) as i128
+}
+
+/// Days since the epoch, kept inside a plausible calendar range so the values
+/// look like the date dimensions the model is meant to cover.
+fn date32_value(row: usize) -> i32 {
+    (int32_value(row).rem_euclid(36_524)) + 10_957
 }
 
 fn int64_value(row: usize) -> i64 {

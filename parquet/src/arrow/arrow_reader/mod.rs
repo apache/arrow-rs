@@ -4888,8 +4888,11 @@ pub(crate) mod tests {
         assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
     }
 
+    /// Dictionary-encoded `Utf8View` is modelled rather than deferred to the
+    /// compatibility fallback: it is the largest single slice of real string
+    /// columns, so leaving it unmodelled meant the planner never ran on them.
     #[test]
-    fn test_auto_per_column_dictionary_encoded_view_uses_fallback() {
+    fn test_auto_per_column_dictionary_encoded_view_is_modelled() {
         let rows = 256;
         let mut values = StringViewBuilder::with_capacity(rows);
         let value = "dictionary-value".repeat(4);
@@ -4929,8 +4932,11 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(actual, expected);
+        // An average run of 8 is below the dictionary-view threshold, so the
+        // model picks Mask on its own rather than inheriting it from the
+        // legacy global threshold.
         assert_eq!(metrics.row_selection_mask_decisions(), Some(1));
-        assert_eq!(metrics.row_selection_fallback_decisions(), Some(1));
+        assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
     }
 
     #[test]
