@@ -736,6 +736,28 @@ impl Decoder {
         Ok(total_consumed)
     }
 
+    /// Decode exactly one unframed Avro datum with the active writer schema.
+    ///
+    /// This is intended for transports such as Kafka where the message boundary is external to
+    /// Avro. It returns the number of datum bytes consumed, allowing the caller to ignore transport
+    /// payload bytes after the first datum when its format contract requires that behavior.
+    ///
+    /// The decoder must already have the desired active fingerprint, and this method does not
+    /// inspect or switch framing fingerprints.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the datum is incomplete, malformed, or incompatible with the active
+    /// writer schema.
+    pub fn decode_datum(&mut self, data: &[u8]) -> Result<usize, AvroError> {
+        if self.remaining_capacity == 0 {
+            return Ok(0);
+        }
+        let consumed = self.active_decoder.decode(data, 1)?;
+        self.remaining_capacity -= 1;
+        Ok(consumed)
+    }
+
     // Attempt to handle a prefix at the current position.
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
@@ -2666,6 +2688,30 @@ mod test {
             .unwrap();
         assert_eq!(col.value(0), 42);
         assert_eq!(col.value(1), 11);
+    }
+
+    #[test]
+    fn test_decode_datum_consumes_one_unframed_record() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let framed = make_message(fp, 42);
+        let mut datum = framed[SINGLE_OBJECT_MAGIC.len() + size_of::<u64>()..].to_vec();
+        datum.extend_from_slice(&[0xde, 0xad]);
+
+        let mut decoder = make_decoder(&store, fp, &reader_schema);
+        let consumed = decoder.decode_datum(&datum).unwrap();
+        assert_eq!(consumed, datum.len() - 2);
+
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 1);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 42);
     }
 
     #[test]
