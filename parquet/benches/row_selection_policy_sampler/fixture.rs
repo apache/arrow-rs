@@ -18,9 +18,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::builder::{FixedSizeBinaryBuilder, StringViewBuilder};
+use arrow_array::builder::{FixedSizeBinaryBuilder, StringBuilder, StringViewBuilder};
 use arrow_array::types::Int32Type;
-use arrow_array::{Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringArray};
+use arrow_array::{
+    Array, ArrayRef, DictionaryArray, Float64Array, Int32Array, Int64Array, RecordBatch,
+    StringArray,
+};
 use arrow_cast::display::array_value_to_string;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -185,10 +188,16 @@ fn validate_spec(spec: &FixtureSpec) -> Result<(), String> {
         FixtureKind::Int32 if spec.value_width != 4 => {
             Err("Int32 fixtures require value_width=4".into())
         }
+        FixtureKind::Int64 | FixtureKind::Float64 if spec.value_width != 8 => {
+            Err("64-bit primitive fixtures require value_width=8".into())
+        }
         FixtureKind::Dictionary if spec.dictionary_cardinality == 0 => {
             Err("dictionary fixtures require a non-zero cardinality".into())
         }
-        FixtureKind::StringView | FixtureKind::Dictionary | FixtureKind::FixedBinary
+        FixtureKind::String
+        | FixtureKind::StringView
+        | FixtureKind::Dictionary
+        | FixtureKind::FixedBinary
             if spec.value_width == 0 =>
         {
             Err("byte-oriented fixtures require a non-zero value width".into())
@@ -200,6 +209,9 @@ fn validate_spec(spec: &FixtureSpec) -> Result<(), String> {
 fn data_type(spec: &FixtureSpec) -> DataType {
     match spec.kind {
         FixtureKind::Int32 => DataType::Int32,
+        FixtureKind::Int64 => DataType::Int64,
+        FixtureKind::Float64 => DataType::Float64,
+        FixtureKind::String => DataType::Utf8,
         FixtureKind::StringView => DataType::Utf8View,
         FixtureKind::Dictionary => {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
@@ -213,6 +225,23 @@ fn build_batch(spec: &FixtureSpec, schema: Arc<Schema>) -> Result<RecordBatch, S
         FixtureKind::Int32 => Arc::new(Int32Array::from_iter(
             (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(int32_value(row))),
         )),
+        FixtureKind::Int64 => Arc::new(Int64Array::from_iter(
+            (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(int64_value(row))),
+        )),
+        FixtureKind::Float64 => Arc::new(Float64Array::from_iter(
+            (0..spec.rows).map(|row| (!is_null(spec, row)).then_some(float64_value(row))),
+        )),
+        FixtureKind::String => {
+            let mut builder = StringBuilder::with_capacity(spec.rows, spec.rows * spec.value_width);
+            for row in 0..spec.rows {
+                if is_null(spec, row) {
+                    builder.append_null();
+                } else {
+                    builder.append_value(string_value(row, spec.value_width, 0x51));
+                }
+            }
+            Arc::new(builder.finish())
+        }
         FixtureKind::StringView => {
             let mut builder = StringViewBuilder::with_capacity(spec.rows);
             for row in 0..spec.rows {
@@ -263,6 +292,18 @@ fn is_null(spec: &FixtureSpec, row: usize) -> bool {
 
 fn int32_value(row: usize) -> i32 {
     row.wrapping_mul(31).wrapping_add(17) as i32
+}
+
+fn int64_value(row: usize) -> i64 {
+    (row as u64)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add(17) as i64
+}
+
+/// Finite by construction. A NaN would decode correctly but compare unequal to
+/// itself, which would fail the sampler's paired value check.
+fn float64_value(row: usize) -> f64 {
+    (int64_value(row) % 1_000_003) as f64 / 3.0
 }
 
 fn string_value(row: usize, width: usize, salt: u8) -> String {

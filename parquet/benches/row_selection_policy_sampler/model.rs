@@ -70,14 +70,20 @@ impl Display for Stage {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum FixtureKind {
     Int32,
+    Int64,
+    Float64,
+    String,
     StringView,
     Dictionary,
     FixedBinary,
 }
 
 impl FixtureKind {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Int32,
+        Self::Int64,
+        Self::Float64,
+        Self::String,
         Self::StringView,
         Self::Dictionary,
         Self::FixedBinary,
@@ -86,11 +92,15 @@ impl FixtureKind {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "int32" => Ok(Self::Int32),
+            "int64" => Ok(Self::Int64),
+            "float64" => Ok(Self::Float64),
+            "string" => Ok(Self::String),
             "string-view" => Ok(Self::StringView),
             "dictionary" => Ok(Self::Dictionary),
             "fixed-binary" => Ok(Self::FixedBinary),
             _ => Err(format!(
-                "unknown kind '{value}', expected int32, string-view, dictionary, or fixed-binary"
+                "unknown kind '{value}', expected int32, int64, float64, string, \
+                 string-view, dictionary, or fixed-binary"
             )),
         }
     }
@@ -98,6 +108,9 @@ impl FixtureKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Int32 => "int32",
+            Self::Int64 => "int64",
+            Self::Float64 => "float64",
+            Self::String => "string",
             Self::StringView => "string-view",
             Self::Dictionary => "dictionary",
             Self::FixedBinary => "fixed-binary",
@@ -141,7 +154,8 @@ impl FixtureSpec {
     fn default_for(kind: FixtureKind, nullable: bool) -> Self {
         let (value_width, dictionary_cardinality) = match kind {
             FixtureKind::Int32 => (4, 0),
-            FixtureKind::StringView => (64, 0),
+            FixtureKind::Int64 | FixtureKind::Float64 => (8, 0),
+            FixtureKind::String | FixtureKind::StringView => (64, 0),
             FixtureKind::Dictionary => (32, 256),
             FixtureKind::FixedBinary => (32, 0),
         };
@@ -584,7 +598,8 @@ fn fixture_variants(kinds: &[FixtureKind]) -> Vec<FixtureSpec> {
     for &kind in kinds {
         let widths: &[usize] = match kind {
             FixtureKind::Int32 => &[4],
-            FixtureKind::StringView => &[16, 64, 256],
+            FixtureKind::Int64 | FixtureKind::Float64 => &[8],
+            FixtureKind::String | FixtureKind::StringView => &[16, 64, 256],
             FixtureKind::Dictionary => &[16, 64],
             FixtureKind::FixedBinary => &[8, 32],
         };
