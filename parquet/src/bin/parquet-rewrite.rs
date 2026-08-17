@@ -130,6 +130,9 @@ enum EncodingArgs {
 
     /// Encoding for fixed-width data.
     ByteStreamSplit,
+
+    /// Adaptive Lossless floating-Point encoding for FLOAT and DOUBLE.
+    Alp,
 }
 
 #[allow(deprecated)]
@@ -145,6 +148,7 @@ impl From<EncodingArgs> for Encoding {
             EncodingArgs::DeltaByteArray => Self::DELTA_BYTE_ARRAY,
             EncodingArgs::RleDictionary => Self::RLE_DICTIONARY,
             EncodingArgs::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
+            EncodingArgs::Alp => Self::ALP,
         }
     }
 }
