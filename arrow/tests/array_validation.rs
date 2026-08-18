@@ -1027,7 +1027,7 @@ fn test_string_data_from_foreign() {
     };
     let offsets_buffer = unsafe {
         Buffer::from_custom_allocation(
-            NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
+            NonNull::new_unchecked(offsets.as_mut_ptr().cast::<u8>()),
             offsets.len() * std::mem::size_of::<i32>(),
             Arc::new(offsets),
         )

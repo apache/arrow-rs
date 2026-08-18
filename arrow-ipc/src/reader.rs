@@ -870,7 +870,7 @@ fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
-    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
@@ -1664,9 +1664,7 @@ impl<R: Read> StreamReader<R> {
                 IpcMessage::RecordBatch(record_batch) => {
                     return Ok(Some(record_batch));
                 }
-                IpcMessage::DictionaryBatch { .. } => {
-                    continue;
-                }
+                IpcMessage::DictionaryBatch { .. } => {}
             };
         }
     }
@@ -1725,7 +1723,7 @@ impl<R: Read> StreamReader<R> {
                     &body.into(),
                     dict,
                     &self.schema,
-                    &mut self.dictionaries_by_id,
+                    &self.dictionaries_by_id,
                     &version,
                     false,
                     self.skip_validation.clone(),

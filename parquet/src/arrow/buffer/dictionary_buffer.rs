@@ -39,7 +39,7 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),
@@ -62,8 +62,8 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 // Need to discard fat pointer for equality check
                 // - https://stackoverflow.com/a/67114787
                 // - https://github.com/rust-lang/rust/issues/46139
-                let values_ptr = values.as_ref() as *const _ as *const ();
-                let dict_ptr = dictionary.as_ref() as *const _ as *const ();
+                let values_ptr = std::ptr::from_ref(values.as_ref()).cast::<()>();
+                let dict_ptr = std::ptr::from_ref(dictionary.as_ref()).cast::<()>();
                 if values_ptr == dict_ptr {
                     Some(keys)
                 } else if keys.is_empty() {
@@ -80,10 +80,10 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
-                    _ => unreachable!(),
+                    Self::Values { .. } => unreachable!(),
                 }
             }
-            _ => None,
+            Self::Values { .. } => None,
         }
     }
 
@@ -116,7 +116,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 *self = Self::Values { values: spilled };
                 match self {
                     Self::Values { values } => Ok(values),
-                    _ => unreachable!(),
+                    Self::Dict { .. } => unreachable!(),
                 }
             }
         }
@@ -300,7 +300,7 @@ mod tests {
         buffer.as_keys(&d1).unwrap().extend_from_slice(values);
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
-        let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+        let valid_buffer = Buffer::from_iter(valid.iter().copied());
         buffer
             .pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice())
             .unwrap();
@@ -313,7 +313,7 @@ mod tests {
         values.try_push("bongo".as_bytes(), false).unwrap();
 
         valid.extend_from_slice(&[false, false, true, false, true]);
-        let null_buffer = Buffer::from_iter(valid.iter().cloned());
+        let null_buffer = Buffer::from_iter(valid.iter().copied());
         buffer
             .pad_nulls(read_offset, 2, 5, null_buffer.as_slice())
             .unwrap();

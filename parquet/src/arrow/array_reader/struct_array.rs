@@ -71,7 +71,7 @@ impl ArrayReader for StructArrayReader {
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         let mut read = None;
-        for child in self.children.iter_mut() {
+        for child in &mut self.children {
             let child_read = child.read_records(batch_size)?;
             match read {
                 Some(expected) => {
@@ -157,7 +157,7 @@ impl ArrayReader for StructArrayReader {
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         let mut skipped = None;
-        for child in self.children.iter_mut() {
+        for child in &mut self.children {
             let child_skipped = child.skip_records(num_records)?;
             match skipped {
                 Some(expected) => {

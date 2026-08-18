@@ -259,7 +259,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte = crate::util::bit_util::read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
@@ -574,7 +574,7 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,

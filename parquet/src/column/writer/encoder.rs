@@ -423,14 +423,12 @@ where
             // skip NaNs if we've encounter non-NaN
             (false, true) => {
                 nan_count += 1;
-                continue;
             }
             // if min/max are NaN, check for non-NaN and reset
             (true, false) => {
                 min = val;
                 max = val;
                 min_max_nan = false;
-                continue;
             }
             // both are NaN or non-NaN, so do the comparison
             (_, val_is_nan) => {

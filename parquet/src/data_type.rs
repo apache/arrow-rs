@@ -564,13 +564,12 @@ impl AsBytes for [u8] {
 macro_rules! gen_as_bytes {
     ($source_ty:ident) => {
         impl AsBytes for $source_ty {
-            #[allow(clippy::size_of_in_element_count)]
             fn as_bytes(&self) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
                 unsafe {
                     std::slice::from_raw_parts(
-                        self as *const $source_ty as *const u8,
+                        std::ptr::from_ref::<$source_ty>(self).cast::<u8>(),
                         std::mem::size_of::<$source_ty>(),
                     )
                 }
@@ -579,27 +578,25 @@ macro_rules! gen_as_bytes {
 
         impl SliceAsBytes for $source_ty {
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             fn slice_as_bytes(self_: &[Self]) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
                 unsafe {
                     std::slice::from_raw_parts(
-                        self_.as_ptr() as *const u8,
+                        self_.as_ptr().cast::<u8>(),
                         std::mem::size_of_val(self_),
                     )
                 }
             }
 
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             unsafe fn slice_as_bytes_mut(self_: &mut [Self]) -> &mut [u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory. Moreover, self has no
                 // invalid bit patterns, so all writes to the resulting slice will be valid.
                 unsafe {
                     std::slice::from_raw_parts_mut(
-                        self_.as_mut_ptr() as *mut u8,
+                        self_.as_mut_ptr().cast::<u8>(),
                         std::mem::size_of_val(self_),
                     )
                 }
@@ -643,14 +640,16 @@ impl AsBytes for bool {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: a bool is guaranteed to be either 0x00 or 0x01 in memory, so the memory is
         // valid.
-        unsafe { std::slice::from_raw_parts(self as *const bool as *const u8, 1) }
+        unsafe { std::slice::from_raw_parts(std::ptr::from_ref::<bool>(self).cast::<u8>(), 1) }
     }
 }
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: Int96::data is a &[u32; 3].
-        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
+        unsafe {
+            std::slice::from_raw_parts(std::ptr::from_ref::<[u32]>(self.data()).cast::<u8>(), 12)
+        }
     }
 }
 
@@ -845,7 +844,7 @@ pub(crate) mod private {
                     // SAFETY: Self is one of i32, i64, f32, f64, which have no padding.
                     let raw = unsafe {
                         std::slice::from_raw_parts(
-                            values.as_ptr() as *const u8,
+                            values.as_ptr().cast::<u8>(),
                             std::mem::size_of_val(values),
                         )
                     };

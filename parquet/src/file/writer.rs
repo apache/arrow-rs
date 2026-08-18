@@ -926,7 +926,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         page_writer: SerializedPageWriter<'b, W>,
     ) -> Result<SerializedPageWriter<'b, W>> {
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &context.file_encryptor,
+            context.file_encryptor.as_ref(),
             context.row_group_index,
             context.column_index,
             &column.path().string(),
@@ -1072,7 +1072,13 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+// These mirror the signatures of the encryption-enabled versions above, so that the
+// callers do not need a `cfg` of their own.
 #[cfg(not(feature = "encryption"))]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "mirrors the encryption-enabled signatures"
+)]
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
@@ -1388,7 +1394,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -1431,7 +1436,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1

@@ -249,7 +249,7 @@ impl GeographyType {
     ///
     /// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
     pub fn algorithm(&self) -> Option<EdgeInterpolationAlgorithm> {
-        self.algorithm.or(Some(Default::default()))
+        Some(self.algorithm.unwrap_or_default())
     }
 }
 
@@ -460,7 +460,7 @@ impl FromStr for Encoding {
             "PLAIN" | "plain" => Ok(Encoding::PLAIN),
             "PLAIN_DICTIONARY" | "plain_dictionary" => Ok(Encoding::PLAIN_DICTIONARY),
             "RLE" | "rle" => Ok(Encoding::RLE),
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             "BIT_PACKED" | "bit_packed" => Ok(Encoding::BIT_PACKED),
             "DELTA_BINARY_PACKED" | "delta_binary_packed" => Ok(Encoding::DELTA_BINARY_PACKED),
             "DELTA_LENGTH_BYTE_ARRAY" | "delta_length_byte_array" => {
@@ -596,7 +596,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 fn i32_to_encoding(val: i32) -> Encoding {
     match val {
         0 => Encoding::PLAIN,
@@ -658,7 +658,7 @@ enum CompressionCodec {
 /// worse compression ratios. However, it is not as widely supported by the ecosystem, with the
 /// Hadoop ecosystem historically favoring the non-standard and now deprecated [`Compression::LZ4`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum Compression {
     /// No compression.
     UNCOMPRESSED,
@@ -724,7 +724,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<i32>), Pa
     }
 }
 
-fn check_level_is_none(level: &Option<i32>) -> Result<(), ParquetError> {
+fn check_level_is_none(level: Option<i32>) -> Result<(), ParquetError> {
     if level.is_some() {
         return Err(ParquetError::General(
             "compression level is not supported".to_string(),
@@ -748,11 +748,11 @@ impl FromStr for Compression {
 
         let c = match codec {
             "UNCOMPRESSED" | "uncompressed" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::UNCOMPRESSED
             }
             "SNAPPY" | "snappy" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::SNAPPY
             }
             "GZIP" | "gzip" => {
@@ -760,7 +760,7 @@ impl FromStr for Compression {
                 Compression::GZIP(GzipLevel::try_new(level.try_into()?)?)
             }
             "LZO" | "lzo" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZO
             }
             "BROTLI" | "brotli" => {
@@ -768,7 +768,7 @@ impl FromStr for Compression {
                 Compression::BROTLI(BrotliLevel::try_new(level.try_into()?)?)
             }
             "LZ4" | "lz4" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZ4
             }
             "ZSTD" | "zstd" => {
@@ -776,7 +776,7 @@ impl FromStr for Compression {
                 Compression::ZSTD(ZstdLevel::try_new(level)?)
             }
             "LZ4_RAW" | "lz4_raw" => {
-                check_level_is_none(&level)?;
+                check_level_is_none(level)?;
                 Compression::LZ4_RAW
             }
             _ => {
@@ -856,7 +856,7 @@ impl EdgeInterpolationAlgorithm {
             Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
             Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
             Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
-            unknown => Err(general_err!(
+            unknown @ Self::_Unknown(_) => Err(general_err!(
                 "Unknown edge interpolation algorithm: {}",
                 unknown
             )),
@@ -976,7 +976,7 @@ union BloomFilterCompression {
 ///
 /// See [`ColumnOrder`] for more information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum SortOrder {
     /// Signed (either value or legacy byte-wise) comparison.
     SIGNED,
@@ -1021,7 +1021,7 @@ impl SortOrder {
 ///
 /// [`ColumnOrder`]: https://github.com/apache/parquet-format/blob/2076361bb64e2de9ca6a8d06eda025a6fa4e9df6/src/main/thrift/parquet.thrift#L1103
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
@@ -1451,7 +1451,7 @@ impl str::FromStr for LogicalType {
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
+#[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
     use crate::parquet_thrift::{ThriftSliceInputProtocol, tests::test_roundtrip};
