@@ -1675,8 +1675,7 @@ mod test {
             error_msg
                 .contains("Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])"),
             "Expected=[Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])],\
-                Got error message=[{}]",
-            error_msg
+                Got error message=[{error_msg}]"
         );
     }
 
@@ -2260,7 +2259,7 @@ mod test {
                 println!("Nested path 'a.x' works unexpectedly!");
             }
             Err(e) => {
-                println!("Nested path 'a.x' error: {}", e);
+                println!("Nested path 'a.x' error: {e}");
                 if e.to_string().contains("Not yet implemented")
                     || e.to_string().contains("NotYetImplemented")
                 {
@@ -2403,7 +2402,7 @@ mod test {
             GetOptions::new_with_path(single_path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&array, options).unwrap();
 
-        println!("Single path 'x' works - result: {:?}", result);
+        println!("Single path 'x' works - result: {result:?}");
 
         // Test: Try nested path "a.x" - this is what we need to implement
         let nested_path = VariantPath::try_from("a").unwrap().join("x");
@@ -2412,7 +2411,7 @@ mod test {
             GetOptions::new_with_path(nested_path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&array, options).unwrap();
 
-        println!("Nested path 'a.x' result: {:?}", result);
+        println!("Nested path 'a.x' result: {result:?}");
     }
 
     #[test]

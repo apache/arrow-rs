@@ -344,10 +344,7 @@ fn format_date_string(date: &chrono::NaiveDate) -> String {
 }
 
 fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime, precision: usize) -> String {
-    let format_str = format!(
-        "{}",
-        ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{}f", precision))
-    );
+    let format_str = format!("{}", ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{precision}f")));
     ts.format(format_str.as_str()).to_string()
 }
 
@@ -361,9 +358,9 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
     match micros {
         0 => format!("{}.{}", base, 0),
         _ => {
-            let micros_str = format!("{:06}", micros);
+            let micros_str = format!("{micros:06}");
             let micros_str_trimmed = micros_str.trim_end_matches('0');
-            format!("{}.{}", base, micros_str_trimmed)
+            format!("{base}.{micros_str_trimmed}")
         }
     }
 }

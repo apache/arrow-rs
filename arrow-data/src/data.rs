@@ -1720,8 +1720,7 @@ impl ArrayData {
         let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
         if prev_value.as_usize() < len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                len_plus_offset
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
             )));
         }
         Ok(())

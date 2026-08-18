@@ -87,7 +87,7 @@ fn main() {
     let column_path = match cli::parse_column_path(&args.column) {
         Ok(path) => path,
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("{err}");
             std::process::exit(1);
         }
     };

@@ -903,9 +903,9 @@ mod tests {
         for (i, expected) in expected_values.iter().enumerate() {
             match expected {
                 Some(variant) => {
-                    assert_eq!(variant_array.value(i), *variant, "Mismatch at index {}", i)
+                    assert_eq!(variant_array.value(i), *variant, "Mismatch at index {i}")
                 }
-                None => assert!(variant_array.is_null(i), "Expected null at index {}", i),
+                None => assert!(variant_array.is_null(i), "Expected null at index {i}"),
             }
         }
     }

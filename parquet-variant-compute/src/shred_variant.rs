@@ -592,7 +592,7 @@ impl ShreddedSchemaBuilder {
     {
         let path: VariantPath<'a> = path
             .try_into()
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("{:?}", e)))?;
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
         self.root.insert_path(&path, field.into_shredding_field());
         Ok(self)
     }
@@ -1503,9 +1503,7 @@ mod tests {
             let err = shred_variant(&input, &data_type).unwrap_err();
             assert!(
                 matches!(err, ArrowError::InvalidArgumentError(_)),
-                "expected InvalidArgumentError for {:?}, got {:?}",
-                data_type,
-                err
+                "expected InvalidArgumentError for {data_type:?}, got {err:?}"
             );
         }
     }
@@ -2847,8 +2845,7 @@ mod tests {
                 // For primitive shredding, at least one should be null
                 assert!(
                     value_is_null || typed_value_is_null,
-                    "Row {}: both value and typed_value are non-null for primitive shredding",
-                    i
+                    "Row {i}: both value and typed_value are non-null for primitive shredding"
                 );
             }
         }

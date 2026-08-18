@@ -5819,7 +5819,7 @@ pub(crate) mod tests {
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
         let seed: u64 = random();
-        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
         use tempfile::TempDir;

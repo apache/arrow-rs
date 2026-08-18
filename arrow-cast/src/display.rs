@@ -1139,9 +1139,9 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericStringArray<O>
     fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
         if *state {
-            write!(f, "{:?}", value)?;
+            write!(f, "{value:?}")?;
         } else {
-            write!(f, "{}", value)?;
+            write!(f, "{value}")?;
         }
         Ok(())
     }
@@ -1157,9 +1157,9 @@ impl<'a> DisplayIndexState<'a> for &'a StringViewArray {
     fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
         if *state {
-            write!(f, "{:?}", value)?;
+            write!(f, "{value:?}")?;
         } else {
-            write!(f, "{}", value)?;
+            write!(f, "{value}")?;
         }
         Ok(())
     }

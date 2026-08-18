@@ -461,8 +461,7 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
         (l, r) => {
             if l != r {
                 Err(ArrowError::ComputeError(format!(
-                    "Cannot concat arrays of different types: {} != {}",
-                    l, r
+                    "Cannot concat arrays of different types: {l} != {r}"
                 )))
             } else {
                 Err(ArrowError::NotYetImplemented(format!(

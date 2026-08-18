@@ -3833,9 +3833,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3850,9 +3850,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }

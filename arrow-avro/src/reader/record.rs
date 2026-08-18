@@ -2413,8 +2413,7 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], AvroError> {
         // Any non-sign byte in the truncated prefix indicates overflow
         if raw[..extra].iter().any(|&b| b != sign_byte) {
             return Err(AvroError::ParseError(format!(
-                "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
-                len, N
+                "Decimal value with {len} bytes cannot be represented in {N} bytes without overflow"
             )));
         }
         if N > 0 {
@@ -2422,8 +2421,7 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], AvroError> {
             let sign_bit_mismatch = ((first_kept ^ sign_byte) & 0x80) != 0;
             if sign_bit_mismatch {
                 return Err(AvroError::ParseError(format!(
-                    "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
-                    len, N
+                    "Decimal value with {len} bytes cannot be represented in {N} bytes without overflow"
                 )));
             }
         }
@@ -5272,7 +5270,7 @@ mod tests {
             let s = Skipper::from_avro(&dt)?;
             match s {
                 Skipper::Int64 => {}
-                other => panic!("expected Int64 skipper for {:?}, got {:?}", codec, other),
+                other => panic!("expected Int64 skipper for {codec:?}, got {other:?}"),
             }
         }
         Ok(())
@@ -5297,9 +5295,7 @@ mod tests {
                 assert_eq!(
                     cursor.position(),
                     bytes.len(),
-                    "did not consume all bytes for {:?} value {}",
-                    codec,
-                    v
+                    "did not consume all bytes for {codec:?} value {v}"
                 );
             }
         }
@@ -5314,9 +5310,9 @@ mod tests {
         match &s {
             Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
                 Skipper::Int64 => {}
-                ref other => panic!("expected inner Int64, got {:?}", other),
+                ref other => panic!("expected inner Int64, got {other:?}"),
             },
-            other => panic!("expected Nullable(NullFirst, Int64), got {:?}", other),
+            other => panic!("expected Nullable(NullFirst, Int64), got {other:?}"),
         }
         {
             let buf = encode_vlq_u64(0);
@@ -5343,9 +5339,9 @@ mod tests {
         match &s {
             Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
                 Skipper::Int64 => {}
-                ref other => panic!("expected inner Int64, got {:?}", other),
+                ref other => panic!("expected inner Int64, got {other:?}"),
             },
-            other => panic!("expected Nullable(NullSecond, Int64), got {:?}", other),
+            other => panic!("expected Nullable(NullSecond, Int64), got {other:?}"),
         }
         {
             let buf = encode_vlq_u64(1);
@@ -5373,7 +5369,7 @@ mod tests {
         let s = Skipper::from_avro(&dt)?;
         match s {
             Skipper::DurationFixed12 => {}
-            other => panic!("expected DurationFixed12, got {:?}", other),
+            other => panic!("expected DurationFixed12, got {other:?}"),
         }
         let payload = vec![0u8; 12];
         let mut cursor = AvroCursor::new(&payload);

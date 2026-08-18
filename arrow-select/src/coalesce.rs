@@ -628,8 +628,7 @@ impl BatchCoalescer {
 
         if filter_len > batch_num_rows {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Filter predicate of length {} is larger than target array of length {}",
-                filter_len, batch_num_rows
+                "Filter predicate of length {filter_len} is larger than target array of length {batch_num_rows}"
             )));
         }
 
@@ -2555,8 +2554,7 @@ mod tests {
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty before batch {}",
-                i
+                "Buffer should be empty before batch {i}"
             );
 
             coalescer.push_batch(large_batch).unwrap();
@@ -2564,29 +2562,25 @@ mod tests {
             // Each large batch should bypass and produce exactly one output batch
             assert!(
                 coalescer.has_completed_batch(),
-                "Should have completed batch after pushing batch {}",
-                i
+                "Should have completed batch after pushing batch {i}"
             );
 
             let output = coalescer.next_completed_batch().unwrap();
             assert_eq!(
                 output.num_rows(),
                 expected_size,
-                "Batch {} should have bypassed with original size",
-                i
+                "Batch {i} should have bypassed with original size"
             );
 
             // Should be no more batches and buffer should be empty
             assert!(
                 !coalescer.has_completed_batch(),
-                "Should have no more completed batches after batch {}",
-                i
+                "Should have no more completed batches after batch {i}"
             );
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty after batch {}",
-                i
+                "Buffer should be empty after batch {i}"
             );
 
             all_outputs.push(output);

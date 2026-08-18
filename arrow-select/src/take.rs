@@ -808,7 +808,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
     let size_usize = usize::try_from(size).map_err(|_| {
-        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{size}' to usize"))
     })?;
 
     let result_buffer = match size_usize {

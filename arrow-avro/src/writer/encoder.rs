@@ -2463,7 +2463,7 @@ mod tests {
         if actual != expected {
             let to_hex = |b: &[u8]| {
                 b.iter()
-                    .map(|x| format!("{:02X}", x))
+                    .map(|x| format!("{x:02X}"))
                     .collect::<Vec<_>>()
                     .join(" ")
             };

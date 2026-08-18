@@ -1759,9 +1759,9 @@ struct HexString<'a>(&'a [u8]);
 impl<'a> std::fmt::Debug for HexString<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some((first, rest)) = self.0.split_first() {
-            write!(f, "{:02x}", first)?;
+            write!(f, "{first:02x}")?;
             for b in rest {
-                write!(f, " {:02x}", b)?;
+                write!(f, " {b:02x}")?;
             }
         }
         Ok(())
@@ -1957,7 +1957,7 @@ mod tests {
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         // Test Debug formatter (?)
-        let debug_output = format!("{:?}", variant);
+        let debug_output = format!("{variant:?}");
 
         // Verify that the debug output contains all the expected types
         assert!(debug_output.contains("\"null\": Null"));
@@ -1989,7 +1989,7 @@ mod tests {
         assert_eq!(debug_output, expected);
 
         // Test alternate Debug formatter (#?)
-        let alt_debug_output = format!("{:#?}", variant);
+        let alt_debug_output = format!("{variant:#?}");
         let expected = r#"{
     "binary": Binary(01 02 03 04 de ad be ef),
     "boolean_false": BooleanFalse,

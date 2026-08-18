@@ -5690,7 +5690,7 @@ mod tests {
 
         let first_array = StringArray::from(
             (0..10)
-                .map(|i| format!("{:0>100}", i))
+                .map(|i| format!("{i:0>100}"))
                 .collect::<Vec<String>>(),
         );
         let first_batch =

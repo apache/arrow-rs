@@ -1117,7 +1117,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
                     (v / 1_000_000) as u32,
                     (v % 1_000_000) as u32 * 1000
                 )
-                .ok_or_else(|| format!("Invalid microsecond from midnight: {}", v)),
+                .ok_or_else(|| format!("Invalid microsecond from midnight: {v}")),
                 typed_value,
                 index
             )

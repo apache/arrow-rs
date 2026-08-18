@@ -1573,8 +1573,7 @@ mod tests {
         let total = array.total_buffer_bytes_used();
         assert!(
             total > u32::MAX as usize,
-            "Expected total non-inline bytes to exceed 4 GiB, got {}",
-            total
+            "Expected total non-inline bytes to exceed 4 GiB, got {total}"
         );
 
         // Run gc and verify correctness

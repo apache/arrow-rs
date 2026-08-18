@@ -866,7 +866,7 @@ impl EdgeInterpolationAlgorithm {
 
 impl fmt::Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!("{0:?}", self))
+        f.write_fmt(format_args!("{self:?}"))
     }
 }
 

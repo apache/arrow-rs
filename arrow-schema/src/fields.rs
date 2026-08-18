@@ -927,7 +927,7 @@ mod tests {
     #[test]
     fn test_union_fields_try_from_fields_too_many() {
         let many_fields: Vec<_> = (0..200)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(many_fields);
         assert!(res.is_err());
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn test_union_fields_try_from_fields_max_valid() {
         let fields: Vec<_> = (0..=i8::MAX)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(fields);
         assert!(res.is_ok());
@@ -955,7 +955,7 @@ mod tests {
     fn test_union_fields_try_from_fields_over_max() {
         // 129 fields should fail
         let fields: Vec<_> = (0..129)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(fields);
         assert!(res.is_err());
