@@ -230,7 +230,7 @@ fn binary_dict_to_string_view<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
             let mut builder = StringViewBuilder::with_capacity(keys.len());
             builder.append_block(value_buffer.clone());
 
-            for key in keys.iter() {
+            for key in keys {
                 match key {
                     Some(v) => {
                         let idx = v.to_usize().ok_or_else(|| {
