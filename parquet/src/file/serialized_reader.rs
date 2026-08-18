@@ -2157,9 +2157,7 @@ mod tests {
 
         // only one row group
         assert_eq!(column_index.len(), 1);
-        let index = if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = &column_index[0][0] {
-            index
-        } else {
+        let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = &column_index[0][0] else {
             unreachable!()
         };
 

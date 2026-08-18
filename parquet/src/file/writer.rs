@@ -2680,10 +2680,14 @@ mod tests {
             let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
-                let column_index =
-                    rg_column_indexes.and_then(|row| row.get(col_idx).and_then(|c| c.clone()));
-                let offset_index =
-                    rg_offset_indexes.and_then(|row| row.get(col_idx).and_then(|o| o.clone()));
+                let column_index = rg_column_indexes.and_then(|row| {
+                    let c = row.get(col_idx)?;
+                    c.clone()
+                });
+                let offset_index = rg_offset_indexes.and_then(|row| {
+                    let o = row.get(col_idx)?;
+                    o.clone()
+                });
 
                 let result = ColumnCloseResult {
                     bytes_written: column.compressed_size() as _,
@@ -2728,9 +2732,8 @@ mod tests {
             let max = stats.max_bytes_opt().expect("max stats missing");
 
             let col_idx = metadata.column_index().expect("column index not present");
-            let col0 = match &col_idx[0][0] {
-                Some(ColumnIndexMetaData::INT96(index)) => index,
-                _ => panic!("expected INT96 stats"),
+            let Some(ColumnIndexMetaData::INT96(col0)) = &col_idx[0][0] else {
+                panic!("expected INT96 stats")
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");
             let col_max = col0.max_value(0).expect("ColumnIndex max not present");

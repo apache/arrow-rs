@@ -3458,9 +3458,8 @@ mod tests {
         assert_eq!(col_idx.as_ref().unwrap().num_pages(), 4);
 
         // test each page
-        let float_idx = match col_idx {
-            Some(ColumnIndexMetaData::DOUBLE(idx)) => idx,
-            _ => panic!("expected double statistics"),
+        let Some(ColumnIndexMetaData::DOUBLE(float_idx)) = col_idx else {
+            panic!("expected double statistics")
         };
 
         assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));
