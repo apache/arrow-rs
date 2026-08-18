@@ -113,7 +113,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let len_bytes = len
             .checked_add(1)
             .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
-            .ok_or(OverflowError::new("buffer length"))?;
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
         let buffer = MutableBuffer::from_len_zeroed(len_bytes);
         Ok(Self(buffer.into_buffer().into()))
     }
@@ -161,15 +161,13 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
         let mut acc = 0_usize;
         for length in iter {
-            acc = acc.checked_add(length).ok_or(OverflowError::new("usize"))?;
+            acc = acc
+                .checked_add(length)
+                .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
             out.push(O::usize_as(acc))
         }
         // Check for overflow
-        O::from_usize(acc).ok_or_else(|| {
-            OverflowError::new("offset")
-                .with_value(acc)
-                .with_type::<O>()
-        })?;
+        O::from_usize(acc).ok_or_else(|| OverflowError::new::<O>("offset").with_value(acc))?;
         Ok(Self(out.into()))
     }
 
@@ -213,13 +211,12 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         }
 
         // Making sure we don't overflow usize or O when calculating the total length
-        let total_length = length.checked_mul(n).ok_or(OverflowError::new("usize"))?;
+        let total_length = length
+            .checked_mul(n)
+            .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
 
-        O::from_usize(total_length).ok_or_else(|| {
-            OverflowError::new("offset")
-                .with_value(total_length)
-                .with_type::<O>()
-        })?;
+        O::from_usize(total_length)
+            .ok_or_else(|| OverflowError::new::<O>("offset").with_value(total_length))?;
 
         let offsets = (0..=n)
             .map(|index| O::usize_as(index * length))
@@ -509,7 +506,10 @@ mod tests {
         assert!(OffsetBuffer::<i64>::try_from_lengths(lengths).is_ok());
 
         let err = OffsetBuffer::<i32>::try_from_lengths([usize::MAX, 1]).unwrap_err();
-        assert_eq!(err.to_string(), "usize overflow");
+        assert_eq!(
+            err.to_string(),
+            "total length overflow: does not fit in usize"
+        );
 
         // The panicking version agrees:
         assert!(std::panic::catch_unwind(|| OffsetBuffer::<i32>::from_lengths(lengths)).is_err());
@@ -521,7 +521,7 @@ mod tests {
             OffsetBuffer::<i32>::try_from_repeated_length(2, usize::MAX)
                 .unwrap_err()
                 .to_string(),
-            "usize overflow"
+            "total length overflow: does not fit in usize"
         );
         assert_eq!(
             OffsetBuffer::<i32>::try_from_repeated_length(u32::MAX as usize, 2)
@@ -543,7 +543,7 @@ mod tests {
             OffsetBuffer::<i64>::try_new_zeroed(usize::MAX)
                 .unwrap_err()
                 .to_string(),
-            "buffer length overflow"
+            "buffer length overflow: does not fit in usize"
         );
         assert_eq!(
             OffsetBuffer::<i32>::try_new_zeroed(3).unwrap().as_ref(),
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn from_lengths_usize_overflow() {
         OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
     }
@@ -615,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn from_repeated_lengths_usize_length_usize_overflow() {
         OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 2);
     }

@@ -59,7 +59,7 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
         self.last_offset = self
             .last_offset
             .checked_add(length)
-            .ok_or(OverflowError::new("usize"))?;
+            .ok_or_else(|| OverflowError::new::<usize>("total length"))?;
         self.offsets.push(O::usize_as(self.last_offset));
         Ok(())
     }
@@ -86,11 +86,8 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     /// Errors if offsets overflow `O`, e.g. if they add up to more than `i32::MAX`
     /// for a `OffsetBufferBuilder<i32>`.
     pub fn try_finish(self) -> Result<OffsetBuffer<O>, OverflowError> {
-        O::from_usize(self.last_offset).ok_or_else(|| {
-            OverflowError::new("offset")
-                .with_value(self.last_offset)
-                .with_type::<O>()
-        })?;
+        O::from_usize(self.last_offset)
+            .ok_or_else(|| OverflowError::new::<O>("offset").with_value(self.last_offset))?;
         Ok(unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) })
     }
 
@@ -145,7 +142,7 @@ mod tests {
         // The builder is unchanged by a failed push:
         assert_eq!(
             builder.try_push_length(1).unwrap_err().to_string(),
-            "usize overflow"
+            "total length overflow: does not fit in usize"
         );
         assert_eq!(builder.len(), 2);
     }

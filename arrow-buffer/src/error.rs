@@ -35,28 +35,23 @@
 pub struct OverflowError {
     what: &'static str,
     value: Option<usize>,
-    type_name: Option<&'static str>,
+    type_name: &'static str,
 }
 
 impl OverflowError {
-    /// `what` names what overflowed, for instance `"offset"`.
-    pub const fn new(what: &'static str) -> Self {
+    /// `what` names what overflowed, for instance `"offset"`,
+    /// and `T` is the type it did not fit in, for instance `i32`.
+    pub fn new<T>(what: &'static str) -> Self {
         Self {
             what,
             value: None,
-            type_name: None,
+            type_name: std::any::type_name::<T>(),
         }
     }
 
     /// The value that did not fit.
     pub const fn with_value(mut self, value: usize) -> Self {
         self.value = Some(value);
-        self
-    }
-
-    /// The type that the value did not fit in, for instance `i32`.
-    pub fn with_type<T>(mut self) -> Self {
-        self.type_name = Some(std::any::type_name::<T>());
         self
     }
 
@@ -70,8 +65,8 @@ impl OverflowError {
         self.value
     }
 
-    /// The name of the type that the value did not fit in, if known.
-    pub const fn type_name(&self) -> Option<&'static str> {
+    /// The name of the type that the value did not fit in, for instance `"i32"`.
+    pub const fn type_name(&self) -> &'static str {
         self.type_name
     }
 }
@@ -83,14 +78,10 @@ impl std::fmt::Display for OverflowError {
             value,
             type_name,
         } = self;
-        write!(f, "{what} overflow")?;
-        match (value, type_name) {
-            (Some(value), Some(type_name)) => {
-                write!(f, ": {value} does not fit in {type_name}")
-            }
-            (Some(value), None) => write!(f, ": {value}"),
-            (None, Some(type_name)) => write!(f, ": does not fit in {type_name}"),
-            (None, None) => Ok(()),
+        write!(f, "{what} overflow: ")?;
+        match value {
+            Some(value) => write!(f, "{value} does not fit in {type_name}"),
+            None => write!(f, "does not fit in {type_name}"),
         }
     }
 }

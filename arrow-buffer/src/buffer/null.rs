@@ -139,7 +139,7 @@ impl NullBuffer {
             .buffer
             .len()
             .checked_mul(count)
-            .ok_or(OverflowError::new("buffer length"))?;
+            .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
         let mut buffer = MutableBuffer::new_null(capacity);
 
         // Expand each bit within `null_mask` into `element_len`
