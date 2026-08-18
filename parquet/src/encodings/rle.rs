@@ -361,6 +361,7 @@ pub struct RleDecoder {
 
 impl RleDecoder {
     pub fn new(bit_width: u8) -> Self {
+        debug_assert!(bit_width <= 64, "Bit width must be <= 64");
         RleDecoder {
             bit_width,
             rle_left: 0,

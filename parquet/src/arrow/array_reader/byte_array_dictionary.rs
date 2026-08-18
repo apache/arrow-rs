@@ -298,7 +298,14 @@ where
     ) -> Result<()> {
         let decoder = match encoding {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-                let bit_width = data[0];
+                let bit_width = *data
+                    .first()
+                    .ok_or_else(|| general_err!("dictionary index page is empty"))?;
+                if bit_width > 32 {
+                    return Err(general_err!(
+                        "Invalid or corrupted RLE bit width {bit_width}. Max allowed is 32"
+                    ));
+                }
                 let mut decoder = RleDecoder::new(bit_width);
                 decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
@@ -687,5 +694,32 @@ mod tests {
             assert_eq!(array.null_count(), 8);
             assert_eq!(array.logical_null_count(), 8);
         }
+    }
+
+    #[test]
+    fn test_dictionary_decoder_empty_data() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, Bytes::new(), 0, None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: dictionary index page is empty"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_decoder_invalid_bit_width() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let data = Bytes::from_static(&[33, 0, 0, 0]);
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, data, 1, None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE bit width 33. Max allowed is 32"
+        );
     }
 }
