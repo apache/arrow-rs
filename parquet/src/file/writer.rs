@@ -2722,9 +2722,10 @@ mod tests {
                     .page_index()
                     .is_some_and(|pi| pi.has_column_indexes())
             );
-            let col0 = match metadata.page_index().unwrap().column_index(0, 0) {
-                Some(ColumnIndexMetaData::INT96(index)) => index,
-                _ => panic!("expected INT96 stats"),
+            let Some(ColumnIndexMetaData::INT96(col0)) =
+                metadata.page_index().unwrap().column_index(0, 0)
+            else {
+                panic!("expected INT96 stats")
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");
             let col_max = col0.max_value(0).expect("ColumnIndex max not present");

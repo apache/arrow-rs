@@ -2156,12 +2156,9 @@ mod tests {
         let page_index = metadata.page_index().expect("page index should be present");
 
         // only one row group
-        let index =
-            if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = page_index.column_index(0, 0) {
-                index
-            } else {
-                unreachable!()
-            };
+        let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = page_index.column_index(0, 0) else {
+            unreachable!()
+        };
 
         assert_eq!(index.boundary_order, BoundaryOrder::ASCENDING);
 
