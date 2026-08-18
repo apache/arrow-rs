@@ -564,7 +564,6 @@ impl AsBytes for [u8] {
 macro_rules! gen_as_bytes {
     ($source_ty:ident) => {
         impl AsBytes for $source_ty {
-            #[allow(clippy::size_of_in_element_count)]
             fn as_bytes(&self) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
@@ -579,7 +578,6 @@ macro_rules! gen_as_bytes {
 
         impl SliceAsBytes for $source_ty {
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             fn slice_as_bytes(self_: &[Self]) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
@@ -592,7 +590,6 @@ macro_rules! gen_as_bytes {
             }
 
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             unsafe fn slice_as_bytes_mut(self_: &mut [Self]) -> &mut [u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory. Moreover, self has no

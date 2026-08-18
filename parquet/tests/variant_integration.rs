@@ -236,7 +236,7 @@ variant_test_case!(138);
 ///   "variant" : "Variant(metadata=VariantMetadata(dict={}), value=Variant(type=BOOLEAN_FALSE, value=false))"
 /// },
 /// ```
-#[allow(dead_code)] // some fields are not used except when printing the struct
+#[expect(dead_code)] // some fields are not used except when printing the struct
 #[derive(Debug, Clone, Deserialize)]
 struct VariantTestCase {
     /// Case number (e.g., 1, 2, 4, etc. - note: case 3 is missing any data)

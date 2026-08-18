@@ -39,7 +39,7 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),

@@ -135,7 +135,7 @@ impl Default for CdcOptions {
 ///
 /// Basic constant, which is not part of the Thrift definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum WriterVersion {
     /// Parquet format version 1.0
     PARQUET_1_0,
@@ -2180,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_writer_properties_deprecated_bloom_filter_ndv_setters_still_work() {
         let col = ColumnPath::from("col");
         let props = WriterProperties::builder()
