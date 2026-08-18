@@ -804,7 +804,6 @@ impl ParquetMetaDataReader {
 
 /// The bounds needed to read page indexes
 // this is an internal enum, so it is ok to allow differences in enum size
-#[allow(clippy::large_enum_variant)]
 enum NeedsIndexData {
     /// no additional data is needed (e.g. the indexes weren't requested)
     No(ParquetMetaData),
@@ -922,7 +921,7 @@ mod tests {
                 assert!(metadata.offset_index.is_some());
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata, but keep trying until page indexes are read
         let mut reader =
@@ -965,7 +964,7 @@ mod tests {
                 reader.finish().unwrap();
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata but use try_parse()
         let reader_result = reader.try_parse(&bytes).unwrap_err();
@@ -1247,7 +1246,7 @@ mod async_tests {
 
         let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
 
-        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let key_code: &[u8] = b"0123456789012345";
         let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
             .build()
             .unwrap();

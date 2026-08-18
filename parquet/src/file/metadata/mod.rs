@@ -911,7 +911,7 @@ impl LevelHistogram {
 
     /// Sets the values of all histogram levels to 0.
     pub fn reset(&mut self) {
-        for value in self.inner.iter_mut() {
+        for value in &mut self.inner {
             *value = 0;
         }
     }
@@ -1757,7 +1757,7 @@ mod tests {
     };
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_level_histogram_update_from_levels_compat() {
         let mut histogram = LevelHistogram::try_new(2).unwrap();
         histogram.update_from_levels(&[0, 2, 1, 2, 2]);
@@ -1785,7 +1785,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta.write_thrift(&mut writer).unwrap();
 
-        let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
+        let row_group_res = read_row_group(&buf, schema_descr).unwrap();
 
         assert_eq!(row_group_res, row_group_meta);
     }
@@ -1867,7 +1867,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta_2cols.write_thrift(&mut writer).unwrap();
 
-        let err = read_row_group(&mut buf, schema_descr_3cols)
+        let err = read_row_group(&buf, schema_descr_3cols)
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -1917,7 +1917,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr.clone()).unwrap();
+        let col_chunk_res = read_column_chunk(&buf, column_descr.clone()).unwrap();
 
         let expected_metadata = ColumnChunkMetaData::builder(column_descr)
             .set_encodings_mask(EncodingMask::new_from_encodings(
@@ -1982,7 +1982,7 @@ mod tests {
 
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let col_chunk_res =
-            read_column_chunk_with_options(&mut buf, column_descr, Some(&options)).unwrap();
+            read_column_chunk_with_options(&buf, column_descr, Some(&options)).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1998,7 +1998,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
+        let col_chunk_res = read_column_chunk(&buf, column_descr).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -2022,7 +2022,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let compressed_size_res: i64 = row_group_meta.compressed_size();
+        let compressed_size_res = row_group_meta.compressed_size();
         let compressed_size_exp: i64 = 1000;
 
         assert_eq!(compressed_size_res, compressed_size_exp);
@@ -2108,9 +2108,8 @@ mod tests {
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
         let column_index = column_index.build().unwrap();
-        let native_index = match column_index {
-            ColumnIndexMetaData::BOOLEAN(index) => index,
-            _ => panic!("wrong type of column index"),
+        let ColumnIndexMetaData::BOOLEAN(native_index) = column_index else {
+            panic!("wrong type of column index")
         };
 
         // Now, add in OffsetIndex
@@ -2182,8 +2181,8 @@ mod tests {
         let base_expected_size = 2074;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
-        let footer_key = "0123456789012345".as_bytes();
-        let column_key = "1234567890123450".as_bytes();
+        let footer_key = b"0123456789012345";
+        let column_key = b"1234567890123450";
         let mut decryption_properties_builder =
             FileDecryptionProperties::builder(footer_key.to_vec())
                 .with_aad_prefix(aad_prefix.clone());

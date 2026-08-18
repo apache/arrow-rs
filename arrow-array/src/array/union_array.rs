@@ -461,9 +461,8 @@ impl UnionArray {
 
     /// Computes the logical nulls for a sparse union, optimized for when there's a lot of fields fully null
     fn mask_sparse_skip_fully_null(&self, mut nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!("Union array's data type is not a union!"),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!("Union array's data type is not a union!")
         };
 
         let type_ids = fields.iter().map(|(id, _)| id).collect::<HashSet<_>>();
@@ -722,9 +721,8 @@ impl From<ArrayData> for UnionArray {
 impl From<UnionArray> for ArrayData {
     fn from(array: UnionArray) -> Self {
         let len = array.len();
-        let f = match &array.data_type {
-            DataType::Union(f, _) => f,
-            _ => unreachable!(),
+        let DataType::Union(f, _) = &array.data_type else {
+            unreachable!()
         };
         let buffers = match array.offsets {
             Some(o) => vec![array.type_ids.into_inner(), o.into_inner()],
@@ -794,9 +792,8 @@ unsafe impl Array for UnionArray {
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!(),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!()
         };
 
         if fields.len() <= 1 {
@@ -978,9 +975,8 @@ impl std::fmt::Debug for UnionArray {
             writeln!(f, "{offsets:?}")?;
         }
 
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!(),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!()
         };
 
         for (type_id, field) in fields.iter() {

@@ -327,7 +327,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 //
 // Instead of comparing the raw bytes of 2 variant lists, this implementation recursively
 // checks whether their elements are equal.
-impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
+impl PartialEq for VariantList<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         if self.num_elements != other.num_elements {
             return false;

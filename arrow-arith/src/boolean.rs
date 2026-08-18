@@ -290,8 +290,8 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
 /// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
 pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| {
-        let buffer = buffer_bin_and_not(a.inner(), b.offset(), b.inner(), a.offset(), a.len());
-        BooleanBuffer::new(buffer, left.offset(), left.len())
+        let buffer = buffer_bin_and_not(a.inner(), a.offset(), b.inner(), b.offset(), a.len());
+        BooleanBuffer::new(buffer, 0, left.len())
     })
 }
 
@@ -392,6 +392,30 @@ mod tests {
 
         assert_eq!(c, expected);
         assert_eq!(c, and(&a, &not(&b).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_bool_array_and_not_sliced() {
+        let a = BooleanArray::from(vec![true, false, true, false, true, false, true]);
+        let b = BooleanArray::from(vec![false, true, false, true, false, true, false]);
+        let a = a.slice(2, 3);
+        let b = b.slice(2, 3);
+        let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        assert_eq!(and_not(a, b).unwrap(), and(a, &not(b).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_bool_array_and_not_sliced_different_offsets() {
+        let a = BooleanArray::from(vec![false, true, true, false, true, false, true]);
+        let b = BooleanArray::from(vec![true, false, false, true, false, true, false]);
+        let a = a.slice(1, 4);
+        let b = b.slice(2, 4);
+        let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        assert_eq!(and_not(a, b).unwrap(), and(a, &not(b).unwrap()).unwrap());
     }
 
     #[test]
