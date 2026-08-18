@@ -69,8 +69,6 @@
 //! Input hints name the pyarrow classes only, and are therefore narrower than what is accepted: the
 //! PyCapsule interface is duck-typed and has no canonical Python type to name.
 
-#![deny(clippy::allow_attributes)]
-
 use std::convert::{From, TryFrom};
 use std::ffi::CStr;
 use std::ptr::NonNull;
