@@ -54,7 +54,7 @@ pub mod builder;
 pub use builder::*;
 
 mod error;
-pub use error::OverflowError;
+pub use error::OutOfBoundsError;
 
 mod bigint;
 pub use bigint::i256;
