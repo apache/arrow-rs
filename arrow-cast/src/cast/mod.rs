@@ -353,7 +353,8 @@ pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowErro
 /// `AsPrimitive` / `as` silently truncates when the source is wider than `M`
 /// (for example `5_000_000_000i64 as i32`). All integer sources fit in `i128`
 /// losslessly, which [`DecimalCast`] then converts to the decimal native type
-/// with a range check.
+/// with a range check. For types that always fit (e.g. `i64` to `Decimal128`) this
+/// should get optimized to being equivalent to `i64 as i128`.
 fn integer_to_decimal_native<I, M>(value: I) -> Option<M>
 where
     I: Into<i128>,
@@ -408,6 +409,8 @@ where
             })?,
             // A scale factor that overflows the source type is larger than all
             // source values, so integer division produces zero.
+            //
+            // For a well formed decimal scale, this path should never be reachable.
             (None, _) => array.unary::<_, D>(|_| M::ZERO),
         }
     } else {
@@ -10672,13 +10675,9 @@ mod tests {
         let err = cast_with_options(&array, &DataType::Decimal32(9, 0), &unsafe_opts)
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("5000000000"),
-            "unsafe error should report the original value, got {err}"
-        );
-        assert!(
-            !err.contains("705032704"),
-            "unsafe error must not report the i32-truncated value, got {err}"
+        assert_eq!(
+            err,
+            "Cast error: Cannot cast to Decimal32(9, 0). Overflowing on 5000000000"
         );
 
         let result = cast_with_options(&array, &DataType::Decimal128(9, 0), &safe).unwrap();
@@ -10733,9 +10732,9 @@ mod tests {
         let err = cast_with_options(&array, &DataType::Decimal32(9, 0), &unsafe_opts)
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("4000000000"),
-            "unsafe error should report the original value, got {err}"
+        assert_eq!(
+            err,
+            "Cast error: Cannot cast to Decimal32(9, 0). Overflowing on 4000000000"
         );
 
         let result = cast_with_options(&array, &DataType::Decimal128(9, 0), &safe).unwrap();
@@ -10754,9 +10753,9 @@ mod tests {
         let err = cast_with_options(&array, &DataType::Decimal64(18, 0), &unsafe_opts)
             .unwrap_err()
             .to_string();
-        assert!(
-            !err.contains("-1"),
-            "u64::MAX must not wrap to -1, got {err}"
+        assert_eq!(
+            err,
+            "Cast error: Cannot cast to Decimal64(18, 0). Overflowing on 18446744073709551615"
         );
 
         assert!(cast_with_options(&array, &DataType::Decimal128(18, 0), &unsafe_opts).is_err());
