@@ -58,7 +58,6 @@ mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
-#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 

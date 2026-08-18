@@ -11466,7 +11466,7 @@ mod tests {
         assert!(
             casted_err
                 .to_string()
-                .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type")
+                .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 2) type")
         );
 
         let str_array = StringArray::from(vec![". 0.123"]);
@@ -11475,7 +11475,7 @@ mod tests {
         assert!(
             casted_err
                 .to_string()
-                .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type")
+                .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 2) type")
         );
 
         let str_array = StringArray::from(vec![""]);
@@ -11484,7 +11484,7 @@ mod tests {
         assert!(
             casted_err
                 .to_string()
-                .contains("Cannot cast string '' to value of Decimal128(38, 10) type")
+                .contains("Cannot cast string '' to value of Decimal128(38, 2) type")
         );
     }
 

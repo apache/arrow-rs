@@ -1327,7 +1327,7 @@ mod tests {
         );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_decoder::<Int32Type>(
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
@@ -2322,14 +2322,12 @@ mod tests {
 
     /// A util trait to convert slices of different types to byte arrays
     trait ToByteArray<T: DataType> {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[T::T]) -> Vec<u8>;
     }
 
     macro_rules! to_byte_array_impl {
         ($ty: ty) => {
             impl ToByteArray<$ty> for $ty {
-                #[allow(clippy::wrong_self_convention)]
                 fn to_byte_array(data: &[<$ty as DataType>::T]) -> Vec<u8> {
                     <$ty as DataType>::T::slice_as_bytes(data).to_vec()
                 }
@@ -2343,7 +2341,6 @@ mod tests {
     to_byte_array_impl!(DoubleType);
 
     impl ToByteArray<BoolType> for BoolType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
             for (i, item) in data.iter().enumerate() {
@@ -2359,7 +2356,6 @@ mod tests {
     }
 
     impl ToByteArray<Int96Type> for Int96Type {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[Int96]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2370,7 +2366,6 @@ mod tests {
     }
 
     impl ToByteArray<ByteArrayType> for ByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[ByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2384,7 +2379,6 @@ mod tests {
     }
 
     impl ToByteArray<FixedLenByteArrayType> for FixedLenByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[FixedLenByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2397,7 +2391,7 @@ mod tests {
 
     #[test]
     // Allow initializing a vector and pushing to it for clarity in this test
-    #[allow(clippy::vec_init_then_push)]
+    #[expect(clippy::vec_init_then_push)]
     fn test_delta_bit_packed_invalid_bit_width() {
         // Manually craft a buffer with an invalid bit width
         let mut buffer = vec![];

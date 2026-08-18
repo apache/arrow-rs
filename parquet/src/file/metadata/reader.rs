@@ -804,7 +804,6 @@ impl ParquetMetaDataReader {
 
 /// The bounds needed to read page indexes
 // this is an internal enum, so it is ok to allow differences in enum size
-#[allow(clippy::large_enum_variant)]
 enum NeedsIndexData {
     /// no additional data is needed (e.g. the indexes weren't requested)
     No(ParquetMetaData),

@@ -147,7 +147,24 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
-    #[allow(unreachable_code, unused_variables)]
+    #[cfg_attr(
+        any(
+            test,
+            feature = "brotli",
+            feature = "flate2",
+            feature = "lz4",
+            feature = "snap",
+            feature = "zstd"
+        ),
+        expect(unreachable_code)
+    )]
+    #[cfg_attr(
+        all(
+            not(test),
+            not(all(feature = "brotli", feature = "flate2", feature = "zstd"))
+        ),
+        expect(unused_variables)
+    )]
     match codec {
         CodecType::BROTLI(level) => {
             #[cfg(any(feature = "brotli", test))]

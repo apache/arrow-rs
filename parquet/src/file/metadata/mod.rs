@@ -1757,7 +1757,7 @@ mod tests {
     };
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_level_histogram_update_from_levels_compat() {
         let mut histogram = LevelHistogram::try_new(2).unwrap();
         histogram.update_from_levels(&[0, 2, 1, 2, 2]);

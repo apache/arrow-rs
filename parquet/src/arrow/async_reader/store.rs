@@ -66,7 +66,7 @@ pub struct ParquetObjectReader {
     runtime: Option<Handle>,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -177,7 +177,7 @@ impl ParquetObjectReader {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
@@ -194,7 +194,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range).boxed())
@@ -257,7 +257,7 @@ impl AsyncFileReader for ParquetObjectReader {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
+#[expect(deprecated)]
 mod tests {
     use crate::arrow::async_reader::ArrowReaderOptions;
     use crate::file::metadata::PageIndexPolicy;

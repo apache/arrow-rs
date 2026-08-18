@@ -796,7 +796,7 @@ mod tests {
         );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_encoder::<Int32Type>(
             0,
             Encoding::BIT_PACKED,

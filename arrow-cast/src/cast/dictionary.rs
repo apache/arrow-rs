@@ -28,25 +28,98 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
 
+    /// Whether the dictionary is sparse; gates short of the measured 0.6x crossover for margin.
+    #[inline]
+    fn is_sparse<K: ArrowDictionaryKeyType>(array: &DictionaryArray<K>) -> bool {
+        array.keys().len() < array.values().len() / 2
+    }
+
+    #[inline]
+    fn values_buffer_fits_in_view<T: ByteArrayType>(values: &GenericByteArray<T>) -> bool {
+        values.values().len() < i32::MAX as usize
+    }
+
     let array = array.as_dictionary::<K>();
     let from_child_type = array.values().data_type();
     match (from_child_type, to_type) {
         (_, Dictionary(to_index_type, to_value_type)) => {
             dictionary_to_dictionary_cast(array, to_index_type, to_value_type, cast_options)
         }
-        // `unpack_dictionary` can handle Utf8View/BinaryView types, but incurs unnecessary data
-        // copy of the value buffer. Fast path which avoids copying underlying values buffer.
-        // TODO: handle LargeUtf8/LargeBinary -> View (need to check offsets can fit)
-        // TODO: handle cross types (String -> BinaryView, Binary -> StringView)
-        //       (need to validate utf8?)
-        (Utf8, Utf8View) => view_from_dict_values::<K, Utf8Type, StringViewType>(
-            array.keys(),
-            array.values().as_string::<i32>(),
-        ),
-        (Binary, BinaryView) => view_from_dict_values::<K, BinaryType, BinaryViewType>(
+        // `unpack_dictionary` operates per dictionary value before using take kernel to form
+        // final view. `view_from_dict_values` builds output view directly per row (key index).
+        // Based on benchmarking, `view_from_dict_values` is more efficient for sparse dictionaries
+        // (more dictionary values than there are rows/keys), whilst `unpack_dictionary` is
+        // more efficient for dense dictionaries, where a sparse dictionary is when rows reach
+        // roughly 0.6x the dictionary size.
+        //
+        // Therefore delegate to the faster method based on the density of the input dictionary.
+        (Utf8, Utf8View) if is_sparse(array) => {
+            view_from_dict_values::<K, Utf8Type, StringViewType>(
+                array.keys(),
+                array.values().as_string::<i32>(),
+            )
+        }
+        (Binary, BinaryView) if is_sparse(array) => {
+            view_from_dict_values::<K, BinaryType, BinaryViewType>(
+                array.keys(),
+                array.values().as_binary::<i32>(),
+            )
+        }
+        // `view_from_dict_values` directly appends the values buffer as a block using
+        // `GenericByteViewBuilder::append_block` which asserts length of the buffer; we must
+        // ensure this assertion holds to use it for large variants which may exceed the max allowable length.
+        // If we exceed the length we can simply fallback to `unpack_dictionary` which still builds it
+        // correctly.
+        (LargeUtf8, Utf8View)
+            if is_sparse(array)
+                && values_buffer_fits_in_view(array.values().as_string::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeUtf8Type, StringViewType>(
+                array.keys(),
+                array.values().as_string::<i64>(),
+            )
+        }
+        (LargeBinary, BinaryView)
+            if is_sparse(array)
+                && values_buffer_fits_in_view(array.values().as_binary::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeBinaryType, BinaryViewType>(
+                array.keys(),
+                array.values().as_binary::<i64>(),
+            )
+        }
+        // Cross casts to a binary view need no validation: valid UTF-8 is valid binary.
+        (Utf8, BinaryView) if is_sparse(array) => {
+            view_from_dict_values::<K, Utf8Type, BinaryViewType>(
+                array.keys(),
+                array.values().as_string::<i32>(),
+            )
+        }
+        (LargeUtf8, BinaryView)
+            if is_sparse(array)
+                && values_buffer_fits_in_view(array.values().as_string::<i64>()) =>
+        {
+            view_from_dict_values::<K, LargeUtf8Type, BinaryViewType>(
+                array.keys(),
+                array.values().as_string::<i64>(),
+            )
+        }
+        // Cross casts to a string view require UTF-8 validation of the dictionary values.
+        (Binary, Utf8View) if is_sparse(array) => binary_dict_to_string_view::<K, i32>(
             array.keys(),
             array.values().as_binary::<i32>(),
+            cast_options,
         ),
+        (LargeBinary, Utf8View)
+            if is_sparse(array)
+                && values_buffer_fits_in_view(array.values().as_binary::<i64>()) =>
+        {
+            binary_dict_to_string_view::<K, i64>(
+                array.keys(),
+                array.values().as_binary::<i64>(),
+                cast_options,
+            )
+        }
         _ => unpack_dictionary(array, to_type, cast_options),
     }
 }
@@ -124,6 +197,73 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
     };
 
     Ok(new_array)
+}
+
+/// Cast `Dict<K, Binary>` or `Dict<K, LargeBinary>` to `Utf8View`, validating UTF-8 for each
+/// dictionary value.
+///
+/// Fast path when all values are valid UTF-8: reuses the values buffer without copying.
+/// When some values are invalid and `cast_options.safe` is true, rows pointing to those
+/// values become null. When `cast_options.safe` is false, returns an error immediately.
+fn binary_dict_to_string_view<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
+    keys: &PrimitiveArray<K>,
+    values: &GenericByteArray<GenericBinaryType<O>>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    match GenericStringArray::<O>::try_from_binary(values.clone()) {
+        Ok(_) => {
+            // All dictionary values are valid UTF-8: reuse the buffer zero-copy.
+            view_from_dict_values::<K, GenericBinaryType<O>, StringViewType>(keys, values)
+        }
+        Err(e) => {
+            if !cast_options.safe {
+                return Err(e);
+            }
+            // safe=true: validate each dictionary value individually so we can nullify
+            // only the rows whose key points to a null or invalid UTF-8 value.
+            let valid: Vec<bool> = (0..values.len())
+                .map(|i| !values.is_null(i) && std::str::from_utf8(values.value(i)).is_ok())
+                .collect();
+
+            let value_buffer = values.values();
+            let value_offsets = values.value_offsets();
+            let mut builder = StringViewBuilder::with_capacity(keys.len());
+            builder.append_block(value_buffer.clone());
+
+            for key in keys {
+                match key {
+                    Some(v) => {
+                        let idx = v.to_usize().ok_or_else(|| {
+                            ArrowError::ComputeError("Invalid dictionary index".to_string())
+                        })?;
+                        let is_valid = *valid.get(idx).ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "Dictionary key {idx} out of bounds for dictionary values of length {}",
+                                valid.len()
+                            ))
+                        })?;
+                        if is_valid {
+                            // Safety:
+                            // (1) `idx` and `idx + 1` are in bounds, checked above
+                            // (2) offsets are monotonically increasing, so end >= offset
+                            // (3) the slice [offset..end] is within the buffer
+                            // (4) the bytes are valid UTF-8, checked above
+                            unsafe {
+                                let offset = value_offsets.get_unchecked(idx).as_usize();
+                                let end = value_offsets.get_unchecked(idx + 1).as_usize();
+                                let length = end - offset;
+                                builder.append_view_unchecked(0, offset as u32, length as u32);
+                            }
+                        } else {
+                            builder.append_null();
+                        }
+                    }
+                    None => builder.append_null(),
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+    }
 }
 
 fn view_from_dict_values<K: ArrowDictionaryKeyType, V: ByteArrayType, T: ByteViewType>(
@@ -560,4 +700,132 @@ where
         }
     }
     Ok(Arc::new(b.finish()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use DataType::*;
+
+    // Too few keys for the dictionary, so `is_sparse` holds and views are built per row.
+    // Covers an inlined value, a buffer backed one, a null key and a null dictionary value.
+    fn sparse_keys(values: &ArrayRef) -> Int32Array {
+        let keys = Int32Array::from(vec![Some(0), Some(2), None, Some(3)]);
+        assert!(
+            keys.len() < values.len() / 2,
+            "keys must reach the direct path"
+        );
+        keys
+    }
+
+    // One key per value, so `is_sparse` fails and `unpack_dictionary` runs.
+    fn dense_keys(values: &ArrayRef) -> Int32Array {
+        let keys = Int32Array::from(vec![
+            Some(0),
+            Some(2),
+            None,
+            Some(3),
+            Some(1),
+            Some(0),
+            Some(4),
+            Some(2),
+            Some(3),
+            Some(5),
+        ]);
+        assert!(
+            keys.len() >= values.len() / 2,
+            "keys must reach unpack_dictionary"
+        );
+        keys
+    }
+
+    fn make_dict(keys: &Int32Array, values: &ArrayRef) -> DictionaryArray<Int32Type> {
+        DictionaryArray::try_new(keys.clone(), values.clone()).unwrap()
+    }
+
+    #[test]
+    fn test_dict_to_view_matches_take_then_cast() {
+        let long = "a value over twelve bytes";
+        let utf8: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("aa"),
+            Some("bb"),
+            Some(long),
+            None,
+            Some("ee"),
+            Some("ff"),
+            Some("gg"),
+            Some("hh"),
+            Some("ii"),
+            Some("jj"),
+        ]));
+
+        for from in [Utf8, LargeUtf8, Binary, LargeBinary] {
+            let values = cast(&utf8, &from).unwrap();
+            for to in [Utf8View, BinaryView] {
+                for keys in [sparse_keys(&values), dense_keys(&values)] {
+                    let expected = cast(&take(&values, &keys, None).unwrap(), &to).unwrap();
+                    let casted = cast(&make_dict(&keys, &values), &to).unwrap();
+                    assert_eq!(casted.as_ref(), expected.as_ref(), "{from:?} -> {to:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_dict_binary_to_utf8view_invalid_utf8() {
+        let bytes: Vec<&[u8]> = vec![
+            b"aa",
+            b"bb",
+            &[0xFF, 0xFE],
+            b"dd",
+            b"ee",
+            b"ff",
+            b"gg",
+            b"hh",
+            b"ii",
+            b"jj",
+        ];
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let safe = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        for values in [
+            Arc::new(BinaryArray::from_vec(bytes.clone())) as ArrayRef,
+            Arc::new(LargeBinaryArray::from_vec(bytes.clone())) as ArrayRef,
+        ] {
+            // index 2 holds the invalid value, so keys pointing at it are nullified when safe
+            for (keys, expected) in [
+                (
+                    sparse_keys(&values),
+                    vec![Some("aa"), None, None, Some("dd")],
+                ),
+                (
+                    dense_keys(&values),
+                    vec![
+                        Some("aa"),
+                        None,
+                        None,
+                        Some("dd"),
+                        Some("bb"),
+                        Some("aa"),
+                        Some("ee"),
+                        None,
+                        Some("dd"),
+                        Some("ff"),
+                    ],
+                ),
+            ] {
+                let dict = make_dict(&keys, &values);
+                assert!(cast_with_options(&dict, &Utf8View, &strict).is_err());
+
+                let casted = cast_with_options(&dict, &Utf8View, &safe).unwrap();
+                assert_eq!(casted.as_string_view(), &StringViewArray::from(expected));
+            }
+        }
+    }
 }

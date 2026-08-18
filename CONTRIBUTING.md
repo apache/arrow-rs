@@ -203,7 +203,7 @@ rather than to individual crates, so that they apply everywhere.
 
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
-Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
+Search for `expect(clippy::` in the codebase to identify lints that are intentionally suppressed. We currently prefer suppressing lints on the lowest unit possible.
 
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.

@@ -157,6 +157,7 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 
     /// Returns an iterator over the chunks
+    #[inline]
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()

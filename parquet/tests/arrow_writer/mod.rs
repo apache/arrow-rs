@@ -112,7 +112,7 @@ fn subtract_live_bytes(size: usize) {
     });
 }
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { self.inner.alloc(layout) };

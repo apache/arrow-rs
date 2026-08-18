@@ -458,6 +458,11 @@ fn add_benchmark(c: &mut Criterion) {
         string_float_array_normal,
         DataType::Decimal128(38, 3)
     );
+    benchmark_cast!(
+        "cast string to decimal256(76, 3)",
+        string_float_array_normal,
+        DataType::Decimal256(76, 3)
+    );
 
     // cast float64 to decimals
     benchmark_cast!(
