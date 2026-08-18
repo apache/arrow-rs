@@ -607,20 +607,35 @@ impl BooleanArray {
             return self;
         };
 
-        let mut_buffer_result = self.values.try_into_builder();
-        let mut builder = match mut_buffer_result {
+        let bit_offset = self.values.offset();
+        let inner_buf = self.values.into_inner();
+
+        match inner_buf.into_mutable() {
             Ok(mut mutable_buffer) => {
-                mutable_buffer.truncate(end);
-                mutable_buffer
+                // Unique ownership: zero trailing bits in place.
+                let actual_end = bit_offset + end;
+                let raw_bytes = mutable_buffer.as_slice_mut();
+                let byte_idx = actual_end / 8;
+                let bits_to_keep = actual_end % 8;
+                if bits_to_keep == 0 {
+                    raw_bytes[byte_idx..].fill(0);
+                } else {
+                    raw_bytes[byte_idx] &= (1_u8 << bits_to_keep) - 1;
+                    raw_bytes[byte_idx + 1..].fill(0);
+                }
+                BooleanArray::new(
+                    BooleanBuffer::new(mutable_buffer.into(), bit_offset, len),
+                    self.nulls,
+                )
             }
             Err(buf) => {
+                // Shared buffer: copy the retained prefix then pad with false.
                 let mut builder = BooleanBufferBuilder::new(len);
-                builder.append_buffer(&buf.slice(0, end));
-                builder
+                builder.append_buffer(&BooleanBuffer::new(buf, bit_offset, end));
+                builder.append_n(len - end, false);
+                BooleanArray::new(builder.finish(), self.nulls)
             }
-        };
-        builder.append_n(len - end, false);
-        BooleanArray::new(builder.finish(), self.nulls)
+        }
     }
 
     /// Deconstruct this array into its constituent parts
