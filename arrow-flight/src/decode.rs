@@ -136,7 +136,7 @@ impl FlightRecordBatchStream {
     /// Note that this will return `None` until the entire stream is consumed.
     /// Only after calling `next()` returns `None`, might any available trailers be returned.
     pub fn trailers(&self) -> Option<MetadataMap> {
-        self.trailers.as_ref().and_then(|trailers| trailers.get())
+        self.trailers.as_ref()?.get()
     }
 
     /// Return schema for the stream, if it has been received

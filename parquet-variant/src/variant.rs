@@ -843,9 +843,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -890,9 +890,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -941,8 +941,8 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int32(i) => Some(i),
             Variant::Int64(i) => i.try_into().ok(),
             Variant::Decimal4(d) => d.as_integer(),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -989,7 +989,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => Some(i),
             Variant::Decimal4(d) => d.as_integer().map(|i| i as i64),
             Variant::Decimal8(d) => d.as_integer(),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -1003,9 +1003,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -1197,9 +1197,10 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int8(i) => VariantDecimal4::try_new(i as i32, 0).ok(),
             Variant::Int16(i) => VariantDecimal4::try_new(i as i32, 0).ok(),
             Variant::Int32(i) => VariantDecimal4::try_new(i, 0).ok(),
-            Variant::Int64(i) => i32::try_from(i)
-                .ok()
-                .and_then(|i| VariantDecimal4::try_new(i, 0).ok()),
+            Variant::Int64(i) => {
+                let i = i32::try_from(i).ok()?;
+                VariantDecimal4::try_new(i, 0).ok()
+            }
             Variant::Decimal4(decimal4) => Some(decimal4),
             Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
             Variant::Decimal16(decimal16) => decimal16.try_into().ok(),

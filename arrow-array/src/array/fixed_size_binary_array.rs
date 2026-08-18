@@ -792,13 +792,12 @@ impl<const N: usize> TryFrom<Vec<Option<&[u8; N]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8; N]>>) -> Result<Self, Self::Error> {
-        N.try_into()
-            .map_err(|_| {
-                ArrowError::InvalidArgumentError(format!(
-                    "FixedSizeBinaryArray value length exceeds i32, got {N}"
-                ))
-            })
-            .and_then(|x| Self::try_from_sparse_iter_with_size(v.into_iter(), x))
+        let size = N.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray value length exceeds i32, got {N}"
+            ))
+        })?;
+        Self::try_from_sparse_iter_with_size(v.into_iter(), size)
     }
 }
 

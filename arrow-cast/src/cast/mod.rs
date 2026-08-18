@@ -375,29 +375,23 @@ where
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .ok()
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                let v = v.as_().div_checked(scale_factor).ok()?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = v.as_().div_checked(scale_factor)?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
         }
     } else {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .ok()
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                let v = v.as_().mul_checked(scale_factor).ok()?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = v.as_().mul_checked(scale_factor)?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
         }
     };
@@ -448,7 +442,8 @@ fn cast_month_day_nano_to_duration<D: ArrowTemporalType<Native = i64>>(
 
     if cast_options.safe {
         let iter = array.iter().map(|v| {
-            v.and_then(|v| (v.days == 0 && v.months == 0).then_some(v.nanoseconds / scale))
+            let v = v?;
+            (v.days == 0 && v.months == 0).then_some(v.nanoseconds / scale)
         });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<D>::from_trusted_len_iter(iter)
@@ -498,10 +493,8 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
 
     if cast_options.safe {
         let iter = array.iter().map(|v| {
-            v.and_then(|v| {
-                v.checked_mul(scale)
-                    .map(|v| IntervalMonthDayNano::new(0, 0, v))
-            })
+            v?.checked_mul(scale)
+                .map(|v| IntervalMonthDayNano::new(0, 0, v))
         });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
