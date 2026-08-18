@@ -479,12 +479,12 @@ enum LogEntry {
     /// Read the metadata of the parquet file
     ReadMetadata(Range<usize>),
     /// Access previously parsed metadata
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "async"), expect(dead_code))]
     GetProvidedMetadata,
     /// Read a single logical data object
     ReadData(ReadInfo),
     /// Read one or more logical data objects in a single operation
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "async"), expect(dead_code))]
     ReadMultipleData(Vec<LogEntry>),
     /// Not known where the read came from
     Unknown(Range<usize>),

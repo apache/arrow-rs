@@ -310,7 +310,7 @@ fn interleave_views<T: ByteViewType>(
     let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
     offsets.push(0);
     let mut total_buffers = 0;
-    for a in interleaved.arrays.iter() {
+    for a in &interleaved.arrays {
         total_buffers += a.data_buffers().len();
         offsets.push(total_buffers);
     }
@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn test_interleave_run_end_encoded_empty_runs() {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1].into_iter().map(Some));
+        builder.extend(std::iter::once(Some(1)));
         let a = builder.finish();
 
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();

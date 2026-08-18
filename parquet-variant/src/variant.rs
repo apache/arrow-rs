@@ -318,6 +318,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     ///
     /// [unvalidated]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if `metadata` or `value` fail basic validation. Use [`Self::try_new`]
+    /// for a fallible version.
     pub fn new(metadata: &'m [u8], value: &'v [u8]) -> Self {
         let metadata = VariantMetadata::try_new_with_shallow_validation(metadata)
             .expect("Invalid variant metadata");
@@ -353,6 +358,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
     ///
     /// [unvalidated]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` fails basic validation. Use [`Self::try_new_with_metadata`]
+    /// for a fallible version.
     pub fn new_with_metadata(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
         Self::try_new_with_metadata_and_shallow_validation(metadata, value)
             .expect("Invalid variant")

@@ -61,7 +61,7 @@ impl fmt::Display for TestTypes {
 fn create_parquet_file(
     dtype: TestTypes,
     row_groups: usize,
-    data_page_row_count_limit: &Option<usize>,
+    data_page_row_count_limit: Option<usize>,
 ) -> NamedTempFile {
     let schema = match dtype {
         TestTypes::UInt64 => Arc::new(Schema::new(vec![Field::new("col", DataType::UInt64, true)])),
@@ -82,7 +82,7 @@ fn create_parquet_file(
     let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(row_groups));
     if let Some(limit) = data_page_row_count_limit {
         props = props
-            .set_data_page_row_count_limit(*limit)
+            .set_data_page_row_count_limit(limit)
             .set_statistics_enabled(EnabledStatistics::Page);
     };
     let props = props.build();
@@ -196,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for dtype in types {
         for data_page_row_count_limit in &data_page_row_count_limits {
-            let file = create_parquet_file(dtype.clone(), row_groups, data_page_row_count_limit);
+            let file = create_parquet_file(dtype.clone(), row_groups, *data_page_row_count_limit);
             let file = file.reopen().unwrap();
             let options =
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));

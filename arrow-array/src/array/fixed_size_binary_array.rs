@@ -143,6 +143,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Create a new [`Scalar`] from `value`
+    ///
+    /// # Panics
+    /// Panics if `value.as_ref().len() > i32::MAX`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
         let value_length =
@@ -373,6 +376,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -457,7 +463,9 @@ impl FixedSizeBinaryArray {
                     // sufficient capacity in the underlying mutable buffer for
                     // the data.
                     if let Some(capacity) = iter_size_hint.checked_mul(len) {
-                        buffer.reserve(capacity);
+                        buffer
+                            .try_reserve(capacity)
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     }
                     let prepend_zeros = slice.len().checked_mul(prepend).ok_or_else(|| {
                         ArrowError::InvalidArgumentError(format!(
@@ -465,12 +473,18 @@ impl FixedSizeBinaryArray {
                             slice.len()
                         ))
                     })?;
-                    buffer.extend_zeros(prepend_zeros);
+                    buffer
+                        .try_extend_zeros(prepend_zeros)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
-                buffer.extend_from_slice(slice);
+                buffer
+                    .try_extend_from_slice(slice)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else if let Some(size) = value_size {
-                buffer.extend_zeros(size);
+                buffer
+                    .try_extend_zeros(size)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else {
                 prepend += 1;
             }
@@ -632,11 +646,15 @@ impl FixedSizeBinaryArray {
                 let len = slice.len();
                 value_size = Some(len);
                 if let Some(capacity) = iter_size_hint.checked_mul(len) {
-                    buffer.reserve(capacity);
+                    buffer
+                        .try_reserve(capacity)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
             }
 
-            buffer.extend_from_slice(slice);
+            buffer
+                .try_extend_from_slice(slice)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             len += 1;
 

@@ -1200,12 +1200,12 @@ fn union_branch_name(dt: &AvroDataType) -> String {
     if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
         if name.contains('.') {
             // Full name
-            return name.to_string();
+            return name.clone();
         }
         if let Some(ns) = dt.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
             return format!("{ns}.{name}");
         }
-        return name.to_string();
+        return name.clone();
     }
     dt.codec.union_field_name()
 }
@@ -2243,7 +2243,7 @@ impl<'a> Maker<'a> {
                     Entry::Vacant(e) => {
                         e.insert(idx);
                     }
-                    _ => {}
+                    Entry::Occupied(_) => {}
                 }
             }
         }

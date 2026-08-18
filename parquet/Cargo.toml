@@ -275,6 +275,11 @@ required-features = ["experimental", "default"]
 harness = false
 
 [[bench]]
+name = "bit_packing"
+required-features = ["experimental", "default"]
+harness = false
+
+[[bench]]
 name = "metadata"
 harness = false
 

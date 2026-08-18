@@ -113,6 +113,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Appends a value of type `T` into the builder `n` times.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
         let bytes: &[u8] = value.as_ref().as_ref();
@@ -131,6 +135,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// - A `Some` value will append the value.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
         match value {

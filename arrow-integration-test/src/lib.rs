@@ -34,7 +34,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
@@ -132,7 +131,7 @@ impl From<&Field> for ArrowJsonField {
         };
 
         Self {
-            name: field.name().to_string(),
+            name: field.name().clone(),
             field_type: data_type_to_json(field.data_type()),
             nullable: field.is_nullable(),
             children: vec![],

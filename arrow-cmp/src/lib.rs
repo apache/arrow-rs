@@ -29,7 +29,6 @@
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
 
-#![deny(clippy::allow_attributes)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -250,7 +249,7 @@ fn compare_list<O: OffsetSizeTrait>(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -281,7 +280,7 @@ fn compare_fixed_list(
         let r_end = r_start + r_size;
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -317,7 +316,7 @@ fn compare_list_view<O: OffsetSizeTrait>(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -348,7 +347,7 @@ fn compare_map(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -380,7 +379,7 @@ fn compare_struct(
     let f = compare(left, right, opts, move |i, j| {
         for cmp in &comparators {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }

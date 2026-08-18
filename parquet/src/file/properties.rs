@@ -135,7 +135,7 @@ impl Default for CdcOptions {
 ///
 /// Basic constant, which is not part of the Thrift definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum WriterVersion {
     /// Parquet format version 1.0
     PARQUET_1_0,
@@ -823,6 +823,10 @@ impl WriterPropertiesBuilder {
     /// * If `None`, there's no effective limit.
     ///
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -852,6 +856,10 @@ impl WriterPropertiesBuilder {
     /// [`WriterPropertiesBuilder::set_column_index_truncate_length`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_length` is `Some(0)`
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(
@@ -1536,6 +1544,9 @@ impl BloomFilterPropertiesBuilder {
 
     /// Builds [`BloomFilterProperties`].
     ///
+    ///
+    /// # Panics
+    ///
     /// Panics if the configured `fpp` is not in `(0.0, 1.0)` exclusive.
     /// Use [`Self::try_build`] for a non-panicking alternative.
     pub fn build(self) -> BloomFilterProperties {
@@ -2169,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_writer_properties_deprecated_bloom_filter_ndv_setters_still_work() {
         let col = ColumnPath::from("col");
         let props = WriterProperties::builder()

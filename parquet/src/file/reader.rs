@@ -39,7 +39,7 @@ use crate::column::reader::ColumnReaderImpl;
 
 /// Length should return the total number of bytes in the input source.
 /// It's mainly used to read the metadata, which is at the end of the source.
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 pub trait Length {
     /// Returns the amount of bytes of the inner source.
     fn len(&self) -> u64;
