@@ -257,6 +257,9 @@ impl MaskCursor {
     /// Returns the next non-empty mask chunk without crossing an unloaded row range.
     /// When loaded ranges are present, the chunk ends immediately after its last
     /// selected row, leaving trailing unselected rows for the next call's initial skip.
+    /// `CachedArrayReader` can fetch the full cache batch containing that selected
+    /// row; predicate fetch expands cached columns to batch boundaries so this read
+    /// stays within fetched data even when the batch crosses the loaded-range end.
     ///
     /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
     /// skips before constructing this cursor. Callers therefore only invoke
@@ -275,10 +278,13 @@ impl MaskCursor {
             cursor += 1;
         }
 
-        debug_assert!(
-            cursor < self.mask.len(),
-            "ReadPlan must remove trailing skips from Mask selections"
-        );
+        if cursor == self.mask.len() {
+            return Err(ParquetError::General(
+                "Internal Error: Mask cursor reached the end without finding a selected row; \
+                 ReadPlan must remove trailing skips"
+                    .to_string(),
+            ));
+        }
 
         let loaded_range_end = self
             .loaded_row_ranges
