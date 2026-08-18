@@ -387,7 +387,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             // to split batch proactively before exceeding byte limit. Both limits apply to
             // the same rows, so measure against whatever the row limit already trimmed
             // `remaining` down to; otherwise the row limit would always win.
-            let candidate_rows = split_at.unwrap_or(remaining.num_rows());
+            let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
 
             if let Some(max_bytes) = self.max_row_group_bytes
                 && buffered_rows > 0
