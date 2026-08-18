@@ -128,6 +128,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
+    /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
 }
 

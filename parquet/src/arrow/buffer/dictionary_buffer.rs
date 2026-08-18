@@ -340,18 +340,13 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
         keys.push(key);
     }
 
-    let arrow_value_type = if V::IS_LARGE {
-        ArrowType::LargeUtf8
-    } else {
-        ArrowType::Utf8
-    };
     let num_unique = unique_offsets.len() - 1;
 
     // SAFETY: buffers are constructed directly from typed Vecs above; offsets are
     // monotonically non-decreasing and bounded by unique_bytes.len(), and all
     // key values are within 0..num_unique, so the invariants Arrow requires hold.
     let value_data = unsafe {
-        arrow_data::ArrayData::builder(arrow_value_type)
+        arrow_data::ArrayData::builder(value_type.clone())
             .len(num_unique)
             .add_buffer(Buffer::from_vec(unique_offsets))
             .add_buffer(Buffer::from_vec(unique_bytes))
@@ -404,6 +399,7 @@ mod tests {
     use super::*;
     use arrow::compute::cast;
     use arrow_array::StringArray;
+    use arrow_array::types::*;
 
     #[test]
     fn test_dictionary_buffer() {
@@ -527,5 +523,51 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    /// A dictionary requested with LargeUtf8 values must come back with LargeUtf8, not Utf8.
+    #[test]
+    fn test_values_path_large_utf8_type() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::LargeUtf8));
+        let mut buffer = DictionaryBuffer::<i32, i64>::with_capacity(0);
+        let values = buffer.spill_values().unwrap();
+        for s in ["foo", "bar", "foo"] {
+            values.try_push(s.as_bytes(), false).unwrap();
+        }
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.data_type(), &dict_type);
+        assert_eq!(dict.values().data_type(), &ArrowType::LargeUtf8);
+    }
+
+    /// A dictionary requested with Binary values must come back with Binary, not Utf8.
+    #[test]
+    fn test_values_path_binary_type() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Binary));
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        let values = buffer.spill_values().unwrap();
+        for s in [b"abc".as_ref(), b"\x00\xff", b"abc"] {
+            values.try_push(s, false).unwrap();
+        }
+
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .unwrap();
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.data_type(), &dict_type);
+        assert_eq!(dict.values().data_type(), &ArrowType::Binary);
     }
 }
