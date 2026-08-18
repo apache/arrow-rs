@@ -274,7 +274,9 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         ree: r_ree_info.as_ref().map(|(_, info)| info),
     };
 
-    // Equality against an inlined constant is a scan of fixed-width integers
+    // Special case: equality against a short scalar that fits the inlined prefix
+    // of a view array, which reduces the comparison to a scan of fixed-width
+    // integers
     if matches!(op, Op::Equal | Op::NotEqual)
         && l_side.dict.is_none()
         && r_side.dict.is_none()
@@ -395,9 +397,11 @@ impl SideInfo<'_> {
 /// Longest constant whose length and bytes both fit a view's low 64 bits
 const MAX_LOW_HALF_LEN: u32 = 4;
 
-/// Compares every value of a byte-view array against an inlined constant
+/// Attempts a special case: comparing every value of a byte-view array against a
+/// short constant that fits entirely within a view's inlined prefix
 ///
-/// `None` for any other shape, which the generic path below then handles.
+/// Returns `None` for any other shape, which the caller then handles on the
+/// generic path.
 fn eq_inline_scalar(
     l: &dyn Array,
     r: &dyn Array,
