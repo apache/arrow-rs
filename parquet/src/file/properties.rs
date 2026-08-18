@@ -914,15 +914,25 @@ impl WriterPropertiesBuilder {
     /// row group column chunk statistics (defaults to `false` via
     /// [`DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES`]).
     ///
-    /// When enabled, the ArrowWriter scans each column's values before encoding
+    /// When enabled, the [`ArrowWriter`] scans each column's values before encoding
     /// and stores the number of distinct non-null values in the row group statistics
     /// footer.
+    ///
+    /// # Compatibility
+    ///
+    /// This setting only takes effect when using [`ArrowWriter`]. The row-based
+    /// [`SerializedFileWriter`] / [`SerializedRowGroupWriter`] APIs do not populate
+    /// `num_distinct_values` and will ignore this flag.
     ///
     /// # Performance
     ///
     /// Computing the distinct count requires hashing every non-null value in the column.
     /// For large row groups or columns with many values this adds significant overhead.
     /// Benchmark your workload before enabling this globally.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`SerializedFileWriter`]: crate::file::writer::SerializedFileWriter
+    /// [`SerializedRowGroupWriter`]: crate::file::writer::SerializedRowGroupWriter
     pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
         self.write_row_group_number_distinct_values = value;
         self
