@@ -694,9 +694,9 @@ mod tests {
 
         // Total rows covered (selects + skips) must equal the full row group
         // so downstream offset/limit math stays in absolute-row space.
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
         assert_eq!(
-            total, TOTAL_ROWS,
+            selection.total_row_count(),
+            TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
     }
@@ -789,7 +789,6 @@ mod tests {
 
         assert_eq!(selection.row_count(), LIMIT);
 
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
-        assert_eq!(total, TOTAL_ROWS);
+        assert_eq!(selection.total_row_count(), TOTAL_ROWS);
     }
 }
