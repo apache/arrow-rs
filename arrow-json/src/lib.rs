@@ -20,15 +20,20 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data uses `Base16` Encoding
+//! # Binary Data Encoding
 //!
 //! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
 //! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
 //! [`Base16` encoding]).
 //!
 //! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
-//! as the original). If that is an issue, we recommend to convert binary data to/from a different
-//! encoding format such as `Base64` instead. See the following example for details.
+//! as the original). If that is an issue, there are two alternatives:
+//!
+//! 1. Provide a custom encoder. See the ["Customizing the encoder"] section of the writer documentation.
+//! 2. Convert binary data to/from a different encoding format such as `Base64` before
+//!    writing / after reading, as shown in the following example.
+//!
+//! ["Customizing the encoder"]: writer#customizing-the-encoder
 //!
 //! ## `Base64` Encoding Example
 //!
