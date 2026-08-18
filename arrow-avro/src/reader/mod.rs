@@ -504,7 +504,7 @@ pub mod async_reader;
 
 pub use header::{HeaderInfo, read_header_info};
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
@@ -4454,7 +4454,7 @@ mod test {
             let offs = vec![0, 0, 0, 1];
             let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
                 DataType::FixedSizeBinary(8) => {
-                    let it = [Some(fx8_a)].into_iter();
+                    let it = std::iter::once(Some(fx8_a));
                     Some(Arc::new(
                         FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 8).unwrap(),
                     ) as ArrayRef)
@@ -5397,7 +5397,7 @@ mod test {
                     .to_string_lossy()
                     .into_owned()
             };
-            let pow10: i128 = 10i128.pow(scale_u32);
+            let pow10 = 10i128.pow(scale_u32);
             let values_i128: Vec<i128> = (1..=24).map(|n| (n as i128) * pow10).collect();
             let build_expected = |dt: &DataType, values: &[i128]| -> ArrayRef {
                 match *dt {
@@ -6587,7 +6587,7 @@ mod test {
             .expect("id column should be an Int64Array");
         let expected_ids = [1, 2, 3, 4, 5, 6, 7];
         for (i, &expected_id) in expected_ids.iter().enumerate() {
-            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}",);
+            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}");
         }
         let int_array = batch
             .column(1)
@@ -7945,7 +7945,7 @@ mod test {
             let mut tid_array: Option<i8> = None;
             let mut tid_map: Option<i8> = None;
             let mut map_entry_field: Option<FieldRef> = None;
-            let mut map_sorted: bool = false;
+            let mut map_sorted = false;
             for (tid, f) in uf.iter() {
                 match f.data_type() {
                     DataType::Dictionary(_, _) => tid_enum = Some(tid),

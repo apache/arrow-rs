@@ -17,6 +17,8 @@
 
 //! Generates the Rust bindings for the Arrow Flight protobuf definitions.
 
+#![deny(clippy::allow_attributes)]
+
 use std::{fs::OpenOptions, io::Write, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

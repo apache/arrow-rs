@@ -43,6 +43,7 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 pub mod convert;
 pub mod reader;
@@ -53,6 +54,8 @@ mod compression;
 #[cfg(test)]
 mod tests;
 
+// This code is generated so we don't want to fix any lint violations manually
+#[allow(clippy::allow_attributes)]
 #[allow(mismatched_lifetime_syntaxes)]
 #[allow(clippy::redundant_closure)]
 #[allow(clippy::needless_lifetimes)]

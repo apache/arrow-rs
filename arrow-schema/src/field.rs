@@ -171,7 +171,7 @@ impl Field {
     /// Field::new("field_name", DataType::Int32, true);
     /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field {
             name: name.into(),
             data_type,
@@ -212,7 +212,7 @@ impl Field {
         dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field {
             name: name.into(),
             data_type,
@@ -554,7 +554,7 @@ impl Field {
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
     /// panics if this [`Field`] does not have this extension type.
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// This calls [`Field::try_extension_type`] and panics when it returns an
     /// error.
@@ -694,7 +694,7 @@ impl Field {
         self.fields()
             .into_iter()
             .filter(|&field| {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 let matching_dict_id = field.dict_id == id;
                 matches!(field.data_type(), DataType::Dictionary(_, _)) && matching_dict_id
             })
@@ -709,7 +709,7 @@ impl Field {
     )]
     pub const fn dict_id(&self) -> Option<i64> {
         match self.data_type {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             DataType::Dictionary(_, _) => Some(self.dict_id),
             _ => None,
         }
@@ -1053,7 +1053,7 @@ mod test {
     fn test_new_dict_with_string() {
         // Fields should allow owned Strings to support reuse
         let s = "c1";
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
     }
 
@@ -1192,7 +1192,7 @@ mod test {
 
     #[test]
     fn test_fields_with_dict_id() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1200,7 +1200,7 @@ mod test {
             10,
             false,
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict2 = Field::new_dict(
             "dict2",
             DataType::Dictionary(DataType::Int32.into(), DataType::Int8.into()),
@@ -1237,11 +1237,11 @@ mod test {
             false,
         );
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         for field in field.fields_with_dict_id(10) {
             assert_eq!(dict1, *field);
         }
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         for field in field.fields_with_dict_id(20) {
             assert_eq!(dict2, *field);
         }
@@ -1256,7 +1256,7 @@ mod test {
     #[test]
     fn test_field_comparison_case() {
         // dictionary-encoding properties not used for field comparison
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1264,7 +1264,7 @@ mod test {
             10,
             false,
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict2 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -1276,7 +1276,7 @@ mod test {
         assert_eq!(dict1, dict2);
         assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict1 = Field::new_dict(
             "dict0",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),

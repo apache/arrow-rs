@@ -147,7 +147,24 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
-    #[allow(unreachable_code, unused_variables)]
+    #[cfg_attr(
+        any(
+            test,
+            feature = "brotli",
+            feature = "flate2",
+            feature = "lz4",
+            feature = "snap",
+            feature = "zstd"
+        ),
+        expect(unreachable_code)
+    )]
+    #[cfg_attr(
+        all(
+            not(test),
+            not(all(feature = "brotli", feature = "flate2", feature = "zstd"))
+        ),
+        expect(unused_variables)
+    )]
     match codec {
         CodecType::BROTLI(level) => {
             #[cfg(any(feature = "brotli", test))]
@@ -194,7 +211,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
             ))
         }
         CodecType::UNCOMPRESSED => Ok(None),
-        _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
+        CodecType::LZO => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
 }
 
@@ -546,7 +563,7 @@ mod zstd_codec {
                         .flatten()
                         .map(|size| size as usize)
                 })
-                .unwrap_or(input_buf.len().saturating_mul(4));
+                .unwrap_or_else(|| input_buf.len().saturating_mul(4));
             output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
@@ -579,7 +596,7 @@ pub struct ZstdLevel(i32);
 impl CompressionLevel<i32> for ZstdLevel {
     // zstd binds to C, and hence zstd::compression_level_range() is not const as this calls the
     // underlying C library.
-    const MINIMUM_LEVEL: i32 = 1;
+    const MINIMUM_LEVEL: i32 = -131072;
     const MAXIMUM_LEVEL: i32 = 22;
 }
 
@@ -935,7 +952,10 @@ mod tests {
 
     #[test]
     fn test_codec_zstd() {
-        for level in ZstdLevel::MINIMUM_LEVEL..=ZstdLevel::MAXIMUM_LEVEL {
+        // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
+        for level in
+            std::iter::once(ZstdLevel::MINIMUM_LEVEL).chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));
             test_codec_without_size(CodecType::ZSTD(level));

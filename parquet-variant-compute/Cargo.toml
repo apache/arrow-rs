@@ -36,7 +36,6 @@ parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 chrono = { workspace = true }
 uuid = { version = "1.18.0", features = ["v4"] }
-serde_json = "1.0"
 num-traits = { version = "0.2.19", default-features = false }
 
 # uuid requires the `js` feature to run on wasm
@@ -50,6 +49,7 @@ bench = false
 [dev-dependencies]
 rand = "0.10.1"
 criterion = { workspace = true, default-features = false }
+serde_json = "1.0"
 
 [[bench]]
 name = "variant_kernels"

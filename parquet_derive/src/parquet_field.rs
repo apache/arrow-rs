@@ -193,7 +193,7 @@ impl Field {
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
                         },
-                        _ => unimplemented!("Unsupported definition encountered"),
+                        Type::Option(_) => unimplemented!("Unsupported definition encountered"),
                     }
                 }
             },
@@ -484,8 +484,7 @@ impl Field {
     }
 }
 
-#[allow(clippy::enum_variant_names)]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq)]
 enum Type {
     Array(Box<Type>, syn::Expr),

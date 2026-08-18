@@ -29,7 +29,6 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-arrow = { workspace = true, features = ["canonical_extension_types"] }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }

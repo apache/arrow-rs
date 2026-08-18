@@ -353,7 +353,7 @@ macro_rules! define_row_builder {
                     // legitimate compiler warnings if an infallible value transform fails to use
                     // its first extra field.
                     $(
-                        #[allow(unused)]
+                        #[expect(unused)]
                         $( let $field = &self.$field; )+
                     )?
 
@@ -501,7 +501,7 @@ pub(crate) struct NullArrowToVariantBuilder;
 
 impl NullArrowToVariantBuilder {
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         _index: usize,
     ) -> Result<(), ArrowError> {

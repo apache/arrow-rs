@@ -3295,7 +3295,7 @@ mod tests {
                     .iter()
                     .chain(json_values[..i].iter())
                     .zip(&schema.fields)
-                    .map(|(v, f)| (f.name().to_string(), v.clone()))
+                    .map(|(v, f)| (f.name().clone(), v.clone()))
                     .collect();
                 serde_json::Value::Object(pairs)
             })

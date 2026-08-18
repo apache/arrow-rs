@@ -27,7 +27,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
     match *json {
         Value::Object(ref map) => {
             let name = match map.get("name") {
-                Some(Value::String(name)) => name.to_string(),
+                Some(Value::String(name)) => name.clone(),
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Field missing 'name' attribute".to_string(),
@@ -282,7 +282,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 _ => data_type,
             };
 
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let mut field = Field::new_dict(name, data_type, nullable, dict_id, dict_is_ordered);
             field.set_metadata(metadata);
             Ok(field)
@@ -311,7 +311,7 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
 
     match field.data_type() {
         DataType::Dictionary(index_type, value_type) => {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let dict_id = field.dict_id().unwrap();
             serde_json::json!({
                 "name": field.name(),

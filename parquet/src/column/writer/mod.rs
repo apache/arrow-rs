@@ -157,6 +157,8 @@ pub fn get_column_writer<'a>(
 /// Gets a typed column writer for the specific type `T`, by "up-casting" `col_writer` of
 /// non-generic type to a generic column writer type `ColumnWriterImpl`.
 ///
+/// # Panics
+///
 /// Panics if actual enum value for `col_writer` does not match the type `T`.
 pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnWriterImpl<T> {
     T::get_column_writer(col_writer).unwrap_or_else(|| {
@@ -231,7 +233,7 @@ impl ColumnCloseResult {
                 .build()?;
             if let Some(offset_index) = self.offset_index.as_mut() {
                 let mut offset = dictionary_len as i64;
-                for location in offset_index.page_locations.iter_mut() {
+                for location in &mut offset_index.page_locations {
                     location.offset = offset;
                     offset += location.compressed_page_size as i64;
                 }
@@ -325,7 +327,7 @@ impl<T: Default> ColumnMetrics<T> {
     /// Sum `page_histogram` into `chunk_histogram`
     fn update_histogram(
         chunk_histogram: &mut Option<LevelHistogram>,
-        page_histogram: &Option<LevelHistogram>,
+        page_histogram: Option<&LevelHistogram>,
     ) {
         if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
             chunk_hist.add(page_hist);
@@ -337,11 +339,11 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
         ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
-            &page_metrics.definition_level_histogram,
+            page_metrics.definition_level_histogram.as_ref(),
         );
         ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
-            &page_metrics.repetition_level_histogram,
+            page_metrics.repetition_level_histogram.as_ref(),
         );
     }
 
@@ -537,7 +539,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
@@ -570,7 +572,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -593,6 +595,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             && !matches!(rep_levels, LevelDataRef::Materialized(_));
         let has_levels = !matches!(def_levels, LevelDataRef::Absent)
             || !matches!(rep_levels, LevelDataRef::Absent);
+
         // When both level vectors are compact (Uniform or Absent), there is no
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
@@ -601,6 +604,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         } else {
             self.props.write_batch_size()
         };
+        debug_assert!(base_batch_size > 0);
+
         let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
@@ -825,7 +830,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `#[inline(never)]` keeps this slow path — only reached for
     /// variable-width columns whose values need page splitting — out of
     /// the hot `write_batch_internal` loop.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline(never)]
     fn write_granular_chunk(
         &mut self,
@@ -1647,7 +1652,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
                 self.column_metrics.dictionary_page_offset = Some(page_spec.offset);
             }
-            _ => {}
+            PageType::INDEX_PAGE => {}
         }
     }
 
@@ -1720,7 +1725,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 }
 
 #[inline]
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
@@ -3557,8 +3562,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_zero_only() {
-        let input = [f16::ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -3570,8 +3574,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_neg_zero_only() {
-        let input = [f16::NEG_ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::NEG_ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -5047,7 +5050,7 @@ mod tests {
                 PageType::DICTIONARY_PAGE => {
                     collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
                 }
-                _ => {}
+                PageType::INDEX_PAGE => {}
             }
         }
         collected

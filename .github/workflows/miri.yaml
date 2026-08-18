@@ -42,6 +42,7 @@ on:
       - arrow-data/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-cmp/**
       - arrow-ord/**
       - arrow-row/**
       - arrow-schema/**
@@ -57,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        partition: [1, 2, 3, 4]
+        partition: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -68,10 +69,11 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        run: |
-          cargo install cargo-nextest --version 0.9.132 --locked
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1  # v2.85.13
+        with:
+          tool: nextest
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 4
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 6

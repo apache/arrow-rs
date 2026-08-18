@@ -191,6 +191,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Builds the [`MapArray`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fields set with [`Self::with_keys_field`] or
+    /// [`Self::with_values_field`] do not match the data types of the key and value
+    /// builders, or if the keys contain nulls
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
         // Build the keys
@@ -204,6 +210,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fields set with [`Self::with_keys_field`] or
+    /// [`Self::with_values_field`] do not match the data types of the key and value
+    /// builders, or if the keys contain nulls
     pub fn finish_cloned(&self) -> MapArray {
         let len = self.len();
         // Build the keys

@@ -212,8 +212,12 @@ pub fn concat_elements_fixed_size_binary(
             result.append_null();
         } else {
             buffer.clear();
-            buffer.extend_from_slice(left.value(i));
-            buffer.extend_from_slice(right.value(i));
+            buffer
+                .try_extend_from_slice(left.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            buffer
+                .try_extend_from_slice(right.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             result.append_value(&buffer)?;
         }
     }

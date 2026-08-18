@@ -280,6 +280,9 @@ impl StructArray {
     }
 
     /// Returns the field at `pos`.
+    ///
+    /// # Panics
+    /// Panics if `pos` is out of bounds
     pub fn column(&self, pos: usize) -> &ArrayRef {
         &self.fields[pos]
     }
@@ -339,6 +342,9 @@ impl StructArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -1023,7 +1029,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_fmt_debug() {
-        let arr: StructArray = StructArray::new(
+        let arr = StructArray::new(
             vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
             vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
             Some(NullBuffer::new(BooleanBuffer::from(

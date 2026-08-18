@@ -445,6 +445,10 @@ pub type LargeStringBuilder = GenericStringBuilder<i64>;
 ///
 /// See comments on [StructBuilder] for retrieving collection builders built by
 /// make_builder.
+///
+/// # Panics
+///
+/// Panics if `datatype` is not supported, see [`ArrayBuilder`] implementations
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {

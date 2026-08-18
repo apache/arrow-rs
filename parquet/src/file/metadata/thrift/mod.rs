@@ -1422,7 +1422,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     // needed for last_field_id w/o encryption
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
@@ -1613,7 +1613,7 @@ impl WriteThrift for RowGroupMetaData {
 impl WriteThrift for ColumnChunkMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {
@@ -1754,7 +1754,7 @@ pub(crate) mod tests {
 
     // for testing. decode thrift encoded RowGroup
     pub(crate) fn read_row_group(
-        buf: &mut [u8],
+        buf: &[u8],
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
@@ -1762,14 +1762,14 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn read_column_chunk(
-        buf: &mut [u8],
+        buf: &[u8],
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
         read_column_chunk_with_options(buf, column_descr, None)
     }
 
     pub(crate) fn read_column_chunk_with_options(
-        buf: &mut [u8],
+        buf: &[u8],
         column_descr: Arc<ColumnDescriptor>,
         options: Option<&ParquetMetaDataOptions>,
     ) -> Result<ColumnChunkMetaData> {

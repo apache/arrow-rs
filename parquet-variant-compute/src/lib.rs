@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![deny(clippy::allow_attributes)]
+
 //! [`VariantArray`] and compute kernels for the [Variant Binary Encoding] from [Apache Parquet].
 //!
 //! ## Main APIs
