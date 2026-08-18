@@ -380,7 +380,7 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     let state = RandomState::new();
 
     // SAFETY: MutableBuffer is 64-byte aligned; scratch is sized to exactly count * size_of::<u64>()
-    let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr() as *mut u64, count) };
+    let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr().cast::<u64>(), count) };
 
     for idx in 0..count {
         let start = offsets[idx].as_usize();
@@ -396,7 +396,7 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
 fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
     let n = scratch.len() / size_of::<u64>();
     // SAFETY: scratch was written as u64s by hash_byte_slices
-    unsafe { from_raw_parts(scratch.as_ptr() as *const u64, n) }
+    unsafe { from_raw_parts(scratch.as_ptr().cast::<u64>(), n) }
 }
 
 #[cfg(test)]
