@@ -86,7 +86,11 @@ impl<O: ArrowNativeType> OffsetBufferBuilder<O> {
     /// Errors if offsets overflow `O`, e.g. if they add up to more than `i32::MAX`
     /// for a `OffsetBufferBuilder<i32>`.
     pub fn try_finish(self) -> Result<OffsetBuffer<O>, OverflowError> {
-        O::from_usize(self.last_offset).ok_or(OverflowError::new("offset"))?;
+        O::from_usize(self.last_offset).ok_or_else(|| {
+            OverflowError::new("offset")
+                .with_value(self.last_offset)
+                .with_type::<O>()
+        })?;
         Ok(unsafe { OffsetBuffer::new_unchecked(self.offsets.into()) })
     }
 
@@ -129,14 +133,12 @@ mod tests {
     fn try_finish_overflow() {
         let mut builder = OffsetBufferBuilder::<i32>::new(2);
         builder.try_push_length(u32::MAX as usize).unwrap();
+        let expected = "offset overflow: 4294967295 does not fit in i32";
         assert_eq!(
             builder.try_finish_cloned().unwrap_err().to_string(),
-            "offset overflow"
+            expected
         );
-        assert_eq!(
-            builder.try_finish().unwrap_err().to_string(),
-            "offset overflow"
-        );
+        assert_eq!(builder.try_finish().unwrap_err().to_string(), expected);
 
         let mut builder = OffsetBufferBuilder::<i32>::new(2);
         builder.try_push_length(usize::MAX).unwrap();

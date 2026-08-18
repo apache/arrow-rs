@@ -165,7 +165,11 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
             out.push(O::usize_as(acc))
         }
         // Check for overflow
-        O::from_usize(acc).ok_or(OverflowError::new("offset"))?;
+        O::from_usize(acc).ok_or_else(|| {
+            OverflowError::new("offset")
+                .with_value(acc)
+                .with_type::<O>()
+        })?;
         Ok(Self(out.into()))
     }
 
@@ -211,7 +215,11 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         // Making sure we don't overflow usize or O when calculating the total length
         let total_length = length.checked_mul(n).ok_or(OverflowError::new("usize"))?;
 
-        O::from_usize(total_length).ok_or(OverflowError::new("offset"))?;
+        O::from_usize(total_length).ok_or_else(|| {
+            OverflowError::new("offset")
+                .with_value(total_length)
+                .with_type::<O>()
+        })?;
 
         let offsets = (0..=n)
             .map(|index| O::usize_as(index * length))
@@ -494,7 +502,10 @@ mod tests {
         let lengths = [u32::MAX as usize, 1];
 
         let err = OffsetBuffer::<i32>::try_from_lengths(lengths).unwrap_err();
-        assert_eq!(err.to_string(), "offset overflow");
+        assert_eq!(
+            err.to_string(),
+            "offset overflow: 4294967296 does not fit in i32"
+        );
         assert!(OffsetBuffer::<i64>::try_from_lengths(lengths).is_ok());
 
         let err = OffsetBuffer::<i32>::try_from_lengths([usize::MAX, 1]).unwrap_err();
@@ -516,7 +527,7 @@ mod tests {
             OffsetBuffer::<i32>::try_from_repeated_length(u32::MAX as usize, 2)
                 .unwrap_err()
                 .to_string(),
-            "offset overflow"
+            "offset overflow: 8589934590 does not fit in i32"
         );
         assert_eq!(
             OffsetBuffer::<i32>::try_from_repeated_length(4, 3)
