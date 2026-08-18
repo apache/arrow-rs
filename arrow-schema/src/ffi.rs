@@ -132,8 +132,12 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 }
 
 impl FFI_ArrowSchema {
-    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
-    /// [`DataType`] is not supported, or if `format` contains an interior nul byte.
+    /// create a new [`FFI_ArrowSchema`].
+    ///
+    /// # Errors
+    ///
+    /// Errors if the fields' [`DataType`] is not supported,
+    /// or if `format` contains an interior nul byte.
     pub fn try_new(
         format: &str,
         children: Vec<FFI_ArrowSchema>,

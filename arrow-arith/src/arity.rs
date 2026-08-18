@@ -247,10 +247,10 @@ where
 ///
 /// Like [`try_unary`] the function is only evaluated for non-null indices
 ///
-/// # Error
+/// # Errors
 ///
-/// Return an error if the arrays have different lengths or
-/// the operation is under erroneous
+/// Returns an error if the arrays have different lengths,
+/// or if the operation returns one.
 pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     a: A,
     b: B,
