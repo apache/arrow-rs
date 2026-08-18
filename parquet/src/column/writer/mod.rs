@@ -381,7 +381,7 @@ impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
     }
 }
 
-impl<'a> LevelDataRef<'a> {
+impl LevelDataRef<'_> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Absent => 0,
@@ -938,7 +938,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             })
                         }
                         None => encoder.put_n_with_observer(value, count, |_, _| {}),
-                    };
+                    }
                     let values_to_write = count * (value == max_def) as usize;
                     self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
                     values_to_write
@@ -992,7 +992,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None => encoder.put_n_with_observer(value, count, |level, run_len| {
                             new_rows += (run_len as u32) * (level == 0) as u32;
                         }),
-                    };
+                    }
                 }
             }
             self.page_metrics.num_buffered_rows += new_rows;
@@ -3823,9 +3823,8 @@ mod tests {
         let r = writer.close().unwrap();
         assert!(r.column_index.is_some());
         let col_idx = r.column_index.unwrap();
-        let col_idx = match col_idx {
-            ColumnIndexMetaData::INT32(col_idx) => col_idx,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(col_idx) = col_idx else {
+            panic!("wrong stats type")
         };
         // null_pages should be true for page 0
         assert!(col_idx.is_null_page(0));
@@ -3862,9 +3861,8 @@ mod tests {
         assert_eq!(8, r.rows_written);
 
         // column index
-        let column_index = match column_index {
-            ColumnIndexMetaData::INT32(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         assert_eq!(2, column_index.num_pages());
         assert_eq!(2, offset_index.page_locations.len());
@@ -3922,9 +3920,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(3, r.rows_written);
@@ -3993,9 +3990,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(1, r.rows_written);
@@ -4017,8 +4013,8 @@ mod tests {
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value);
-                assert_eq!("C".as_bytes(), column_index_max_value);
+                assert_eq!(b"B", column_index_min_value);
+                assert_eq!(b"C", column_index_max_value);
 
                 assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
                 assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
@@ -4048,9 +4044,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -4091,9 +4086,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -4192,8 +4186,8 @@ mod tests {
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
 
-            assert_eq!("B".as_bytes(), min_value.as_bytes());
-            assert_eq!("C".as_bytes(), max_value.as_bytes());
+            assert_eq!(b"B", min_value.as_bytes());
+            assert_eq!(b"C", max_value.as_bytes());
         } else {
             panic!("expecting Statistics::ByteArray");
         }
@@ -4402,7 +4396,7 @@ mod tests {
         // Test truncate and increment for max bounds on UTF-8 statistics
         // 7-bit (i.e. ASCII)
         let r = truncate_and_increment_utf8("yyyyyyyyy", 8).unwrap();
-        assert_eq!(&r, "yyyyyyyz".as_bytes());
+        assert_eq!(&r, b"yyyyyyyz");
 
         // 2-byte without overflow
         let r = truncate_and_increment_utf8("ééééé", 7).unwrap();

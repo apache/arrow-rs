@@ -160,7 +160,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             self.nulls.append_buffer(&nulls);
         } else {
             self.nulls.append_n_non_nulls(len);
-        };
+        }
 
         // Copy the values
         let values = s.values();

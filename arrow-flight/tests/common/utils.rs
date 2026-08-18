@@ -105,7 +105,7 @@ pub fn make_view_batches(num_rows: usize) -> RecordBatch {
     let bin_view_values: Vec<Option<&[u8]>> = (0..num_rows)
         .map(|i| match i % 3 {
             0 => None,
-            1 => Some("bar".as_bytes()),
+            1 => Some(b"bar".as_slice()),
             2 => Some(LONG_TEST_STRING.as_bytes()),
             _ => unreachable!(),
         })

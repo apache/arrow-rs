@@ -120,7 +120,7 @@ enum IpcBodySink<'a> {
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
-impl<'a> IpcBodySink<'a> {
+impl IpcBodySink<'_> {
     /// Writes the encoded buffer to the sink.
     pub fn write(&mut self, pad_len: usize, buffer: EncodedBuffer) {
         match self {
@@ -3833,9 +3833,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3850,9 +3850,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }

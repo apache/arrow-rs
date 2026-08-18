@@ -244,7 +244,7 @@ impl ParquetMetaDataPushDecoder {
             return Err(ParquetError::General(format!(
                 "Parquet files are at least 8 bytes long, but file length is {file_len}"
             )));
-        };
+        }
 
         Ok(Self {
             state: DecodeState::ReadingFooter,

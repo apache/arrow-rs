@@ -470,7 +470,7 @@ impl Drop for FFI_ArrowSchema {
         match self.release {
             None => (),
             Some(release) => unsafe { release(self) },
-        };
+        }
     }
 }
 

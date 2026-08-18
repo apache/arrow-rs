@@ -281,8 +281,8 @@ impl Iterator for FilePageIterator {
     fn next(&mut self) -> Option<Result<Box<dyn PageReader>>> {
         self.row_group_indices.next().map(|row_group_index| {
             self.file_reader
-                .get_row_group(row_group_index)
-                .and_then(|r| r.get_column_page_reader(self.column_index))
+                .get_row_group(row_group_index)?
+                .get_column_page_reader(self.column_index)
         })
     }
 }

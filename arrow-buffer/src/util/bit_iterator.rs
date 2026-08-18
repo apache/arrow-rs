@@ -353,7 +353,7 @@ impl<'a> BitIndexU32Iterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitIndexU32Iterator<'a> {
+impl Iterator for BitIndexU32Iterator<'_> {
     type Item = u32;
 
     #[inline(always)]

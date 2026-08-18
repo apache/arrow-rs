@@ -375,29 +375,23 @@ where
     let array = if scale < 0 {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .ok()
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                let v = v.as_().div_checked(scale_factor).ok()?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = v.as_().div_checked(scale_factor)?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
         }
     } else {
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .ok()
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                let v = v.as_().mul_checked(scale_factor).ok()?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_()
-                    .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = v.as_().mul_checked(scale_factor)?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
         }
     };
@@ -448,7 +442,8 @@ fn cast_month_day_nano_to_duration<D: ArrowTemporalType<Native = i64>>(
 
     if cast_options.safe {
         let iter = array.iter().map(|v| {
-            v.and_then(|v| (v.days == 0 && v.months == 0).then_some(v.nanoseconds / scale))
+            let v = v?;
+            (v.days == 0 && v.months == 0).then_some(v.nanoseconds / scale)
         });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<D>::from_trusted_len_iter(iter)
@@ -498,10 +493,8 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
 
     if cast_options.safe {
         let iter = array.iter().map(|v| {
-            v.and_then(|v| {
-                v.checked_mul(scale)
-                    .map(|v| IntervalMonthDayNano::new(0, 0, v))
-            })
+            v?.checked_mul(scale)
+                .map(|v| IntervalMonthDayNano::new(0, 0, v))
         });
         Ok(Arc::new(unsafe {
             PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
@@ -5925,8 +5918,8 @@ mod tests {
 
     #[test]
     fn test_cast_binary_to_fixed_size_binary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
@@ -5951,8 +5944,8 @@ mod tests {
         assert!(down_cast.is_null(2));
 
         // test error cases when the length of binary are not same
-        let bytes_1 = "Hi".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hi".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
@@ -5981,8 +5974,8 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_to_binary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
@@ -6008,8 +6001,8 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_to_dictionary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), Some(bytes_1), None];
         let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
@@ -7328,13 +7321,11 @@ mod tests {
             ToType: ArrowPrimitiveType<Native = i64>,
             PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
         {
-            let from_unit = match FromType::DATA_TYPE {
-                DataType::Duration(unit) => unit,
-                _ => panic!("Expected a duration type"),
+            let DataType::Duration(from_unit) = FromType::DATA_TYPE else {
+                panic!("Expected a duration type")
             };
-            let to_unit = match ToType::DATA_TYPE {
-                DataType::Duration(unit) => unit,
-                _ => panic!("Expected a duration type"),
+            let DataType::Duration(to_unit) = ToType::DATA_TYPE else {
+                panic!("Expected a duration type")
             };
             let from_size = time_unit_multiple(&from_unit);
             let to_size = time_unit_multiple(&to_unit);
@@ -7524,9 +7515,9 @@ mod tests {
     #[test]
     fn test_binary_view_to_string_view_with_invalid_utf8() {
         let binary_view_array = BinaryViewArray::from_iter(vec![
-            Some("valid".as_bytes()),
+            Some(b"valid".as_slice()),
             Some(&[0xff]),
-            Some("utf8".as_bytes()),
+            Some(b"utf8".as_slice()),
             None,
         ]);
 

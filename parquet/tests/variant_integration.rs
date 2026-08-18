@@ -303,8 +303,7 @@ impl VariantTestCase {
             // compare the variants (is this the right way to compare?)
             assert_eq!(
                 actual, expected,
-                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
-                i
+                "Variant data mismatch at index {i}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}"
             );
         }
     }

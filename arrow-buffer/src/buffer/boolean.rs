@@ -1248,7 +1248,7 @@ mod tests {
         assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
         let finished = builder.finish();
         for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 

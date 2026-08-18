@@ -907,8 +907,7 @@ mod tests {
         for v in &values {
             assert!(
                 sbbf.check(v.as_str()),
-                "Value '{}' missing after folding (false negative!)",
-                v
+                "Value '{v}' missing after folding (false negative!)"
             );
         }
     }
@@ -989,8 +988,7 @@ mod tests {
         for value in &test_values {
             assert!(
                 reconstructed.check(value),
-                "Value '{}' should be present after round-trip",
-                value
+                "Value '{value}' should be present after round-trip"
             );
         }
     }

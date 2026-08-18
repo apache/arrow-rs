@@ -193,7 +193,7 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     }
 }
 
-impl<'a, S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'a, S> {
+impl<S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'_, S> {
     type State<'s>
         = ListState<'s>
     where
@@ -216,7 +216,7 @@ impl<'a, S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'a, S> {
     }
 }
 
-impl<'a, 'm, 'v, S, V> Extend<V> for ListBuilder<'a, S>
+impl<'m, 'v, S, V> Extend<V> for ListBuilder<'_, S>
 where
     S: BuilderSpecificState,
     V: Into<Variant<'m, 'v>>,
