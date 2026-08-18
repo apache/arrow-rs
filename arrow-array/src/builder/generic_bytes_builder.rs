@@ -785,7 +785,7 @@ mod tests {
         let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(
             r,
-            &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
+            &[b"foo".as_slice(), b"bar\n".as_slice(), b"fizbuz".as_slice()]
         )
     }
 

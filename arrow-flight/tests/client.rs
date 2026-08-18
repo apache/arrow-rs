@@ -65,7 +65,7 @@ async fn test_handshake() {
 #[tokio::test]
 async fn test_handshake_error() {
     do_test(|test_server, mut client| async move {
-        let request_payload = "foo-request-payload".to_string().into_bytes();
+        let request_payload = b"foo-request-payload".to_vec();
         let e = Status::unauthenticated("DENIED");
         test_server.set_handshake_response(Err(e.clone()));
 
@@ -603,9 +603,9 @@ async fn test_do_exchange_error_stream_client() {
 
         let output_flight_data = FlightData::new()
             .with_descriptor(FlightDescriptor::new_cmd("Sample command"))
-            .with_data_body("body".as_bytes())
-            .with_data_header("header".as_bytes())
-            .with_app_metadata("metadata".as_bytes());
+            .with_data_body(b"body".as_slice())
+            .with_data_header(b"header".as_slice())
+            .with_app_metadata(b"metadata".as_slice());
 
         // server responds with one good message
         let response = vec![Ok(output_flight_data)];

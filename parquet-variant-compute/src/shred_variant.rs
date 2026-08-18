@@ -3114,7 +3114,7 @@ mod tests {
         array_builder.append_value(Variant::Double(6f64));
         array_builder.append_value(Variant::BooleanTrue);
         array_builder.append_value(Variant::BooleanFalse);
-        array_builder.append_value(Variant::Binary("helow".as_bytes()));
+        array_builder.append_value(Variant::Binary(b"helow"));
         array_builder.append_value(Variant::String("hello"));
         array_builder.append_value(Variant::ShortString(
             ShortString::try_from("world").unwrap(),

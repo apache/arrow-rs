@@ -621,7 +621,7 @@ mod tests {
                 assert_eq!(res, expected);
 
                 let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
-                let right_binary = $right.as_bytes();
+                let right_binary: &[u8] = $right.as_ref();
 
                 let left = BinaryArray::from(left_binary.clone());
                 let right = BinaryArray::from_iter_values([right_binary]);

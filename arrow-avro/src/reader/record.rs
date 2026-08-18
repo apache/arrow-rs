@@ -2897,7 +2897,7 @@ mod tests {
         dec.decode(&mut cur1).unwrap();
 
         let mut rec2 = encode_avro_long(1);
-        rec2.extend(encode_avro_bytes("abc".as_bytes()));
+        rec2.extend(encode_avro_bytes(b"abc"));
         let mut cur2 = AvroCursor::new(&rec2);
         dec.decode(&mut cur2).unwrap();
 
@@ -2964,7 +2964,7 @@ mod tests {
         let mut dec = Decoder::try_new(&dt).unwrap();
 
         let mut data = encode_avro_long(1);
-        data.extend(encode_avro_bytes("z".as_bytes()));
+        data.extend(encode_avro_bytes(b"z"));
         let mut cur = AvroCursor::new(&data);
         let res = dec.decode(&mut cur);
         assert!(
@@ -3150,7 +3150,7 @@ mod tests {
     fn test_schema_resolution_promotion_bytes_to_string_utf8view_enabled() {
         let mut dec = decoder_for_promotion(PrimitiveType::Bytes, PrimitiveType::String, true);
         assert!(matches!(dec, Decoder::BytesToString(_, _)));
-        let data = encode_avro_bytes("abc".as_bytes());
+        let data = encode_avro_bytes(b"abc");
         let mut cur = AvroCursor::new(&data);
         dec.decode(&mut cur).unwrap();
         let arr = dec.flush(None).unwrap();
@@ -3171,7 +3171,7 @@ mod tests {
         let a = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
         assert_eq!(a.value(0), b"");
         assert_eq!(a.value(1), b"abc");
-        assert_eq!(a.value(2), "data".as_bytes());
+        assert_eq!(a.value(2), b"data");
     }
 
     #[test]
@@ -5235,7 +5235,7 @@ mod tests {
         ));
         let mut dec = Decoder::try_new(&dt).expect("decoder");
         let mut b1 = encode_avro_long(1);
-        b1.extend(encode_avro_bytes("hi".as_bytes()));
+        b1.extend(encode_avro_bytes(b"hi"));
         dec.decode(&mut AvroCursor::new(&b1)).expect("decode b1");
         let mut b0 = encode_avro_long(0);
         b0.extend(encode_avro_int(5));

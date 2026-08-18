@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn it_creates_flight_descriptor_command() {
-        let expected_cmd = "my_command".as_bytes();
+        let expected_cmd = b"my_command";
         let fd = FlightDescriptor::new_cmd(expected_cmd.to_vec());
         assert_eq!(fd.r#type(), DescriptorType::Cmd);
         assert_eq!(fd.cmd, expected_cmd.to_vec());

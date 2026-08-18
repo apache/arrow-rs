@@ -1557,27 +1557,27 @@ mod tests {
     test_binary!(
         test_binary_min_max_with_nulls,
         vec![
-            Some("b01234567890123".as_bytes()), // long bytes
+            Some(b"b01234567890123".as_slice()), // long bytes
             None,
             None,
             Some(b"a"),
             Some(b"c"),
             Some(b"abcdedfg0123456"),
         ],
-        Some("a".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(
         test_binary_min_max_no_null,
         vec![
-            Some("b".as_bytes()),
+            Some(b"b".as_slice()),
             Some(b"abcdefghijklmnopqrst"), // long bytes
             Some(b"c"),
             Some(b"b01234567890123"), // long bytes for view types
         ],
-        Some("abcdefghijklmnopqrst".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"abcdefghijklmnopqrst".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
@@ -1586,13 +1586,13 @@ mod tests {
         test_binary_min_max_1,
         vec![
             None,
-            Some("b01234567890123435".as_bytes()), // long bytes for view types
+            Some(b"b01234567890123435".as_slice()), // long bytes for view types
             None,
             Some(b"b0123xxxxxxxxxxx"),
             Some(b"a")
         ],
-        Some("a".as_bytes()),
-        Some("b0123xxxxxxxxxxx".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"b0123xxxxxxxxxxx".as_slice())
     );
 
     macro_rules! test_string {

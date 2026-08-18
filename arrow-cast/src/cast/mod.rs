@@ -5925,8 +5925,8 @@ mod tests {
 
     #[test]
     fn test_cast_binary_to_fixed_size_binary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
@@ -5951,8 +5951,8 @@ mod tests {
         assert!(down_cast.is_null(2));
 
         // test error cases when the length of binary are not same
-        let bytes_1 = "Hi".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hi".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
@@ -5981,8 +5981,8 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_to_binary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
         let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
@@ -6008,8 +6008,8 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_to_dictionary() {
-        let bytes_1 = "Hiiii".as_bytes();
-        let bytes_2 = "Hello".as_bytes();
+        let bytes_1 = b"Hiiii".as_slice();
+        let bytes_2 = b"Hello".as_slice();
 
         let binary_data = vec![Some(bytes_1), Some(bytes_2), Some(bytes_1), None];
         let a1 = Arc::new(FixedSizeBinaryArray::try_from(binary_data.clone()).unwrap()) as ArrayRef;
@@ -7524,9 +7524,9 @@ mod tests {
     #[test]
     fn test_binary_view_to_string_view_with_invalid_utf8() {
         let binary_view_array = BinaryViewArray::from_iter(vec![
-            Some("valid".as_bytes()),
+            Some(b"valid".as_slice()),
             Some(&[0xff]),
-            Some("utf8".as_bytes()),
+            Some(b"utf8".as_slice()),
             None,
         ]);
 

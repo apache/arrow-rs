@@ -644,15 +644,15 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworld");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
 
             assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(output.values.as_slice(), "helloworldab".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworldab");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
@@ -701,14 +701,14 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "hellob".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hellob");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);

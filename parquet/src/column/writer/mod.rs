@@ -4017,8 +4017,8 @@ mod tests {
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value);
-                assert_eq!("C".as_bytes(), column_index_max_value);
+                assert_eq!(b"B", column_index_min_value);
+                assert_eq!(b"C", column_index_max_value);
 
                 assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
                 assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
@@ -4192,8 +4192,8 @@ mod tests {
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
 
-            assert_eq!("B".as_bytes(), min_value.as_bytes());
-            assert_eq!("C".as_bytes(), max_value.as_bytes());
+            assert_eq!(b"B", min_value.as_bytes());
+            assert_eq!(b"C", max_value.as_bytes());
         } else {
             panic!("expecting Statistics::ByteArray");
         }
@@ -4402,7 +4402,7 @@ mod tests {
         // Test truncate and increment for max bounds on UTF-8 statistics
         // 7-bit (i.e. ASCII)
         let r = truncate_and_increment_utf8("yyyyyyyyy", 8).unwrap();
-        assert_eq!(&r, "yyyyyyyz".as_bytes());
+        assert_eq!(&r, b"yyyyyyyz");
 
         // 2-byte without overflow
         let r = truncate_and_increment_utf8("ééééé", 7).unwrap();

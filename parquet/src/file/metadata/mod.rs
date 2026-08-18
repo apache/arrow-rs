@@ -2182,8 +2182,8 @@ mod tests {
         let base_expected_size = 2074;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
-        let footer_key = "0123456789012345".as_bytes();
-        let column_key = "1234567890123450".as_bytes();
+        let footer_key = b"0123456789012345";
+        let column_key = b"1234567890123450";
         let mut decryption_properties_builder =
             FileDecryptionProperties::builder(footer_key.to_vec())
                 .with_aad_prefix(aad_prefix.clone());

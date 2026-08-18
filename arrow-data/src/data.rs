@@ -2607,7 +2607,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&int_data_slice));
         assert!(!int_data_slice.ptr_eq(&int_data));
 
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2686,7 +2686,7 @@ mod tests {
     #[test]
     fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
         // 2-element array ["hello", "world"]: array len = 2, 10 bytes
-        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"helloworld");
         // offsets need array_len+1 entries to mark the end of every string:
         //   [0, 5, 10] -> 3 i32s = 12 bytes
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
@@ -2738,7 +2738,7 @@ mod tests {
             data.get_slice_memory_size().unwrap() - 8,
             new_data.get_slice_memory_size().unwrap()
         );
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,

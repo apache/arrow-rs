@@ -5287,8 +5287,8 @@ mod tests {
         // check that min/max were actually written to the page
         assert!(stats.is_max_value_exact.unwrap());
         assert!(stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Blart Versenwald III");
+        assert_eq!(stats.min_value.unwrap(), b"Andrew Lamb");
     }
 
     #[test]
@@ -5335,8 +5335,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
 
         // check second page now
         let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
@@ -5348,8 +5348,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
     }
 
     #[test]

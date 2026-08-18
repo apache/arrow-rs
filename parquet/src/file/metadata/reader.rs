@@ -1246,7 +1246,7 @@ mod async_tests {
 
         let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
 
-        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let key_code: &[u8] = b"0123456789012345";
         let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
             .build()
             .unwrap();
