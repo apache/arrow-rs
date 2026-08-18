@@ -2226,8 +2226,7 @@ mod tests {
         buf.extend_from_slice(&crate::ARROW_MAGIC);
 
         let err = FileReader::try_new(Cursor::new(buf), None)
-            .err()
-            .expect("expected an error, not a panic");
+            .expect_err("expected an error, not a panic");
         assert!(
             matches!(err, ArrowError::ParseError(_)),
             "expected ParseError, got {err:?}"
