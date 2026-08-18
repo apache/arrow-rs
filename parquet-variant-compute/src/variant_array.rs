@@ -409,7 +409,10 @@ impl VariantArray {
     /// Use `try_value` if you need to handle conversion errors gracefully.
     ///
     /// # Panics
-    /// Panics if [`VariantArray::try_value`] returns an error, e.g. if the index is out of bounds.
+    /// Panics if
+    /// * the index is out of bounds,
+    /// * the `metadata`/`value` bytes of the row are invalid, which includes reading a null row, or
+    /// * both `value` and `typed_value` are non-null for a non-struct `typed_value`.
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
         self.try_value(index)
             .unwrap_or_else(|err| panic!("VariantArray::value({index}) failed: {err}"))

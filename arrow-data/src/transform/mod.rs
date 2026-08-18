@@ -772,9 +772,10 @@ impl<'a> MutableArrayData<'a> {
     /// Extends the in progress array with a region of the input arrays.
     ///
     /// # Panics
-    /// This function panics for the same reasons [`Self::try_extend`] returns an error:
-    /// an invalid index, an invalid range, or offset type overflow
-    /// (e.g. more than 2 GiB in a `StringArray`).
+    /// This function panics if
+    /// * `index` >= the number of source arrays,
+    /// * `start..end` is not a valid range within the `index`th array, or
+    /// * the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend` which returns an error on overflow instead of panicking"
@@ -817,7 +818,8 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// # Panics
     ///
-    /// Panics for the same reasons [`Self::try_extend_nulls`] returns an error.
+    /// Panics if this [`MutableArrayData`] was not created with `use_nulls` and none of the
+    /// source arrays are nullable, or if the run-end counter overflows.
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
