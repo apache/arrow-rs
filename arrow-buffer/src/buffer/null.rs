@@ -17,7 +17,7 @@
 
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::buffer::BooleanBuffer;
-use crate::{Buffer, MutableBuffer};
+use crate::{Buffer, MutableBuffer, OverflowError};
 
 /// A [`BooleanBuffer`] used to encode validity (null values) for Arrow arrays
 ///
@@ -121,9 +121,25 @@ impl NullBuffer {
     ///
     /// # Panics
     ///
-    /// Panics if `self.len() * count` overflows `usize`
+    /// Panics if `self.len() * count` overflows `usize`.
+    /// Use [`Self::try_expand`] for a fallible version.
     pub fn expand(&self, count: usize) -> Self {
-        let capacity = self.buffer.len().checked_mul(count).unwrap();
+        self.try_expand(count).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Returns a new [`NullBuffer`] where each bit in the current null buffer
+    /// is repeated `count` times. This is useful for masking the nulls of
+    /// the child of a FixedSizeListArray based on its parent
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self.len() * count` overflows `usize`
+    pub fn try_expand(&self, count: usize) -> Result<Self, OverflowError> {
+        let capacity = self
+            .buffer
+            .len()
+            .checked_mul(count)
+            .ok_or(OverflowError::new("buffer length"))?;
         let mut buffer = MutableBuffer::new_null(capacity);
 
         // Expand each bit within `null_mask` into `element_len`
@@ -136,10 +152,10 @@ impl NullBuffer {
                 crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
             }
         }
-        Self {
+        Ok(Self {
             buffer: BooleanBuffer::new(buffer.into(), 0, capacity),
             null_count: self.null_count * count,
-        }
+        })
     }
 
     /// Returns the length of this [`NullBuffer`] in bits
