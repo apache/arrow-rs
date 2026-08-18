@@ -29,11 +29,11 @@
 //! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
 //! as the original). If that is an issue, there are two alternatives:
 //!
-//! 1. Provide a custom encoder. See the ["Customizing the encoder"] section of the writer documentation.
+//! 1. Provide a custom encoder. See the [Customizing the encoder] section of the writer documentation.
 //! 2. Convert binary data to/from a different encoding format such as `Base64` before
 //!    writing / after reading, as shown in the following example.
 //!
-//! ["Customizing the encoder"]: writer#customizing-the-encoder
+//! [Customizing the encoder]: writer#customizing-the-encoder
 //!
 //! ## `Base64` Encoding Example
 //!
