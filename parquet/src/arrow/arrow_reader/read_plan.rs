@@ -633,16 +633,16 @@ mod tests {
             panic!("expected a Mask cursor");
         };
 
-        // The first chunk must end at the loaded range boundary (row 4), not
-        // continue into the unloaded gap.
+        // The first chunk stops at its final selected row instead of carrying
+        // trailing skipped rows to the loaded range boundary.
         let first = cursor.next_chunk(12).unwrap();
         assert_eq!(first.initial_skip, 0);
-        assert_eq!(first.chunk_rows, 4);
+        assert_eq!(first.chunk_rows, 1);
         assert_eq!(first.selected_rows, 1);
 
-        // The second chunk skips the gap and decodes only within [10, 12).
+        // The second chunk skips directly to the next selected row.
         let second = cursor.next_chunk(12).unwrap();
-        assert_eq!(second.initial_skip, 7);
+        assert_eq!(second.initial_skip, 10);
         assert_eq!(second.chunk_rows, 1);
         assert_eq!(second.selected_rows, 1);
         assert!(cursor.is_empty());

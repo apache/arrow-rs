@@ -176,10 +176,11 @@ impl SelectorsCursor {
 /// LoadedRowRanges:  [0, 4)                         [10, 12)
 /// ```
 ///
-/// The first chunk decodes `[0, 4)` with mask `1000`. The next chunk skips to
-/// row 11 and decodes `[11, 12)` with mask `1`. The loaded ranges are decode
-/// boundaries, not output batch boundaries: [`ParquetRecordBatchReader`]
-/// accumulates both chunks and applies the combined mask `10001` once.
+/// The first chunk decodes `[0, 1)` with mask `1`. The next chunk skips to row
+/// 11 and decodes `[11, 12)` with mask `1`. Trimming trailing skipped rows from
+/// each chunk prevents a fixed-size cached read from extending into an unloaded
+/// page. [`ParquetRecordBatchReader`] still accumulates both chunks and applies
+/// the combined mask `11` once.
 ///
 /// [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 #[derive(Debug)]
@@ -289,17 +290,19 @@ impl MaskCursor {
 
         let mask_start = cursor;
         let mut selected_rows = 0;
+        let mut chunk_end = cursor;
         while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
             if self.mask.value(cursor) {
                 selected_rows += 1;
+                chunk_end = cursor + 1;
             }
             cursor += 1;
         }
 
-        self.position = cursor;
+        self.position = chunk_end;
         Ok(MaskChunk {
             initial_skip: mask_start - start_position,
-            chunk_rows: cursor - mask_start,
+            chunk_rows: chunk_end - mask_start,
             selected_rows,
             mask_start,
         })
