@@ -21,6 +21,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use crate::BufferBuilder;
+use crate::OutOfBoundsError;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
@@ -261,10 +262,25 @@ impl Buffer {
     /// # Panics
     ///
     /// Panics iff `offset` is larger than `len`.
+    /// Use [`Self::try_slice`] for a fallible version.
     pub fn slice(&self, offset: usize) -> Self {
         let mut s = self.clone();
         s.advance(offset);
         s
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the
+    /// same memory region to be shared between buffers.
+    ///
+    /// # Errors
+    ///
+    /// Errors iff `offset` is larger than `len`.
+    pub fn try_slice(&self, offset: usize) -> Result<Self, OutOfBoundsError> {
+        let mut s = self.clone();
+        s.try_advance(offset)?;
+        Ok(s)
     }
 
     /// Increases the offset of this buffer by `offset`
@@ -272,20 +288,34 @@ impl Buffer {
     /// # Panics
     ///
     /// Panics iff `offset` is larger than `len`.
+    /// Use [`Self::try_advance`] for a fallible version.
     #[inline]
     pub fn advance(&mut self, offset: usize) {
-        assert!(
-            offset <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length: offset={} length={}",
-            offset,
-            self.length
-        );
+        let length = self.length;
+        self.try_advance(offset).unwrap_or_else(|_| {
+            panic!(
+                "the offset of the new Buffer cannot exceed the existing length: offset={offset} length={length}"
+            )
+        });
+    }
+
+    /// Increases the offset of this buffer by `offset`
+    ///
+    /// # Errors
+    ///
+    /// Errors iff `offset` is larger than `len`. The buffer is left unchanged.
+    #[inline]
+    pub fn try_advance(&mut self, offset: usize) -> Result<(), OutOfBoundsError> {
+        if self.length < offset {
+            return Err(OutOfBoundsError::new("buffer", offset, self.length));
+        }
         self.length -= offset;
         // Safety:
         // This cannot overflow as
         // `self.offset + self.length < self.data.len()`
         // `offset < self.length`
         self.ptr = unsafe { self.ptr.add(offset) };
+        Ok(())
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
@@ -296,20 +326,40 @@ impl Buffer {
     ///
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
+    /// Use [`Self::try_slice_with_length`] for a fallible version.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
-        assert!(
-            offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
-            self.length
-        );
+        self.try_slice_with_length(offset, length).unwrap_or_else(|_| {
+            panic!(
+                "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
+                self.length
+            )
+        })
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
+    /// with `length` bytes.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the same
+    /// memory region to be shared between buffers.
+    ///
+    /// # Errors
+    /// Errors iff `(offset + length)` is larger than the existing length.
+    pub fn try_slice_with_length(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<Self, OutOfBoundsError> {
+        if self.length < offset.saturating_add(length) {
+            return Err(OutOfBoundsError::new("buffer", offset, self.length).with_len(length));
+        }
         // Safety:
         // offset + length <= self.length
         let ptr = unsafe { self.ptr.add(offset) };
-        Self {
+        Ok(Self {
             data: self.data.clone(),
             ptr,
             length,
-        }
+        })
     }
 
     /// Returns a pointer to the start of this buffer.
@@ -728,6 +778,42 @@ mod tests {
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
         assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
+    }
+
+    #[test]
+    fn test_try_slice_out_of_bounds() {
+        let buf = Buffer::from(&[2, 4, 6, 8, 10]);
+
+        assert_eq!(buf.try_slice(2).unwrap().as_slice(), &[6, 8, 10]);
+        assert_eq!(buf.try_slice(5).unwrap().len(), 0);
+        assert_eq!(
+            buf.try_slice(6).unwrap_err().to_string(),
+            "buffer out of bounds: offset 6 exceeds length 5"
+        );
+
+        assert_eq!(buf.try_slice_with_length(1, 2).unwrap().as_slice(), &[4, 6]);
+        assert_eq!(buf.try_slice_with_length(5, 0).unwrap().len(), 0);
+        assert_eq!(
+            buf.try_slice_with_length(2, 4).unwrap_err().to_string(),
+            "buffer out of bounds: offset 2 + length 4 exceeds length 5"
+        );
+        // `offset + length` must not overflow:
+        assert_eq!(
+            buf.try_slice_with_length(1, usize::MAX)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "buffer out of bounds: offset 1 + length {} exceeds length 5",
+                usize::MAX
+            )
+        );
+
+        // A failed `try_advance` leaves the buffer alone:
+        let mut buf = buf;
+        assert!(buf.try_advance(6).is_err());
+        assert_eq!(buf.as_slice(), &[2, 4, 6, 8, 10]);
+        buf.try_advance(2).unwrap();
+        assert_eq!(buf.as_slice(), &[6, 8, 10]);
     }
 
     #[test]
