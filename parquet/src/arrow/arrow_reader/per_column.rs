@@ -86,38 +86,41 @@ pub(crate) trait ColumnSelectionPlanner {
 /// is below the threshold. The values below deliberately stop at the last
 /// repeatable Mask win outside the sampler's 3% practical-equivalence band.
 ///
-/// The values below were resampled on aarch64 with unit resolution over runs
-/// 1..=16 across five seeds, restricted to the sampler's `balanced-grid` shape
-/// family (`skip == select`), which is the only family that varies run length
-/// without also varying selectivity. Every sampled family crosses between 4
-/// and 16, so that window is where one type's threshold can differ from
-/// another's; beyond it the choice is uniformly `Selectors`.
-const FIXED_BINARY_RUN_THRESHOLD: usize = 5;
+/// The values below come from a refinement pass on x86_64 (AMD EPYC): five
+/// seeds, unit resolution over runs 1..=16, restricted to the sampler's
+/// `balanced-grid` shape family (`skip == select`), which is the only family
+/// that varies run length without also varying selectivity.
+///
+/// **These are hardware-specific.** The same fixtures sampled on aarch64 put
+/// every crossover far lower — `Int64` at 15 against 28 here, `Int32` at 15
+/// against 24, `Date32` at 16 against 28 — because Mask keeps its edge over
+/// Selectors across a much wider run-length range on EPYC. The gap is not
+/// academic: on TPC-DS SF10 the x86 values are worth -14.5% on q36 and -13.0%
+/// on q75, while the aarch64 values on the same machine leave most of that on
+/// the table. Anyone calibrating for a different target should rerun
+/// `arrow_reader_row_selection_policy_sampler --stage refinement` there rather
+/// than carrying these numbers over.
 const WIDE_BYTE_RUN_THRESHOLD: usize = 8;
+const FIXED_BINARY_RUN_THRESHOLD: usize = 9;
 /// Dictionary-encoded `Utf8View` used to fall through to the compatibility
 /// fallback. It is the single largest unmodeled slice of both TPC-DS (31
 /// columns) and ClickBench (28), and it samples well clear of the plain
 /// `Utf8View` threshold, so it gets its own value rather than sharing one.
-const DICTIONARY_UTF8_VIEW_RUN_THRESHOLD: usize = 11;
-/// The five seeds put `Int64`'s crossover at 12, 14 and 15, so 15 sits inside
-/// the sampled spread. Choosing it over 14 also lines `Int64` up with `Int32`
-/// and `Decimal128`, which lets the shared-threshold check fire on the many
-/// scans that project a mix of those three; on TPC-DS q47 that alone is worth
-/// 2.3 points.
-const INT64_RUN_THRESHOLD: usize = 15;
-const INT32_RUN_THRESHOLD: usize = 15;
+const DICTIONARY_UTF8_VIEW_RUN_THRESHOLD: usize = 16;
 /// Only the INT32-backed precision range was sampled; wider decimals keep the
 /// fallback.
-const DECIMAL128_INT32_RUN_THRESHOLD: usize = 15;
+const DECIMAL128_INT32_RUN_THRESHOLD: usize = 18;
 const DECIMAL128_INT32_MAX_PRECISION: u8 = 9;
-const DATE32_RUN_THRESHOLD: usize = 16;
+const INT32_RUN_THRESHOLD: usize = 24;
+const INT64_RUN_THRESHOLD: usize = 28;
+const DATE32_RUN_THRESHOLD: usize = 28;
 /// Inherited from the earlier x86_64 sampling: neither `Dictionary(Int32,
 /// Utf8)` nor narrow `Utf8View` occurs in TPC-DS or ClickBench, so this pass
 /// did not resample them.
 const DICTIONARY_UTF8_RUN_THRESHOLD: usize = 17;
 const NARROW_BYTE_RUN_THRESHOLD: usize = 13;
 /// Smallest value any arm can return, used to guard the strategy helper.
-const MIN_RUN_THRESHOLD: usize = FIXED_BINARY_RUN_THRESHOLD;
+const MIN_RUN_THRESHOLD: usize = WIDE_BYTE_RUN_THRESHOLD;
 const NARROW_UTF8_VIEW_BYTES: usize = 32;
 
 struct MetadataColumnSelectionPlanner;
