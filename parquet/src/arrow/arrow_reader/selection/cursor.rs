@@ -255,6 +255,8 @@ impl MaskCursor {
     }
 
     /// Returns the next non-empty mask chunk without crossing an unloaded row range.
+    /// When loaded ranges are present, the chunk ends immediately after its last
+    /// selected row, leaving trailing unselected rows for the next call's initial skip.
     ///
     /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
     /// skips before constructing this cursor. Callers therefore only invoke

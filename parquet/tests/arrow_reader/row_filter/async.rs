@@ -35,7 +35,7 @@ use parquet::{
         ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask,
         arrow_reader::{
             ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelectionPolicy,
-            RowSelector,
+            RowSelector, metrics::ArrowReaderMetrics,
         },
     },
     file::{
@@ -178,6 +178,7 @@ async fn test_cached_mask_reads_sparse_pages_without_error() {
         RowSelectionPolicy::Auto { threshold: 32 },
         RowSelectionPolicy::Mask,
     ] {
+        let metrics = ArrowReaderMetrics::enabled();
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
             ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
@@ -196,6 +197,8 @@ async fn test_cached_mask_reads_sparse_pages_without_error() {
         let predicate = ArrowPredicateFn::new(projection.clone(), |batch: RecordBatch| {
             Ok(BooleanArray::from(vec![true; batch.num_rows()]))
         });
+        // Extending the first mask chunk to the 20-row page boundary would make
+        // the 8-row cache batch at rows 16..24 cross into the unloaded middle page.
         let stream = builder
             .with_projection(projection)
             .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
@@ -207,6 +210,7 @@ async fn test_cached_mask_reads_sparse_pages_without_error() {
             .with_batch_size(8)
             .with_max_predicate_cache_size(1024)
             .with_row_selection_policy(policy)
+            .with_metrics(metrics.clone())
             .build()
             .unwrap();
 
@@ -222,6 +226,13 @@ async fn test_cached_mask_reads_sparse_pages_without_error() {
                 .values(),
             &[0, 40],
             "policy={policy:?}"
+        );
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .expect("metrics are enabled")
+                > 0,
+            "predicate cache was not exercised for policy={policy:?}"
         );
     }
 }
