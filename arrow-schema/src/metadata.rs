@@ -162,6 +162,23 @@ impl Metadata {
     pub fn values(&self) -> impl Iterator<Item = &String> {
         self.iter().map(|(_, value)| value)
     }
+
+    /// Retains only the entries for which `f(&key, &mut value)` returns `true`.
+    ///
+    /// Entries for which `f` returns `false` are removed. Retained entries
+    /// remain in their original (sorted) order.
+    ///
+    /// Clones the underlying map if (and only if) it is shared.
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&String, &mut String) -> bool,
+    {
+        let Some(map) = self.0.as_mut() else { return };
+        Arc::make_mut(map).retain(&mut f);
+        if map.is_empty() {
+            self.0 = None;
+        }
+    }
 }
 
 /// Iterator over the entries of a [`Metadata`], sorted by key.
@@ -484,6 +501,51 @@ mod tests {
         let metadata = Metadata::from([("b", "2"), ("a", "1")]);
         assert_eq!(format!("{metadata:?}"), r#"{"a": "1", "b": "2"}"#);
         assert_eq!(format!("{:?}", Metadata::new()), "{}");
+    }
+
+    #[test]
+    fn test_retain() {
+        let mut metadata =
+            Metadata::from([("a", "1"), ("b", "2"), ("c", "3"), ("d", "4"), ("e", "5")]);
+
+        metadata.retain(|k, _| -> bool { k >= &String::from("c") });
+
+        let result_map = Metadata::from([("c", "3"), ("d", "4"), ("e", "5")]);
+        assert_eq!(metadata, result_map)
+    }
+
+    #[test]
+    fn test_retain_empty() {
+        let mut metadata = Metadata::new();
+        metadata.retain(|_, _| -> bool { true });
+        assert!(metadata.is_empty())
+    }
+
+    #[test]
+    fn test_retain_all_removed() {
+        let mut metadata = Metadata::from([("a", "1"), ("b", "2"), ("c", "3")]);
+        metadata.retain(|_, _| false);
+        assert!(metadata.is_empty());
+        assert!(metadata.0.is_none());
+    }
+
+    #[test]
+    fn test_retain_copy_on_write() {
+        let mut metadata = Metadata::from([("a", "1"), ("b", "2"), ("c", "3")]);
+        let clone = metadata.clone();
+
+        // both share the same Arc before any mutation:
+        assert!(Arc::ptr_eq(
+            metadata.0.as_ref().expect("non-empty"),
+            clone.0.as_ref().expect("non-empty"),
+        ));
+
+        // retain clones the shared map, leaving the clone untouched:
+        metadata.retain(|k, _| k != "a");
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(clone.len(), 3);
+        assert!(!metadata.contains_key("a"));
+        assert!(clone.contains_key("a"));
     }
 
     #[test]
