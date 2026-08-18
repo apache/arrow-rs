@@ -664,7 +664,7 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
         return string_to_datetime(&Utc, string)
             .map(|dt| dt.date_naive())
             .ok();
-    };
+    }
     let mut digits = [0; 10];
     let mut mask = 0;
 
@@ -835,7 +835,7 @@ fn parse_e_notation<T: DecimalType>(
                     "can't parse the string value {s} to decimal"
                 )));
             }
-        };
+        }
     }
 
     // parse the exponent itself

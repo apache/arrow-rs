@@ -364,7 +364,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_bool().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -382,7 +382,7 @@ pub fn array_from_json(
                         ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
                     })? as i8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -398,7 +398,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -414,7 +414,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -431,7 +431,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -455,7 +455,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -496,7 +496,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -512,7 +512,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -528,7 +528,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -544,7 +544,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -574,7 +574,7 @@ pub fn array_from_json(
                         }
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -612,7 +612,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as MonthDayNano"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -628,7 +628,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap() as f32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -644,7 +644,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -663,7 +663,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -682,7 +682,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -698,7 +698,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -714,7 +714,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -733,7 +733,7 @@ pub fn array_from_json(
                         b.append_value(&v)?
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -907,7 +907,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -925,7 +925,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -943,7 +943,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,

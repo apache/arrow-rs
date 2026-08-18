@@ -302,7 +302,7 @@ impl RecordBatchDecoder<'_> {
         if self.skip_validation.get() {
             // SAFETY: flag can only be set via unsafe code
             unsafe { builder = builder.skip_validation(true) }
-        };
+        }
         Ok(make_array(builder.build()?))
     }
 
@@ -714,7 +714,7 @@ impl<'a> RecordBatchDecoder<'a> {
                 match mode {
                     UnionMode::Dense => self.skip_buffer(), // Offsets
                     UnionMode::Sparse => {}
-                };
+                }
 
                 for (_, field) in fields.iter() {
                     self.skip_field(field, variadic_count)?
@@ -750,7 +750,7 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer();
                 self.skip_buffer();
             }
-        };
+        }
         Ok(())
     }
 }
@@ -1665,7 +1665,7 @@ impl<R: Read> StreamReader<R> {
                     return Ok(Some(record_batch));
                 }
                 IpcMessage::DictionaryBatch { .. } => {}
-            };
+            }
         }
     }
 
@@ -1932,7 +1932,7 @@ impl<R: Read> MessageReader<R> {
                     Err(ArrowError::from(e))
                 };
             }
-        };
+        }
 
         let meta_len = {
             // If a continuation marker is encountered, skip over it and read

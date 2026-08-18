@@ -183,7 +183,7 @@ fn test_can_cast_types() {
                 }
                 // otherwise it was a match
                 _ => {}
-            };
+            }
         }
     }
 }

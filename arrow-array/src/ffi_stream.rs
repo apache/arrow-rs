@@ -166,7 +166,7 @@ impl Drop for FFI_ArrowArrayStream {
         match self.release {
             None => (),
             Some(release) => unsafe { release(self) },
-        };
+        }
     }
 }
 

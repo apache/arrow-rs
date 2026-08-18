@@ -1568,7 +1568,7 @@ impl ParquetRecordBatchReader {
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
                         rec => read_records += rec,
-                    };
+                    }
                 }
             }
             RowSelectionCursor::All => {

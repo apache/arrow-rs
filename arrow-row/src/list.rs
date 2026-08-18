@@ -366,7 +366,7 @@ pub fn encode_fixed_size_list(
                     data[*offset] = null_sentinel;
                     *offset += 1;
                 }
-            };
+            }
         })
 }
 

@@ -144,7 +144,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append a null value into the builder.

@@ -298,7 +298,7 @@ where
                     }
                 }
             }
-        };
+        }
 
         builder.finish(null_buffer)
     }
@@ -334,7 +334,7 @@ where
             self.inline.extend_from_slice(right);
             self.views.push(make_view(&self.inline, 0, 0));
             self.inline.clear();
-        };
+        }
     }
 
     /// Append an empty view.

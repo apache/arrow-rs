@@ -541,7 +541,7 @@ fn read_column_metadata<'a>(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
@@ -617,14 +617,14 @@ fn read_column_chunk<'a>(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
     // the only required field from ColumnChunk
     if !has_file_offset {
         return Err(general_err!("Required field file_offset is missing"));
-    };
+    }
 
     // if encrypted just return. we'll decrypt after finishing the footer and populate the rest.
     #[cfg(feature = "encryption")]
@@ -709,7 +709,7 @@ fn read_row_group(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
@@ -853,7 +853,7 @@ pub(crate) fn parquet_metadata_from_bytes(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
     let Some(version) = version else {
@@ -1038,7 +1038,7 @@ impl DataPageHeader {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
@@ -1131,7 +1131,7 @@ impl DataPageHeaderV2 {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
@@ -1249,7 +1249,7 @@ impl PageHeader {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(type_) = type_ else {

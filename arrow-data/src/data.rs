@@ -1018,7 +1018,7 @@ impl ArrayData {
                 ));
             }
             _ => {}
-        };
+        }
 
         Ok(())
     }
@@ -1743,7 +1743,7 @@ impl ArrayData {
             (Some(a), Some(b)) if !a.inner().ptr_eq(b.inner()) => return false,
             (Some(_), None) | (None, Some(_)) => return false,
             _ => {}
-        };
+        }
 
         if !self
             .buffers
@@ -2932,7 +2932,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -2987,7 +2987,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3046,7 +3046,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3098,7 +3098,7 @@ mod tests {
                     assert_eq!(msg, "Map key field must not be nullable")
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3152,7 +3152,7 @@ mod tests {
                     "The nullable should be set to false for the map entries field."
                 ),
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 

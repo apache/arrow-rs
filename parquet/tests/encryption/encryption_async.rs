@@ -344,7 +344,7 @@ async fn test_aes_ctr_encryption() {
             _ => {
                 panic!("Expected ParquetError::NYI");
             }
-        };
+        }
     }
 
     aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;

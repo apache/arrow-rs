@@ -135,7 +135,7 @@ pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(
             "Partition columns have different row counts".to_string(),
         ));
-    };
+    }
 
     match num_rows {
         0 => return Ok(Partitions(None)),

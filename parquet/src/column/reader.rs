@@ -561,7 +561,7 @@ where
                             )?;
                             return Ok(true);
                         }
-                    };
+                    }
                 }
             }
         }

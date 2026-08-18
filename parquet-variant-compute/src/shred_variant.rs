@@ -2098,7 +2098,7 @@ mod tests {
                 None => {
                     assert!(result.is_null(i));
                 }
-            };
+            }
         };
 
         // Row 0: Fully shredded - both fields shred successfully

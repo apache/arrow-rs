@@ -199,7 +199,7 @@ impl fmt::Display for FlightData {
         match &self.flight_descriptor {
             Some(d) => write!(f, "{d}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, ", header: ")?;
         limited_fmt(f, &self.data_header, 8)?;
         write!(f, ", metadata: ")?;
@@ -322,7 +322,7 @@ impl fmt::Display for CancelFlightInfoRequest {
         match &self.info {
             Some(value) => write!(f, "{value}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, " }}")
     }
 }
@@ -342,7 +342,7 @@ impl fmt::Display for RenewFlightEndpointRequest {
         match &self.endpoint {
             Some(value) => write!(f, "{value}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, " }}")
     }
 }

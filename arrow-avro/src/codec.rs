@@ -1554,7 +1554,7 @@ impl<'a> Maker<'a> {
                                 return Err(ArrowError::ParseError(format!(
                                     "Invalid fixed size for Duration: {size}, must be 12"
                                 )));
-                            };
+                            }
                             AvroDataType {
                                 nullability: None,
                                 metadata,
@@ -1962,7 +1962,7 @@ impl<'a> Maker<'a> {
                             first_resolution = Some((reader_index, dt));
                         }
                     }
-                };
+                }
             }
         }
         first_resolution

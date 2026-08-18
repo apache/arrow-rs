@@ -312,7 +312,7 @@ fn shredded_get_path(
                 );
                 return shred_basic_variant(target, path[path_index..].into(), as_field);
             }
-        };
+        }
     }
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.

@@ -921,7 +921,7 @@ mod tests {
                 assert!(metadata.offset_index.is_some());
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata, but keep trying until page indexes are read
         let mut reader =
@@ -964,7 +964,7 @@ mod tests {
                 reader.finish().unwrap();
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata but use try_parse()
         let reader_result = reader.try_parse(&bytes).unwrap_err();

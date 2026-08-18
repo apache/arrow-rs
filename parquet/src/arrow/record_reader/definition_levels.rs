@@ -233,7 +233,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
         match &mut self.decoder {
             MaybePacked::Packed(d) => d.set_data(encoding, data),
             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
-        };
+        }
         Ok(())
     }
 }

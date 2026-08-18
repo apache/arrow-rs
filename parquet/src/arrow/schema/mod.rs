@@ -1970,7 +1970,7 @@ mod tests {
                         assert_eq!(a.physical_type(), b.physical_type());
                         assert_eq!(a.converted_type(), b.converted_type());
                     }
-                };
+                }
             });
     }
 

@@ -617,7 +617,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             // so the loop above wrote exactly `capacity` bytes.
             unsafe { values.set_len(capacity) };
         }
-    };
+    }
 
     // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
     // and `nulls` (if present) has length == `indices.len()`.
@@ -710,7 +710,7 @@ where
                 indices.len() - last_filled,
             ));
         }
-    };
+    }
 
     assert_eq!(
         new_offsets.len(),

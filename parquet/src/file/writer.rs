@@ -281,7 +281,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                     write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
                 }
                 BloomFilterPosition::End => (),
-            };
+            }
             row_groups.push(metadata);
             Ok(())
         };
@@ -2604,7 +2604,7 @@ mod tests {
             match iter.next() {
                 Some(row) => check_row(row),
                 None => break,
-            };
+            }
             start += 1;
         }
     }

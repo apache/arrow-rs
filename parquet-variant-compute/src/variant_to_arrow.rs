@@ -199,7 +199,7 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             builder: Box::new(builder),
             path,
         })
-    };
+    }
 
     Ok(builder)
 }

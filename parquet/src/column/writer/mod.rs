@@ -938,7 +938,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             })
                         }
                         None => encoder.put_n_with_observer(value, count, |_, _| {}),
-                    };
+                    }
                     let values_to_write = count * (value == max_def) as usize;
                     self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
                     values_to_write
@@ -992,7 +992,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None => encoder.put_n_with_observer(value, count, |level, run_len| {
                             new_rows += (run_len as u32) * (level == 0) as u32;
                         }),
-                    };
+                    }
                 }
             }
             self.page_metrics.num_buffered_rows += new_rows;

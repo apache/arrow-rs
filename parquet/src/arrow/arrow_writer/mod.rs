@@ -852,7 +852,7 @@ impl PageWriter for ArrowPageWriter {
                     let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
                     page_header.write_thrift(&mut protocol)?;
                 }
-            };
+            }
 
             Bytes::from(header)
         };

@@ -105,8 +105,9 @@ fn main() {
                 .get_row_group(ri)
                 .expect("Unable to read row group");
             if let Some(sbbf) = row_group_reader.get_column_bloom_filter(column_index) {
-                args.values.iter().for_each(|value| {
-                    match check_filter(sbbf, value, column) {
+                args.values
+                    .iter()
+                    .for_each(|value| match check_filter(sbbf, value, column) {
                         Ok(present) => {
                             println!(
                                 "Value {} is {} in bloom filter",
@@ -117,8 +118,7 @@ fn main() {
                         Err(err) => {
                             println!("{err}");
                         }
-                    };
-                });
+                    });
             } else {
                 println!("No bloom filter found for column {}", args.column);
             }
