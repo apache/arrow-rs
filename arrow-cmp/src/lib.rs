@@ -29,7 +29,6 @@
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
 
-#![deny(clippy::allow_attributes)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
