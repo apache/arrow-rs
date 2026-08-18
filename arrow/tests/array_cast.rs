@@ -366,7 +366,7 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 }
 
 fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
-    let values: &[u8; 15] = b"hellotherearrow";
+    let values = b"hellotherearrow";
 
     let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
         .len(3)

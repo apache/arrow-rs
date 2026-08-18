@@ -106,17 +106,23 @@ impl Type {
     }
 
     /// Gets the fields from this group type.
-    /// Note that this will panic if called on a non-group type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-group type
     // TODO: should we return `&[&Type]` here?
     pub fn get_fields(&self) -> &[TypePtr] {
         match *self {
             Type::GroupType { ref fields, .. } => &fields[..],
-            _ => panic!("Cannot call get_fields() on a non-group type"),
+            Type::PrimitiveType { .. } => panic!("Cannot call get_fields() on a non-group type"),
         }
     }
 
     /// Gets physical type of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_physical_type(&self) -> PhysicalType {
         match *self {
             Type::PrimitiveType {
@@ -124,25 +130,33 @@ impl Type {
                 physical_type,
                 ..
             } => physical_type,
-            _ => panic!("Cannot call get_physical_type() on a non-primitive type"),
+            Type::GroupType { .. } => {
+                panic!("Cannot call get_physical_type() on a non-primitive type")
+            }
         }
     }
 
     /// Gets precision of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_precision(&self) -> i32 {
         match *self {
             Type::PrimitiveType { precision, .. } => precision,
-            _ => panic!("Cannot call get_precision() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_precision() on non-primitive type"),
         }
     }
 
     /// Gets scale of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_scale(&self) -> i32 {
         match *self {
             Type::PrimitiveType { scale, .. } => scale,
-            _ => panic!("Cannot call get_scale() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_scale() on non-primitive type"),
         }
     }
 
@@ -197,7 +211,7 @@ impl Type {
     pub fn is_schema(&self) -> bool {
         match *self {
             Type::GroupType { ref basic_info, .. } => !basic_info.has_repetition(),
-            _ => false,
+            Type::PrimitiveType { .. } => false,
         }
     }
 
@@ -704,6 +718,10 @@ impl BasicTypeInfo {
     }
 
     /// Returns [`Repetition`] value for the type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the repetition is not set, see [`Self::has_repetition`]
     pub fn repetition(&self) -> Repetition {
         assert!(self.repetition.is_some());
         self.repetition.unwrap()
@@ -725,6 +743,10 @@ impl BasicTypeInfo {
     }
 
     /// Returns id value for the type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the id is not set, see [`Self::has_id`]
     pub fn id(&self) -> i32 {
         assert!(self.id.is_some());
         self.id.unwrap()
@@ -950,38 +972,50 @@ impl ColumnDescriptor {
     }
 
     /// Returns physical type for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn physical_type(&self) -> PhysicalType {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { physical_type, .. } => *physical_type,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type length for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_length(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { type_length, .. } => *type_length,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type precision for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_precision(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { precision, .. } => *precision,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type scale for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_scale(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { scale, .. } => *scale,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -1098,6 +1132,10 @@ impl SchemaDescriptor {
     }
 
     /// Returns [`ColumnDescriptor`] for a field position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.num_columns()`
     pub fn column(&self, i: usize) -> ColumnDescPtr {
         assert!(
             i < self.leaves.len(),
@@ -1125,12 +1163,20 @@ impl SchemaDescriptor {
     }
 
     /// Returns column root [`Type`] pointer for a leaf position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.num_columns()`
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
     }
 
     /// Returns the index of the root column for a field position
+    ///
+    /// # Panics
+    ///
+    /// Panics if `leaf` is out of bounds
     pub fn get_column_root_idx(&self, leaf: usize) -> usize {
         assert!(
             leaf < self.leaves.len(),
@@ -1171,7 +1217,7 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_nodes = 1usize; // count root
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_nodes(f, &mut n_nodes);
     }
     Ok(n_nodes)
@@ -1192,7 +1238,7 @@ fn num_leaves(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_leaves = 0usize;
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_leaves(f, &mut n_leaves);
     }
     Ok(n_leaves)
@@ -1232,7 +1278,7 @@ fn build_tree<'a>(
             max_rep_level += 1;
             repeated_ancestor_def_level = max_def_level;
         }
-        _ => {}
+        Repetition::REQUIRED => {}
     }
 
     match tp.as_ref() {
@@ -1268,7 +1314,7 @@ fn build_tree<'a>(
 }
 
 /// Checks if the logical type is valid.
-fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
+fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
     if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
         && *bit_width != 8
         && *bit_width != 16
@@ -1341,7 +1387,7 @@ fn schema_from_array_helper<'a>(
     // LogicalType is prefered to ConvertedType, but both may be present.
     let logical_type = element.logical_type;
 
-    check_logical_type(&logical_type)?;
+    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {
@@ -1461,7 +1507,7 @@ mod tests {
                 Type::PrimitiveType { physical_type, .. } => {
                     assert_eq!(physical_type, PhysicalType::INT32);
                 }
-                _ => panic!(),
+                Type::GroupType { .. } => panic!(),
             }
         }
 

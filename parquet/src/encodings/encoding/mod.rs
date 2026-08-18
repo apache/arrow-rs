@@ -102,7 +102,8 @@ pub fn get_encoder<T: DataType>(
             )),
             _ => Box::new(ByteStreamSplitEncoder::new()),
         },
-        e => return Err(nyi_err!("Encoding {} is not supported", e)),
+        #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
+        e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
     };
     Ok(encoder)
 }

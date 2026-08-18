@@ -911,7 +911,7 @@ impl LevelHistogram {
 
     /// Sets the values of all histogram levels to 0.
     pub fn reset(&mut self) {
-        for value in self.inner.iter_mut() {
+        for value in &mut self.inner {
             *value = 0;
         }
     }
@@ -1054,6 +1054,10 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the offset and length in bytes of the column chunk within the file
+    ///
+    /// # Panics
+    ///
+    /// Panics if the column start offset or the compressed size is negative
     pub fn byte_range(&self) -> (u64, u64) {
         let col_start = match self.dictionary_page_offset() {
             Some(dictionary_page_offset) => dictionary_page_offset,
@@ -1781,7 +1785,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta.write_thrift(&mut writer).unwrap();
 
-        let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
+        let row_group_res = read_row_group(&buf, schema_descr).unwrap();
 
         assert_eq!(row_group_res, row_group_meta);
     }
@@ -1863,7 +1867,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta_2cols.write_thrift(&mut writer).unwrap();
 
-        let err = read_row_group(&mut buf, schema_descr_3cols)
+        let err = read_row_group(&buf, schema_descr_3cols)
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -1913,7 +1917,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr.clone()).unwrap();
+        let col_chunk_res = read_column_chunk(&buf, column_descr.clone()).unwrap();
 
         let expected_metadata = ColumnChunkMetaData::builder(column_descr)
             .set_encodings_mask(EncodingMask::new_from_encodings(
@@ -1978,7 +1982,7 @@ mod tests {
 
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let col_chunk_res =
-            read_column_chunk_with_options(&mut buf, column_descr, Some(&options)).unwrap();
+            read_column_chunk_with_options(&buf, column_descr, Some(&options)).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1994,7 +1998,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
+        let col_chunk_res = read_column_chunk(&buf, column_descr).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -2018,7 +2022,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let compressed_size_res: i64 = row_group_meta.compressed_size();
+        let compressed_size_res = row_group_meta.compressed_size();
         let compressed_size_exp: i64 = 1000;
 
         assert_eq!(compressed_size_res, compressed_size_exp);

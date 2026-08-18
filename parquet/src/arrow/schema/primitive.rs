@@ -370,7 +370,7 @@ mod tests {
                 precision,
                 scale,
             },
-            _ => unreachable!(),
+            Type::GroupType { .. } => unreachable!(),
         }
     }
 

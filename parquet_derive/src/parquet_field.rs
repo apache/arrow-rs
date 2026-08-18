@@ -193,7 +193,7 @@ impl Field {
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
                         },
-                        _ => unimplemented!("Unsupported definition encountered"),
+                        Type::Option(_) => unimplemented!("Unsupported definition encountered"),
                     }
                 }
             },

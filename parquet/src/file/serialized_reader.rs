@@ -128,6 +128,10 @@ impl ReadOptionsBuilder {
 
     /// Add a range predicate on filtering row groups if their midpoints are within
     /// the Closed-Open range `[start..end) {x | start <= x < end}`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `end <= start`
     pub fn with_range(mut self, start: i64, end: i64) -> Self {
         assert!(start < end);
         let predicate = move |rg: &RowGroupMetaData, _: usize| {
@@ -512,7 +516,7 @@ pub(crate) fn decode_page(
                 statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
-        _ => {
+        PageType::INDEX_PAGE => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
             return Err(general_err!(
                 "Page type {:?} is not supported",
@@ -1441,7 +1445,7 @@ mod tests {
                     assert!(statistics.is_none());
                     true
                 }
-                _ => false,
+                Page::DataPageV2 { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1468,10 +1472,7 @@ mod tests {
             "parquet-mr version 1.8.1 (build 4aba4dae7bb0d4edbcf7923ae1339f28fd3f7fcf)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 5);
         assert_eq!(file_metadata.version(), 1);
@@ -1539,7 +1540,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1567,10 +1568,7 @@ mod tests {
             "parquet-cpp-arrow version 14.0.2"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 10);
         assert_eq!(file_metadata.version(), 2);
@@ -1641,7 +1639,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1669,10 +1667,7 @@ mod tests {
             "parquet-mr version 1.13.1 (build db4183109d5b734ec5930d870cdae161e408ddba)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            2
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 2);
 
         assert_eq!(file_metadata.num_rows(), 1);
         assert_eq!(file_metadata.version(), 1);

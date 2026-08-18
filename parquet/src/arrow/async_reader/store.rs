@@ -342,7 +342,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("I don't exist.parquet not found:"), "{err}",);
+                assert!(err.contains("I don't exist.parquet not found:"), "{err}");
             }
         }
     }
@@ -427,7 +427,7 @@ mod tests {
 
         let err = reader.get_bytes(0..1).await.unwrap_err().to_string();
 
-        assert!(err.to_string().contains("was cancelled"));
+        assert!(err.contains("was cancelled"));
     }
 
     #[tokio::test]

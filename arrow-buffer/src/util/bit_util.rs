@@ -20,6 +20,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
     num.checked_next_multiple_of(64)
@@ -28,6 +32,10 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
@@ -36,6 +44,10 @@ pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn get_bit(data: &[u8], i: usize) -> bool {
     data[i / 8] & (1 << (i % 8)) != 0
@@ -53,6 +65,10 @@ pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
 }
 
 /// Sets bit at position `i` for `data` to 1
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
     data[i / 8] |= 1 << (i % 8);
@@ -72,6 +88,10 @@ pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
 }
 
 /// Sets bit at position `i` for `data` to 0
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn unset_bit(data: &mut [u8], i: usize) {
     data[i / 8] &= !(1 << (i % 8));
@@ -239,7 +259,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte = crate::util::bit_util::read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
@@ -554,7 +574,7 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,

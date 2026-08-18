@@ -483,7 +483,6 @@ impl IpcWriteOptions {
             | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
-            #[allow(deprecated)]
             crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
@@ -762,7 +761,7 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
@@ -1373,7 +1372,6 @@ impl DictionaryTracker {
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
     pub fn new(error_on_replacement: bool) -> Self {
-        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -2771,7 +2769,7 @@ mod tests {
     use arrow_buffer::ScalarBuffer;
 
     use crate::MetadataVersion;
-    use crate::convert::fb_to_schema;
+    use crate::convert::try_fb_to_schema;
     use crate::reader::*;
     use crate::root_as_footer;
 
@@ -3209,9 +3207,9 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 0, false);
-        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
+        let union_fields = std::iter::once((0, Arc::new(dctfield))).collect();
 
         let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
         let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
@@ -3255,7 +3253,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Arc::new(Field::new_dict(
             "dict",
             array.data_type().clone(),
@@ -4285,7 +4283,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4300,7 +4298,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_large_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::LargeListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4315,7 +4313,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_sliced_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4365,7 +4363,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4409,7 +4407,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4456,7 +4454,7 @@ mod tests {
 
         let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
             Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
@@ -4528,7 +4526,7 @@ mod tests {
         let value_keys = Int32Array::from_iter_values([0, 1, 2, 0, 1, 0]);
         let dict_values = DictionaryArray::new(value_keys, Arc::new(value_values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
             Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
@@ -4630,7 +4628,7 @@ mod tests {
             let footer =
                 root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
-            let schema = fb_to_schema(footer.schema().unwrap());
+            let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
             // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
             // for `read_record_batch` later on to read the data in a zero-copy manner.
@@ -4682,7 +4680,7 @@ mod tests {
         let trailer_start = buffer.len() - 10;
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
         // to an aligned buffer in `ArrayDataBuilder.build_aligned`.

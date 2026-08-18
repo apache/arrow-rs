@@ -165,7 +165,7 @@ impl CachedArrayReader {
 
     /// Remove batches from cache that have been completely consumed
     /// This is only called for Consumer role readers
-    fn cleanup_consumed_batches(&mut self) {
+    fn cleanup_consumed_batches(&self) {
         let current_batch_id = self.get_batch_id_from_position(self.outer_position);
 
         // Remove batches that are at least one batch behind the current position

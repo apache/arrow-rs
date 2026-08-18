@@ -134,6 +134,14 @@ const _: () = crate::utils::expect_size_of::<VariantObject>(64);
 const _: () = crate::utils::expect_size_of::<VariantObject>(44);
 
 impl<'m, 'v> VariantObject<'m, 'v> {
+    /// Interprets `metadata` and `value` as a variant object, performing only basic
+    /// (constant-cost) [validation].
+    ///
+    /// # Panics
+    ///
+    /// Panics if basic validation fails. Use [`Self::try_new`] for a fallible version.
+    ///
+    /// [validation]: Self#Validation
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant object")
     }
@@ -366,6 +374,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this object is invalid. Use [`Self::iter_try`] for a fallible version.
     pub fn iter(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
         self.iter_try_with_shallow_validation()
             .map(|result| result.expect("Invalid variant object field value"))

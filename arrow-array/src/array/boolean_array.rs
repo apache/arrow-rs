@@ -150,6 +150,9 @@ impl BooleanArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             values: self.values.slice(offset, length),
@@ -840,7 +843,7 @@ impl BooleanArray {
     ///
     /// Panics if the iterator does not report an upper bound on `size_hint()`.
     #[inline]
-    #[allow(
+    #[expect(
         private_bounds,
         reason = "We will expose BooleanAdapter if there is a need"
     )]
