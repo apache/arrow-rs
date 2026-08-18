@@ -1250,7 +1250,9 @@ impl FileReaderBuilder {
 
         let total_blocks = blocks.len();
 
-        let ipc_schema = footer.schema().unwrap();
+        let ipc_schema = footer.schema().ok_or_else(|| {
+            ArrowError::ParseError("Unable to get schema from IPC Footer".to_string())
+        })?;
         if !ipc_schema.endianness().equals_to_target_endianness() {
             return Err(ArrowError::IpcError(
                 "the endianness of the source system does not match the endianness of the target system.".to_owned()
@@ -2192,6 +2194,44 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_missing_footer_schema_error() {
+        use crate::r#gen::File::{Footer, FooterArgs};
+        use flatbuffers::FlatBufferBuilder;
+
+        // a footer that verifies but has no schema table. record batches present
+        // (so the earlier ok_or_else passes) but schema absent, which used to panic.
+        let mut fbb = FlatBufferBuilder::new();
+        let record_batches = fbb.create_vector::<Block>(&[]);
+        let footer = Footer::create(
+            &mut fbb,
+            &FooterArgs {
+                version: MetadataVersion::V5,
+                schema: None,
+                dictionaries: None,
+                recordBatches: Some(record_batches),
+                custom_metadata: None,
+            },
+        );
+        fbb.finish(footer, None);
+        let footer_data = fbb.finished_data();
+
+        // assemble a minimal IPC file: magic header, footer, footer length, magic trailer
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&crate::ARROW_MAGIC);
+        buf.extend_from_slice(footer_data);
+        buf.extend_from_slice(&(footer_data.len() as i32).to_le_bytes());
+        buf.extend_from_slice(&crate::ARROW_MAGIC);
+
+        let err = FileReader::try_new(Cursor::new(buf), None)
+            .err()
+            .expect("expected an error, not a panic");
+        assert!(
+            matches!(err, ArrowError::ParseError(_)),
+            "expected ParseError, got {err:?}"
+        );
     }
 
     /// Test that the reader can read legacy files where empty list arrays were written with a 0-byte offsets buffer.
