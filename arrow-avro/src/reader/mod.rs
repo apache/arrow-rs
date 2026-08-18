@@ -1100,13 +1100,10 @@ impl ReaderBuilder {
         let mut cache = IndexMap::with_capacity(fingerprints.len().saturating_sub(1));
         let mut active_decoder: Option<RecordDecoder> = None;
         for fingerprint in store.fingerprints() {
-            let avro_schema = match store.lookup(&fingerprint) {
-                Some(schema) => schema,
-                None => {
-                    return Err(AvroError::General(format!(
-                        "Fingerprint {fingerprint:?} not found in schema store",
-                    )));
-                }
+            let Some(avro_schema) = store.lookup(&fingerprint) else {
+                return Err(AvroError::General(format!(
+                    "Fingerprint {fingerprint:?} not found in schema store",
+                )));
             };
             let writer_schema = avro_schema.schema()?;
             let record_decoder = match projection {
@@ -5380,12 +5377,12 @@ mod test {
             ),
         ];
         for (file, expected_dt, mut metadata) in files {
-            let (precision, scale) = match expected_dt {
-                DataType::Decimal32(p, s)
-                | DataType::Decimal64(p, s)
-                | DataType::Decimal128(p, s)
-                | DataType::Decimal256(p, s) => (p, s),
-                _ => unreachable!("Unexpected decimal type in test inputs"),
+            let (DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale)) = expected_dt
+            else {
+                unreachable!("Unexpected decimal type in test inputs")
             };
             assert!(scale >= 0, "test data uses non-negative scales only");
             let scale_u32 = scale as u32;
@@ -8458,22 +8455,20 @@ mod test {
             .field_with_name("union_uuid_or_fixed10")
             .ok()
             .and_then(|f| match f.data_type() {
-                DataType::Union(uf, _) => uf
-                    .iter()
-                    .find(|(_, child)| child.name() == "uuid")
-                    .and_then(|(_, child)| {
-                        let md = child.metadata();
-                        let has_ext = md.get(UUID_EXT_KEY).is_some();
-                        let is_uuid_logical = md
-                            .get(UUID_LOGICAL_KEY)
-                            .map(|v| v.trim_matches('"') == "uuid")
-                            .unwrap_or(false);
-                        if has_ext || is_uuid_logical {
-                            Some(md.clone())
-                        } else {
-                            None
-                        }
-                    }),
+                DataType::Union(uf, _) => {
+                    let (_, child) = uf.iter().find(|(_, child)| child.name() == "uuid")?;
+                    let md = child.metadata();
+                    let has_ext = md.get(UUID_EXT_KEY).is_some();
+                    let is_uuid_logical = md
+                        .get(UUID_LOGICAL_KEY)
+                        .map(|v| v.trim_matches('"') == "uuid")
+                        .unwrap_or(false);
+                    if has_ext || is_uuid_logical {
+                        Some(md.clone())
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             });
 

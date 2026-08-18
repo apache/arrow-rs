@@ -710,7 +710,7 @@ async fn test_predicate_pushdown_with_skipped_pages() {
         PageIndexPolicy::Optional,
         PageIndexPolicy::Required,
     ] {
-        println!("Testing with page index policy: {:?}", policy);
+        println!("Testing with page index policy: {policy:?}");
         let reader = TestReader::new(buffer.clone());
         let options = ArrowReaderOptions::default().with_page_index_policy(policy);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)

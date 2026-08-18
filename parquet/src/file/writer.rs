@@ -281,7 +281,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                     write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
                 }
                 BloomFilterPosition::End => (),
-            };
+            }
             row_groups.push(metadata);
             Ok(())
         };
@@ -1054,7 +1054,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 }
 
 #[cfg(feature = "encryption")]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+impl<W: Write> SerializedPageWriter<'_, W> {
     /// Set the encryptor to use to encrypt page data
     fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
         self.page_encryptor = page_encryptor;
@@ -1079,7 +1079,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     clippy::needless_pass_by_ref_mut,
     reason = "mirrors the encryption-enabled signatures"
 )]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+impl<W: Write> SerializedPageWriter<'_, W> {
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
@@ -2622,7 +2622,7 @@ mod tests {
             match iter.next() {
                 Some(row) => check_row(row),
                 None => break,
-            };
+            }
             start += 1;
         }
     }

@@ -1788,13 +1788,12 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
             .map(|s| {
-                s.and_then(|s| {
-                    if self.missing_null_counts_as_zero {
-                        Some(s.null_count_opt().unwrap_or(0))
-                    } else {
-                        s.null_count_opt()
-                    }
-                })
+                let s = s?;
+                if self.missing_null_counts_as_zero {
+                    Some(s.null_count_opt().unwrap_or(0))
+                } else {
+                    s.null_count_opt()
+                }
             });
         Ok(UInt64Array::from_iter(null_counts))
     }
@@ -1817,7 +1816,7 @@ impl<'a> StatisticsConverter<'a> {
         let nan_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.and_then(|s| s.nan_count_opt()));
+            .map(|s| s?.nan_count_opt());
         Ok(UInt64Array::from_iter(nan_counts))
     }
 

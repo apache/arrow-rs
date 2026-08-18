@@ -29,7 +29,6 @@
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
 
-#![deny(clippy::allow_attributes)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -397,13 +396,11 @@ fn compare_union(
     let left = left.as_union();
     let right = right.as_union();
 
-    let (left_fields, left_mode) = match left.data_type() {
-        DataType::Union(fields, mode) => (fields, mode),
-        _ => unreachable!(),
+    let DataType::Union(left_fields, left_mode) = left.data_type() else {
+        unreachable!()
     };
-    let (right_fields, right_mode) = match right.data_type() {
-        DataType::Union(fields, mode) => (fields, mode),
-        _ => unreachable!(),
+    let DataType::Union(right_fields, right_mode) = right.data_type() else {
+        unreachable!()
     };
 
     if left_fields != right_fields {

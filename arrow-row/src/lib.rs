@@ -158,7 +158,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -5432,7 +5431,7 @@ mod tests {
 
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let values = BinaryArray::from(vec![
-            Some("a".as_bytes()),
+            Some(b"a".as_slice()),
             Some(b"b"),
             Some(b"c"),
             Some(b"d"),

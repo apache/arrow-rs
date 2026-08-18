@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
                             &format!("Expected None, Some, or a timezone string, got {tok:?}"),
                         ));
                     }
-                };
+                }
                 self.expect_token(Token::RParen)?;
             }
             // No timezone (e.g `Timestamp(ns)`)
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
                     &format!("Time32 time unit must be 's' or 'ms', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time32(time_unit))
     }
@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
                     &format!("Time64 time unit must be 'µs' or 'ns', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time64(time_unit))
     }

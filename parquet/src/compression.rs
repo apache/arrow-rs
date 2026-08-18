@@ -147,7 +147,24 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
-    #[allow(unreachable_code, unused_variables)]
+    #[cfg_attr(
+        any(
+            test,
+            feature = "brotli",
+            feature = "flate2",
+            feature = "lz4",
+            feature = "snap",
+            feature = "zstd"
+        ),
+        expect(unreachable_code)
+    )]
+    #[cfg_attr(
+        all(
+            not(test),
+            not(all(feature = "brotli", feature = "flate2", feature = "zstd"))
+        ),
+        expect(unused_variables)
+    )]
     match codec {
         CodecType::BROTLI(level) => {
             #[cfg(any(feature = "brotli", test))]
@@ -627,13 +644,10 @@ mod lz4_raw_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(uncompress_size) => uncompress_size,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4RawCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(offset + required_len, 0);
             match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
@@ -766,13 +780,10 @@ mod lz4_hadoop_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let output_len = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(n) => n,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4HadoopCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(output_len + required_len, 0);
             match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {

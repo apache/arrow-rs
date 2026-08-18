@@ -353,9 +353,9 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let (item_capacity, bytes_capacity) = match binary_capacity::<T>(arrays) {
-        Capacities::Binary(item_capacity, Some(bytes_capacity)) => (item_capacity, bytes_capacity),
-        _ => unreachable!(),
+    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)
+    else {
+        unreachable!()
     };
 
     let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, bytes_capacity);

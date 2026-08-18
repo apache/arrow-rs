@@ -1360,7 +1360,7 @@ enum Encoder<'a> {
     Time64NanosToMicros(Time64NanosToMicrosEncoder<'a>),
 }
 
-impl<'a> Encoder<'a> {
+impl Encoder<'_> {
     /// Encode the value at `idx`.
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         match self {
@@ -1471,7 +1471,7 @@ impl BooleanEncoder<'_> {
 
 /// Generic Avro `int` encoder for primitive arrays with `i32` native values.
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
-impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
+impl<P: ArrowPrimitiveType<Native = i32>> IntEncoder<'_, P> {
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_int(out, self.0.value(idx))
     }
@@ -1479,7 +1479,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 
 /// Generic Avro `long` encoder for primitive arrays with `i64` native values.
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
-impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
+impl<P: ArrowPrimitiveType<Native = i64>> LongEncoder<'_, P> {
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_long(out, self.0.value(idx))
     }
@@ -1487,7 +1487,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 
 /// Time32(Second) to Avro time-millis (int), via safe scaling by 1000
 struct Time32SecondsToMillisEncoder<'a>(&'a PrimitiveArray<Time32SecondType>);
-impl<'a> Time32SecondsToMillisEncoder<'a> {
+impl Time32SecondsToMillisEncoder<'_> {
     #[inline]
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let secs = self.0.value(idx);
@@ -1502,7 +1502,7 @@ impl<'a> Time32SecondsToMillisEncoder<'a> {
 #[cfg(not(feature = "avro_custom_types"))]
 struct TimestampSecondsToMillisEncoder<'a>(&'a PrimitiveArray<TimestampSecondType>);
 #[cfg(not(feature = "avro_custom_types"))]
-impl<'a> TimestampSecondsToMillisEncoder<'a> {
+impl TimestampSecondsToMillisEncoder<'_> {
     #[inline]
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let secs = self.0.value(idx);
@@ -1734,7 +1734,7 @@ impl Time64NanosToMicrosEncoder<'_> {
 
 /// Unified binary encoder generic over offset size (i32/i64).
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
-impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
+impl<O: OffsetSizeTrait> BinaryEncoder<'_, O> {
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx))
     }
@@ -1776,7 +1776,7 @@ impl F64Encoder<'_> {
 
 struct Utf8GenericEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
-impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
+impl<O: OffsetSizeTrait> Utf8GenericEncoder<'_, O> {
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
@@ -2233,7 +2233,7 @@ impl IntervalToDurationParts for IntervalDayTimeType {
 /// Single generic encoder used for all three interval units.
 /// Writes Avro `fixed(12)` as three little-endian u32 values in one call.
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
-impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P> {
+impl<P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'_, P> {
     #[inline(always)]
     fn encode<W: Write + ?Sized>(&self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let parts = P::duration_parts(self.0.value(idx))?;
@@ -2463,7 +2463,7 @@ mod tests {
         if actual != expected {
             let to_hex = |b: &[u8]| {
                 b.iter()
-                    .map(|x| format!("{:02X}", x))
+                    .map(|x| format!("{x:02X}"))
                     .collect::<Vec<_>>()
                     .join(" ")
             };

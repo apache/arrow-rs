@@ -209,7 +209,7 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");
         }
-    };
+    }
 }
 
 pub(crate) fn read_encrypted_file(

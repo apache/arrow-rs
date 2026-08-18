@@ -448,9 +448,8 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Note the underlying writer is not flushed with this call.
     /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
-        let in_progress = match self.in_progress.take() {
-            Some(in_progress) => in_progress,
-            None => return Ok(()),
+        let Some(in_progress) = self.in_progress.take() else {
+            return Ok(());
         };
 
         let mut row_group_writer = self.writer.next_row_group()?;
@@ -852,7 +851,7 @@ impl PageWriter for ArrowPageWriter {
                     let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
                     page_header.write_thrift(&mut protocol)?;
                 }
-            };
+            }
 
             Bytes::from(header)
         };
@@ -3381,9 +3380,8 @@ mod tests {
                     assert!(idx.is_some());
                     let idx = idx.as_ref().unwrap();
                     assert!(idx.nan_counts().is_some());
-                    let float_idx = match idx {
-                        ColumnIndexMetaData::DOUBLE(idx) => idx,
-                        _ => panic!("expected double statistics"),
+                    let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
+                        panic!("expected double statistics")
                     };
                     for i in 0..idx.num_pages() as usize {
                         assert_eq!(float_idx.nan_count(i), Some(10));
@@ -4059,7 +4057,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4312,7 +4310,7 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
@@ -4423,7 +4421,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
@@ -5289,8 +5287,8 @@ mod tests {
         // check that min/max were actually written to the page
         assert!(stats.is_max_value_exact.unwrap());
         assert!(stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Blart Versenwald III");
+        assert_eq!(stats.min_value.unwrap(), b"Andrew Lamb");
     }
 
     #[test]
@@ -5337,8 +5335,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
 
         // check second page now
         let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
@@ -5350,8 +5348,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
     }
 
     #[test]
@@ -5692,7 +5690,7 @@ mod tests {
 
         let first_array = StringArray::from(
             (0..10)
-                .map(|i| format!("{:0>100}", i))
+                .map(|i| format!("{i:0>100}"))
                 .collect::<Vec<String>>(),
         );
         let first_batch =

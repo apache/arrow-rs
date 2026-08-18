@@ -1872,8 +1872,7 @@ mod tests_from_ffi {
             let mixed_one_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id =
-                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id = builder.append_block(Buffer::from(b"non-inlined-string-buffer"));
                 builder.try_append_view(block_id, 0, 25).unwrap();
                 builder.finish()
             };
@@ -1884,8 +1883,7 @@ mod tests_from_ffi {
             let mixed_two_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id =
-                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id = builder.append_block(Buffer::from(b"non-inlined-string-buffer"));
                 builder.try_append_view(block_id, 0, 25).unwrap();
 
                 let block_id = builder

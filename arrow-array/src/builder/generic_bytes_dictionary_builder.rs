@@ -361,7 +361,7 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append an `Option` value into the builder repeatedly `count` times.
@@ -374,7 +374,7 @@ where
         match value {
             None => self.keys_builder.append_nulls(count),
             Some(v) => self.append_values(v, count),
-        };
+        }
     }
 
     /// Extends builder with an existing dictionary array.

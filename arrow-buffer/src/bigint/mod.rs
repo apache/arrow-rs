@@ -240,10 +240,8 @@ impl i256 {
     /// Create an optional i256 from the provided `f64`. Returning `None`
     /// if overflow occurred
     pub fn from_f64(v: f64) -> Option<Self> {
-        BigInt::from_f64(v).and_then(|i| {
-            let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow { None } else { Some(integer) }
-        })
+        let (integer, overflow) = i256::from_bigint_with_overflow(BigInt::from_f64(v)?);
+        if overflow { None } else { Some(integer) }
     }
 
     /// Create an i256 from the provided low u128 and high i128

@@ -161,9 +161,8 @@ impl ReadPlanBuilder {
             RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
             RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
             RowSelectionPolicy::Auto { threshold, .. } => {
-                let selection = match self.selection.as_ref() {
-                    Some(selection) => selection,
-                    None => return RowSelectionStrategy::Selectors,
+                let Some(selection) = self.selection.as_ref() else {
+                    return RowSelectionStrategy::Selectors;
                 };
 
                 selection.auto_selection_strategy(threshold)

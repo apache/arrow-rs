@@ -460,7 +460,7 @@ impl FromStr for Encoding {
             "PLAIN" | "plain" => Ok(Encoding::PLAIN),
             "PLAIN_DICTIONARY" | "plain_dictionary" => Ok(Encoding::PLAIN_DICTIONARY),
             "RLE" | "rle" => Ok(Encoding::RLE),
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             "BIT_PACKED" | "bit_packed" => Ok(Encoding::BIT_PACKED),
             "DELTA_BINARY_PACKED" | "delta_binary_packed" => Ok(Encoding::DELTA_BINARY_PACKED),
             "DELTA_LENGTH_BYTE_ARRAY" | "delta_length_byte_array" => {
@@ -596,7 +596,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 fn i32_to_encoding(val: i32) -> Encoding {
     match val {
         0 => Encoding::PLAIN,
@@ -658,7 +658,7 @@ enum CompressionCodec {
 /// worse compression ratios. However, it is not as widely supported by the ecosystem, with the
 /// Hadoop ecosystem historically favoring the non-standard and now deprecated [`Compression::LZ4`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum Compression {
     /// No compression.
     UNCOMPRESSED,
@@ -866,7 +866,7 @@ impl EdgeInterpolationAlgorithm {
 
 impl fmt::Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!("{0:?}", self))
+        f.write_fmt(format_args!("{self:?}"))
     }
 }
 
@@ -976,7 +976,7 @@ union BloomFilterCompression {
 ///
 /// See [`ColumnOrder`] for more information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum SortOrder {
     /// Signed (either value or legacy byte-wise) comparison.
     SIGNED,
@@ -1021,7 +1021,7 @@ impl SortOrder {
 ///
 /// [`ColumnOrder`]: https://github.com/apache/parquet-format/blob/2076361bb64e2de9ca6a8d06eda025a6fa4e9df6/src/main/thrift/parquet.thrift#L1103
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
@@ -1451,7 +1451,7 @@ impl str::FromStr for LogicalType {
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
+#[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
     use crate::parquet_thrift::{ThriftSliceInputProtocol, tests::test_roundtrip};

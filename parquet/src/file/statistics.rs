@@ -1184,7 +1184,7 @@ mod tests {
     // generic function without reyling on a bound to a private trait.
     fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
         match stats.min_opt() {
-            Some(s) => format!("min: {}", s),
+            Some(s) => format!("min: {s}"),
             None => "min: NA".to_string(),
         }
     }

@@ -84,7 +84,7 @@ fn create_parquet_file(
         props = props
             .set_data_page_row_count_limit(limit)
             .set_statistics_enabled(EnabledStatistics::Page);
-    };
+    }
     let props = props.build();
 
     let file = tempfile::Builder::new()

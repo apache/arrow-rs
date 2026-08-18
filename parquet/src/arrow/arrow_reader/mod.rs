@@ -1573,7 +1573,7 @@ impl ParquetRecordBatchReader {
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
                         rec => read_records += rec,
-                    };
+                    }
                 }
             }
             RowSelectionCursor::All => {
@@ -5824,7 +5824,7 @@ pub(crate) mod tests {
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
         let seed: u64 = random();
-        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
         use tempfile::TempDir;

@@ -39,7 +39,7 @@ pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),
@@ -309,8 +309,8 @@ mod tests {
 
         let values = buffer.spill_values().unwrap();
         let read_offset = values.len();
-        values.try_push("bingo".as_bytes(), false).unwrap();
-        values.try_push("bongo".as_bytes(), false).unwrap();
+        values.try_push(b"bingo", false).unwrap();
+        values.try_push(b"bongo", false).unwrap();
 
         valid.extend_from_slice(&[false, false, true, false, true]);
         let null_buffer = Buffer::from_iter(valid.iter().copied());

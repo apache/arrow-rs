@@ -272,9 +272,8 @@ impl StructArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (Fields, Vec<ArrayRef>, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::Struct(f) => f,
-            _ => unreachable!(),
+        let DataType::Struct(f) = self.data_type else {
+            unreachable!()
         };
         (f, self.fields, self.nulls)
     }
@@ -393,9 +392,8 @@ impl StructArray {
     pub fn flatten(&self) -> (Fields, Vec<ArrayRef>) {
         let schema_fields = self.fields();
 
-        let struct_nulls = match &self.nulls {
-            Some(n) => n,
-            None => return (schema_fields.clone(), self.fields.clone()),
+        let Some(struct_nulls) = &self.nulls else {
+            return (schema_fields.clone(), self.fields.clone());
         };
 
         let new_fields: Fields = schema_fields

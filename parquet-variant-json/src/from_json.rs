@@ -125,7 +125,7 @@ pub fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result
             }
             obj_builder.finish();
         }
-    };
+    }
     Ok(())
 }
 

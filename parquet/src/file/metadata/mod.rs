@@ -1759,7 +1759,7 @@ mod tests {
     };
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_level_histogram_update_from_levels_compat() {
         let mut histogram = LevelHistogram::try_new(2).unwrap();
         histogram.update_from_levels(&[0, 2, 1, 2, 2]);
@@ -2110,9 +2110,8 @@ mod tests {
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
         let column_index = column_index.build().unwrap();
-        let native_index = match column_index {
-            ColumnIndexMetaData::BOOLEAN(index) => index,
-            _ => panic!("wrong type of column index"),
+        let ColumnIndexMetaData::BOOLEAN(native_index) = column_index else {
+            panic!("wrong type of column index")
         };
 
         // Now, add in OffsetIndex
@@ -2186,8 +2185,8 @@ mod tests {
         let base_expected_size = 2074;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
-        let footer_key = "0123456789012345".as_bytes();
-        let column_key = "1234567890123450".as_bytes();
+        let footer_key = b"0123456789012345";
+        let column_key = b"1234567890123450";
         let mut decryption_properties_builder =
             FileDecryptionProperties::builder(footer_key.to_vec())
                 .with_aad_prefix(aad_prefix.clone());

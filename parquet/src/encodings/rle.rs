@@ -82,7 +82,7 @@ pub struct RleEncoder {
 }
 
 impl RleEncoder {
-    #[allow(unused)]
+    #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
     pub fn new(bit_width: u8, buffer_len: usize) -> Self {
         let buffer = Vec::with_capacity(buffer_len);
         RleEncoder::new_from_buf(bit_width, buffer)
@@ -185,7 +185,7 @@ impl RleEncoder {
     }
 
     #[inline]
-    #[allow(unused)]
+    #[cfg_attr(not(feature = "experimental"), expect(unused))]
     pub fn buffer(&self) -> &[u8] {
         self.bit_writer.buffer()
     }
@@ -195,7 +195,7 @@ impl RleEncoder {
         self.bit_writer.bytes_written()
     }
 
-    #[allow(unused)]
+    #[cfg_attr(not(feature = "experimental"), expect(unused))]
     pub fn is_empty(&self) -> bool {
         self.bit_writer.bytes_written() == 0
     }
@@ -389,7 +389,7 @@ impl RleDecoder {
     // These functions inline badly, they tend to inline and then create very large loop unrolls
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
-    #[allow(unused)]
+    #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
     pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= size_of::<u64>());
 

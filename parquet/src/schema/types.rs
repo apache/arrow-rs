@@ -1255,7 +1255,7 @@ fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_tree<'a>(
     tp: &'a TypePtr,
     root_idx: usize,
@@ -1330,7 +1330,7 @@ fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
-pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
+pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Result<TypePtr> {
     let mut index = 0;
     let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
@@ -1358,8 +1358,8 @@ pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) ->
 }
 
 // recursive helper function for schema conversion
-fn schema_from_array_helper<'a>(
-    elements: &mut IntoIter<SchemaElement<'a>>,
+fn schema_from_array_helper(
+    elements: &mut IntoIter<SchemaElement<'_>>,
     num_elements: usize,
     index: usize,
 ) -> Result<(usize, TypePtr)> {
