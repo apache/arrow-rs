@@ -113,11 +113,14 @@ pub struct PageStoreArgs<'a> {
     column_descriptor: &'a ColumnDescriptor,
 }
 
-impl<'a> PageStoreArgs<'a> {
+impl PageStoreArgs<'_> {
     // Constructed only by the Arrow writer; without that feature there is no caller.
     #[cfg(feature = "arrow")]
-    pub(crate) fn new(column_index: usize, column_descriptor: &'a ColumnDescriptor) -> Self {
-        Self {
+    pub(crate) fn new(
+        column_index: usize,
+        column_descriptor: &ColumnDescriptor,
+    ) -> PageStoreArgs<'_> {
+        PageStoreArgs {
             column_index,
             column_descriptor,
         }

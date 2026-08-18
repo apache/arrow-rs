@@ -87,7 +87,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int64Type>),
 }
 
-impl<'a> ArrowToVariantRowBuilder<'a> {
+impl ArrowToVariantRowBuilder<'_> {
     /// Appends a single row at the given index to the supplied builder.
     pub fn append_row(
         &mut self,

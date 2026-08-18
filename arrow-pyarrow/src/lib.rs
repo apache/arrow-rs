@@ -171,13 +171,13 @@ pub trait IntoPyArrow {
     const OUTPUT_TYPE: PyStaticExpr = type_hint_identifier!("_typeshed", "Incomplete");
 
     /// Convert the implemented type into a Python object while consuming it.
-    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
+    fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>>;
 }
 
 impl<T: ToPyArrow> IntoPyArrow for T {
     type_hint!(OUTPUT_TYPE = <T as ToPyArrow>::OUTPUT_TYPE);
 
-    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         self.to_pyarrow(py)
     }
 }
@@ -515,7 +515,7 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
 
     // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
     // there is already a blanket implementation for `T: ToPyArrow`.
-    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         let stream = FFI_ArrowArrayStream::new(self);
         record_batch_reader_class(py)?.call_method1(
             intern!(py, "_import_from_c"),
@@ -528,7 +528,7 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
 impl IntoPyArrow for ArrowArrayStreamReader {
     type_hint!(OUTPUT_TYPE = type_hint_identifier!("pyarrow", "RecordBatchReader"));
 
-    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         let boxed: Box<dyn RecordBatchReader + Send> = Box::new(self);
         boxed.into_pyarrow(py)
     }

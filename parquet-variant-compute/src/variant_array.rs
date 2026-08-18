@@ -651,7 +651,7 @@ impl<'a> Iterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+impl DoubleEndedIterator for VariantArrayIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.head_i == self.tail_i {
             return None;
@@ -663,7 +663,7 @@ impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
+impl ExactSizeIterator for VariantArrayIter<'_> {}
 
 /// One shredded field of a partially or perfectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is

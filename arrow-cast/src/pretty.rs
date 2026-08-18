@@ -1291,7 +1291,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+    impl DisplayIndex for MyMoneyFormatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} €", self.array.value(idx))?,
@@ -1308,7 +1308,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyInt32Formatter<'a> {
+    impl DisplayIndex for MyInt32Formatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} (32-Bit)", self.array.value(idx))?,

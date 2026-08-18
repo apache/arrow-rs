@@ -381,7 +381,7 @@ impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
     }
 }
 
-impl<'a> LevelDataRef<'a> {
+impl LevelDataRef<'_> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Absent => 0,

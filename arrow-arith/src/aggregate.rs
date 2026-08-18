@@ -656,9 +656,9 @@ mod ree {
     use arrow_schema::ArrowError;
 
     /// Downcasts an array to a TypedRunArray.
-    fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
-        array: &'a dyn Array,
-    ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
+    fn downcast<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Option<TypedRunArray<'_, I, PrimitiveArray<V>>> {
         let array = array.as_run_opt::<I>()?;
         // We only support RunArray wrapping primitive types.
         array.downcast::<PrimitiveArray<V>>()
@@ -697,8 +697,8 @@ mod ree {
     }
 
     /// Folds over the values in a run-end-encoded array.
-    fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
-        array: TypedRunArray<'a, I, PrimitiveArray<V>>,
+    fn fold<I: RunEndIndexType, V: ArrowNumericType, F, E>(
+        array: TypedRunArray<'_, I, PrimitiveArray<V>>,
         mut f: F,
     ) -> Result<Option<V::Native>, E>
     where

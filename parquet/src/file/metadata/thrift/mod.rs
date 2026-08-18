@@ -397,9 +397,7 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
-fn read_encoding_stats_as_mask<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
-) -> Result<EncodingMask> {
+fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Result<EncodingMask> {
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
     let list_ident = prot.read_list_begin()?;
@@ -419,8 +417,8 @@ fn read_encoding_stats_as_mask<'a>(
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
 #[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
-fn read_column_metadata<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
+fn read_column_metadata(
+    prot: &mut ThriftSliceInputProtocol<'_>,
     column: &mut ColumnChunkMetaData,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
@@ -550,8 +548,8 @@ fn read_column_metadata<'a>(
 
 // using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
 // these are all internal and operate on slices.
-fn read_column_chunk<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
+fn read_column_chunk(
+    prot: &mut ThriftSliceInputProtocol<'_>,
     column_descr: &Arc<ColumnDescriptor>,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
@@ -1418,7 +1416,7 @@ pub(super) struct FileMeta<'a> {
 //   8: optional EncryptionAlgorithm encryption_algorithm
 //   9: optional binary footer_signing_key_metadata
 // }
-impl<'a> WriteThrift for FileMeta<'a> {
+impl WriteThrift for FileMeta<'_> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     // needed for last_field_id w/o encryption
@@ -1806,7 +1804,7 @@ pub(crate) mod tests {
         Ok(buf)
     }
 
-    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
+    pub(crate) fn buf_to_schema_list(buf: &mut Vec<u8>) -> Result<Vec<SchemaElement<'_>>> {
         let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
         read_thrift_vec(&mut prot)
     }

@@ -165,7 +165,7 @@ pub trait VariantToJson {
     fn to_json_value(&self) -> Result<Value, ArrowError>;
 }
 
-impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+impl VariantToJson for Variant<'_, '_> {
     fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
         match self {
             Variant::Null => write!(buffer, "null")?,

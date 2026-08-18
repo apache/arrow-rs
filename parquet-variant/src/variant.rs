@@ -1756,7 +1756,7 @@ impl std::fmt::Debug for InvalidVariant {
 // helper to print binary data in hex format in debug mode, as space-separated hex byte values.
 struct HexString<'a>(&'a [u8]);
 
-impl<'a> std::fmt::Debug for HexString<'a> {
+impl std::fmt::Debug for HexString<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some((first, rest)) = self.0.split_first() {
             write!(f, "{first:02x}")?;

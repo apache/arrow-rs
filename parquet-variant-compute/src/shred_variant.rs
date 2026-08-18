@@ -212,7 +212,7 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 
-impl<'a> VariantToShreddedVariantRowBuilder<'a> {
+impl VariantToShreddedVariantRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {

@@ -58,7 +58,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     WithPath(VariantPathRowBuilder<'a>),
 }
 
-impl<'a> VariantToArrowRowBuilder<'a> {
+impl VariantToArrowRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToArrowRowBuilder::*;
         match self {
@@ -252,7 +252,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     BinaryView(VariantToBinaryArrowRowBuilder<'a, BinaryViewBuilder>),
 }
 
-impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
+impl PrimitiveVariantToArrowRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
@@ -1185,7 +1185,7 @@ pub(crate) struct VariantPathRowBuilder<'a> {
     path: VariantPath<'a>,
 }
 
-impl<'a> VariantPathRowBuilder<'a> {
+impl VariantPathRowBuilder<'_> {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null()
     }
@@ -1436,7 +1436,7 @@ enum ListElementBuilder<'a> {
     Shredded(Box<VariantToShreddedVariantRowBuilder<'a>>),
 }
 
-impl<'a> ListElementBuilder<'a> {
+impl ListElementBuilder<'_> {
     fn append_null(&mut self) -> Result<()> {
         match self {
             Self::Typed(b) => b.append_null(),
