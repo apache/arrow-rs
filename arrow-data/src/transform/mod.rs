@@ -136,9 +136,8 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<
 pub struct MutableArrayData<'a> {
     /// Input arrays: the data being read FROM.
     ///
-    /// Note this is "dead code" because all actual references to the arrays are
-    /// stored in closures for extending values and nulls.
-    #[expect(dead_code)]
+    /// Note all actual reads of the arrays go through the closures for extending
+    /// values and nulls; these references are only kept for bounds checking.
     arrays: Vec<&'a ArrayData>,
 
     /// In progress output array: The data being written TO
@@ -736,13 +735,23 @@ impl<'a> MutableArrayData<'a> {
     /// * `end` - the end index of the chunk (exclusive)
     ///
     /// # Errors
-    /// Returns an error if offset arithmetic overflows the underlying integer type.
-    ///
-    /// # Panics
-    /// This function panics if there is an invalid index,
-    /// i.e. `index` >= the number of source arrays
-    /// or `end` > the length of the `index`th array
+    /// Returns an error if
+    /// * `index` >= the number of source arrays,
+    /// * `start..end` is not a valid range within the `index`th array, or
+    /// * offset arithmetic overflows the underlying integer type.
     pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
+        let Some(array_len) = self.arrays.get(index).map(|array| array.len()) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Source array index {index} is out of bounds: there are {} source arrays",
+                self.arrays.len()
+            )));
+        };
+        if end < start || array_len < end {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid range {start}..{end} for source array {index} of length {array_len}"
+            )));
+        }
+
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
         // Snapshot buffer lengths before attempting the extend so we can roll
@@ -763,17 +772,15 @@ impl<'a> MutableArrayData<'a> {
     /// Extends the in progress array with a region of the input arrays.
     ///
     /// # Panics
-    /// This function panics if there is an invalid index,
-    /// i.e. `index` >= the number of source arrays,
-    /// `end` > the length of the `index`th array,
-    /// or the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
+    /// This function panics for the same reasons [`Self::try_extend`] returns an error:
+    /// an invalid index, an invalid range, or offset type overflow
+    /// (e.g. more than 2 GiB in a `StringArray`).
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend` which returns an error on overflow instead of panicking"
     )]
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
-        self.try_extend(index, start, end)
-            .expect("extend failed due to offset overflow")
+        self.try_extend(index, start, end).expect("extend failed")
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays, returning an
@@ -782,10 +789,19 @@ impl<'a> MutableArrayData<'a> {
     /// Prefer this over [`extend_nulls`](Self::extend_nulls) to handle cases where the run-end
     /// counter overflows (relevant for `RunEndEncoded` arrays).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
+    /// Returns an error if this [`MutableArrayData`] was not created with `use_nulls` and none
+    /// of the source arrays are nullable, or if the run-end counter overflows.
     pub fn try_extend_nulls(&mut self, len: usize) -> Result<(), ArrowError> {
+        if self.data.null_buffer.is_none() {
+            return Err(ArrowError::InvalidArgumentError(
+                "MutableArrayData cannot be extended with nulls: it was created with `use_nulls` \
+                 set to false and no source array is nullable"
+                    .to_owned(),
+            ));
+        }
+
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
@@ -801,15 +817,13 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays,
-    /// or if the run-end counter overflows for `RunEndEncoded` arrays.
+    /// Panics for the same reasons [`Self::try_extend_nulls`] returns an error.
     #[deprecated(
         since = "59.0.0",
         note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
     )]
     pub fn extend_nulls(&mut self, len: usize) {
-        self.try_extend_nulls(len)
-            .expect("extend_nulls failed due to overflow")
+        self.try_extend_nulls(len).expect("extend_nulls failed")
     }
 
     /// Returns the current length
@@ -904,6 +918,64 @@ mod test {
     use super::*;
     use arrow_schema::Field;
     use std::sync::Arc;
+
+    fn int64_array_data(values: Vec<i64>) -> ArrayData {
+        let len = values.len();
+        ArrayData::try_new(
+            DataType::Int64,
+            len,
+            None,
+            0,
+            vec![arrow_buffer::Buffer::from_slice_ref(&values)],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_try_extend_invalid_index_and_range() {
+        let array = int64_array_data(vec![1, 2, 3]);
+        let mut mutable = MutableArrayData::new(vec![&array], false, 3);
+
+        let err = mutable.try_extend(1, 0, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Source array index 1 is out of bounds: there are 1 source arrays"
+        );
+
+        let err = mutable.try_extend(0, 0, 4).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid range 0..4 for source array 0 of length 3"
+        );
+
+        // `end < start` used to underflow:
+        let err = mutable.try_extend(0, 2, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Invalid range 2..1 for source array 0 of length 3"
+        );
+
+        // The bounds are inclusive of the full array:
+        mutable.try_extend(0, 3, 3).unwrap();
+        mutable.try_extend(0, 0, 3).unwrap();
+        assert_eq!(mutable.len(), 3);
+    }
+
+    #[test]
+    fn test_try_extend_nulls_without_null_buffer() {
+        let array = int64_array_data(vec![1, 2, 3]);
+        let mut mutable = MutableArrayData::new(vec![&array], false, 3);
+        let err = mutable.try_extend_nulls(1).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot be extended with nulls"),
+            "unexpected error: {err}"
+        );
+
+        let mut mutable = MutableArrayData::new(vec![&array], true, 3);
+        mutable.try_extend_nulls(1).unwrap();
+        assert_eq!(mutable.len(), 1);
+    }
 
     #[test]
     fn test_list_append_with_capacities() {
