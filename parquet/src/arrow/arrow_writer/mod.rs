@@ -365,14 +365,14 @@ impl<W: Write + Send> ArrowWriter<W> {
         let mut remaining = batch.clone();
 
         loop {
-            if self.in_progress.is_none() {
-                let row_group_index = self.writer.flushed_row_groups().len();
-                self.in_progress = Some(
+            let in_progress = match &mut self.in_progress {
+                Some(in_progress) => in_progress,
+                x => x.insert(
                     self.row_group_writer_factory
-                        .create_row_group_writer(row_group_index)?,
-                );
-            }
-            let buffered_rows = self.in_progress.as_ref().unwrap().buffered_rows;
+                        .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+                ),
+            };
+            let buffered_rows = in_progress.buffered_rows;
 
             // Leading rows of `remaining` that still fit in the current row group, when the
             // rest has to go to a later one.
@@ -384,16 +384,15 @@ impl<W: Write + Send> ArrowWriter<W> {
             };
 
             // Check byte limit: if we have buffered data, use measured average row size
-            // to split batch proactively before exceeding byte limit
-            if split_at.is_none()
-                && let Some(max_bytes) = self.max_row_group_bytes
+            // to split batch proactively before exceeding byte limit. Both limits apply to
+            // the same rows, so measure against whatever the row limit already trimmed
+            // `remaining` down to; otherwise the row limit would always win.
+            let candidate_rows = split_at.unwrap_or(remaining.num_rows());
+
+            if let Some(max_bytes) = self.max_row_group_bytes
                 && buffered_rows > 0
             {
-                let current_bytes = self
-                    .in_progress
-                    .as_ref()
-                    .unwrap()
-                    .get_estimated_total_bytes();
+                let current_bytes = in_progress.get_estimated_total_bytes();
 
                 if current_bytes >= max_bytes {
                     self.flush()?;
@@ -408,7 +407,7 @@ impl<W: Write + Send> ArrowWriter<W> {
                     let remaining_bytes = max_bytes - current_bytes;
                     let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
 
-                    if remaining.num_rows() > rows_that_fit {
+                    if candidate_rows > rows_that_fit {
                         if rows_that_fit > 0 {
                             split_at = Some(rows_that_fit);
                         } else {
@@ -5836,6 +5835,31 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    // Both limits can apply to the same batch: the row limit trims it to 5 rows, and the
+    // byte limit then trims those 5 down to 4.
+    fn test_row_group_limit_both_apply_to_same_batch() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(15))
+            .set_max_row_group_bytes(Some(1500))
+            .build();
+
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 2,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
+
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[14, 6],
+            "Byte limit should still apply to a batch the row limit already split"
+        );
     }
 
     #[test]
