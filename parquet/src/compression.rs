@@ -644,13 +644,10 @@ mod lz4_raw_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(uncompress_size) => uncompress_size,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4RawCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(offset + required_len, 0);
             match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
@@ -783,13 +780,10 @@ mod lz4_hadoop_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let output_len = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(n) => n,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4HadoopCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(output_len + required_len, 0);
             match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {

@@ -1803,14 +1803,10 @@ mod tests {
         ];
 
         for data_type in non_primitive_types {
-            let err = match make_primitive_variant_to_arrow_row_builder(
-                &data_type,
-                &cast_options,
-                1,
-                false,
-            ) {
-                Ok(_) => panic!("non-primitive type {data_type:?} should be rejected"),
-                Err(err) => err,
+            let Err(err) =
+                make_primitive_variant_to_arrow_row_builder(&data_type, &cast_options, 1, false)
+            else {
+                panic!("non-primitive type {data_type:?} should be rejected")
             };
 
             match err {

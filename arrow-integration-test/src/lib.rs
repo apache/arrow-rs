@@ -1000,9 +1000,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Union(fields, _) => {
-            let type_ids = if let Some(type_id) = json_col.type_id {
-                type_id
-            } else {
+            let Some(type_ids) = json_col.type_id else {
                 return Err(ArrowError::JsonError(
                     "Cannot find expected type_id in json column".to_string(),
                 ));

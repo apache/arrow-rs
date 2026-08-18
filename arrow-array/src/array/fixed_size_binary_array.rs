@@ -697,9 +697,8 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_length = match data_type {
-            DataType::FixedSizeBinary(len) => len,
-            _ => panic!("Expected data type to be FixedSizeBinary"),
+        let DataType::FixedSizeBinary(value_length) = data_type else {
+            panic!("Expected data type to be FixedSizeBinary")
         };
 
         let value_size = value_length

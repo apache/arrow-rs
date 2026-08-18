@@ -7328,13 +7328,11 @@ mod tests {
             ToType: ArrowPrimitiveType<Native = i64>,
             PrimitiveArray<FromType>: From<Vec<Option<i64>>>,
         {
-            let from_unit = match FromType::DATA_TYPE {
-                DataType::Duration(unit) => unit,
-                _ => panic!("Expected a duration type"),
+            let DataType::Duration(from_unit) = FromType::DATA_TYPE else {
+                panic!("Expected a duration type")
             };
-            let to_unit = match ToType::DATA_TYPE {
-                DataType::Duration(unit) => unit,
-                _ => panic!("Expected a duration type"),
+            let DataType::Duration(to_unit) = ToType::DATA_TYPE else {
+                panic!("Expected a duration type")
             };
             let from_size = time_unit_multiple(&from_unit);
             let to_size = time_unit_multiple(&to_unit);

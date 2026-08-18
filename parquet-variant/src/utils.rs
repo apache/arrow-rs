@@ -256,11 +256,8 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         }
     }
 
-    let end = match end {
-        Some(e) => e,
-        None => {
-            return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
-        }
+    let Some(end) = end else {
+        return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
     };
 
     let element = if let Some(inner) = unescaped

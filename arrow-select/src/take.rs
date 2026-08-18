@@ -171,15 +171,12 @@ fn check_bounds<T: ArrowPrimitiveType>(
 where
     T::Native: Display,
 {
-    let len = match T::Native::from_usize(len) {
-        Some(len) => len,
-        None => {
-            if T::DATA_TYPE.is_integer() {
-                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
-                return Ok(());
-            } else {
-                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
-            }
+    let Some(len) = T::Native::from_usize(len) else {
+        if T::DATA_TYPE.is_integer() {
+            // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+            return Ok(());
+        } else {
+            return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
         }
     };
 

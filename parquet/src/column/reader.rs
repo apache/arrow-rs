@@ -315,9 +315,8 @@ where
         let mut remaining_records = num_records;
         while remaining_records != 0 {
             if self.num_buffered_values == self.num_decoded_values {
-                let metadata = match self.page_reader.peek_next_page()? {
-                    None => return Ok(num_records - remaining_records),
-                    Some(metadata) => metadata,
+                let Some(metadata) = self.page_reader.peek_next_page()? else {
+                    return Ok(num_records - remaining_records);
                 };
 
                 // If dictionary, we must read it

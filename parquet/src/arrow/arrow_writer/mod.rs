@@ -448,9 +448,8 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Note the underlying writer is not flushed with this call.
     /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
-        let in_progress = match self.in_progress.take() {
-            Some(in_progress) => in_progress,
-            None => return Ok(()),
+        let Some(in_progress) = self.in_progress.take() else {
+            return Ok(());
         };
 
         let mut row_group_writer = self.writer.next_row_group()?;
@@ -3379,9 +3378,8 @@ mod tests {
             for rg_idx in col_indexes {
                 for idx in rg_idx {
                     assert!(idx.nan_counts().is_some());
-                    let float_idx = match idx {
-                        ColumnIndexMetaData::DOUBLE(idx) => idx,
-                        _ => panic!("expected double statistics"),
+                    let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
+                        panic!("expected double statistics")
                     };
                     for i in 0..idx.num_pages() as usize {
                         assert_eq!(float_idx.nan_count(i), Some(10));
@@ -3458,9 +3456,8 @@ mod tests {
         assert_eq!(col_idx.num_pages(), 4);
 
         // test each page
-        let float_idx = match col_idx {
-            ColumnIndexMetaData::DOUBLE(idx) => idx,
-            _ => panic!("expected double statistics"),
+        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+            panic!("expected double statistics")
         };
 
         assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));

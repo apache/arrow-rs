@@ -57,9 +57,8 @@ impl<O: OffsetSizeTrait> GenericListArrayOrMap for GenericListArray<O> {
     where
         Self: Sized,
     {
-        let field = match data_type {
-            DataType::List(inner_field) | DataType::LargeList(inner_field) => inner_field,
-            _ => unreachable!(),
+        let (DataType::List(field) | DataType::LargeList(field)) = data_type else {
+            unreachable!()
         };
 
         let child = children

@@ -1590,9 +1590,8 @@ mod tests {
         {"c": "14:26:56.123"}
         "#;
 
-        let unit = match T::DATA_TYPE {
-            DataType::Time32(unit) | DataType::Time64(unit) => unit,
-            _ => unreachable!(),
+        let (DataType::Time32(unit) | DataType::Time64(unit)) = T::DATA_TYPE else {
+            unreachable!()
         };
 
         let unit_in_nanos = match unit {

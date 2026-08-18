@@ -2707,9 +2707,8 @@ mod tests {
             let max = stats.max_bytes_opt().expect("max stats missing");
 
             let col_idx = metadata.column_index().expect("column index not present");
-            let col0 = match &col_idx[0][0] {
-                ColumnIndexMetaData::INT96(index) => index,
-                _ => panic!("expected INT96 stats"),
+            let ColumnIndexMetaData::INT96(col0) = &col_idx[0][0] else {
+                panic!("expected INT96 stats")
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");
             let col_max = col0.max_value(0).expect("ColumnIndex max not present");

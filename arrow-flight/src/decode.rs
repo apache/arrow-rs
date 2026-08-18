@@ -293,9 +293,7 @@ impl FlightDataDecoder {
                 Ok(Some(DecodedFlightData::new_schema(data, schema)))
             }
             MessageHeader::DictionaryBatch => {
-                let state = if let Some(state) = self.state.as_mut() {
-                    state
-                } else {
+                let Some(state) = self.state.as_mut() else {
                     return Err(FlightError::protocol(
                         "Received DictionaryBatch prior to Schema",
                     ));
@@ -325,9 +323,7 @@ impl FlightDataDecoder {
                 Ok(None)
             }
             MessageHeader::RecordBatch => {
-                let state = if let Some(state) = self.state.as_ref() {
-                    state
-                } else {
+                let Some(state) = self.state.as_ref() else {
                     return Err(FlightError::protocol(
                         "Received RecordBatch prior to Schema",
                     ));

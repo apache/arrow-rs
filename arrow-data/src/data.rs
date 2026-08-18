@@ -1465,17 +1465,14 @@ impl ArrayData {
         mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
-        let mask = match mask {
-            Some(mask) => mask,
-            None => {
-                return match child.null_count() {
-                    0 => Ok(()),
-                    _ => Err(ArrowError::InvalidArgumentError(format!(
-                        "non-nullable child of type {} contains nulls not present in parent {}",
-                        child.data_type, self.data_type
-                    ))),
-                };
-            }
+        let Some(mask) = mask else {
+            return match child.null_count() {
+                0 => Ok(()),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent {}",
+                    child.data_type, self.data_type
+                ))),
+            };
         };
 
         match child.nulls() {

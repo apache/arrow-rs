@@ -1212,9 +1212,8 @@ impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
     type State = ArrayFormatter<'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let field = match (*self).data_type() {
-            DataType::RunEndEncoded(_, values_field) => values_field,
-            _ => unreachable!(),
+        let DataType::RunEndEncoded(_, field) = (*self).data_type() else {
+            unreachable!()
         };
         make_array_formatter(self.values().as_ref(), options, Some(field))
     }
@@ -1287,9 +1286,8 @@ impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
     type State = (usize, ArrayFormatter<'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let field = match (*self).data_type() {
-            DataType::FixedSizeList(f, _) => f,
-            _ => unreachable!(),
+        let DataType::FixedSizeList(field, _) = (*self).data_type() else {
+            unreachable!()
         };
         let formatter =
             make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))?;
@@ -1311,9 +1309,8 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
     type State = Vec<FieldDisplay<'a>>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let fields = match (*self).data_type() {
-            DataType::Struct(f) => f,
-            _ => unreachable!(),
+        let DataType::Struct(fields) = (*self).data_type() else {
+            unreachable!()
         };
 
         self.columns()
@@ -1376,9 +1373,8 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     type State = (Vec<Option<FieldDisplay<'a>>>, UnionMode);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let (fields, mode) = match (*self).data_type() {
-            DataType::Union(fields, mode) => (fields, mode),
-            _ => unreachable!(),
+        let DataType::Union(fields, mode) = (*self).data_type() else {
+            unreachable!()
         };
 
         let max_id = fields.iter().map(|(id, _)| id).max().unwrap_or_default() as usize;
