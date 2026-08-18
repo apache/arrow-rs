@@ -1838,7 +1838,7 @@ impl<'a> StatisticsConverter<'a> {
         let distinct_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.and_then(|s| s.distinct_count_opt()));
+            .map(|s| s?.distinct_count_opt());
         Ok(UInt64Array::from_iter(distinct_counts))
     }
 
