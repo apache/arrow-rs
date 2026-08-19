@@ -302,6 +302,10 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
     let mut dedup: HbHashMap<u64, (usize, usize), BuildPassthroughHasher> =
         HbHashMap::with_capacity_and_hasher(num_values, BuildPassthroughHasher);
 
+    // Tracks colliding values (same hash, different bytes) so repeated occurrences
+    // are deduplicated rather than inserted as new entries. Empty in the common case.
+    let mut collision_overflow: Vec<(u64, usize, usize)> = Vec::new();
+
     for (input_idx, &hash) in hashes.iter().enumerate() {
         let byte_start = offset_buffer.offsets[input_idx].as_usize();
         let byte_end = offset_buffer.offsets[input_idx + 1].as_usize();
@@ -315,13 +319,34 @@ fn pack_values_from_offsets_impl<K: ArrowDictionaryKeyType, V: OffsetSizeTrait>(
                 if &offset_buffer.values[first_start..first_end] == bytes {
                     existing_output_idx
                 } else {
-                    // True hash collision: same hash, different bytes — insert as new unique value
-                    let new_output_idx = unique_offsets.len() - 1;
-                    unique_bytes.extend_from_slice(bytes);
-                    let new_end = V::from_usize(unique_bytes.len())
-                        .ok_or_else(|| general_err!("offset overflow building dictionary"))?;
-                    unique_offsets.push(new_end);
-                    new_output_idx
+                    // True hash collision — check overflow list before inserting.
+                    let existing = collision_overflow
+                        .iter()
+                        .find(|&&(entry_hash, collision_input_idx, _)| {
+                            if entry_hash != hash {
+                                return false;
+                            }
+                            let collision_start =
+                                offset_buffer.offsets[collision_input_idx].as_usize();
+                            let collision_end =
+                                offset_buffer.offsets[collision_input_idx + 1].as_usize();
+                            &offset_buffer.values[collision_start..collision_end] == bytes
+                        })
+                        .map(|&(_, _, collision_output_idx)| collision_output_idx);
+
+                    match existing {
+                        Some(collision_output_idx) => collision_output_idx,
+                        None => {
+                            let new_output_idx = unique_offsets.len() - 1;
+                            unique_bytes.extend_from_slice(bytes);
+                            let new_end = V::from_usize(unique_bytes.len()).ok_or_else(|| {
+                                general_err!("offset overflow building dictionary")
+                            })?;
+                            unique_offsets.push(new_end);
+                            collision_overflow.push((hash, input_idx, new_output_idx));
+                            new_output_idx
+                        }
+                    }
                 }
             }
             Entry::Vacant(entry) => {
@@ -546,6 +571,78 @@ mod tests {
 
         assert_eq!(dict.data_type(), &dict_type);
         assert_eq!(dict.values().data_type(), &ArrowType::LargeUtf8);
+    }
+
+    /// 128 unique strings fill Int8 keys to capacity (last index = 127 = i8::MAX).
+    /// A 129th unique string overflows and must return an error.
+    #[test]
+    fn test_int8_key_overflow_boundary() {
+        let dict_type = ArrowType::Dictionary(Box::new(ArrowType::Int8), Box::new(ArrowType::Utf8));
+        let mut scratch = MutableBuffer::new(0);
+
+        {
+            let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+            let values = buffer.spill_values().unwrap();
+            for i in 0u32..128 {
+                values
+                    .try_push(format!("val{i}").as_bytes(), false)
+                    .unwrap();
+            }
+            buffer
+                .into_array(None, &dict_type, &mut scratch)
+                .expect("128 unique strings must fit: last index is 127 = i8::MAX");
+        }
+
+        {
+            let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+            let values = buffer.spill_values().unwrap();
+            for i in 0u32..129 {
+                values
+                    .try_push(format!("val{i}").as_bytes(), false)
+                    .unwrap();
+            }
+            let err = buffer
+                .into_array(None, &dict_type, &mut scratch)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("dictionary key overflow"),
+                "expected 'dictionary key overflow', got: {err}"
+            );
+        }
+    }
+
+    /// A colliding string repeated after its initial collision must reuse its key,
+    /// not be inserted again as a new dictionary entry.
+    #[test]
+    fn test_hash_collision_deduplication() {
+        let key_type = ArrowType::Int32;
+        let value_type = ArrowType::Utf8;
+
+        // "alpha", "beta", "beta" — all forced to share the same hash.
+        let mut ob = OffsetBuffer::<i32>::with_capacity(3);
+        ob.try_push(b"alpha", false).unwrap();
+        ob.try_push(b"beta", false).unwrap();
+        ob.try_push(b"beta", false).unwrap();
+        let hashes = [0xdeadbeef_u64; 3];
+
+        let array = pack_values_from_offsets_impl::<Int32Type, i32>(
+            &ob,
+            &hashes,
+            None,
+            &key_type,
+            &value_type,
+        )
+        .unwrap();
+
+        let dict = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict.values().len(), 2);
+        let keys: Vec<i32> = dict.keys().values().iter().copied().collect();
+        assert_eq!(keys, vec![0, 1, 1]);
     }
 
     /// A dictionary requested with Binary values must come back with Binary, not Utf8.
