@@ -56,9 +56,9 @@ use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
-#[allow(unused_imports)] // Only used for benchmarks
+#[cfg_attr(not(feature = "experimental"), expect(unused_imports))]
 pub use byte_view_array::make_byte_view_array_reader;
-#[allow(unused_imports)] // Only used for benchmarks
+#[cfg_attr(not(feature = "experimental"), expect(unused_imports))]
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
 pub use list_array::ListArrayReader;
@@ -88,7 +88,6 @@ pub use struct_array::StructArrayReader;
 pub trait ArrayReader: Send {
     // TODO: this function is never used, and the trait is not public. Perhaps this should be
     // removed.
-    #[allow(dead_code)]
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the arrow type of this array reader.

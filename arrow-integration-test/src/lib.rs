@@ -34,7 +34,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
@@ -132,7 +131,7 @@ impl From<&Field> for ArrowJsonField {
         };
 
         Self {
-            name: field.name().to_string(),
+            name: field.name().clone(),
             field_type: data_type_to_json(field.data_type()),
             nullable: field.is_nullable(),
             children: vec![],
@@ -364,7 +363,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_bool().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -382,7 +381,7 @@ pub fn array_from_json(
                         ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
                     })? as i8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -398,7 +397,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -414,7 +413,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -431,7 +430,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -455,7 +454,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -496,7 +495,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -512,7 +511,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -528,7 +527,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -544,7 +543,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -574,7 +573,7 @@ pub fn array_from_json(
                         }
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -612,7 +611,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as MonthDayNano"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -628,7 +627,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap() as f32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -644,7 +643,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -663,7 +662,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -682,7 +681,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -698,7 +697,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -714,7 +713,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -733,7 +732,7 @@ pub fn array_from_json(
                         b.append_value(&v)?
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -907,7 +906,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -925,7 +924,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -943,7 +942,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -1000,9 +999,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Union(fields, _) => {
-            let type_ids = if let Some(type_id) = json_col.type_id {
-                type_id
-            } else {
+            let Some(type_ids) = json_col.type_id else {
                 return Err(ArrowError::JsonError(
                     "Cannot find expected type_id in json column".to_string(),
                 ));

@@ -62,7 +62,6 @@ mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
-#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -860,7 +859,7 @@ where
                     match self.decoder.try_next_reader()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(reader) => {
                             self.request_state = RequestState::None { input };
@@ -874,7 +873,7 @@ where
                     // Push the requested data to the decoder and try again
                     self.decoder.push_ranges(ranges, data)?;
                     self.request_state = RequestState::None { input };
-                    continue; // try and decode on next iteration
+                    // Will try and decode on the next iteration.
                 }
                 RequestState::Done => {
                     self.request_state = RequestState::Done;
@@ -922,7 +921,7 @@ where
                     match self.decoder.try_decode()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(batch) => {
                             self.request_state = RequestState::None { input };
@@ -941,7 +940,7 @@ where
                         // Push the requested data to the decoder
                         self.decoder.push_ranges(ranges, data)?;
                         self.request_state = RequestState::None { input };
-                        continue; // next iteration will try to decode the next batch
+                        // The next iteration will try to decode the next batch.
                     }
                     Poll::Pending => {
                         self.request_state = RequestState::Outstanding { ranges, future };

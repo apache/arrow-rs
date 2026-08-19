@@ -1354,7 +1354,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            for predicate in filter.predicates.iter_mut() {
+            for predicate in &mut filter.predicates {
                 // break early if we have ruled out all rows
                 if !plan_builder.selects_any() {
                     break;
@@ -1436,7 +1436,7 @@ struct ReaderPageIterator<T: ChunkReader> {
 
 impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     /// Return the next SerializedPageReader
-    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
+    fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
@@ -1694,7 +1694,7 @@ impl ParquetRecordBatchReader {
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
                         rec => read_records += rec,
-                    };
+                    }
                 }
             }
             RowSelectionCursor::All => {
@@ -2140,14 +2140,14 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(BooleanArray::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int32Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -2159,7 +2159,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int64Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -2171,7 +2171,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Float32Array::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
         );
     }
@@ -6020,7 +6020,7 @@ pub(crate) mod tests {
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
         let seed: u64 = random();
-        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
         use tempfile::TempDir;

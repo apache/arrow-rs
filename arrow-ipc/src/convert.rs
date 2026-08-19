@@ -170,7 +170,7 @@ impl From<crate::Field<'_>> for Field {
 /// Convert an IPC Field to Arrow Field
 fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
     let arrow_field = if let Some(dictionary) = field.dictionary() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Field::new_dict(
             field.name().unwrap_or_default(),
             get_data_type(field, true)?,
@@ -223,7 +223,7 @@ pub fn try_fb_to_schema(fb: crate::Schema) -> Result<Schema, ArrowError> {
                 ));
             }
             _ => (),
-        };
+        }
         fields.push(try_field_from(c_field)?);
     }
 
@@ -574,7 +574,7 @@ pub(crate) fn get_data_type(
                 for i in 0..children.len() {
                     fields.push(try_field_from(children.get(i))?);
                 }
-            };
+            }
 
             let fields = match union.typeIds() {
                 None => UnionFields::from_fields(fields),
@@ -615,9 +615,10 @@ pub(crate) fn build_field<'a>(
     field: &Field,
 ) -> WIPOffset<crate::Field<'a>> {
     // Optional custom metadata.
-    let mut fb_metadata = None;
-    if !field.metadata().is_empty() {
-        fb_metadata = Some(metadata_to_fb(fbb, field.metadata()));
+    let fb_metadata = if field.metadata().is_empty() {
+        None
+    } else {
+        Some(metadata_to_fb(fbb, field.metadata()))
     };
 
     let fb_field_name = fbb.create_string(field.name().as_str());
@@ -649,7 +650,7 @@ pub(crate) fn build_field<'a>(
     match field_type.children {
         None => {}
         Some(children) => field_builder.add_children(children),
-    };
+    }
     field_builder.add_type_(field_type.type_);
 
     if let Some(fb_metadata) = fb_metadata {
@@ -689,7 +690,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 UInt32 => builder.add_bitWidth(32),
                 UInt64 => builder.add_bitWidth(64),
                 _ => {}
-            };
+            }
             FBFieldType {
                 type_type: crate::Type::Int,
                 type_: builder.finish().as_union_value(),
@@ -706,7 +707,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 Int32 => builder.add_bitWidth(32),
                 Int64 => builder.add_bitWidth(64),
                 _ => {}
-            };
+            }
             FBFieldType {
                 type_type: crate::Type::Int,
                 type_: builder.finish().as_union_value(),
@@ -721,7 +722,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 Float32 => builder.add_precision(crate::Precision::SINGLE),
                 Float64 => builder.add_precision(crate::Precision::DOUBLE),
                 _ => {}
-            };
+            }
             FBFieldType {
                 type_type: crate::Type::FloatingPoint,
                 type_: builder.finish().as_union_value(),
@@ -1166,14 +1167,8 @@ mod tests {
 
     #[test]
     fn convert_schema_round_trip() {
-        let md: HashMap<String, String> = [("Key".to_string(), "value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
-        let field_md: HashMap<String, String> = [("k".to_string(), "v".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let md = HashMap::from([("Key".to_string(), "value".to_string())]);
+        let field_md = HashMap::from([("k".to_string(), "v".to_string())]);
         let schema = Schema::new_with_metadata(
             vec![
                 Field::new("uint8", DataType::UInt8, false).with_metadata(field_md),
@@ -1352,7 +1347,7 @@ mod tests {
                     ),
                     true,
                 ),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1360,7 +1355,7 @@ mod tests {
                     123,
                     true,
                 ),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),

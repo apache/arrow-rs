@@ -1590,9 +1590,8 @@ mod tests {
         {"c": "14:26:56.123"}
         "#;
 
-        let unit = match T::DATA_TYPE {
-            DataType::Time32(unit) | DataType::Time64(unit) => unit,
-            _ => unreachable!(),
+        let (DataType::Time32(unit) | DataType::Time64(unit)) = T::DATA_TYPE else {
+            unreachable!()
         };
 
         let unit_in_nanos = match unit {
@@ -2740,7 +2739,7 @@ mod tests {
         )]));
 
         let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
-        let _ = decoder.decode(r#"{"a": { "child":"#.as_bytes()).unwrap();
+        let _ = decoder.decode(br#"{"a": { "child":"#).unwrap();
         assert!(decoder.tape_decoder.has_partial_row());
         assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
         let _ = decoder.flush().unwrap_err();
@@ -3295,7 +3294,7 @@ mod tests {
                     .iter()
                     .chain(json_values[..i].iter())
                     .zip(&schema.fields)
-                    .map(|(v, f)| (f.name().to_string(), v.clone()))
+                    .map(|(v, f)| (f.name().clone(), v.clone()))
                     .collect();
                 serde_json::Value::Object(pairs)
             })

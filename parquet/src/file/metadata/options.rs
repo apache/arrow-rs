@@ -276,9 +276,8 @@ mod tests {
             .push_range(0..data.len() as u64, data.clone())
             .unwrap();
 
-        let expected = match decoder.try_decode().unwrap() {
-            DecodeResult::Data(m) => m,
-            _ => panic!("could not parse metadata"),
+        let DecodeResult::Data(expected) = decoder.try_decode().unwrap() else {
+            panic!("could not parse metadata")
         };
         let expected_schema = expected.file_metadata().schema_descr_ptr();
 
@@ -290,9 +289,8 @@ mod tests {
             .unwrap()
             .with_metadata_options(Some(options));
         decoder.push_range(0..data.len() as u64, data).unwrap();
-        let metadata = match decoder.try_decode().unwrap() {
-            DecodeResult::Data(m) => m,
-            _ => panic!("could not parse metadata"),
+        let DecodeResult::Data(metadata) = decoder.try_decode().unwrap() else {
+            panic!("could not parse metadata")
         };
 
         assert_eq!(expected, metadata);

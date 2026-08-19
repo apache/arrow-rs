@@ -90,7 +90,7 @@ unsafe fn set_upto_64bits(
     let write_shift = offset_write % 8;
 
     if len >= 64 {
-        let chunk = unsafe { (data.as_ptr().add(read_byte) as *const u64).read_unaligned() };
+        let chunk = unsafe { data.as_ptr().add(read_byte).cast::<u64>().read_unaligned() };
         if read_shift == 0 {
             if write_shift == 0 {
                 // no shifting necessary
@@ -148,7 +148,7 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
     let mut tmp: u64 = 0;
     let src = unsafe { data.as_ptr().add(offset) };
-    unsafe { std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count) };
+    unsafe { std::ptr::copy_nonoverlapping(src, std::ptr::from_mut(&mut tmp).cast::<u8>(), count) };
     tmp
 }
 
@@ -156,7 +156,7 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    let ptr = unsafe { data.as_mut_ptr().add(offset) } as *mut u64;
+    let ptr = unsafe { data.as_mut_ptr().add(offset) }.cast::<u64>();
     unsafe { ptr.write_unaligned(chunk) };
 }
 
@@ -169,7 +169,7 @@ unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
 unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
     let ptr = unsafe { data.as_mut_ptr().add(offset) };
     let chunk = chunk | (unsafe { *ptr }) as u64;
-    unsafe { (ptr as *mut u64).write_unaligned(chunk) };
+    unsafe { ptr.cast::<u64>().write_unaligned(chunk) };
 }
 
 #[cfg(test)]
@@ -393,7 +393,7 @@ mod tests {
         /// call set_bits with the given parameters and compare with the expected output
         fn verify(&self) {
             // call set_bits and compare
-            let mut actual = self.write_data.to_vec();
+            let mut actual = self.write_data.clone();
             let null_count = set_bits(
                 &mut actual,
                 &self.data,

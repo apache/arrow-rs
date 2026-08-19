@@ -328,7 +328,7 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     }
 }
 
-impl<'a, 'm, 'v, S, K, V> Extend<(K, V)> for ObjectBuilder<'a, S>
+impl<'m, 'v, S, K, V> Extend<(K, V)> for ObjectBuilder<'_, S>
 where
     S: BuilderSpecificState,
     K: AsRef<str>,

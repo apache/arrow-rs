@@ -745,7 +745,7 @@ impl Field {
     pub fn with_dict_is_ordered(mut self, dict_is_ordered: bool) -> Self {
         if matches!(self.data_type, DataType::Dictionary(_, _)) {
             self.dict_is_ordered = dict_is_ordered;
-        };
+        }
         self
     }
 

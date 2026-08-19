@@ -240,7 +240,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
-                };
+                }
 
                 byte_view.as_u128()
             }));
@@ -402,7 +402,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             self.flush_in_progress();
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
-        };
+        }
 
         let offset = self.in_progress.len() as u32;
         self.in_progress.extend_from_slice(v);
@@ -433,7 +433,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append the same value `n` times into the builder
@@ -991,7 +991,7 @@ mod tests {
 
         // All views should be identical
         let first_view = array.views()[0];
-        for view in array.views().iter() {
+        for view in array.views() {
             assert_eq!(*view, first_view);
         }
     }
