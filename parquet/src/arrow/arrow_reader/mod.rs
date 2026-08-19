@@ -338,8 +338,8 @@ impl<T> ArrowReaderBuilder<T> {
     /// combined with that method; attempting to do so returns an error from
     /// `build`.
     ///
-    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
-    /// [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::with_row_group_selections
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
     pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
         self.row_group_plan.set_row_groups(row_groups);
         self
@@ -383,8 +383,8 @@ impl<T> ArrowReaderBuilder<T> {
     /// combined with that method; attempting to do so returns an error from
     /// `build`.
     ///
-    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
-    /// [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::with_row_group_selections
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
