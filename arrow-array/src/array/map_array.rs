@@ -181,11 +181,29 @@ impl MapArray {
         Option<NullBuffer>,
         bool,
     ) {
-        let (f, ordered) = match self.data_type {
-            DataType::Map(f, ordered) => (f, ordered),
-            _ => unreachable!(),
+        let DataType::Map(f, ordered) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_offsets, self.entries, self.nulls, ordered)
+    }
+
+    /// The field that describes the entries of this map.
+    ///
+    /// The field's type is always a [`DataType::Struct`] of the key and value fields,
+    /// see [`Self::entries_fields`].
+    pub fn entries_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::Map(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Are the entries of this map sorted by key?
+    pub fn ordered(&self) -> bool {
+        match &self.data_type {
+            DataType::Map(_, ordered) => *ordered,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the offsets of this map
@@ -266,6 +284,9 @@ impl MapArray {
     }
 
     /// Returns the length for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_length(&self, i: usize) -> i32 {
         let offsets = self.value_offsets();
@@ -273,6 +294,9 @@ impl MapArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -284,6 +308,15 @@ impl MapArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> MapArrayIter<'_> {
+        MapArrayIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a MapArray {
+    type Item = Option<StructArray>;
+    type IntoIter = MapArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         MapArrayIter::new(self)
     }
 }
@@ -436,7 +469,6 @@ impl MapArray {
     /// // Or you could fill the last 2 generics manually for the key array item and value array item
     /// // let map_array = MapArray::from_vec_of_maps::<StringArray, Int32Array, &str, i32>(map, ordered);
     ///```
-    #[allow(clippy::type_complexity)]
     pub fn from_vec_of_maps<KeyArray, ValueArray, K, V>(
         input: Vec<Option<Entries<K, Option<V>>>>,
         ordered: bool,
@@ -594,9 +626,8 @@ impl std::fmt::Debug for MapArray {
 
 impl From<MapArray> for ListArray {
     fn from(value: MapArray) -> Self {
-        let field = match value.data_type() {
-            DataType::Map(field, _) => field,
-            _ => unreachable!("This should be a map type."),
+        let DataType::Map(field, _) = value.data_type() else {
+            unreachable!("This should be a map type.")
         };
         let data_type = DataType::List(field.clone());
         let builder = value.into_data().into_builder().data_type(data_type);

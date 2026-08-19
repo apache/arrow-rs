@@ -45,7 +45,7 @@ pub use spawn::SpawnedReader;
 mod store;
 
 use crate::errors::AvroError;
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
@@ -363,7 +363,6 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                                 future,
                                 next_behaviour: FetchNextBehaviour::ContinueDecoding,
                             };
-                            continue;
                         }
                         FetchNextBehaviour::ContinueDecoding => {
                             self.reader_state = ReaderState::DecodingBlock {
@@ -482,7 +481,6 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                         future,
                         next_behaviour: FetchNextBehaviour::ContinueDecoding,
                     };
-                    continue;
                 }
                 ReaderState::ReadingBatches {
                     reader,
@@ -611,7 +609,7 @@ mod tests {
     fn arrow_test_data(file: &str) -> String {
         let base =
             std::env::var("ARROW_TEST_DATA").unwrap_or_else(|_| "../testing/data".to_string());
-        format!("{}/{}", base, file)
+        format!("{base}/{file}")
     }
 
     fn get_alltypes_schema() -> SchemaRef {
@@ -1331,8 +1329,7 @@ mod tests {
             assert_eq!(
                 batch.num_rows(),
                 batch_size.min(8),
-                "Failed with batch_size={}",
-                batch_size
+                "Failed with batch_size={batch_size}"
             );
         }
     }
@@ -2023,8 +2020,7 @@ mod tests {
             Err(err) => {
                 assert!(
                     err.to_string().contains("disallowed in strict_mode"),
-                    "Expected strict_mode error, got: {}",
-                    err
+                    "Expected strict_mode error, got: {err}"
                 );
             }
         }

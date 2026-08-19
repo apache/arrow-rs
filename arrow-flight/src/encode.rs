@@ -551,7 +551,7 @@ fn prepare_field_for_flight(
                     send_dictionaries,
                 );
                 dictionary_tracker.next_dict_id();
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
@@ -1235,7 +1235,7 @@ mod tests {
 
         let arr1 = builder.finish();
 
-        let type_id_buffer = [0].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(0).collect::<ScalarBuffer<i8>>();
         let arr1 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1253,7 +1253,7 @@ mod tests {
         let arr2 = Arc::new(builder.finish());
         let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
 
-        let type_id_buffer = [1].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(1).collect::<ScalarBuffer<i8>>();
         let arr2 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1266,7 +1266,7 @@ mod tests {
         )
         .unwrap();
 
-        let type_id_buffer = [2].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(2).collect::<ScalarBuffer<i8>>();
         let arr3 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1409,7 +1409,7 @@ mod tests {
 
         let arr1 = builder.finish();
 
-        let type_id_buffer = [0].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(0).collect::<ScalarBuffer<i8>>();
         let arr1 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1427,7 +1427,7 @@ mod tests {
         let arr2 = Arc::new(builder.finish());
         let arr2 = StructArray::new(struct_fields.clone().into(), vec![arr2], None);
 
-        let type_id_buffer = [1].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(1).collect::<ScalarBuffer<i8>>();
         let arr2 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,
@@ -1440,7 +1440,7 @@ mod tests {
         )
         .unwrap();
 
-        let type_id_buffer = [2].into_iter().collect::<ScalarBuffer<i8>>();
+        let type_id_buffer = std::iter::once(2).collect::<ScalarBuffer<i8>>();
         let arr3 = UnionArray::try_new(
             union_fields.clone(),
             type_id_buffer,

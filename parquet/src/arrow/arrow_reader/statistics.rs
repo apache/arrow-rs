@@ -1788,13 +1788,12 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
             .map(|s| {
-                s.and_then(|s| {
-                    if self.missing_null_counts_as_zero {
-                        Some(s.null_count_opt().unwrap_or(0))
-                    } else {
-                        s.null_count_opt()
-                    }
-                })
+                let s = s?;
+                if self.missing_null_counts_as_zero {
+                    Some(s.null_count_opt().unwrap_or(0))
+                } else {
+                    s.null_count_opt()
+                }
             });
         Ok(UInt64Array::from_iter(null_counts))
     }
@@ -1817,8 +1816,30 @@ impl<'a> StatisticsConverter<'a> {
         let nan_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
-            .map(|s| s.and_then(|s| s.nan_count_opt()));
+            .map(|s| s?.nan_count_opt());
         Ok(UInt64Array::from_iter(nan_counts))
+    }
+
+    /// Extract the distinct counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_distinct_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
+        };
+
+        let distinct_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s?.distinct_count_opt());
+        Ok(UInt64Array::from_iter(distinct_counts))
     }
 
     /// Extract the minimum values from Data Page statistics.
