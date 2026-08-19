@@ -448,9 +448,8 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Note the underlying writer is not flushed with this call.
     /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
-        let in_progress = match self.in_progress.take() {
-            Some(in_progress) => in_progress,
-            None => return Ok(()),
+        let Some(in_progress) = self.in_progress.take() else {
+            return Ok(());
         };
 
         let mut row_group_writer = self.writer.next_row_group()?;
@@ -818,7 +817,13 @@ impl ArrowPageWriter {
         self.page_encryptor.as_mut()
     }
 
+    // Mirrors the signature of the encryption-enabled version above, so that the
+    // callers do not need a `cfg` of their own.
     #[cfg(not(feature = "encryption"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "mirrors the encryption-enabled signature"
+    )]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
@@ -846,7 +851,7 @@ impl PageWriter for ArrowPageWriter {
                     let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
                     page_header.write_thrift(&mut protocol)?;
                 }
-            };
+            }
 
             Bytes::from(header)
         };
@@ -1368,7 +1373,7 @@ impl ArrowColumnWriterFactory {
     ) -> Result<Box<ArrowPageWriter>> {
         let column_path = column_descriptor.path().string();
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &self.file_encryptor,
+            self.file_encryptor.as_ref(),
             self.row_group_index,
             column_index,
             &column_path,
@@ -1691,7 +1696,7 @@ fn write_leaf(
                         let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices.iter().copied())
                     }
-                    _ => {
+                    IntervalUnit::MonthDayNano => {
                         return Err(ParquetError::NYI(format!(
                             "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
                         )));
@@ -2221,16 +2226,12 @@ mod tests {
 
     #[test]
     fn arrow_writer_non_null() {
-        // define schema
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-
-        // create some data
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
-        // build a record batch
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        roundtrip(batch, Some(SMALL_SIZE / 2));
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2261,15 +2262,11 @@ mod tests {
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
+        assert_eq!(a.null_count(), 1);
 
-        // build a record batch
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        assert_eq!(batch.column(0).null_count(), 1);
-
-        // This test fails if the max row group size is less than the batch's length
-        // see https://github.com/apache/arrow-rs/issues/518
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2299,15 +2296,11 @@ mod tests {
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
+        assert_eq!(a.null_count(), 0);
 
-        // build a record batch
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        // This test fails if the max row group size is less than the batch's length
-        // see https://github.com/apache/arrow-rs/issues/518
-        assert_eq!(batch.column(0).null_count(), 0);
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2327,12 +2320,11 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
             Some(vec![true, true, false, true, true].into()),
         );
+        assert_eq!(a.null_count(), 1);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        assert_eq!(batch.column(0).null_count(), 1);
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2352,12 +2344,11 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
             None,
         );
+        assert_eq!(a.null_count(), 0);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        assert_eq!(batch.column(0).null_count(), 0);
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2377,10 +2368,11 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
             None,
         );
+        assert_eq!(a.null_count(), 0);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2400,12 +2392,11 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
             Some(vec![true, true, false, true, true].into()),
         );
+        assert_eq!(a.null_count(), 1);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
-
-        assert_eq!(batch.column(0).null_count(), 1);
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(a))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
@@ -2441,18 +2432,15 @@ mod tests {
             Arc::new(struct_array),
             Some(vec![true, false, true].into()),
         );
+        assert_eq!(list_view.null_count(), 1);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_view)]).unwrap();
-
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(list_view))
+            .with_schema(Arc::new(schema))
+            .run();
     }
 
     #[test]
     fn arrow_writer_binary() {
-        let string_field = Field::new("a", DataType::Utf8, false);
-        let binary_field = Field::new("b", DataType::Binary, false);
-        let schema = Schema::new(vec![string_field, binary_field]);
-
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
         let raw_binary_values = [
             b"foo".to_vec(),
@@ -2467,22 +2455,15 @@ mod tests {
 
         let string_values = StringArray::from(raw_string_values.clone());
         let binary_values = BinaryArray::from(raw_binary_value_refs);
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(string_values), Arc::new(binary_values)],
-        )
-        .unwrap();
+        assert_eq!(string_values.null_count(), 0);
+        assert_eq!(binary_values.null_count(), 0);
 
-        roundtrip(batch, Some(SMALL_SIZE / 2));
+        RoundTripTest::new(Arc::new(string_values)).run();
+        RoundTripTest::new(Arc::new(binary_values)).run();
     }
 
     #[test]
     fn arrow_writer_binary_view() {
-        let string_field = Field::new("a", DataType::Utf8View, false);
-        let binary_field = Field::new("b", DataType::BinaryView, false);
-        let nullable_string_field = Field::new("a", DataType::Utf8View, true);
-        let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
-
         let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
         let raw_binary_values = vec![
             b"foo".to_vec(),
@@ -2496,26 +2477,14 @@ mod tests {
         let string_view_values = StringViewArray::from(raw_string_values);
         let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
         let nullable_string_view_values = StringViewArray::from(nullable_string_values);
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(string_view_values),
-                Arc::new(binary_view_values),
-                Arc::new(nullable_string_view_values),
-            ],
-        )
-        .unwrap();
 
-        roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
-        roundtrip(batch, None);
+        RoundTripTest::new(Arc::new(string_view_values)).run();
+        RoundTripTest::new(Arc::new(binary_view_values)).run();
+        RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
     }
 
     #[test]
     fn arrow_writer_binary_view_long_value() {
-        let string_field = Field::new("a", DataType::Utf8View, false);
-        let binary_field = Field::new("b", DataType::BinaryView, false);
-        let schema = Schema::new(vec![string_field, binary_field]);
-
         // There is special case validation for long values (greater than 128)
         // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
         // trigger the long-string UTF-8 validation branch in the plain decoder.
@@ -2533,21 +2502,6 @@ mod tests {
         RoundTripTest::new(Arc::clone(&binary_view_values))
             .with_nullable(false)
             .run();
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![string_view_values, binary_view_values],
-        )
-        .unwrap();
-
-        // Disable dictionary to exercise plain encoding paths in the reader.
-        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-            let props = WriterProperties::builder()
-                .set_writer_version(version)
-                .set_dictionary_enabled(false)
-                .build();
-            roundtrip_opts(&batch, props);
-        }
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -3424,9 +3378,8 @@ mod tests {
             for rg_idx in col_indexes {
                 for idx in rg_idx {
                     assert!(idx.nan_counts().is_some());
-                    let float_idx = match idx {
-                        ColumnIndexMetaData::DOUBLE(idx) => idx,
-                        _ => panic!("expected double statistics"),
+                    let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
+                        panic!("expected double statistics")
                     };
                     for i in 0..idx.num_pages() as usize {
                         assert_eq!(float_idx.nan_count(i), Some(10));
@@ -3503,9 +3456,8 @@ mod tests {
         assert_eq!(col_idx.num_pages(), 4);
 
         // test each page
-        let float_idx = match col_idx {
-            ColumnIndexMetaData::DOUBLE(idx) => idx,
-            _ => panic!("expected double statistics"),
+        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+            panic!("expected double statistics")
         };
 
         assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));
@@ -4102,7 +4054,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4355,7 +4307,7 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
@@ -4466,7 +4418,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
@@ -4496,7 +4448,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ];
-        let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt32Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4542,7 +4494,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ];
-        let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt64Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4745,7 +4697,7 @@ mod tests {
                     .unwrap()
                     .values()
                     .iter()
-                    .cloned()
+                    .copied()
             })
             .collect();
 
@@ -5332,8 +5284,8 @@ mod tests {
         // check that min/max were actually written to the page
         assert!(stats.is_max_value_exact.unwrap());
         assert!(stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Blart Versenwald III");
+        assert_eq!(stats.min_value.unwrap(), b"Andrew Lamb");
     }
 
     #[test]
@@ -5380,8 +5332,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
 
         // check second page now
         let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
@@ -5393,8 +5345,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
     }
 
     #[test]
@@ -5735,7 +5687,7 @@ mod tests {
 
         let first_array = StringArray::from(
             (0..10)
-                .map(|i| format!("{:0>100}", i))
+                .map(|i| format!("{i:0>100}"))
                 .collect::<Vec<String>>(),
         );
         let first_batch =

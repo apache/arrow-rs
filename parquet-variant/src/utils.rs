@@ -138,7 +138,6 @@ where
 }
 
 /// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
-#[allow(unused)]
 pub(crate) const fn expect_size_of<T>(expected: usize) {
     let size = std::mem::size_of::<T>();
     if size != expected {
@@ -257,21 +256,15 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         }
     }
 
-    let end = match end {
-        Some(e) => e,
-        None => {
-            return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
-        }
+    let Some(end) = end else {
+        return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
     };
 
     let element = if let Some(inner) = unescaped
         .strip_prefix('\'')
         .and_then(|s| s.strip_suffix('\''))
-        .or_else(|| {
-            unescaped
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-        }) {
+        .or_else(|| unescaped.strip_prefix('"')?.strip_suffix('"'))
+    {
         // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
         VariantPathElement::field(inner.to_string())
     } else {

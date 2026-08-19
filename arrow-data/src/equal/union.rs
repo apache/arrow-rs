@@ -20,7 +20,7 @@ use arrow_schema::{DataType, UnionFields, UnionMode};
 
 use super::equal_range;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn equal_dense(
     lhs: &ArrayData,
     rhs: &ArrayData,

@@ -113,7 +113,7 @@ impl BooleanBuilder {
         match v {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Appends a slice of type `T` into the builder

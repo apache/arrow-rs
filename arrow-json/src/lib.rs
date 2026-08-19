@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(invalid_from_utf8)]
+    #[expect(invalid_from_utf8)]
     fn test_json_roundtrip_binary() {
         let not_utf8: &[u8] = b"Not UTF8 \xa0\xa1!";
         assert!(str::from_utf8(not_utf8).is_err());

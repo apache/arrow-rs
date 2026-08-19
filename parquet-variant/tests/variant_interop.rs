@@ -508,10 +508,7 @@ fn test_validation_workflow(metadata: &[u8], value: &[u8]) {
     // Step 1: Try unvalidated construction - should not panic
     let variant_result = std::panic::catch_unwind(|| Variant::new(metadata, value));
 
-    let variant = match variant_result {
-        Ok(v) => v,
-        Err(_) => return, // Construction failed, which is acceptable for corrupted data
-    };
+    let Ok(variant) = variant_result else { return };
 
     // Step 2: Try validation
     let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());
@@ -606,10 +603,7 @@ fn test_validation_workflow_simple(metadata: &[u8], value: &[u8]) {
     // Step 1: Try unvalidated construction - should not panic
     let variant_result = std::panic::catch_unwind(|| Variant::new(metadata, value));
 
-    let variant = match variant_result {
-        Ok(v) => v,
-        Err(_) => return, // Construction failed, which is acceptable for corrupted data
-    };
+    let Ok(variant) = variant_result else { return };
 
     // Step 2: Try validation
     let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());

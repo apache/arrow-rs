@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(decoder.read(&mut output, 3).unwrap(), 3);
 
         let mut valid = vec![false, false, true, true, false, true];
-        let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+        let valid_buffer = Buffer::from_iter(valid.iter().copied());
         output
             .pad_nulls(0, 3, valid.len(), valid_buffer.as_slice())
             .unwrap();
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(decoder.read(&mut output, 4).unwrap(), 4);
 
         valid.extend_from_slice(&[false, false, true, true, false, true, true, false]);
-        let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+        let valid_buffer = Buffer::from_iter(valid.iter().copied());
         output.pad_nulls(6, 4, 8, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(decoder.skip_values(4).unwrap(), 0);
 
         let valid = [true, true, true, true, true];
-        let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+        let valid_buffer = Buffer::from_iter(valid.iter().copied());
         output.pad_nulls(0, 5, 5, valid_buffer.as_slice()).unwrap();
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
