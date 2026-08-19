@@ -555,8 +555,8 @@ impl RowGroupReaderBuilder {
                 )
                 .with_selection(plan_builder.selection())
                 // Cached output columns reuse these predicate-stage chunks. Expand their
-                // selection to cache batch boundaries because `CachedArrayReader` may fetch
-                // a full batch around the last selected row of a `MaskCursor` chunk.
+                // selection to cache batch boundaries so a cache miss can safely fetch a
+                // complete batch from the retained sparse column data.
                 .with_cache_projection(Some(filter_info.cache_projection()))
                 .with_column_chunks(column_chunks)
                 .build();

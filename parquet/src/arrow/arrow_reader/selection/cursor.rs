@@ -177,10 +177,10 @@ impl SelectorsCursor {
 /// ```
 ///
 /// The first chunk decodes `[0, 1)` with mask `1`. The next chunk skips to row
-/// 11 and decodes `[11, 12)` with mask `1`. Trimming trailing skipped rows from
-/// each chunk prevents a fixed-size cached read from extending into an unloaded
-/// page. [`ParquetRecordBatchReader`] still accumulates both chunks and applies
-/// the combined mask `11` once.
+/// 11 and decodes `[11, 12)` with mask `1`. When loaded ranges are present,
+/// every returned chunk ends at a selected row and never includes trailing
+/// unselected rows. [`ParquetRecordBatchReader`] still accumulates both chunks
+/// and applies the combined mask `11` once.
 ///
 /// [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 #[derive(Debug)]
@@ -255,11 +255,9 @@ impl MaskCursor {
     }
 
     /// Returns the next non-empty mask chunk without crossing an unloaded row range.
-    /// When loaded ranges are present, the chunk ends immediately after its last
-    /// selected row, leaving trailing unselected rows for the next call's initial skip.
-    /// `CachedArrayReader` can fetch the full cache batch containing that selected
-    /// row; predicate fetch expands cached columns to batch boundaries so this read
-    /// stays within fetched data even when the batch crosses the loaded-range end.
+    /// When loaded ranges are present, every returned chunk ends immediately after a
+    /// selected row and therefore never contains trailing unselected rows. Those rows
+    /// remain for the next call's initial skip.
     ///
     /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
     /// skips before constructing this cursor. Callers therefore only invoke
