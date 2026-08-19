@@ -1740,4 +1740,14 @@ mod tests {
         assert_eq!(r.len(), 0);
         assert_eq!(r.true_count(), 0);
     }
+
+    #[test]
+    fn test_take_n_true_unique_buffer() {
+        // unique buffer ownership -> mutable in-place path.
+        let arr = BooleanArray::from(vec![true, false, true, true, false, true, true]);
+        let result = arr.take_n_true(3);
+        assert_eq!(result.true_count(), 3);
+        let values: Vec<bool> = (0..result.len()).map(|i| result.value(i)).collect();
+        assert_eq!(values, vec![true, false, true, true, false, false, false]);
+    }
 }

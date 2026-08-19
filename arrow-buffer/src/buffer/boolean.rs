@@ -610,53 +610,6 @@ impl BooleanBuffer {
         }
     }
 
-    /// Try to convert self into a [`BooleanBufferBuilder`] without copying.
-    ///
-    /// Reuses the underlying [`Buffer`] allocation if
-    /// 1. it is not shared (no other references to it exist) and
-    /// 2. the bit offset is zero
-    ///
-    /// Returns `Err(self)` if the allocation cannot be reused.
-    ///
-    /// # Example
-    /// ```
-    /// # use arrow_buffer::BooleanBuffer;
-    /// let buffer = BooleanBuffer::from(vec![true, false, true]);
-    /// // The buffer is not shared, so the builder reuses its allocation
-    /// let mut builder = buffer.try_into_builder().expect("buffer was not shared");
-    /// builder.append(false);
-    /// assert_eq!(builder.finish(), BooleanBuffer::from(vec![true, false, true, false]));
-    ///
-    /// // Conversion fails if the buffer is shared
-    /// let buffer = BooleanBuffer::from(vec![true, false, true]);
-    /// let shared = buffer.clone();
-    /// let buffer = buffer.try_into_builder().expect_err("buffer was shared");
-    /// # assert_eq!(buffer, shared);
-    /// ```
-    pub fn try_into_builder(self) -> Result<BooleanBufferBuilder, Self> {
-        if self.bit_offset != 0 {
-            return Err(self);
-        }
-
-        let Self {
-            buffer,
-            bit_offset,
-            bit_len,
-        } = self;
-
-        match buffer.into_mutable() {
-            Ok(mutable_buffer) => Ok(BooleanBufferBuilder::new_from_buffer(
-                mutable_buffer,
-                bit_len,
-            )),
-            Err(buffer) => Err(Self {
-                buffer,
-                bit_offset,
-                bit_len,
-            }),
-        }
-    }
-
     /// Returns an iterator over the bits in this [`BooleanBuffer`]
     pub fn iter(&self) -> BitIterator<'_> {
         self.into_iter()
