@@ -53,6 +53,7 @@ pub(crate) mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
 use crate::file::metadata::RowGroupMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
@@ -165,6 +166,20 @@ pub trait RowGroups {
 
     /// Returns the parquet metadata
     fn metadata(&self) -> &ParquetMetaData;
+
+    /// Returns the [`OffsetIndexMetaData`] for the row group backing this
+    /// collection, if page level information is available.
+    ///
+    /// Implementations that hold only a subset of a column chunk's pages (see
+    /// [`RowSelection::scan_ranges`]) should return the offset index they pruned
+    /// with, so that readers can confine mask based decoding to loaded pages.
+    ///
+    /// Defaults to `None`, meaning no page level information is available.
+    ///
+    /// [`RowSelection::scan_ranges`]: crate::arrow::arrow_reader::RowSelection::scan_ranges
+    fn offset_index(&self) -> Option<&[OffsetIndexMetaData]> {
+        None
+    }
 }
 
 impl RowGroups for Arc<dyn FileReader> {

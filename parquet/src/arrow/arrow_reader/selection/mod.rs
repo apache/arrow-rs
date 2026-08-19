@@ -29,7 +29,8 @@
 //! * `ranges`: mapping a [`RowSelection`] onto page and batch ranges
 //! * `cursor`: iterating a [`RowSelection`] while reading
 
-use crate::file::page_index::offset_index::PageLocation;
+use crate::arrow::ProjectionMask;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
@@ -634,6 +635,40 @@ impl RowSelection {
             }
             RowSelectionInner::Mask(m) => m.mask().len() - m.count(),
         }
+    }
+
+    /// Row ranges whose backing pages are loaded for every projected column,
+    /// assuming the pages fetched were those returned by [`Self::scan_ranges`].
+    ///
+    /// Reading a column chunk that holds only a subset of pages with
+    /// [`RowSelectionPolicy::Mask`] requires these ranges, so that a decoded
+    /// chunk never crosses a page that was not loaded.
+    ///
+    /// The result is conservative: a caller that loaded *more* pages than
+    /// `scan_ranges` selects (for example after expanding to batch boundaries)
+    /// still gets ranges that are a subset of what it actually loaded.
+    pub(crate) fn loaded_row_ranges(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: &[OffsetIndexMetaData],
+        total_rows: usize,
+    ) -> Option<LoadedRowRanges> {
+        offset_index
+            .iter()
+            .enumerate()
+            .filter_map(|(leaf_idx, column)| {
+                let pages = column.page_locations();
+                (projection.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
+                    RowSelection::from_consecutive_ranges(
+                        self.row_ranges_for_selected_pages(pages, total_rows)
+                            .into_iter(),
+                        total_rows,
+                    )
+                })
+            })
+            .reduce(|loaded, column| loaded.intersection(&column))
+            .filter(|loaded| loaded.skipped_row_count() != 0)
+            .map(LoadedRowRanges::from_selection)
     }
 
     /// Expands the selection to align with batch boundaries.

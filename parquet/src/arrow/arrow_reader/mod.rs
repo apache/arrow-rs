@@ -59,6 +59,8 @@ mod filter;
 pub mod metrics;
 mod read_plan;
 pub(crate) mod selection;
+#[cfg(test)]
+mod sparse_row_group_tests;
 pub mod statistics;
 
 /// Default batch size for reading parquet files
@@ -1615,6 +1617,21 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         selection: Option<RowSelection>,
     ) -> Result<Self> {
+        // A `RowGroups` may hold only the pages its `RowSelection` touches (see
+        // `RowSelection::scan_ranges`). Mask based decoding must not cross a page
+        // that was never loaded, so when the row group surfaces the offset index it
+        // pruned with, derive the row ranges whose pages are loaded.
+        //
+        // The derivation is conservative: a caller that loaded more pages than the
+        // selection touches still gets a subset of what it actually loaded.
+        let loaded_row_ranges = row_groups.offset_index().and_then(|offset_index| {
+            selection.as_ref()?.loaded_row_ranges(
+                &ProjectionMask::all(),
+                offset_index,
+                row_groups.num_rows(),
+            )
+        });
+
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
@@ -1624,6 +1641,7 @@ impl ParquetRecordBatchReader {
 
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
+            .with_loaded_row_ranges(loaded_row_ranges)
             .build();
 
         Ok(Self {
