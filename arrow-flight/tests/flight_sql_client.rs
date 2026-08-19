@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![expect(clippy::missing_panics_doc, reason = "tests are free to panic")]
+
 mod common;
 
 use crate::common::fixture::TestFixture;

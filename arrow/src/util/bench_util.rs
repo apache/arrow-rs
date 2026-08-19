@@ -17,6 +17,11 @@
 
 //! Utils to make benchmarking easier
 
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "benchmark helpers are free to panic"
+)]
+
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;

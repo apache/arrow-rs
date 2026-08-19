@@ -17,6 +17,8 @@
 
 //! Utils to make testing easier
 
+#![expect(clippy::missing_panics_doc, reason = "test helpers are free to panic")]
+
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::{env, error::Error, fs, io::Write, path::PathBuf};
 
