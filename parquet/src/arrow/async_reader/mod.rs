@@ -657,9 +657,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// error from [`Self::build`].
     ///
     /// See [`ParquetPushDecoderBuilder::with_row_group_selections`] for the
-    /// full semantics (duplicate and short selections, offset/limit
-    /// interaction) and a worked example; this builder forwards its
-    /// configuration to the push decoder unchanged.
+    /// full semantics and a worked example. This builder supports the same API
+    /// because the async stream is implemented using the push decoder; the
+    /// synchronous reader does not support row-group-local selections.
     ///
     /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
     pub fn with_row_group_selections(
