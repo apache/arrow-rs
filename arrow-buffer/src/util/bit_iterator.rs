@@ -391,11 +391,11 @@ impl Iterator for BitIndexU32Iterator<'_> {
 /// As such this is the next best option
 ///
 /// [not possible]: https://github.com/rust-lang/rust/issues/69595
-#[inline]
 /// # Panics
 ///
 /// Panics if `null_count > len`, or if `nulls` is `None` while
 /// `0 < null_count < len`.
+#[inline]
 pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
     len: usize,
     offset: usize,

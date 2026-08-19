@@ -357,11 +357,12 @@ impl FFI_ArrowArray {
     }
 
     /// Returns the child at the provided index
-    #[inline]
+    ///
     /// # Panics
     ///
     /// Panics if there are no children, if `index >= self.num_children()`,
     /// or if the child pointer is null.
+    #[inline]
     pub fn child(&self, index: usize) -> &FFI_ArrowArray {
         assert!(!self.children.is_null());
         assert!(index < self.num_children());
