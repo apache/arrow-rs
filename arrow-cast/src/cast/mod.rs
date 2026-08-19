@@ -395,17 +395,19 @@ where
 
         match (scale_factor, cast_options.safe) {
             (Some(scale_factor), true) => array.unary_opt::<_, D>(|v| {
-                v.div_checked(scale_factor)
+                let v = v
+                    .div_checked(scale_factor)
                     .ok()
-                    .and_then(integer_to_decimal_native::<_, M>)
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                    .and_then(integer_to_decimal_native::<_, M>)?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             (Some(scale_factor), false) => array.try_unary::<_, D, _>(|v| {
-                v.div_checked(scale_factor)
+                let v = v
+                    .div_checked(scale_factor)
                     .ok()
                     .and_then(integer_to_decimal_native::<_, M>)
-                    .ok_or_else(|| overflow(v))
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                    .ok_or_else(|| overflow(v))?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
             // A scale factor that overflows the source type is larger than all
             // source values, so integer division produces zero.
@@ -425,15 +427,15 @@ where
 
         match cast_options.safe {
             true => array.unary_opt::<_, D>(|v| {
-                integer_to_decimal_native::<_, M>(v)
-                    .and_then(|v| v.mul_checked(scale_factor).ok())
-                    .and_then(|v| (D::is_valid_decimal_precision(v, precision)).then_some(v))
+                let v = integer_to_decimal_native::<_, M>(v)
+                    .and_then(|v| v.mul_checked(scale_factor).ok())?;
+                (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                integer_to_decimal_native::<_, M>(v)
+                let v = integer_to_decimal_native::<_, M>(v)
                     .ok_or_else(|| overflow(v))
-                    .and_then(|v| v.mul_checked(scale_factor))
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                    .and_then(|v| v.mul_checked(scale_factor))?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
         }
     };
