@@ -270,11 +270,17 @@ where
     }
     let len = a.len();
 
-    if a.null_count() == 0 && b.null_count() == 0 {
+    // Physical nulls are not the whole story: a `RunArray` or `DictionaryArray` can have
+    // logical nulls in its values while its own null buffer is absent. `is_nullable` covers
+    // those, but is allowed to be conservative, so the union of the logical nulls can still
+    // be empty.
+    if !a.is_nullable() && !b.is_nullable() {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let nulls =
-            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
+        let Some(nulls) = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+        else {
+            return try_binary_no_nulls(len, a, b, op);
+        };
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -429,6 +435,22 @@ mod tests {
             result,
             Float64Array::from(vec![None, Some(7.0), None, Some(7.0)])
         );
+    }
+
+    #[test]
+    fn test_try_binary_run_array_logical_nulls() {
+        // A `RunArray` has no null buffer of its own, so its logical nulls live in the values.
+        let run_ends = Int32Array::from(vec![1, 2, 3]);
+        let values = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let run = RunArray::<Int32Type>::try_new(&run_ends, &values).expect("valid run array");
+        assert_eq!(run.null_count(), 0);
+        assert_eq!(run.logical_null_count(), 1);
+
+        let typed = run.downcast::<Int32Array>().expect("Int32 values");
+        let other = Int32Array::from(vec![1, 1, 1]);
+        let result =
+            try_binary::<_, _, _, Int32Type>(typed, &other, |a, b| Ok(a + b)).expect("no overflow");
+        assert_eq!(result, Int32Array::from(vec![Some(11), None, Some(31)]));
     }
 
     #[test]
