@@ -42,9 +42,8 @@ impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
         data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let values_field = match data_type {
-            DataType::RunEndEncoded(_, v) => v,
-            _ => unreachable!(),
+        let DataType::RunEndEncoded(_, values_field) = data_type else {
+            unreachable!()
         };
         let decoder = ctx.make_decoder(
             values_field.data_type(),

@@ -738,7 +738,7 @@ impl<'a> MutableArrayData<'a> {
     /// # Errors
     /// Returns an error if offset arithmetic overflows the underlying integer type.
     ///
-    /// # Panic
+    /// # Panics
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
@@ -762,7 +762,7 @@ impl<'a> MutableArrayData<'a> {
 
     /// Extends the in progress array with a region of the input arrays.
     ///
-    /// # Panic
+    /// # Panics
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays,
     /// `end` > the length of the `index`th array,
@@ -789,7 +789,9 @@ impl<'a> MutableArrayData<'a> {
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
-        nulls.resize(bit_len, 0);
+        nulls
+            .try_resize(bit_len, 0)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
         (self.extend_nulls)(&mut self.data, len)?;
         Ok(())

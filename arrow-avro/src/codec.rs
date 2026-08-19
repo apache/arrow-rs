@@ -1089,8 +1089,7 @@ fn parse_decimal_attributes(
     }
     if precision > DECIMAL256_MAX_PRECISION as usize {
         return Err(ArrowError::ParseError(format!(
-            "Decimal precision {precision} exceeds maximum supported by Arrow ({})",
-            DECIMAL256_MAX_PRECISION
+            "Decimal precision {precision} exceeds maximum supported by Arrow ({DECIMAL256_MAX_PRECISION})"
         )));
     }
     if let Some(sz) = size {
@@ -1200,12 +1199,12 @@ fn union_branch_name(dt: &AvroDataType) -> String {
     if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
         if name.contains('.') {
             // Full name
-            return name.to_string();
+            return name.clone();
         }
         if let Some(ns) = dt.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
             return format!("{ns}.{name}");
         }
-        return name.to_string();
+        return name.clone();
     }
     dt.codec.union_field_name()
 }
@@ -1555,7 +1554,7 @@ impl<'a> Maker<'a> {
                                 return Err(ArrowError::ParseError(format!(
                                     "Invalid fixed size for Duration: {size}, must be 12"
                                 )));
-                            };
+                            }
                             AvroDataType {
                                 nullability: None,
                                 metadata,
@@ -1963,7 +1962,7 @@ impl<'a> Maker<'a> {
                             first_resolution = Some((reader_index, dt));
                         }
                     }
-                };
+                }
             }
         }
         first_resolution
@@ -2243,7 +2242,7 @@ impl<'a> Maker<'a> {
                     Entry::Vacant(e) => {
                         e.insert(idx);
                     }
-                    _ => {}
+                    Entry::Occupied(_) => {}
                 }
             }
         }

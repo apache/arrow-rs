@@ -372,7 +372,7 @@ fn sort_bytes<T: ByteArrayType>(
             let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
             let prefix = if slice.len() >= 4 {
-                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
+                let raw = std::ptr::read_unaligned(slice.as_ptr().cast::<u32>());
                 u32::from_be(raw)
             } else if slice.is_empty() {
                 // Handle empty slice case to avoid shift overflow
@@ -956,7 +956,7 @@ pub fn lexsort_to_indices(
         return Err(ArrowError::ComputeError(
             "lexical sort columns have different row counts".to_string(),
         ));
-    };
+    }
 
     let len = limit.unwrap_or(row_count).min(row_count);
 
@@ -1131,7 +1131,7 @@ impl LexicographicalComparator {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -1167,7 +1167,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }

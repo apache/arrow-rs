@@ -193,7 +193,7 @@ impl Field {
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
                         },
-                        _ => unimplemented!("Unsupported definition encountered"),
+                        Type::Option(_) => unimplemented!("Unsupported definition encountered"),
                     }
                 }
             },
@@ -812,9 +812,8 @@ mod test {
     fn extract_fields(input: proc_macro2::TokenStream) -> Vec<syn::Field> {
         let input: DeriveInput = syn::parse2(input).unwrap();
 
-        let fields = match input.data {
-            Data::Struct(DataStruct { fields, .. }) => fields,
-            _ => panic!("Input must be a struct"),
+        let Data::Struct(DataStruct { fields, .. }) = input.data else {
+            panic!("Input must be a struct")
         };
 
         fields.iter().map(|field| field.to_owned()).collect()
