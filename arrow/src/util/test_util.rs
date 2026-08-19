@@ -16,6 +16,9 @@
 // under the License.
 
 //! Utils to make testing easier
+//!
+//! These helpers are meant for tests, so they panic on invalid input instead of
+//! reporting it. The individual functions do not repeat that.
 
 #![expect(clippy::missing_panics_doc, reason = "test helpers are free to panic")]
 

@@ -16,6 +16,9 @@
 // under the License.
 
 //! Utils to make benchmarking easier
+//!
+//! These helpers are meant for benchmarks, so they panic on invalid input
+//! instead of reporting it. The individual functions do not repeat that.
 
 #![expect(
     clippy::missing_panics_doc,
