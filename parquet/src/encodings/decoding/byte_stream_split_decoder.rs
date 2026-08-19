@@ -44,9 +44,6 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
     }
 }
 
-// Here we assume src contains the full data (which it must, since we're
-// can only know where to split the streams once all data is collected),
-// but dst can be just a slice starting from the given index.
 // We iterate over the output bytes and fill them in from their strided
 // input byte locations.
 fn join_streams_const<const TYPE_SIZE: usize>(src: &[u8], dst: &mut [u8], stride: usize) {
@@ -76,6 +73,10 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     }
 
     fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
+        // We assume self.encoded_bytes contains the full data 
+        // (which it must, since we can only know where to split the streams once all data is collected),
+        // but buffer can just be sliced starting from the given index.
+
         let total_remaining_values = self.values_left();
         let num_values = buffer.len().min(total_remaining_values);
         let buffer = &mut buffer[..num_values];
@@ -83,6 +84,7 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         // SAFETY: i/f32 and i/f64 has no constraints on their internal representation, so we can modify it as we want
         let dst = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
         let type_size = T::get_type_size();
+
         let stride = self.encoded_bytes.len() / type_size;
         let src = &self.encoded_bytes[self.values_decoded..];
         match type_size {
