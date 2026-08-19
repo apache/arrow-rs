@@ -339,6 +339,10 @@ impl Buffer {
     /// Returns a slice of this buffer starting at a certain bit offset.
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len` is larger than the length of this buffer in bits
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
         if offset.is_multiple_of(8) {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
@@ -434,7 +438,7 @@ impl Buffer {
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
-            _ => return Err(self), // Custom allocation
+            Deallocation::Custom(..) => return Err(self),
         };
 
         if self.ptr != self.data.as_ptr() {
@@ -453,7 +457,7 @@ impl Buffer {
 
         Arc::try_unwrap(self.data)
             .map(|bytes| unsafe {
-                let ptr = bytes.ptr().as_ptr() as _;
+                let ptr = bytes.ptr().as_ptr().cast();
                 std::mem::forget(bytes);
                 // Safety
                 // Verified that bytes layout matches that of Vec
@@ -902,7 +906,7 @@ mod tests {
         let mut vector = vec![1_i32, 2, 3, 4, 5];
         let buffer = unsafe {
             Buffer::from_custom_allocation(
-                NonNull::new_unchecked(vector.as_mut_ptr() as *mut u8),
+                NonNull::new_unchecked(vector.as_mut_ptr().cast::<u8>()),
                 vector.len() * std::mem::size_of::<i32>(),
                 Arc::new(vector),
             )

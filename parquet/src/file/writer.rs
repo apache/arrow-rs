@@ -281,7 +281,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                     write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
                 }
                 BloomFilterPosition::End => (),
-            };
+            }
             row_groups.push(metadata);
             Ok(())
         };
@@ -926,7 +926,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         page_writer: SerializedPageWriter<'b, W>,
     ) -> Result<SerializedPageWriter<'b, W>> {
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &context.file_encryptor,
+            context.file_encryptor.as_ref(),
             context.row_group_index,
             context.column_index,
             &column.path().string(),
@@ -1054,7 +1054,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 }
 
 #[cfg(feature = "encryption")]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+impl<W: Write> SerializedPageWriter<'_, W> {
     /// Set the encryptor to use to encrypt page data
     fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
         self.page_encryptor = page_encryptor;
@@ -1072,8 +1072,14 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+// These mirror the signatures of the encryption-enabled versions above, so that the
+// callers do not need a `cfg` of their own.
 #[cfg(not(feature = "encryption"))]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "mirrors the encryption-enabled signatures"
+)]
+impl<W: Write> SerializedPageWriter<'_, W> {
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
@@ -1388,7 +1394,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -1431,7 +1436,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -2600,7 +2604,7 @@ mod tests {
             match iter.next() {
                 Some(row) => check_row(row),
                 None => break,
-            };
+            }
             start += 1;
         }
     }
@@ -2703,9 +2707,8 @@ mod tests {
             let max = stats.max_bytes_opt().expect("max stats missing");
 
             let col_idx = metadata.column_index().expect("column index not present");
-            let col0 = match &col_idx[0][0] {
-                ColumnIndexMetaData::INT96(index) => index,
-                _ => panic!("expected INT96 stats"),
+            let ColumnIndexMetaData::INT96(col0) = &col_idx[0][0] else {
+                panic!("expected INT96 stats")
             };
             let col_min = col0.min_value(0).expect("ColumnIndex min not present");
             let col_max = col0.max_value(0).expect("ColumnIndex max not present");

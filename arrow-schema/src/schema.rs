@@ -381,7 +381,7 @@ impl Schema {
         note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
     )]
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.fields
             .iter()
             .flat_map(|f| f.fields_with_dict_id(dict_id))
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(first_name.name(), "first_name");
         assert_eq!(first_name.data_type(), &DataType::Utf8);
         assert!(!first_name.is_nullable());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = first_name.dict_id();
         assert_eq!(dict_id, None);
         assert_eq!(first_name.dict_is_ordered(), None);
@@ -735,7 +735,7 @@ mod tests {
             interests.data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = interests.dict_id();
         assert_eq!(dict_id, Some(123));
         assert_eq!(interests.dict_is_ordered(), Some(true));
@@ -1177,7 +1177,7 @@ mod tests {
     fn schema_field_with_dict_id() {
         let schema = person_schema();
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let fields_dict_123: Vec<_> = schema
             .fields_with_dict_id(123)
             .iter()
@@ -1185,7 +1185,7 @@ mod tests {
             .collect();
         assert_eq!(fields_dict_123, vec!["interests"]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let is_empty = schema.fields_with_dict_id(456).is_empty();
         assert!(is_empty);
     }
@@ -1207,7 +1207,7 @@ mod tests {
                 ])),
                 false,
             ),
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Field::new_dict(
                 "interests",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1221,26 +1221,17 @@ mod tests {
     #[test]
     fn test_try_merge_field_with_metadata() {
         // 1. Different values for the same key should cause error.
-        let metadata1: HashMap<String, String> = [("foo".to_string(), "bar".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata1 = HashMap::from([("foo".to_string(), "bar".to_string())]);
         let f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata1);
 
-        let metadata2: HashMap<String, String> = [("foo".to_string(), "baz".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("foo".to_string(), "baz".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])]).is_err());
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: HashMap<String, String> = [("missing".to_string(), "value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("missing".to_string(), "value".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
@@ -1303,10 +1294,7 @@ mod tests {
                     // new field
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
         ])
         .unwrap();
@@ -1327,10 +1315,7 @@ mod tests {
                     ),
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>()
+                HashMap::from([("foo".to_string(), "bar".to_string())])
             )
         );
 
@@ -1385,17 +1370,11 @@ mod tests {
         let res = Schema::try_merge(vec![
             Schema::new_with_metadata(
                 vec![Field::new("first_name", DataType::Utf8, false)],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
             Schema::new_with_metadata(
                 vec![Field::new("last_name", DataType::Utf8, false)],
-                [("foo".to_string(), "baz".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "baz".to_string())]),
             ),
         ])
         .unwrap_err();

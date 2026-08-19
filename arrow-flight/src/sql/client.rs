@@ -19,7 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_ipc::MessageHeader;
-use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
 use arrow_ipc::root_as_message;
 use arrow_schema::SchemaRef;
@@ -664,7 +664,7 @@ pub fn arrow_data_from_flight_data(
                 )
             })?;
 
-            let arrow_schema = fb_to_schema(ipc_schema);
+            let arrow_schema = try_fb_to_schema(ipc_schema)?;
             Ok(ArrowFlightData::Schema(arrow_schema))
         }
         MessageHeader::DictionaryBatch => {

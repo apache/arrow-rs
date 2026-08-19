@@ -171,15 +171,12 @@ fn check_bounds<T: ArrowPrimitiveType>(
 where
     T::Native: Display,
 {
-    let len = match T::Native::from_usize(len) {
-        Some(len) => len,
-        None => {
-            if T::DATA_TYPE.is_integer() {
-                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
-                return Ok(());
-            } else {
-                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
-            }
+    let Some(len) = T::Native::from_usize(len) else {
+        if T::DATA_TYPE.is_integer() {
+            // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+            return Ok(());
+        } else {
+            return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
         }
     };
 
@@ -617,7 +614,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             // so the loop above wrote exactly `capacity` bytes.
             unsafe { values.set_len(capacity) };
         }
-    };
+    }
 
     // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
     // and `nulls` (if present) has length == `indices.len()`.
@@ -710,7 +707,7 @@ where
                 indices.len() - last_filled,
             ));
         }
-    };
+    }
 
     assert_eq!(
         new_offsets.len(),
@@ -808,7 +805,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
     let size_usize = usize::try_from(size).map_err(|_| {
-        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{size}' to usize"))
     })?;
 
     let result_buffer = match size_usize {
