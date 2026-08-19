@@ -433,7 +433,7 @@ impl<'a> VariantValueArrayBuilderExt<'a> {
     }
 }
 
-impl<'a> VariantBuilderExt for VariantValueArrayBuilderExt<'a> {
+impl VariantBuilderExt for VariantValueArrayBuilderExt<'_> {
     type State<'b>
         = ValueArrayBuilderState<'b>
     where

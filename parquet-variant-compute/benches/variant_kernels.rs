@@ -480,7 +480,7 @@ impl RandomJsonGenerator {
                     let random_string: String = (0..length)
                         .map(|_| rng.sample(Alphanumeric) as char)
                         .collect();
-                    write!(output_buffer, "\"{random_string}\"",).unwrap();
+                    write!(output_buffer, "\"{random_string}\"").unwrap();
                 } else {
                     random_value -= *string_weight;
 
@@ -489,11 +489,11 @@ impl RandomJsonGenerator {
                         if rng.random_bool(0.5) {
                             // Generate a random integer
                             let random_integer: i64 = rng.random_range(-1000..1000);
-                            write!(output_buffer, "{random_integer}",).unwrap();
+                            write!(output_buffer, "{random_integer}").unwrap();
                         } else {
                             // Generate a random float
                             let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                            write!(output_buffer, "{random_float}",).unwrap();
+                            write!(output_buffer, "{random_float}").unwrap();
                         }
                     } else {
                         random_value -= *number_weight;
@@ -501,7 +501,7 @@ impl RandomJsonGenerator {
                         if random_value <= *boolean_weight {
                             // Generate a random boolean
                             let random_boolean: bool = rng.random();
-                            write!(output_buffer, "{random_boolean}",).unwrap();
+                            write!(output_buffer, "{random_boolean}").unwrap();
                         }
                     }
                 }
@@ -557,7 +557,7 @@ impl RandomJsonGenerator {
             let random_string: String = (0..length)
                 .map(|_| rng.sample(Alphanumeric) as char)
                 .collect();
-            write!(output_buffer, "\"{random_string}\"",).unwrap();
+            write!(output_buffer, "\"{random_string}\"").unwrap();
             return;
         }
         random_value -= *string_weight;
@@ -567,11 +567,11 @@ impl RandomJsonGenerator {
             if rng.random_bool(0.5) {
                 // Generate a random integer
                 let random_integer: i64 = rng.random_range(-1000..1000);
-                write!(output_buffer, "{random_integer}",).unwrap();
+                write!(output_buffer, "{random_integer}").unwrap();
             } else {
                 // Generate a random float
                 let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                write!(output_buffer, "{random_float}",).unwrap();
+                write!(output_buffer, "{random_float}").unwrap();
             }
             return;
         }
@@ -580,7 +580,7 @@ impl RandomJsonGenerator {
         if random_value <= *boolean_weight {
             // Generate a random boolean
             let random_boolean: bool = rng.random();
-            write!(output_buffer, "{random_boolean}",).unwrap();
+            write!(output_buffer, "{random_boolean}").unwrap();
             return;
         }
         random_value -= *boolean_weight;

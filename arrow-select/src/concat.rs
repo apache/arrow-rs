@@ -91,7 +91,7 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
 fn concat_byte_view<B: ByteViewType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     let mut builder =
         GenericByteViewBuilder::<B>::with_capacity(arrays.iter().map(|a| a.len()).sum());
-    for &array in arrays.iter() {
+    for &array in arrays {
         builder.append_array(array.as_byte_view());
     }
     Ok(Arc::new(builder.finish()))
@@ -309,7 +309,7 @@ fn concat_list_view<OffsetSize: OffsetSizeTrait>(
 
     let mut offsets = MutableBuffer::with_capacity(lists.iter().map(|l| l.offsets().len()).sum());
     let mut global_offset = OffsetSize::zero();
-    for l in lists.iter() {
+    for l in &lists {
         for &offset in l.offsets() {
             offsets.push(offset + global_offset);
         }
@@ -353,9 +353,9 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let (item_capacity, bytes_capacity) = match binary_capacity::<T>(arrays) {
-        Capacities::Binary(item_capacity, Some(bytes_capacity)) => (item_capacity, bytes_capacity),
-        _ => unreachable!(),
+    let Capacities::Binary(item_capacity, Some(bytes_capacity)) = binary_capacity::<T>(arrays)
+    else {
+        unreachable!()
     };
 
     let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, bytes_capacity);
@@ -1084,7 +1084,7 @@ mod tests {
             Some(vec![Some(10), Some(20)]),
         ];
         let mut list1_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list1.iter() {
+        for v in &list1 {
             list1_array.append_option(v.clone());
         }
         let list1_array = list1_array.finish();
@@ -1095,14 +1095,14 @@ mod tests {
             Some(vec![Some(102), Some(103)]),
         ];
         let mut list2_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list2.iter() {
+        for v in &list2 {
             list2_array.append_option(v.clone());
         }
         let list2_array = list2_array.finish();
 
         let list3 = [Some(vec![Some(1000), Some(1001)])];
         let mut list3_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list3.iter() {
+        for v in &list3 {
             list3_array.append_option(v.clone());
         }
         let list3_array = list3_array.finish();
@@ -1111,7 +1111,7 @@ mod tests {
 
         let expected: Vec<_> = list1.into_iter().chain(list2).chain(list3).collect();
         let mut array_expected = ListViewBuilder::new(Int64Builder::new());
-        for v in expected.iter() {
+        for v in &expected {
             array_expected.append_option(v.clone());
         }
         let array_expected = array_expected.finish();
@@ -1127,7 +1127,7 @@ mod tests {
             Some(vec![Some(10), Some(20)]),
         ];
         let mut list1_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list1.iter() {
+        for v in &list1 {
             list1_array.append_option(v.clone());
         }
         let list1_array = list1_array.finish();
@@ -1138,14 +1138,14 @@ mod tests {
             Some(vec![Some(102), Some(103)]),
         ];
         let mut list2_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list2.iter() {
+        for v in &list2 {
             list2_array.append_option(v.clone());
         }
         let list2_array = list2_array.finish();
 
         let list3 = [Some(vec![Some(1000), Some(1001)])];
         let mut list3_array = ListViewBuilder::new(Int64Builder::new());
-        for v in list3.iter() {
+        for v in &list3 {
             list3_array.append_option(v.clone());
         }
         let list3_array = list3_array.finish();
@@ -1167,7 +1167,7 @@ mod tests {
             Some(vec![Some(1000), Some(1001)]),
         ];
         let mut array_expected = ListViewBuilder::new(Int64Builder::new());
-        for v in expected.iter() {
+        for v in &expected {
             array_expected.append_option(v.clone());
         }
         let array_expected = array_expected.finish();

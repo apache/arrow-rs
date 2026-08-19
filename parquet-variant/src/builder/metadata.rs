@@ -198,7 +198,7 @@ impl WritableMetadataBuilder {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
-        let total_dict_size: usize = self.metadata_size();
+        let total_dict_size = self.metadata_size();
 
         let metadata_buffer = &mut self.metadata_buffer;
         let is_sorted = std::mem::take(&mut self.is_sorted);
@@ -222,7 +222,7 @@ impl WritableMetadataBuilder {
 
         // Write offsets
         let mut cur_offset = 0;
-        for key in field_names.iter() {
+        for key in &field_names {
             write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }
