@@ -963,7 +963,8 @@ impl Date32Type {
     ///
     /// Returns `Some(NaiveDate)` if it fits, `None` otherwise.
     pub fn to_naive_date_opt(i: <Date32Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        // `NaiveDate::default()` is documented to be 1970-01-01
+        let epoch = NaiveDate::default();
         let d = Duration::try_days(i as i64)?;
         epoch.checked_add_signed(d)
     }
@@ -974,7 +975,8 @@ impl Date32Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        // `NaiveDate::default()` is documented to be 1970-01-01
+        let epoch = NaiveDate::default();
         d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
     }
 
@@ -1245,7 +1247,8 @@ impl Date64Type {
     ///
     /// Returns `Some(NaiveDateTime)` if it fits, `None` otherwise.
     pub fn to_naive_date_opt(i: <Date64Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        // `NaiveDate::default()` is documented to be 1970-01-01
+        let epoch = NaiveDate::default();
         let d = Duration::try_milliseconds(i)?;
         epoch.checked_add_signed(d)
     }
@@ -1256,7 +1259,8 @@ impl Date64Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        // `NaiveDate::default()` is documented to be 1970-01-01
+        let epoch = NaiveDate::default();
         d.sub(epoch).num_milliseconds()
     }
 

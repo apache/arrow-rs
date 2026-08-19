@@ -161,9 +161,11 @@ impl BooleanBufferBuilder {
         self.len = len;
 
         let remainder = self.len % 8;
-        if remainder != 0 {
+        if remainder != 0
+            && let Some(last) = self.buffer.as_mut().last_mut()
+        {
             let mask = (1_u8 << remainder).wrapping_sub(1);
-            *self.buffer.as_mut().last_mut().unwrap() &= mask;
+            *last &= mask;
         }
     }
 
@@ -248,14 +250,18 @@ impl BooleanBufferBuilder {
                 let cur_remainder = self.len % 8;
                 let new_remainder = new_len % 8;
 
-                if cur_remainder != 0 {
+                if cur_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Pad last byte with 1s
-                    *self.buffer.as_slice_mut().last_mut().unwrap() |= !((1 << cur_remainder) - 1)
+                    *last |= !((1 << cur_remainder) - 1)
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
-                if new_remainder != 0 {
+                if new_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Clear remaining bits
-                    *self.buffer.as_slice_mut().last_mut().unwrap() &= (1 << new_remainder) - 1
+                    *last &= (1 << new_remainder) - 1
                 }
                 self.len = new_len;
             }

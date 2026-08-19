@@ -356,11 +356,10 @@ impl SqlInfoDataBuilder {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();
 
-        let mut names: Vec<_> = self.infos.keys().copied().collect();
-        names.sort_unstable();
+        let mut infos: Vec<_> = self.infos.iter().collect();
+        infos.sort_unstable_by_key(|(name, _)| **name);
 
-        for key in names {
-            let (name, value) = self.infos.get_key_value(&key).unwrap();
+        for (name, value) in infos {
             name_builder.append_value(*name);
             value_builder.append_value(value)?
         }

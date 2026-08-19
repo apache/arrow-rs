@@ -259,7 +259,7 @@ impl MapArray {
         let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
         let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+            .slice(start.as_usize(), (end - start).as_usize())
     }
 
     /// Returns ith value of this map array.

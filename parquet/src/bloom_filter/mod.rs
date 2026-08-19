@@ -406,7 +406,7 @@ impl Sbbf {
             .map(|chunk| {
                 let mut block = Block::ZERO;
                 for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                    block[i] = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
                 }
                 block
             })

@@ -949,7 +949,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
     }
 
     // read footer length
-    let footer_len = i32::from_le_bytes(buf[..4].try_into().unwrap());
+    let footer_len = i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
     footer_len
         .try_into()
         .map_err(|_| ArrowError::ParseError(format!("Invalid footer length: {footer_len}")))
