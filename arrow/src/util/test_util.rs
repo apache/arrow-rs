@@ -64,14 +64,16 @@ pub fn get_temp_file(file_name: &str, content: &[u8]) -> fs::File {
 /// The default can be overridden by the optional environment
 /// variable `ARROW_TEST_DATA`
 ///
-/// panics when the directory can not be found.
-///
 /// Example:
 /// ```
 /// let testdata = arrow::util::test_util::arrow_test_data();
 /// let csvdata = format!("{}/csv/aggregate_test_100.csv", testdata);
 /// assert!(std::path::PathBuf::from(csvdata).exists());
 /// ```
+///
+/// # Panics
+///
+/// Panics if the directory can not be found
 pub fn arrow_test_data() -> String {
     match get_data_dir("ARROW_TEST_DATA", "../testing/data") {
         Ok(pb) => pb.display().to_string(),
@@ -86,14 +88,16 @@ pub fn arrow_test_data() -> String {
 /// The default can be overridden by the optional environment variable
 /// `PARQUET_TEST_DATA`
 ///
-/// panics when the directory can not be found.
-///
 /// Example:
 /// ```
 /// let testdata = arrow::util::test_util::parquet_test_data();
 /// let filename = format!("{}/binary.parquet", testdata);
 /// assert!(std::path::PathBuf::from(filename).exists());
 /// ```
+///
+/// # Panics
+///
+/// Panics if the directory can not be found
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../parquet-testing/data") {
         Ok(pb) => pb.display().to_string(),
@@ -166,6 +170,10 @@ pub struct BadIterator<T> {
 impl<T> BadIterator<T> {
     /// Create a new iterator for `<limit>` items, but that reports to
     /// produce `<claimed>` items. Must provide at least 1 item.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items` is empty
     pub fn new(limit: usize, claimed: usize, items: Vec<T>) -> Self {
         assert!(!items.is_empty());
         Self {

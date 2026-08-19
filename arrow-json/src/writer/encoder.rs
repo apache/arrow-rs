@@ -512,7 +512,7 @@ impl Encoder for StructArrayEncoder<'_> {
         // Nulls can only be dropped in explicit mode
         let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
 
-        for field_encoder in self.encoders.iter_mut() {
+        for field_encoder in &mut self.encoders {
             let is_null = field_encoder.is_null(idx);
             if is_null && drop_nulls {
                 continue;

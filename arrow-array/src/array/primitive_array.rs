@@ -848,6 +848,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -1297,6 +1300,10 @@ where
     /// A valid value is expected, thus the user should first check for validity.
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
         as_datetime::<T>(i64::from(self.value(i)))
     }
@@ -1307,6 +1314,10 @@ where
     /// the passed tz to the to-be-returned NaiveDateTime
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
         as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
@@ -1316,6 +1327,10 @@ where
     /// If a data type cannot be converted to `NaiveDate`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_date(&self, i: usize) -> Option<NaiveDate> {
         self.value_as_datetime(i).map(|datetime| datetime.date())
     }
@@ -1325,6 +1340,10 @@ where
     /// `Date32` and `Date64` return UTC midnight as they do not have time resolution
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_time(&self, i: usize) -> Option<NaiveTime> {
         as_time::<T>(i64::from(self.value(i)))
     }
@@ -1334,6 +1353,10 @@ where
     /// If a data type cannot be converted to `Duration`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_duration(&self, i: usize) -> Option<Duration> {
         as_duration::<T>(i64::from(self.value(i)))
     }

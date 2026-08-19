@@ -40,7 +40,7 @@ pub struct AvroObjectReader {
     runtime: Option<Handle>,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl AvroObjectReader {
     /// Creates a new [`Self`] from a store implementation and file location.
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -100,7 +100,7 @@ impl AvroObjectReader {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl AsyncFileReader for AvroObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
         self.spawn(|store, path| async move { store.get_range(path, range).await }.boxed())
