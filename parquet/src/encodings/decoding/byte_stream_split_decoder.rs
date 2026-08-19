@@ -73,7 +73,7 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     }
 
     fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
-        // We assume self.encoded_bytes contains the full data 
+        // We assume self.encoded_bytes contains the full data
         // (which it must, since we can only know where to split the streams once all data is collected),
         // but buffer can just be sliced starting from the given index.
 
