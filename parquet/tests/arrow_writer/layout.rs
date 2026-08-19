@@ -749,6 +749,49 @@ fn test_large_string() {
 }
 
 #[test]
+fn test_large_string_delta_byte_array_shared_prefix() {
+    // Regression for https://github.com/apache/arrow-rs/issues/10489, at the
+    // `ArrowWriter` level the report used.
+    //
+    // Same shape as `test_large_string` — 64 KiB values against a 16 KiB
+    // page limit — but `DELTA_BYTE_ARRAY` and identical values. Cutting one
+    // page per value would reset the encoder's shared-prefix state every
+    // time and reproduce `PLAIN` byte for byte (32 pages, ~2 MiB). Instead
+    // the page's mandatory first value is exempt from the byte limit, so all
+    // 32 values share one page: one value stored in full plus 31 empty
+    // suffixes.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: vec![Page {
+                        rows: 32,
+                        page_header_size: 21,
+                        compressed_size: 65696,
+                        encoding: Encoding::DELTA_BYTE_ARRAY,
+                        page_type: PageType::DATA_PAGE,
+                    }],
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
 fn test_large_string_view() {
     // Same bytes and expected layout as `test_large_string`, but the input
     // is a `Utf8View` array. View arrays expose no contiguous offsets
