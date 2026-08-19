@@ -172,6 +172,28 @@ fn build_float64_array_invalid_items(size: usize, null_density: f32) -> ArrayRef
     build_array_with_samples!(builder, size, null_density, invalid_values)
 }
 
+// Builds a BinaryArray of `size` rows over `unique_count` distinct byte strings.
+// `null_every` controls null density: Some(n) inserts a null every n rows, None means no nulls.
+// Binary and Utf8 both route through pack_byte_to_dictionary, so binary covers both paths.
+fn build_binary_array_for_dict_cast(
+    size: usize,
+    unique_count: usize,
+    null_every: Option<usize>,
+) -> ArrayRef {
+    let values: Vec<Vec<u8>> = (0..unique_count)
+        .map(|i| format!("value{i:08}").into_bytes())
+        .collect();
+    let mut builder = BinaryBuilder::with_capacity(size, size * 10);
+    for i in 0..size {
+        if null_every.is_some_and(|n| i % n == 0) {
+            builder.append_null();
+        } else {
+            builder.append_value(&values[i % unique_count]);
+        }
+    }
+    Arc::new(builder.finish())
+}
+
 fn build_dict_array(size: usize) -> ArrayRef {
     let values = StringArray::from_iter([
         Some("small"),
@@ -256,6 +278,13 @@ fn add_benchmark(c: &mut Criterion) {
     let decimal256_array = build_decimal256_array(8_000, 50, 3);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
+
+    let binary_low_card = build_binary_array_for_dict_cast(10_000, 25, Some(20));
+    let binary_med_card = build_binary_array_for_dict_cast(10_000, 500, Some(20));
+    let binary_high_card = build_binary_array_for_dict_cast(10_000, 2_500, Some(20));
+    let binary_low_card_no_nulls = build_binary_array_for_dict_cast(10_000, 25, None);
+    let binary_med_card_no_nulls = build_binary_array_for_dict_cast(10_000, 500, None);
+    let binary_high_card_no_nulls = build_binary_array_for_dict_cast(10_000, 2_500, None);
 
     let dict_array = build_dict_array(10_000);
     let nested_dict_array = build_nested_dict_array(10_000);
@@ -400,6 +429,54 @@ fn add_benchmark(c: &mut Criterion) {
             cast_array(
                 &nested_dict_array,
                 DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict low cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict low cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             )
         })
     });
