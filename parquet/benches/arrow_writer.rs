@@ -785,6 +785,11 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .build();
     props.push(("cdc", prop));
 
+    let prop = WriterProperties::builder()
+        .set_write_row_group_number_distinct_values(true)
+        .build();
+    props.push(("number_distinct_values", prop));
+
     props
 }
 
