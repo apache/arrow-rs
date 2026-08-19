@@ -17,7 +17,7 @@
 
 use bytes::Bytes;
 
-use crate::encodings::rle::RleDecoder;
+use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
@@ -46,9 +46,9 @@ impl DictIndexDecoder {
         let bit_width = *data
             .first()
             .ok_or_else(|| general_err!("dictionary index page is empty"))?;
-        if bit_width > 32 {
+        if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
             return Err(general_err!(
-                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is 32"
+                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
             ));
         }
         let mut decoder = RleDecoder::new(bit_width);

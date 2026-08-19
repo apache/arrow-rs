@@ -41,6 +41,12 @@ use bytes::Bytes;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
 
+/// Maximum bit width for dictionary page indices encoded with RLE / Bit-Packing hybrid encoding.
+///
+/// Parquet dictionary indices are represented as 32-bit signed integers, so dictionary
+/// index bit widths must not exceed 32.
+pub const MAX_RLE_DICTIONARY_BIT_WIDTH: u8 = 32;
+
 /// Number of values in one bit-packed group. The Parquet RLE/bit-packing hybrid
 /// format always bit-packs values in multiples of this count (see the
 /// [format spec](https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3):
@@ -360,6 +366,10 @@ pub struct RleDecoder {
 }
 
 impl RleDecoder {
+    /// Creates a new `RleDecoder` with the specified bit width.
+    ///
+    /// Bit width must be between 0 and 64 (inclusive). Note that for dictionary indices
+    /// specifically, the bit width cannot exceed [`MAX_RLE_DICTIONARY_BIT_WIDTH`] (32).
     pub fn new(bit_width: u8) -> Self {
         debug_assert!(bit_width <= 64, "Bit width must be <= 64");
         RleDecoder {

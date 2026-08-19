@@ -31,7 +31,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
-use crate::encodings::rle::RleDecoder;
+use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBitpacked;
@@ -301,9 +301,9 @@ where
                 let bit_width = *data
                     .first()
                     .ok_or_else(|| general_err!("dictionary index page is empty"))?;
-                if bit_width > 32 {
+                if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
                     return Err(general_err!(
-                        "Invalid or corrupted RLE bit width {bit_width}. Max allowed is 32"
+                        "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
                     ));
                 }
                 let mut decoder = RleDecoder::new(bit_width);
