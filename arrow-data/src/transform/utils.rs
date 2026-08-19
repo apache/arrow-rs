@@ -35,7 +35,9 @@ pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
     mut last_offset: T,
     offsets: &[T],
 ) -> Result<(), ArrowError> {
-    buffer.reserve(std::mem::size_of_val(offsets));
+    buffer
+        .try_reserve(std::mem::size_of_val(offsets))
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     // Snapshot the length so we can roll back partial writes on overflow.
     let original_len = buffer.len();
     for window in offsets.windows(2) {

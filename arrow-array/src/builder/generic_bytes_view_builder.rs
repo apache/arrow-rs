@@ -191,6 +191,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// let expected = &["hello", "world", "bingo", "bongo", "helloworldbingo"];
     /// assert_eq!(actual, expected);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer.len() >= u32::MAX`
     pub fn append_block(&mut self, buffer: Buffer) -> u32 {
         assert!(buffer.len() < u32::MAX as usize);
 
@@ -236,7 +240,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
-                };
+                }
 
                 byte_view.as_u128()
             }));
@@ -296,8 +300,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     }
 
     /// Returns the value at the given index
+    ///
     /// Useful if we want to know what value has been inserted to the builder
-    /// The index has to be smaller than `self.len()`, otherwise it will panic
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()`
     pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
@@ -394,7 +402,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             self.flush_in_progress();
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
-        };
+        }
 
         let offset = self.in_progress.len() as u32;
         self.in_progress.extend_from_slice(v);
@@ -425,7 +433,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append the same value `n` times into the builder
@@ -983,7 +991,7 @@ mod tests {
 
         // All views should be identical
         let first_view = array.views()[0];
-        for view in array.views().iter() {
+        for view in array.views() {
             assert_eq!(*view, first_view);
         }
     }

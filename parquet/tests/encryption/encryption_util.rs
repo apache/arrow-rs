@@ -153,7 +153,7 @@ pub(crate) fn verify_encryption_test_data(
                 ((row_index(i) * 2 + 1) * 1000000000000) as i64
             );
         }
-        for x in timestamp_col.iter() {
+        for x in timestamp_col {
             assert!(x.is_some());
         }
         for (i, x) in f32_col.iter().enumerate() {
@@ -209,7 +209,7 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");
         }
-    };
+    }
 }
 
 pub(crate) fn read_encrypted_file(

@@ -166,7 +166,7 @@ pub(crate) fn from_thrift_page_stats(
                 stats.max_value
             };
 
-            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
                 if let Some(min) = min
                     && min.len() < len
                 {
@@ -184,13 +184,16 @@ pub(crate) fn from_thrift_page_stats(
                 Ok(())
             }
 
-            match physical_type {
-                Type::BOOLEAN => check_len(&min, &max, 1),
-                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
-                Type::INT96 => check_len(&min, &max, 12),
-                _ => Ok(()),
-            }?;
+            {
+                let (min, max) = (min.as_deref(), max.as_deref());
+                match physical_type {
+                    Type::BOOLEAN => check_len(min, max, 1),
+                    Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                    Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                    Type::INT96 => check_len(min, max, 12),
+                    _ => Ok(()),
+                }?;
+            }
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -1181,7 +1184,7 @@ mod tests {
     // generic function without reyling on a bound to a private trait.
     fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
         match stats.min_opt() {
-            Some(s) => format!("min: {}", s),
+            Some(s) => format!("min: {s}"),
             None => "min: NA".to_string(),
         }
     }

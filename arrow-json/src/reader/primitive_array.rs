@@ -109,28 +109,26 @@ where
                 TapeElement::String(idx) => {
                     let s = tape.get_string(idx);
                     P::parse(s).ok_or_else(|| {
-                        ArrowError::JsonError(format!("failed to parse \"{s}\" as {d}",))
+                        ArrowError::JsonError(format!("failed to parse \"{s}\" as {d}"))
                     })
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
-                        ArrowError::JsonError(format!("failed to parse {s} as {d}",))
-                    })
+                    ParseJsonNumber::parse(s.as_bytes())
+                        .ok_or_else(|| ArrowError::JsonError(format!("failed to parse {s} as {d}")))
                 }
                 TapeElement::F32(v) => {
                     let v = f32::from_bits(v);
-                    NumCast::from(v).ok_or_else(|| {
-                        ArrowError::JsonError(format!("failed to parse {v} as {d}",))
-                    })
+                    NumCast::from(v)
+                        .ok_or_else(|| ArrowError::JsonError(format!("failed to parse {v} as {d}")))
                 }
                 TapeElement::I32(v) => NumCast::from(v)
-                    .ok_or_else(|| ArrowError::JsonError(format!("failed to parse {v} as {d}",))),
+                    .ok_or_else(|| ArrowError::JsonError(format!("failed to parse {v} as {d}"))),
                 TapeElement::F64(high) => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let v = f64::from_bits(((high as u64) << 32) | low as u64);
                         NumCast::from(v).ok_or_else(|| {
-                            ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                            ArrowError::JsonError(format!("failed to parse {v} as {d}"))
                         })
                     }
                     _ => unreachable!(),
@@ -139,7 +137,7 @@ where
                     TapeElement::I32(low) => {
                         let v = ((high as i64) << 32) | (low as u32) as i64;
                         NumCast::from(v).ok_or_else(|| {
-                            ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                            ArrowError::JsonError(format!("failed to parse {v} as {d}"))
                         })
                     }
                     _ => unreachable!(),

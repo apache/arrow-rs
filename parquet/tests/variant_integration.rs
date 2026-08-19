@@ -236,7 +236,7 @@ variant_test_case!(138);
 ///   "variant" : "Variant(metadata=VariantMetadata(dict={}), value=Variant(type=BOOLEAN_FALSE, value=false))"
 /// },
 /// ```
-#[allow(dead_code)] // some fields are not used except when printing the struct
+#[expect(dead_code)] // some fields are not used except when printing the struct
 #[derive(Debug, Clone, Deserialize)]
 struct VariantTestCase {
     /// Case number (e.g., 1, 2, 4, etc. - note: case 3 is missing any data)
@@ -303,8 +303,7 @@ impl VariantTestCase {
             // compare the variants (is this the right way to compare?)
             assert_eq!(
                 actual, expected,
-                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
-                i
+                "Variant data mismatch at index {i}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}"
             );
         }
     }
