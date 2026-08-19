@@ -550,7 +550,9 @@ impl RowGroupReaderBuilder {
                     predicate.projection(), // use the predicate's projection
                 )
                 .with_selection(plan_builder.selection())
-                // Fetch predicate columns; expand selection only for cached predicate columns
+                // Cached output columns reuse these predicate-stage chunks. Expand their
+                // selection to cache batch boundaries so a cache miss can safely fetch a
+                // complete batch from the retained sparse column data.
                 .with_cache_projection(Some(filter_info.cache_projection()))
                 .with_column_chunks(column_chunks)
                 .build();
