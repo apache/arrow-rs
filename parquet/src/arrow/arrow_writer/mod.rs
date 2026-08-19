@@ -448,9 +448,8 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Note the underlying writer is not flushed with this call.
     /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
-        let in_progress = match self.in_progress.take() {
-            Some(in_progress) => in_progress,
-            None => return Ok(()),
+        let Some(in_progress) = self.in_progress.take() else {
+            return Ok(());
         };
 
         let mut row_group_writer = self.writer.next_row_group()?;
@@ -818,7 +817,13 @@ impl ArrowPageWriter {
         self.page_encryptor.as_mut()
     }
 
+    // Mirrors the signature of the encryption-enabled version above, so that the
+    // callers do not need a `cfg` of their own.
     #[cfg(not(feature = "encryption"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "mirrors the encryption-enabled signature"
+    )]
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
@@ -846,7 +851,7 @@ impl PageWriter for ArrowPageWriter {
                     let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
                     page_header.write_thrift(&mut protocol)?;
                 }
-            };
+            }
 
             Bytes::from(header)
         };
@@ -1368,7 +1373,7 @@ impl ArrowColumnWriterFactory {
     ) -> Result<Box<ArrowPageWriter>> {
         let column_path = column_descriptor.path().string();
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &self.file_encryptor,
+            self.file_encryptor.as_ref(),
             self.row_group_index,
             column_index,
             &column_path,
@@ -1691,7 +1696,7 @@ fn write_leaf(
                         let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices.iter().copied())
                     }
-                    _ => {
+                    IntervalUnit::MonthDayNano => {
                         return Err(ParquetError::NYI(format!(
                             "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
                         )));
@@ -3373,9 +3378,8 @@ mod tests {
             for rg_idx in col_indexes {
                 for idx in rg_idx {
                     assert!(idx.nan_counts().is_some());
-                    let float_idx = match idx {
-                        ColumnIndexMetaData::DOUBLE(idx) => idx,
-                        _ => panic!("expected double statistics"),
+                    let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
+                        panic!("expected double statistics")
                     };
                     for i in 0..idx.num_pages() as usize {
                         assert_eq!(float_idx.nan_count(i), Some(10));
@@ -3452,9 +3456,8 @@ mod tests {
         assert_eq!(col_idx.num_pages(), 4);
 
         // test each page
-        let float_idx = match col_idx {
-            ColumnIndexMetaData::DOUBLE(idx) => idx,
-            _ => panic!("expected double statistics"),
+        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+            panic!("expected double statistics")
         };
 
         assert_eq!(float_idx.nan_counts, Some(vec![10, 10, 0, 2]));
@@ -4051,7 +4054,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4304,7 +4307,7 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
@@ -4415,7 +4418,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
@@ -4445,7 +4448,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ];
-        let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt32Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4491,7 +4494,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ];
-        let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
+        let values = Arc::new(UInt64Array::from_iter_values(src.iter().copied()));
         let files = RoundTripTest::new(values).with_nullable(false).run();
 
         for file in files {
@@ -4694,7 +4697,7 @@ mod tests {
                     .unwrap()
                     .values()
                     .iter()
-                    .cloned()
+                    .copied()
             })
             .collect();
 
@@ -5281,8 +5284,8 @@ mod tests {
         // check that min/max were actually written to the page
         assert!(stats.is_max_value_exact.unwrap());
         assert!(stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Blart Versenwald III");
+        assert_eq!(stats.min_value.unwrap(), b"Andrew Lamb");
     }
 
     #[test]
@@ -5329,8 +5332,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
 
         // check second page now
         let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
@@ -5342,8 +5345,8 @@ mod tests {
         // check that min/max were properly truncated
         assert!(!stats.is_max_value_exact.unwrap());
         assert!(!stats.is_min_value_exact.unwrap());
-        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
-        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+        assert_eq!(stats.max_value.unwrap(), b"Bm");
+        assert_eq!(stats.min_value.unwrap(), b"Bl");
     }
 
     #[test]
@@ -5684,7 +5687,7 @@ mod tests {
 
         let first_array = StringArray::from(
             (0..10)
-                .map(|i| format!("{:0>100}", i))
+                .map(|i| format!("{i:0>100}"))
                 .collect::<Vec<String>>(),
         );
         let first_batch =

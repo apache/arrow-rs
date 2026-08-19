@@ -539,6 +539,15 @@ impl VariantArray {
     }
 }
 
+impl<'a> IntoIterator for &'a VariantArray {
+    type Item = Option<Variant<'a, 'a>>;
+    type IntoIter = VariantArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        VariantArrayIter::new(self)
+    }
+}
+
 impl PartialEq for VariantArray {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
@@ -642,7 +651,7 @@ impl<'a> Iterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+impl DoubleEndedIterator for VariantArrayIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.head_i == self.tail_i {
             return None;
@@ -654,7 +663,7 @@ impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
+impl ExactSizeIterator for VariantArrayIter<'_> {}
 
 /// One shredded field of a partially or perfectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
@@ -1108,7 +1117,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
                     (v / 1_000_000) as u32,
                     (v % 1_000_000) as u32 * 1000
                 )
-                .ok_or_else(|| format!("Invalid microsecond from midnight: {}", v)),
+                .ok_or_else(|| format!("Invalid microsecond from midnight: {v}")),
                 typed_value,
                 index
             )

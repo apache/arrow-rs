@@ -120,7 +120,7 @@ enum IpcBodySink<'a> {
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
-impl<'a> IpcBodySink<'a> {
+impl IpcBodySink<'_> {
     /// Writes the encoded buffer to the sink.
     pub fn write(&mut self, pad_len: usize, buffer: EncodedBuffer) {
         match self {
@@ -3209,7 +3209,7 @@ mod tests {
         // Dict field with id 2
         #[expect(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 0, false);
-        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
+        let union_fields = std::iter::once((0, Arc::new(dctfield))).collect();
 
         let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
         let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
@@ -3833,9 +3833,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3850,9 +3850,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }

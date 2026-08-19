@@ -259,7 +259,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte = crate::util::bit_util::read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
@@ -574,7 +574,7 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,
@@ -1166,8 +1166,7 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with left_offset={}, right_offset={}, len={}",
-            left_offset_in_bits, right_offset_in_bits, len_in_bits
+            "Failed with left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
         );
 
         assert_bits_outside_range_preserved(
@@ -1176,8 +1175,7 @@ mod tests {
             left_offset_in_bits,
             len_in_bits,
             &format!(
-                "left_offset={}, right_offset={}, len={}",
-                left_offset_in_bits, right_offset_in_bits, len_in_bits
+                "left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
             ),
         );
     }
@@ -1199,9 +1197,7 @@ mod tests {
             assert_eq!(
                 get_bit(before, i),
                 get_bit(after, i),
-                "bit {} outside the requested range was modified ({})",
-                i,
-                context
+                "bit {i} outside the requested range was modified ({context})"
             );
         }
     }
@@ -1237,8 +1233,7 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with offset={}, len={}",
-            offset_in_bits, len_in_bits
+            "Failed with offset={offset_in_bits}, len={len_in_bits}"
         );
 
         assert_bits_outside_range_preserved(
@@ -1246,7 +1241,7 @@ mod tests {
             buffer.as_slice(),
             offset_in_bits,
             len_in_bits,
-            &format!("offset={}, len={}", offset_in_bits, len_in_bits),
+            &format!("offset={offset_in_bits}, len={len_in_bits}"),
         );
     }
 

@@ -209,7 +209,7 @@ fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
         // introduce values unique to this batch which extends the dictionary.
         for r in 0..num_rows {
             if r < num_rows / 4 {
-                builder.append_value(format!("batch {i} value {}", r));
+                builder.append_value(format!("batch {i} value {r}"));
             } else {
                 builder.append_value(format!("shared {r}"));
             }

@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(builder.len(), 100);
         let finished = builder.finish();
         for (i, v) in bools.into_iter().enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 
@@ -780,7 +780,7 @@ mod tests {
 
             let finished = builder.finish();
             for (i, &v) in bools.iter().enumerate() {
-                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+                assert_eq!(finished.value(i), v, "at index {i} for len {len}");
             }
         }
     }

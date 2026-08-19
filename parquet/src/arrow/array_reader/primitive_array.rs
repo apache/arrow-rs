@@ -466,7 +466,7 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use std::collections::VecDeque;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn make_column_chunks<T: DataType>(
         column_desc: ColumnDescPtr,
         encoding: Encoding,
