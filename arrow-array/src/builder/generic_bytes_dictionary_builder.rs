@@ -377,6 +377,95 @@ where
         }
     }
 
+    /// Append all values from a [`GenericByteArray`] into this builder.
+    ///
+    /// This is more efficient than calling [`Self::append`] in a loop because
+    /// it accesses the raw offset/value buffers directly and bulk-writes the
+    /// resolved keys with a single `append_slice` / `append_values` call.
+    ///
+    /// Returns an error if any new dictionary index would overflow the key type.
+    pub fn append_array(&mut self, array: &GenericByteArray<T>) -> Result<(), ArrowError> {
+        let row_count = array.len();
+        if row_count == 0 {
+            return Ok(());
+        }
+        let offsets = array.value_offsets();
+        let raw_data = array.value_data();
+
+        match array.nulls() {
+            None => {
+                let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
+                for row_idx in 0..row_count {
+                    let start = offsets[row_idx].as_usize();
+                    let end = offsets[row_idx + 1].as_usize();
+                    // SAFETY: offsets are valid by GenericByteArray invariants
+                    let bytes = unsafe { raw_data.get_unchecked(start..end) };
+                    let state = &self.state;
+                    let storage = &mut self.values_builder;
+                    let hash = state.hash_one(bytes);
+                    let dict_idx = *self
+                        .dedup
+                        .entry(
+                            hash,
+                            |idx| bytes == get_bytes(storage, *idx),
+                            |idx| state.hash_one(get_bytes(storage, *idx)),
+                        )
+                        .or_insert_with(|| {
+                            let idx = storage.len();
+                            // SAFETY: row_idx < row_count = array.len(), slot is non-null
+                            storage.append_value(unsafe { array.value_unchecked(row_idx) });
+                            idx
+                        })
+                        .get();
+                    key_buf.push(
+                        K::Native::from_usize(dict_idx)
+                            .ok_or(ArrowError::DictionaryKeyOverflowError)?,
+                    );
+                }
+                self.keys_builder.append_slice(&key_buf);
+            }
+            Some(nulls) => {
+                let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
+                let mut valid_buf: Vec<bool> = Vec::with_capacity(row_count);
+                for row_idx in 0..row_count {
+                    if nulls.is_null(row_idx) {
+                        key_buf.push(K::Native::usize_as(0));
+                        valid_buf.push(false);
+                    } else {
+                        let start = offsets[row_idx].as_usize();
+                        let end = offsets[row_idx + 1].as_usize();
+                        // SAFETY: offsets are valid by GenericByteArray invariants
+                        let bytes = unsafe { raw_data.get_unchecked(start..end) };
+                        let state = &self.state;
+                        let storage = &mut self.values_builder;
+                        let hash = state.hash_one(bytes);
+                        let dict_idx = *self
+                            .dedup
+                            .entry(
+                                hash,
+                                |idx| bytes == get_bytes(storage, *idx),
+                                |idx| state.hash_one(get_bytes(storage, *idx)),
+                            )
+                            .or_insert_with(|| {
+                                let idx = storage.len();
+                                // SAFETY: row_idx < row_count = array.len(), slot is non-null
+                                storage.append_value(unsafe { array.value_unchecked(row_idx) });
+                                idx
+                            })
+                            .get();
+                        key_buf.push(
+                            K::Native::from_usize(dict_idx)
+                                .ok_or(ArrowError::DictionaryKeyOverflowError)?,
+                        );
+                        valid_buf.push(true);
+                    }
+                }
+                self.keys_builder.append_values(&key_buf, &valid_buf);
+            }
+        }
+        Ok(())
+    }
+
     /// Extends builder with an existing dictionary array.
     ///
     /// This is the same as [`Self::extend`] but is faster as it translates
@@ -1107,5 +1196,55 @@ mod tests {
             all_values,
             [Some("a"), Some("b"), Some("c"), Some("d"), Some("e"),]
         );
+    }
+
+    #[test]
+    fn test_append_array_deduplicates_repeated_values() {
+        let input = StringArray::from(vec!["a", "b", "a", "c", "b", "a"]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&input).unwrap();
+        let result = builder.finish();
+
+        let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        for value in input.iter() {
+            expected_builder.append_option(value);
+        }
+        let expected = expected_builder.finish();
+
+        assert_eq!(result.keys().values(), expected.keys().values());
+        assert_eq!(result.values().len(), 3);
+    }
+
+    #[test]
+    fn test_append_array_dedup_across_consecutive_calls() {
+        let first = StringArray::from(vec!["a", "b"]);
+        let second = StringArray::from(vec!["b", "c", "a"]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&first).unwrap();
+        builder.append_array(&second).unwrap();
+        let result = builder.finish();
+
+        assert_eq!(result.keys().values(), &[0, 1, 1, 2, 0]);
+        assert_eq!(result.values().len(), 3);
+    }
+
+    #[test]
+    fn test_append_array_preserves_null_positions() {
+        let input = StringArray::from(vec![Some("x"), None, Some("x"), None, Some("y")]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&input).unwrap();
+        let result = builder.finish();
+
+        let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        for value in input.iter() {
+            expected_builder.append_option(value);
+        }
+        let expected = expected_builder.finish();
+
+        assert_eq!(result.keys(), expected.keys());
+        assert_eq!(result.values().len(), 2);
     }
 }
