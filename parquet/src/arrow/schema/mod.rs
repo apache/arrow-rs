@@ -267,12 +267,12 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
                 bytes.as_slice()
             };
             match arrow_ipc::root_as_message(slice) {
-                Ok(message) => message
-                    .header_as_schema()
-                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema"))
-                    .and_then(|schema| {
-                        arrow_ipc::convert::try_fb_to_schema(schema).map_err(Into::into)
-                    }),
+                Ok(message) => {
+                    let schema = message
+                        .header_as_schema()
+                        .ok_or_else(|| arrow_err!("the message is not Arrow Schema"))?;
+                    arrow_ipc::convert::try_fb_to_schema(schema).map_err(Into::into)
+                }
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
@@ -1970,7 +1970,7 @@ mod tests {
                         assert_eq!(a.physical_type(), b.physical_type());
                         assert_eq!(a.converted_type(), b.converted_type());
                     }
-                };
+                }
             });
     }
 

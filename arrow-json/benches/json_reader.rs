@@ -221,7 +221,7 @@ fn build_wide_projection_json(rows: usize, total_fields: usize) -> Vec<u8> {
                 data.push(',');
             }
             // Use fixed-width values for stable benchmarks: 7 digits
-            let _ = write!(data, "\"f{}\":{:07}", i, i);
+            let _ = write!(data, "\"f{i}\":{i:07}");
         }
         data.push('}');
         data.push('\n');

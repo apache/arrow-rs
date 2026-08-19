@@ -274,9 +274,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         ArrayRef,
         Option<NullBuffer>,
     ) {
-        let f = match self.data_type {
-            DataType::ListView(f) | DataType::LargeListView(f) => f,
-            _ => unreachable!(),
+        let (DataType::ListView(f) | DataType::LargeListView(f)) = self.data_type else {
+            unreachable!()
         };
         (
             f,

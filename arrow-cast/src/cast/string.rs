@@ -166,10 +166,8 @@ fn cast_string_to_timestamp_impl<
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     if cast_options.safe {
         let iter = iter.map(|v| {
-            v.and_then(|v| {
-                let naive = string_to_datetime(tz, v).ok()?.naive_utc();
-                T::from_naive_datetime(naive, None)
-            })
+            let naive = string_to_datetime(tz, v?).ok()?.naive_utc();
+            T::from_naive_datetime(naive, None)
         });
         // Benefit:
         //     20% performance improvement
@@ -315,7 +313,7 @@ where
     F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
 {
     let interval_array = if cast_options.safe {
-        let iter = iter.map(|v| v.and_then(|v| parse_function(v).ok()));
+        let iter = iter.map(|v| parse_function(v?).ok());
 
         // Benefit:
         //     20% performance improvement
@@ -343,7 +341,7 @@ where
     B: Extend<Option<&'a str>>,
     I: Iterator<Item = Option<&'a [u8]>>,
 {
-    builder.extend(iter.map(|value| value.and_then(|bytes| std::str::from_utf8(bytes).ok())));
+    builder.extend(iter.map(|value| std::str::from_utf8(value?).ok()));
 }
 
 pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(

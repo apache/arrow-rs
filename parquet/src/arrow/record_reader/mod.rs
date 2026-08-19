@@ -191,7 +191,7 @@ where
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Option<Vec<i16>> {
-        self.def_levels.as_mut().and_then(|x| x.consume_levels())
+        self.def_levels.as_mut()?.consume_levels()
     }
 
     /// Return repetition level data.

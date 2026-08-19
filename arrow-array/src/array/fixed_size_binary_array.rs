@@ -697,9 +697,8 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_length = match data_type {
-            DataType::FixedSizeBinary(len) => len,
-            _ => panic!("Expected data type to be FixedSizeBinary"),
+        let DataType::FixedSizeBinary(value_length) = data_type else {
+            panic!("Expected data type to be FixedSizeBinary")
         };
 
         let value_size = value_length
@@ -793,13 +792,12 @@ impl<const N: usize> TryFrom<Vec<Option<&[u8; N]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8; N]>>) -> Result<Self, Self::Error> {
-        N.try_into()
-            .map_err(|_| {
-                ArrowError::InvalidArgumentError(format!(
-                    "FixedSizeBinaryArray value length exceeds i32, got {N}"
-                ))
-            })
-            .and_then(|x| Self::try_from_sparse_iter_with_size(v.into_iter(), x))
+        let size = N.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray value length exceeds i32, got {N}"
+            ))
+        })?;
+        Self::try_from_sparse_iter_with_size(v.into_iter(), size)
     }
 }
 
@@ -1121,7 +1119,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_vec() {
-        let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
+        let values = vec![b"one".as_slice(), b"two", b"six", b"ten"];
         let array = FixedSizeBinaryArray::try_from(values).unwrap();
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
@@ -1138,14 +1136,14 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_vec_incorrect_length() {
-        let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
+        let values = vec![b"one".as_slice(), b"two", b"three", b"four"];
         assert!(FixedSizeBinaryArray::try_from(values).is_err());
     }
 
     #[test]
     fn test_fixed_size_binary_array_from_opt_vec() {
         let values = vec![
-            Some("one".as_bytes()),
+            Some(b"one".as_slice()),
             Some(b"two"),
             None,
             Some(b"six"),
@@ -1167,7 +1165,7 @@ mod tests {
     #[test]
     fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
         let values = vec![
-            Some("one".as_bytes()),
+            Some(b"one".as_slice()),
             Some(b"two"),
             None,
             Some(b"three"),
@@ -1208,7 +1206,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a FixedSizeBinaryArray of length 3"
     )]
     fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
-        let values = vec![Some("one".as_bytes()), Some(b"two"), None];
+        let values = vec![Some(b"one".as_slice()), Some(b"two"), None];
         let array = FixedSizeBinaryArray::try_from(values).unwrap();
 
         array.value(4);

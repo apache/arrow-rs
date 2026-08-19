@@ -1939,13 +1939,12 @@ mod tests {
         let rows: Vec<Result<Row>> = iter.collect();
         assert_eq!(rows.len(), actual_rows + 1);
         for row in &rows[..actual_rows] {
-            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
+            assert!(row.is_ok(), "Expected Ok row, got: {row:?}");
         }
         let err = rows[actual_rows].as_ref().unwrap_err();
         assert!(
             err.to_string().contains("Unexpected end of column data"),
-            "Unexpected error message: {}",
-            err
+            "Unexpected error message: {err}"
         );
     }
 

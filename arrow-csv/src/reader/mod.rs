@@ -1017,15 +1017,13 @@ fn parse(
         })
         .collect();
 
-    arrays.and_then(|arr| {
-        RecordBatch::try_new_with_options(
-            projected_schema,
-            arr,
-            &RecordBatchOptions::new()
-                .with_match_field_names(true)
-                .with_row_count(Some(rows.len())),
-        )
-    })
+    RecordBatch::try_new_with_options(
+        projected_schema,
+        arrays?,
+        &RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(rows.len())),
+    )
 }
 
 fn parse_bool(string: &str) -> Option<bool> {

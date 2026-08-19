@@ -58,7 +58,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     WithPath(VariantPathRowBuilder<'a>),
 }
 
-impl<'a> VariantToArrowRowBuilder<'a> {
+impl VariantToArrowRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToArrowRowBuilder::*;
         match self {
@@ -199,7 +199,7 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             builder: Box::new(builder),
             path,
         })
-    };
+    }
 
     Ok(builder)
 }
@@ -252,7 +252,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     BinaryView(VariantToBinaryArrowRowBuilder<'a, BinaryViewBuilder>),
 }
 
-impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
+impl PrimitiveVariantToArrowRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
@@ -1185,7 +1185,7 @@ pub(crate) struct VariantPathRowBuilder<'a> {
     path: VariantPath<'a>,
 }
 
-impl<'a> VariantPathRowBuilder<'a> {
+impl VariantPathRowBuilder<'_> {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null()
     }
@@ -1436,7 +1436,7 @@ enum ListElementBuilder<'a> {
     Shredded(Box<VariantToShreddedVariantRowBuilder<'a>>),
 }
 
-impl<'a> ListElementBuilder<'a> {
+impl ListElementBuilder<'_> {
     fn append_null(&mut self) -> Result<()> {
         match self {
             Self::Typed(b) => b.append_null(),
@@ -1803,14 +1803,10 @@ mod tests {
         ];
 
         for data_type in non_primitive_types {
-            let err = match make_primitive_variant_to_arrow_row_builder(
-                &data_type,
-                &cast_options,
-                1,
-                false,
-            ) {
-                Ok(_) => panic!("non-primitive type {data_type:?} should be rejected"),
-                Err(err) => err,
+            let Err(err) =
+                make_primitive_variant_to_arrow_row_builder(&data_type, &cast_options, 1, false)
+            else {
+                panic!("non-primitive type {data_type:?} should be rejected")
             };
 
             match err {

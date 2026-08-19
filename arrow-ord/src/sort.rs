@@ -957,7 +957,7 @@ pub fn lexsort_to_indices(
         return Err(ArrowError::ComputeError(
             "lexical sort columns have different row counts".to_string(),
         ));
-    };
+    }
 
     let len = limit.unwrap_or(row_count).min(row_count);
 

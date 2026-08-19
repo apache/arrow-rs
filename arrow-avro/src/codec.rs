@@ -1089,8 +1089,7 @@ fn parse_decimal_attributes(
     }
     if precision > DECIMAL256_MAX_PRECISION as usize {
         return Err(ArrowError::ParseError(format!(
-            "Decimal precision {precision} exceeds maximum supported by Arrow ({})",
-            DECIMAL256_MAX_PRECISION
+            "Decimal precision {precision} exceeds maximum supported by Arrow ({DECIMAL256_MAX_PRECISION})"
         )));
     }
     if let Some(sz) = size {
@@ -1555,7 +1554,7 @@ impl<'a> Maker<'a> {
                                 return Err(ArrowError::ParseError(format!(
                                     "Invalid fixed size for Duration: {size}, must be 12"
                                 )));
-                            };
+                            }
                             AvroDataType {
                                 nullability: None,
                                 metadata,
@@ -1963,7 +1962,7 @@ impl<'a> Maker<'a> {
                             first_resolution = Some((reader_index, dt));
                         }
                     }
-                };
+                }
             }
         }
         first_resolution

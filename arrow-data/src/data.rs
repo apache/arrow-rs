@@ -1018,7 +1018,7 @@ impl ArrayData {
                 ));
             }
             _ => {}
-        };
+        }
 
         Ok(())
     }
@@ -1465,17 +1465,14 @@ impl ArrayData {
         mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
-        let mask = match mask {
-            Some(mask) => mask,
-            None => {
-                return match child.null_count() {
-                    0 => Ok(()),
-                    _ => Err(ArrowError::InvalidArgumentError(format!(
-                        "non-nullable child of type {} contains nulls not present in parent {}",
-                        child.data_type, self.data_type
-                    ))),
-                };
-            }
+        let Some(mask) = mask else {
+            return match child.null_count() {
+                0 => Ok(()),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent {}",
+                    child.data_type, self.data_type
+                ))),
+            };
         };
 
         match child.nulls() {
@@ -1720,8 +1717,7 @@ impl ArrayData {
         let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
         if prev_value.as_usize() < len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                len_plus_offset
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
             )));
         }
         Ok(())
@@ -1744,7 +1740,7 @@ impl ArrayData {
             (Some(a), Some(b)) if !a.inner().ptr_eq(b.inner()) => return false,
             (Some(_), None) | (None, Some(_)) => return false,
             _ => {}
-        };
+        }
 
         if !self
             .buffers
@@ -2608,7 +2604,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&int_data_slice));
         assert!(!int_data_slice.ptr_eq(&int_data));
 
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2687,7 +2683,7 @@ mod tests {
     #[test]
     fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
         // 2-element array ["hello", "world"]: array len = 2, 10 bytes
-        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"helloworld");
         // offsets need array_len+1 entries to mark the end of every string:
         //   [0, 5, 10] -> 3 i32s = 12 bytes
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
@@ -2739,7 +2735,7 @@ mod tests {
             data.get_slice_memory_size().unwrap() - 8,
             new_data.get_slice_memory_size().unwrap()
         );
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2933,7 +2929,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -2988,7 +2984,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3047,7 +3043,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3099,7 +3095,7 @@ mod tests {
                     assert_eq!(msg, "Map key field must not be nullable")
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3153,7 +3149,7 @@ mod tests {
                     "The nullable should be set to false for the map entries field."
                 ),
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 

@@ -178,13 +178,13 @@ impl ArrayReader for StructArrayReader {
     fn get_def_levels(&self) -> Option<&[i16]> {
         // Children definition levels should describe the same
         // parent structure, so return first child's
-        self.children.first().and_then(|l| l.get_def_levels())
+        self.children.first()?.get_def_levels()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         // Children definition levels should describe the same
         // parent structure, so return first child's
-        self.children.first().and_then(|l| l.get_rep_levels())
+        self.children.first()?.get_rep_levels()
     }
 
     fn max_def_level(&self) -> i16 {

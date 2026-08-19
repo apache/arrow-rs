@@ -179,7 +179,7 @@ where
     // handling, which is faster and simpler for scaling by 10^delta_scale.
     let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
     let mul = max.add_wrapping(O::Native::ONE);
-    let f_fallible = move |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked(mul).ok();
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
@@ -369,9 +369,8 @@ where
     } else {
         let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
-            f_fallible(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
-            })
+            let v = f_fallible(x).ok_or_else(|| error(x))?;
+            O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
         })?
     };
     Ok(array)
@@ -718,8 +717,8 @@ where
 {
     if cast_options.safe {
         let iter = from.iter().map(|v| {
-            v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
-                .and_then(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            let v = v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())?;
+            T::is_valid_decimal_precision(v, precision).then_some(v)
         });
         // Benefit:
         //     15-19% faster than appending to a PrimitiveBuilder (measured
@@ -858,17 +857,16 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
-                    .ok_or_else(|| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            D::PREFIX,
-                            precision,
-                            scale,
-                            v
-                        ))
-                    })
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = single_float_to_decimal::<D>(v.as_(), mul).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        D::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    ))
+                })?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)

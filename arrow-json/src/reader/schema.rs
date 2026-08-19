@@ -440,7 +440,7 @@ where
                     "Expected JSON record to be an object, found {value:?}"
                 )));
             }
-        };
+        }
     }
 
     generate_schema(field_types)

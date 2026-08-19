@@ -495,7 +495,7 @@ impl RowGroupReaderBuilder {
                         column_chunks,
                         cache_info: None,
                     }));
-                };
+                }
 
                 // we have predicates to evaluate
                 let cache_projection =

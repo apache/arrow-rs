@@ -153,20 +153,19 @@ fn assert_token(token: Option<&str>, expected: &str) -> Result<()> {
 #[inline]
 fn parse_i32(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<i32> {
     value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| v.parse::<i32>().map_err(|_| general_err!(parse_fail_msg)))
+        .ok_or_else(|| general_err!(not_found_msg))?
+        .parse::<i32>()
+        .map_err(|_| general_err!(parse_fail_msg))
 }
 
 // Utility function to parse boolean or return general error.
 #[inline]
 fn parse_bool(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<bool> {
     value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| {
-            v.to_lowercase()
-                .parse::<bool>()
-                .map_err(|_| general_err!(parse_fail_msg))
-        })
+        .ok_or_else(|| general_err!(not_found_msg))?
+        .to_lowercase()
+        .parse::<bool>()
+        .map_err(|_| general_err!(parse_fail_msg))
 }
 
 // Utility function to parse TimeUnit or return general error.
@@ -175,14 +174,13 @@ fn parse_timeunit(
     not_found_msg: &str,
     parse_fail_msg: &str,
 ) -> Result<TimeUnit> {
-    value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| match v.to_uppercase().as_str() {
-            "MILLIS" => Ok(TimeUnit::MILLIS),
-            "MICROS" => Ok(TimeUnit::MICROS),
-            "NANOS" => Ok(TimeUnit::NANOS),
-            _ => Err(general_err!(parse_fail_msg)),
-        })
+    let v = value.ok_or_else(|| general_err!(not_found_msg))?;
+    match v.to_uppercase().as_str() {
+        "MILLIS" => Ok(TimeUnit::MILLIS),
+        "MICROS" => Ok(TimeUnit::MICROS),
+        "NANOS" => Ok(TimeUnit::NANOS),
+        _ => Err(general_err!(parse_fail_msg)),
+    }
 }
 
 impl Parser<'_> {

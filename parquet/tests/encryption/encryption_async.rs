@@ -149,7 +149,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: No column decryption key set for encrypted column 'double_field'",
         footer_key,
-        "".as_bytes(),
+        b"",
         column_2_key,
         empty_column_key,
     )
@@ -163,7 +163,7 @@ async fn test_misspecified_encryption_keys() {
         )
         .as_str(),
         footer_key,
-        "abc".as_bytes(),
+        b"abc",
         column_2_key,
         empty_column_key,
     )
@@ -173,7 +173,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
         footer_key,
-        "1123456789012345".as_bytes(),
+        b"1123456789012345",
         column_2_key,
         empty_column_key,
     )
@@ -224,7 +224,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: No column decryption key set for encrypted column 'double_field'",
         aes256_footer_key,
-        "".as_bytes(),
+        b"",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -238,7 +238,7 @@ async fn test_misspecified_encryption_keys() {
         )
         .as_str(),
         aes256_footer_key,
-        "abc".as_bytes(),
+        b"abc",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -248,7 +248,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
         aes256_footer_key,
-        "22345678901234567890123456789012".as_bytes(),
+        b"22345678901234567890123456789012",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -344,7 +344,7 @@ async fn test_aes_ctr_encryption() {
             _ => {
                 panic!("Expected ParquetError::NYI");
             }
-        };
+        }
     }
 
     aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
@@ -513,7 +513,7 @@ async fn test_read_encrypted_file_from_object_store() {
     let store = Arc::new(LocalFileSystem::new_with_prefix(test_data).unwrap());
     let path = Path::from("uniform_encryption.parquet.encrypted");
 
-    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let key_code: &[u8] = b"0123456789012345";
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
         .build()
         .unwrap();
