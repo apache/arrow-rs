@@ -296,6 +296,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
         let offsets = self.value_offsets();
+        // An `OffsetBuffer` is never empty, but an empty array is ASCII either way
         let (Some(start), Some(end)) = (offsets.first(), offsets.last()) else {
             return true;
         };

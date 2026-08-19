@@ -209,6 +209,7 @@ where
             &self.run_ends[start..=end]
         };
         physical_slice.iter().map(move |&val| {
+            // `len` is at most the largest run end, so it always fits in `E`
             let val = val.as_usize().saturating_sub(offset).min(len);
             E::usize_as(val)
         })
@@ -340,10 +341,8 @@ where
         ordered_indices.sort_unstable_by_key(|&idx| logical_indices[idx].as_usize());
 
         // Return early if all the logical indices cannot be converted to physical indices.
-        let Some(&largest_ordered_index) = ordered_indices.last() else {
-            return Ok(vec![]);
-        };
-        let largest_logical_index = logical_indices[largest_ordered_index];
+        // `ordered_indices` has `indices_len` entries, and the empty case returned above.
+        let largest_logical_index = logical_indices[ordered_indices[indices_len - 1]];
         if largest_logical_index.as_usize() >= len {
             return Err(largest_logical_index);
         }
