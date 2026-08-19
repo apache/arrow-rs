@@ -2027,6 +2027,10 @@ impl<'a> StatisticsConverter<'a> {
     ///   extract the column offset index on a per row group per column basis.
     ///
     /// See docs on [`Self::data_page_mins`] for details.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "a page location list in the offset index is never empty"
+    )]
     pub fn data_page_row_counts<I>(
         &self,
         column_offset_index: &ParquetOffsetIndex,

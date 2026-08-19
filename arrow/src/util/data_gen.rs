@@ -63,6 +63,10 @@ pub fn create_random_batch(
 /// * `null_density` - The approximate fraction of null values in the resulting array (0.0 to 1.0)
 /// * `true_density` - The approximate fraction of true values in boolean arrays (0.0 to 1.0)
 ///
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the null density is set to zero for non-nullable fields"
+)]
 pub fn create_random_array(
     field: &Field,
     size: usize,

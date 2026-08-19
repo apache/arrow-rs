@@ -381,6 +381,10 @@ impl UnionArray {
     /// # Ok(())
     /// # }
     /// ```
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "a `UnionArray` always has a union data type with a child per type id"
+    )]
     pub fn into_parts(
         self,
     ) -> (

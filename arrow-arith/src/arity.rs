@@ -251,6 +251,10 @@ where
 ///
 /// Return an error if the arrays have different lengths or
 /// the operation is under erroneous
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the null buffers of two equal-length arrays with nulls always combine"
+)]
 pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
     a: A,
     b: B,
@@ -302,6 +306,10 @@ where
 /// Like [`try_unary`] the function is only evaluated for non-null indices.
 ///
 /// See [`binary_mut`] for errors and buffer reuse information.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the null buffers of two equal-length arrays with nulls always combine"
+)]
 pub fn try_binary_mut<T, F>(
     a: PrimitiveArray<T>,
     b: &PrimitiveArray<T>,

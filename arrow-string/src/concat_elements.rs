@@ -414,6 +414,10 @@ pub fn concat_elements_string_view_array(
 /// # Errors
 ///
 /// This function errors if the arrays are of different types.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "an array always matches the concrete type of its data type"
+)]
 pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8) => {

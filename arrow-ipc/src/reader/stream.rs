@@ -156,6 +156,10 @@ impl StreamDecoder {
     ///     Ok(())
     /// }
     /// ```
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the header type was just checked to be a record batch"
+    )]
     pub fn decode(&mut self, buffer: &mut Buffer) -> Result<Option<RecordBatch>, ArrowError> {
         while !buffer.is_empty() {
             match &mut self.state {

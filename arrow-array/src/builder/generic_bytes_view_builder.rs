@@ -466,6 +466,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// # Ok::<(), arrow_schema::ArrowError>(())
     /// ```
     #[inline]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "`try_append_value` always pushes exactly one view"
+    )]
     pub fn try_append_value_n(
         &mut self,
         value: impl AsRef<T::Native>,

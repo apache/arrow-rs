@@ -1207,6 +1207,10 @@ impl ArrowJsonBatch {
     /// to an empty `ArrowJsonColumn`.
     ///
     /// </div>
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "a column always matches the concrete type of its data type"
+    )]
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),

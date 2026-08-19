@@ -860,6 +860,10 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     }
 
     /// Closes this row group writer and returns row group metadata.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the row group metadata is set just above"
+    )]
     pub fn close(mut self) -> Result<RowGroupMetaDataPtr> {
         if self.row_group_metadata.is_none() {
             self.assert_previous_writer_closed()?;

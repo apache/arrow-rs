@@ -396,6 +396,10 @@ impl Buffer {
     /// ```
     ///
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the buffer has no offset, so it starts at the allocation pointer"
+    )]
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;

@@ -206,6 +206,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// * `offsets.last() > values.len()`
     /// * `!field.is_nullable() && values.is_nullable()`
     /// * `field.data_type() != values.data_type()`
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "an `OffsetBuffer` is never empty"
+    )]
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<OffsetSize>,
