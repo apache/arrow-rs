@@ -30,22 +30,24 @@ on:
     paths:
       - .github/**
       - rust-toolchain.toml
+      - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-cmp/**
       - arrow-csv/**
       - arrow-data/**
+      - arrow-flight/**
       - arrow-integration-test/**
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
-      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-pyarrow/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-sort/**
       - arrow-string/**
       - arrow/**
 

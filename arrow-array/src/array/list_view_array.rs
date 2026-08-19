@@ -274,9 +274,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         ArrayRef,
         Option<NullBuffer>,
     ) {
-        let f = match self.data_type {
-            DataType::ListView(f) | DataType::LargeListView(f) => f,
-            _ => unreachable!(),
+        let (DataType::ListView(f) | DataType::LargeListView(f)) = self.data_type else {
+            unreachable!()
         };
         (
             f,
@@ -446,6 +445,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             }
         }
         builder.finish()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListViewArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListViewArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListViewArrayIter::<'a, OffsetSize>::new(self)
     }
 }
 

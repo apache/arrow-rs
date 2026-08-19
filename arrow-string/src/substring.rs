@@ -521,7 +521,7 @@ mod tests {
 
     fn with_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec![
-            Some("hello".as_bytes()),
+            Some(b"hello".as_slice()),
             None,
             Some(&[0xf8, 0xf9, 0xff, 0xfa]),
         ];
@@ -562,11 +562,11 @@ mod tests {
     }
 
     fn without_nulls_generic_binary<O: OffsetSizeTrait>() {
-        let input = vec!["hello".as_bytes(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
+        let input = vec![b"hello".as_slice(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), b"", b""],
-            (2, Some(1), vec!["".as_bytes(), b"", b""])
+            vec![b"".as_slice(), b"", b""],
+            (2, Some(1), vec![b"".as_slice(), b"", b""])
         );
         let cases = gen_test_cases!(
             input,
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn with_nulls_fixed_size_binary() {
-        let input = vec![Some("cat".as_bytes()), None, Some(&[0xf8, 0xf9, 0xff])];
+        let input = vec![Some(b"cat".as_slice()), None, Some(&[0xf8, 0xf9, 0xff])];
         // all-nulls array is always identical
         let base_case =
             gen_test_cases!(vec![None, None, None], (3, Some(2), vec![None, None, None]));
@@ -690,11 +690,11 @@ mod tests {
 
     #[test]
     fn without_nulls_fixed_size_binary() {
-        let input = vec!["cat".as_bytes(), b"dog", &[0xf8, 0xf9, 0xff]];
+        let input = vec![b"cat".as_slice(), b"dog", &[0xf8, 0xf9, 0xff]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), &[], &[]],
-            (1, Some(2), vec!["".as_bytes(), &[], &[]])
+            vec![b"".as_slice(), &[], &[]],
+            (1, Some(2), vec![b"".as_slice(), &[], &[]])
         );
         let cases = gen_test_cases!(
             input,

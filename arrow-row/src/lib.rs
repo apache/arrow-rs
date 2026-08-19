@@ -158,7 +158,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -2391,7 +2390,7 @@ unsafe fn decode_column(
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
                         // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows.iter() {
+                        for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
                             let consumed_length = 1 + child_row.len() - remaining_len;
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
@@ -5399,7 +5398,7 @@ mod tests {
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
         let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays.iter() {
+        for array in &arrays {
             rows.clear();
             converter
                 .append(&mut rows, std::slice::from_ref(array))
@@ -5432,7 +5431,7 @@ mod tests {
 
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let values = BinaryArray::from(vec![
-            Some("a".as_bytes()),
+            Some(b"a".as_slice()),
             Some(b"b"),
             Some(b"c"),
             Some(b"d"),

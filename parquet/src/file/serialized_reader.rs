@@ -291,7 +291,7 @@ fn get_midpoint_offset(meta: &RowGroupMetaData) -> i64 {
         && offset > dic_offset
     {
         offset = dic_offset
-    };
+    }
     offset + meta.compressed_size() / 2
 }
 
@@ -516,7 +516,7 @@ pub(crate) fn decode_page(
                 statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
-        _ => {
+        PageType::INDEX_PAGE => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
             return Err(general_err!(
                 "Page type {:?} is not supported",
@@ -1439,13 +1439,13 @@ mod tests {
                     assert_eq!(num_values, 8);
                     assert_eq!(encoding, Encoding::PLAIN_DICTIONARY);
                     assert_eq!(def_level_encoding, Encoding::RLE);
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     let expected_rep_level_encoding = Encoding::BIT_PACKED;
                     assert_eq!(rep_level_encoding, expected_rep_level_encoding);
                     assert!(statistics.is_none());
                     true
                 }
-                _ => false,
+                Page::DataPageV2 { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1472,10 +1472,7 @@ mod tests {
             "parquet-mr version 1.8.1 (build 4aba4dae7bb0d4edbcf7923ae1339f28fd3f7fcf)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 5);
         assert_eq!(file_metadata.version(), 1);
@@ -1543,7 +1540,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1571,10 +1568,7 @@ mod tests {
             "parquet-cpp-arrow version 14.0.2"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            1
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 1);
 
         assert_eq!(file_metadata.num_rows(), 10);
         assert_eq!(file_metadata.version(), 2);
@@ -1645,7 +1639,7 @@ mod tests {
                     assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
-                _ => false,
+                Page::DataPage { .. } => false,
             };
             assert!(is_expected_page);
             page_count += 1;
@@ -1673,10 +1667,7 @@ mod tests {
             "parquet-mr version 1.13.1 (build db4183109d5b734ec5930d870cdae161e408ddba)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
-        assert_eq!(
-            file_metadata.key_value_metadata().to_owned().unwrap().len(),
-            2
-        );
+        assert_eq!(file_metadata.key_value_metadata().unwrap().len(), 2);
 
         assert_eq!(file_metadata.num_rows(), 1);
         assert_eq!(file_metadata.version(), 1);
@@ -2158,9 +2149,7 @@ mod tests {
 
         // only one row group
         assert_eq!(column_index.len(), 1);
-        let index = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
-            index
-        } else {
+        let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] else {
             unreachable!()
         };
 
@@ -2220,7 +2209,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[0].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
         assert!(&column_index[0][1].is_sorted());
         if let ColumnIndexMetaData::BOOLEAN(index) = &column_index[0][1] {
@@ -2228,7 +2217,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[1].page_locations.len(), 82);
         } else {
             unreachable!()
-        };
+        }
         //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][2].is_sorted());
         if let ColumnIndexMetaData::INT32(index) = &column_index[0][2] {
@@ -2241,7 +2230,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[2].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][3].is_sorted());
         if let ColumnIndexMetaData::INT32(index) = &column_index[0][3] {
@@ -2254,7 +2243,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[3].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][4].is_sorted());
         if let ColumnIndexMetaData::INT32(index) = &column_index[0][4] {
@@ -2267,7 +2256,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[4].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
         assert!(!&column_index[0][5].is_sorted());
         if let ColumnIndexMetaData::INT64(index) = &column_index[0][5] {
@@ -2280,7 +2269,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[5].page_locations.len(), 528);
         } else {
             unreachable!()
-        };
+        }
         //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
         assert!(&column_index[0][6].is_sorted());
         if let ColumnIndexMetaData::FLOAT(index) = &column_index[0][6] {
@@ -2293,7 +2282,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[6].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
         assert!(!&column_index[0][7].is_sorted());
         if let ColumnIndexMetaData::DOUBLE(index) = &column_index[0][7] {
@@ -2306,7 +2295,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[7].page_locations.len(), 528);
         } else {
             unreachable!()
-        };
+        }
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
         assert!(!&column_index[0][8].is_sorted());
         if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][8] {
@@ -2319,7 +2308,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[8].page_locations.len(), 974);
         } else {
             unreachable!()
-        };
+        }
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][9].is_sorted());
         if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][9] {
@@ -2332,7 +2321,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[9].page_locations.len(), 352);
         } else {
             unreachable!()
-        };
+        }
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
         assert!(!&column_index[0][10].is_sorted());
@@ -2340,7 +2329,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[10].page_locations.len(), 974);
         } else {
             unreachable!()
-        };
+        }
         //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
         assert!(&column_index[0][11].is_sorted());
         if let ColumnIndexMetaData::INT32(index) = &column_index[0][11] {
@@ -2353,7 +2342,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[11].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
         //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
         assert!(!&column_index[0][12].is_sorted());
         if let ColumnIndexMetaData::INT32(index) = &column_index[0][12] {
@@ -2366,7 +2355,7 @@ mod tests {
             assert_eq!(row_group_offset_indexes[12].page_locations.len(), 325);
         } else {
             unreachable!()
-        };
+        }
     }
 
     fn check_native_page_index<T: ParquetValueType>(
@@ -2702,7 +2691,7 @@ mod tests {
             match iter.next() {
                 Some(row) => check_row(row),
                 None => break,
-            };
+            }
             start += 1;
         }
     }

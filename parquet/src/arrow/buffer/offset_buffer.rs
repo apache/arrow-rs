@@ -235,10 +235,10 @@ mod tests {
     #[test]
     fn test_offset_buffer_append() {
         let mut buffer = OffsetBuffer::<i64>::with_capacity(0);
-        buffer.try_push("hello".as_bytes(), true).unwrap();
-        buffer.try_push("bar".as_bytes(), true).unwrap();
+        buffer.try_push(b"hello", true).unwrap();
+        buffer.try_push(b"bar", true).unwrap();
         buffer
-            .extend_from_dictionary(&[1, 3, 0, 2], &[0, 2, 4, 5, 6], "abcdef".as_bytes())
+            .extend_from_dictionary(&[1, 3, 0, 2], &[0, 2, 4, 5, 6], b"abcdef")
             .unwrap();
 
         let array = buffer.into_array(None, ArrowType::LargeUtf8);
@@ -264,7 +264,7 @@ mod tests {
             vec!["hello", "world", "cupcakes", "a", "b", "c"]
         );
 
-        buffer.try_push("test".as_bytes(), false).unwrap();
+        buffer.try_push(b"test", false).unwrap();
         let array = buffer.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
@@ -358,7 +358,7 @@ mod tests {
         // Offsets inconsistent with `values_read`: only one value was pushed,
         // but three are claimed to have been read.
         let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
-        buffer.try_push("a".as_bytes(), false).unwrap();
+        buffer.try_push(b"a", false).unwrap();
         let valid_mask = Buffer::from_iter([true, false, false]);
         let err = buffer
             .pad_nulls(0, 3, 3, valid_mask.as_slice())
