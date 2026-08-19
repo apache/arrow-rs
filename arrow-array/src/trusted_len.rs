@@ -37,7 +37,7 @@ where
     let mut buffer = MutableBuffer::new(len);
 
     let dst_null = null.as_mut_ptr();
-    let mut dst = buffer.as_mut_ptr() as *mut T;
+    let mut dst = buffer.as_mut_ptr().cast::<T>();
     for (i, item) in iterator.enumerate() {
         let item = item.borrow();
         if let Some(item) = item {

@@ -118,6 +118,10 @@ impl NullBuffer {
     /// Returns a new [`NullBuffer`] where each bit in the current null buffer
     /// is repeated `count` times. This is useful for masking the nulls of
     /// the child of a FixedSizeListArray based on its parent
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.len() * count` overflows `usize`
     pub fn expand(&self, count: usize) -> Self {
         let capacity = self.buffer.len().checked_mul(count).unwrap();
         let mut buffer = MutableBuffer::new_null(capacity);
@@ -168,12 +172,20 @@ impl NullBuffer {
     }
 
     /// Returns `true` if the value at `idx` is not null
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx >= self.len()`
     #[inline]
     pub fn is_valid(&self, idx: usize) -> bool {
         self.buffer.value(idx)
     }
 
     /// Returns `true` if the value at `idx` is null
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx >= self.len()`
     #[inline]
     pub fn is_null(&self, idx: usize) -> bool {
         !self.is_valid(idx)
@@ -186,6 +198,10 @@ impl NullBuffer {
     }
 
     /// Slices this [`NullBuffer`] by the provided `offset` and `length`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self::new(self.buffer.slice(offset, len))
     }
