@@ -194,12 +194,25 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    /// Add metadata to the schema
-    pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
+    /// Add metadata to the schema.
+    ///
+    /// # Safety
+    ///
+    /// Reinterprets `private_data` as a value this crate produced. `self` must
+    /// come from arrow-rs (e.g. [`FFI_ArrowSchema::try_new`] or a `TryFrom`),
+    /// not a foreign producer. See <https://github.com/apache/arrow-rs/issues/10679>.
+    pub unsafe fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
     {
+        // empty() leaves private_data null; error instead of deref-ing it (#10286).
+        if self.private_data.is_null() {
+            return Err(ArrowError::CDataInterface(
+                "Cannot add metadata to a schema with no private data".to_string(),
+            ));
+        }
+
         let metadata: Vec<(S, S)> = metadata.into_iter().collect();
         // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
         let new_metadata = if !metadata.is_empty() {
@@ -867,10 +880,11 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
-        FFI_ArrowSchema::try_from(field.data_type())?
+        let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
-            .with_flags(flags)?
-            .with_metadata(field.metadata())
+            .with_flags(flags)?;
+        // SAFETY: schema was just constructed by this crate.
+        unsafe { schema.with_metadata(field.metadata()) }
     }
 }
 
@@ -879,8 +893,9 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
-        Ok(c_schema)
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
+        // SAFETY: c_schema was just constructed by this crate.
+        unsafe { c_schema.with_metadata(&schema.metadata) }
     }
 }
 
@@ -1065,10 +1080,19 @@ mod tests {
             .unwrap();
 
         for metadata in metadata_cases {
-            schema = schema.with_metadata(&metadata).unwrap();
+            // SAFETY: schema was constructed by this crate via try_new.
+            schema = unsafe { schema.with_metadata(&metadata) }.unwrap();
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
+    }
+
+    #[test]
+    fn test_with_metadata_on_empty_schema_errors() {
+        // empty() has null private_data; with_metadata errors instead of UB (#10286).
+        let schema = FFI_ArrowSchema::empty();
+        let result = unsafe { schema.with_metadata([("key", "value")]) };
+        assert!(result.is_err());
     }
 
     #[test]
