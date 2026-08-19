@@ -31,6 +31,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{RecordBatchOptions, StringArray};
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
@@ -177,6 +178,83 @@ fn create_large_string_distinct_bench_batch(size: usize, value_size: usize) -> R
         (0..size).map(|i| format!("{i:08}{filler}")),
     )) as _;
     Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// Where nulls fall in a generated batch, for
+/// [`create_large_string_nullable_bench_batch`].
+#[derive(Clone, Copy)]
+enum NullPattern {
+    /// One null every `n` rows, spread evenly.
+    Every(usize),
+    /// `n` nulls in a single run at the end of the batch.
+    Trailing(usize),
+}
+
+/// `size` rows of `value_size`-byte strings with nulls, sharing a long common
+/// prefix when `shared_prefix` is set and differing from their first byte
+/// otherwise.
+///
+/// Nullability is the point. The non-null large-value batches leave the
+/// column's definition levels absent, so the writer's byte-budget
+/// sub-batching resolves a chunk's value count in O(1) and never inspects
+/// levels. Nulls put it on the general path, where the number of values that
+/// share a data page is derived from the chunk's level-to-value ratio.
+///
+/// That ratio is why the density levels chosen at the call sites are not
+/// simply "few" and "many". Where a single value already fills the page
+/// budget, the derived window spans `ceil(levels / values)` levels, so it
+/// covers about `levels / values` values instead of one — an overshoot that
+/// is largest when nulls are *sparse* and disappears exactly when the ratio
+/// is a whole number, as at one-null-in-two.
+fn create_large_string_nullable_bench_batch(
+    size: usize,
+    value_size: usize,
+    shared_prefix: bool,
+    nulls: NullPattern,
+) -> Result<RecordBatch> {
+    let filler = "x".repeat(value_size - 8);
+    let is_null = |i: usize| match nulls {
+        NullPattern::Every(n) => i % n == n - 1,
+        NullPattern::Trailing(n) => i >= size - n,
+    };
+    let array = Arc::new(StringArray::from_iter((0..size).map(|i| {
+        (!is_null(i)).then(|| {
+            if shared_prefix {
+                format!("{filler}{i:08}")
+            } else {
+                format!("{i:08}{filler}")
+            }
+        })
+    }))) as _;
+    Ok(RecordBatch::try_from_iter([("col", array)])?)
+}
+
+/// `size` records of `values_per_record` strings of `value_size` bytes,
+/// sharing a long common prefix.
+///
+/// A repeated column is the third level shape the writer sub-batches against,
+/// after absent and flat-nullable levels. Records cannot span data pages, so
+/// mini-batches must step whole records; with values this large a single
+/// record overruns the page limit on its own.
+fn create_list_large_string_bench_batch(
+    size: usize,
+    values_per_record: usize,
+    value_size: usize,
+) -> Result<RecordBatch> {
+    let prefix = "x".repeat(value_size - 8);
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    for i in 0..size {
+        for j in 0..values_per_record {
+            builder
+                .values()
+                .append_value(format!("{prefix}{:08}", i * values_per_record + j));
+        }
+        builder.append(true);
+    }
+    Ok(RecordBatch::try_from_iter([(
+        "col",
+        Arc::new(builder.finish()) as _,
+    )])?)
 }
 
 /// `size` rows of `value_size`-byte strings sharing their first
@@ -813,9 +891,88 @@ fn bench_delta_byte_array_writers(c: &mut Criterion) {
         .set_encoding(Encoding::DELTA_BYTE_ARRAY)
         .build();
 
-    for (batch_name, batch) in [
-        ("large_string_shared_prefix", &shared),
-        ("large_string_distinct", &distinct),
+    // Nullable and repeated counterparts. Each varies one property of the
+    // first nullable case, so a movement can be attributed to that property
+    // rather than to some combination:
+    //
+    // * `_dense` changes only the null density, to a ratio of exactly two
+    //   levels per value. Deriving a window from that ratio is exact, so this
+    //   case is the one where sub-batching arithmetic cannot go wrong — it
+    //   should stay flat when the others move.
+    // * `_trailing` changes only where the nulls sit, keeping the count. A
+    //   run of nulls at the end leaves every window before it holding values
+    //   only, which is the worst placement for `DELTA_BYTE_ARRAY`.
+    // * `distinct_nullable` changes only the prefix, removing what
+    //   deduplication has to work with.
+    // * `medium_string_*` changes only the value size, to a size where
+    //   several values share a page budget rather than one overrunning it.
+    // * `_list` changes only the level shape, to a repeated column. Records
+    //   cannot span pages, so this one is a control: the writer's output for
+    //   it is byte for byte identical across the changes it is used to judge.
+    //
+    // `PLAIN` is measured wherever page count alone drives the result, and
+    // omitted where it would only restate a neighbouring case: it does not
+    // read the previous value, so prefix, null placement and value size do
+    // not change its per-page work.
+    let nullable = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        true,
+        NullPattern::Every(16),
+    )
+    .unwrap();
+    let nullable_dense =
+        create_large_string_nullable_bench_batch(128, 2 * 1024 * 1024, true, NullPattern::Every(2))
+            .unwrap();
+    let nullable_trailing = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        true,
+        NullPattern::Trailing(8),
+    )
+    .unwrap();
+    let nullable_distinct = create_large_string_nullable_bench_batch(
+        128,
+        2 * 1024 * 1024,
+        false,
+        NullPattern::Every(16),
+    )
+    .unwrap();
+    // 256 KiB against the 1 MiB default limit: several values to a page.
+    let nullable_medium =
+        create_large_string_nullable_bench_batch(1024, 256 * 1024, true, NullPattern::Every(16))
+            .unwrap();
+    // 4 values per record, so one record is ~8 MiB and cannot be split.
+    let list = create_list_large_string_bench_batch(32, 4, 2 * 1024 * 1024).unwrap();
+
+    let both: &[(&str, &WriterProperties)] = &[("plain", &plain), ("delta_byte_array", &delta)];
+    let delta_only: &[(&str, &WriterProperties)] = &[("delta_byte_array", &delta)];
+
+    for (batch_name, batch, props) in [
+        ("large_string_shared_prefix", &shared, both),
+        ("large_string_distinct", &distinct, both),
+        ("large_string_shared_prefix_nullable", &nullable, both),
+        (
+            "large_string_shared_prefix_nullable_dense",
+            &nullable_dense,
+            delta_only,
+        ),
+        (
+            "large_string_shared_prefix_nullable_trailing",
+            &nullable_trailing,
+            delta_only,
+        ),
+        (
+            "large_string_distinct_nullable",
+            &nullable_distinct,
+            delta_only,
+        ),
+        (
+            "medium_string_shared_prefix_nullable",
+            &nullable_medium,
+            delta_only,
+        ),
+        ("large_string_shared_prefix_list", &list, delta_only),
     ] {
         let mut group = c.benchmark_group(batch_name);
         group.throughput(Throughput::Bytes(
@@ -826,8 +983,8 @@ fn bench_delta_byte_array_writers(c: &mut Criterion) {
                 .sum(),
         ));
 
-        for (prop_name, prop) in [("plain", &plain), ("delta_byte_array", &delta)] {
-            group.bench_function(prop_name, |b| {
+        for (prop_name, prop) in props {
+            group.bench_function(*prop_name, |b| {
                 write_batch_with_option(b, batch, Some((*prop).clone())).unwrap()
             });
         }

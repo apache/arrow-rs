@@ -233,7 +233,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
         match &mut self.decoder {
             MaybePacked::Packed(d) => d.set_data(encoding, data),
             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
-        };
+        }
         Ok(())
     }
 }
@@ -385,7 +385,7 @@ impl PackedDecoder {
         self.packed_offset = 0;
         self.packed_count = match encoding {
             Encoding::RLE => 0,
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Encoding::BIT_PACKED => data.len() * 8,
             _ => unreachable!("invalid level encoding: {}", encoding),
         };

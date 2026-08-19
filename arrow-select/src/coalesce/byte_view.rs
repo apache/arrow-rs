@@ -207,7 +207,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
-                };
+                }
                 byte_view.as_u128()
             });
 
@@ -405,7 +405,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             self.nulls.append_buffer(&nulls);
         } else {
             self.nulls.append_n_non_nulls(len);
-        };
+        }
 
         let buffers = s.data_buffers();
         // SAFETY: copy_rows is called with ranges derived from the source array.

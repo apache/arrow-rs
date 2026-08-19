@@ -425,7 +425,7 @@ impl FileDecryptionProperties {
         let mut column_names: Vec<String> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
         if let DecryptionKeys::Explicit(keys) = &self.keys {
-            for (key, value) in keys.column_keys.iter() {
+            for (key, value) in &keys.column_keys {
                 column_names.push(key.clone());
                 column_keys.push(value.clone());
             }
