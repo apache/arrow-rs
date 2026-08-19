@@ -20,6 +20,10 @@
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
 #![allow(unused_crate_dependencies)]
 #![warn(missing_docs)]
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "these are integration test binaries, which are free to panic"
+)]
 use serde_json::Value;
 
 use arrow::array::{Array, StructArray};
