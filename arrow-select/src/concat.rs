@@ -1734,9 +1734,8 @@ mod tests {
 
     #[test]
     fn concat_string_view_dictionary_overflow_returns_err() {
-        // Two independently-built `Dictionary<UInt8, Utf8View>` arrays, each within
-        // the u8 key range on its own, but whose *combined* distinct values overflow
-        // it (analogous to per-partition dictionary-encoded columns being merged).
+        // concatenating dictionaries which results in overflowing the key type should
+        // surface an error not a panic
         let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
         let keys_a = UInt8Array::from_iter_values(0..200);
         let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
@@ -1745,18 +1744,13 @@ mod tests {
         let keys_b = UInt8Array::from_iter_values(0..200);
         let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
 
-        // Must not panic: the key type genuinely cannot address 400 distinct values,
-        // so this should surface as a normal, catchable error.
         let err = concat(&[&dict_a, &dict_b]).unwrap_err();
         assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]
     fn concat_nested_dictionary_overflow_returns_err() {
-        // Same overflow as `concat_string_view_dictionary_overflow_returns_err`, but
-        // with the dictionary nested inside a `FixedSizeList`, exercising the
-        // recursive child construction in `MutableArrayData::try_with_capacities`
-        // rather than the top-level dictionary handling.
+        // same as above, but with the dictionary nested inside a FixedSizeList
         let field = Arc::new(arrow_schema::Field::new(
             "item",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View)),

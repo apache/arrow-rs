@@ -431,10 +431,11 @@ impl<'a> MutableArrayData<'a> {
     ///
     /// # Panics
     ///
-    /// This function panics if the given `capacities` don't match the data type
-    /// of `arrays`. Or when a [Capacities] variant is not yet supported. Or when
-    /// merging dictionary arrays whose combined values overflow the dictionary key
-    /// type — see [MutableArrayData::try_with_capacities] for a fallible variant.
+    /// * if the given `capacities` don't match the data type of `arrays`
+    /// * if a [Capacities] variant is not yet supported
+    /// * when merging dictionary arrays whose combined values overflow the
+    ///   dictionary key type — see [MutableArrayData::try_with_capacities] for a
+    ///   fallible variant
     pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,

@@ -2035,11 +2035,8 @@ mod tests {
 
     #[test]
     fn test_interleave_string_view_dictionary_overflow_returns_err() {
-        // Two independently-built `Dictionary<UInt8, Utf8View>` arrays, each within
-        // the u8 key range on its own, but whose *combined* distinct values overflow
-        // it. This mirrors what happens when a UInt16-keyed dictionary column is
-        // scanned in multiple partitions and merged (e.g. via a sort-preserving
-        // merge), each partition building its own dictionary independently.
+        // interleaving dictionaries which results in overflowing the key type should
+        // surface an error not a panic
         let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
         let keys_a = UInt8Array::from_iter_values(0..200);
         let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
@@ -2050,19 +2047,13 @@ mod tests {
 
         let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
 
-        // Must not panic: the key type genuinely cannot address 400 distinct values,
-        // so this should surface as a normal, catchable error.
         let err = interleave(&[&dict_a, &dict_b], &indices).unwrap_err();
         assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]
     fn test_interleave_nested_dictionary_overflow_returns_err() {
-        // Same overflow as `test_interleave_string_view_dictionary_overflow_returns_err`,
-        // but with the dictionary nested inside a `FixedSizeList`, exercising the
-        // recursive child construction in `MutableArrayData::try_with_capacities`
-        // (reached via `interleave_fallback`) rather than the top-level dictionary
-        // handling.
+        // same as above, but with the dictionary nested inside a FixedSizeList
         let field = Arc::new(arrow_schema::Field::new(
             "item",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View)),
