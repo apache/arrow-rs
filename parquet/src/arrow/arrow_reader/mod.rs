@@ -66,6 +66,10 @@ pub const DEFAULT_BATCH_SIZE: usize = 1024;
 
 /// A row group and its optional row-group-local [`RowSelection`].
 ///
+/// A row-group-local selection is relative to the rows in this row group. For
+/// example, an offset of 100 refers to the row at offset 100 within the row
+/// group, not within the Parquet file.
+///
 /// A `None` selection reads the entire row group. Omitting a row group skips
 /// it. Entries are decoded in the supplied order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,18 +100,25 @@ impl RowGroupSelection {
 }
 
 /// Row-selection configuration shared by the Arrow reader builders.
-///
-/// `Global` is the legacy configuration formed by `with_row_groups` and
-/// `with_row_selection`. `PerRowGroup` is available through the push decoder
-/// and async stream builders. The two configurations are intentionally
-/// mutually exclusive.
 #[derive(Debug)]
 pub(crate) enum RowGroupPlan {
+    /// First select `row_groups`, if provided, and then apply `selection`
+    /// across the concatenated rows from those row groups.
+    ///
+    /// This is formed by [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`].
     Global {
         row_groups: Option<Vec<usize>>,
         selection: Option<RowSelection>,
     },
+    /// Apply each row-group-local selection independently, in the order
+    /// supplied.
+    ///
+    /// This is formed by `with_row_group_selections` on the push decoder and
+    /// async stream builders.
     PerRowGroup(Vec<RowGroupSelection>),
+    /// Mutually exclusive global and per-row-group configuration was supplied.
+    /// This is reported as an error when the reader is built.
     Conflicting,
 }
 
@@ -252,43 +263,15 @@ pub struct ArrowReaderBuilder<T> {
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // `row_groups` and `selection` straddle `projection`/`filter` so that the
-        // legacy configuration keeps its historical field order; only the
-        // row-group-local fields are new.
-        let (row_groups, selection, row_group_selections) = match &self.row_group_plan {
-            RowGroupPlan::Global {
-                row_groups,
-                selection,
-            } => (Some(row_groups), Some(selection), None),
-            RowGroupPlan::PerRowGroup(row_group_selections) => {
-                (None, None, Some(row_group_selections))
-            }
-            RowGroupPlan::Conflicting => (None, None, None),
-        };
-
-        let mut builder = f.debug_struct("ArrowReaderBuilder<T>");
-        builder
+        f.debug_struct("ArrowReaderBuilder<T>")
             .field("input", &self.input)
             .field("metadata", &self.metadata)
             .field("schema", &self.schema)
             .field("fields", &self.fields)
-            .field("batch_size", &self.batch_size);
-        if let Some(row_groups) = row_groups {
-            builder.field("row_groups", row_groups);
-        }
-        if let Some(row_group_selections) = row_group_selections {
-            builder.field("row_group_selections", row_group_selections);
-        }
-        if matches!(self.row_group_plan, RowGroupPlan::Conflicting) {
-            builder.field("row_group_plan", &format_args!("conflicting"));
-        }
-        builder
+            .field("batch_size", &self.batch_size)
+            .field("row_group_plan", &self.row_group_plan)
             .field("projection", &self.projection)
-            .field("filter", &self.filter);
-        if let Some(selection) = selection {
-            builder.field("selection", selection);
-        }
-        builder
+            .field("filter", &self.filter)
             .field("row_selection_policy", &self.row_selection_policy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
@@ -350,11 +333,13 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// This is also called row group filtering
     ///
-    /// On [`ParquetPushDecoderBuilder`] and async stream builders, which
-    /// additionally offer `with_row_group_selections`, this cannot be combined
-    /// with that method; attempting to do so returns an error from `build`.
+    /// On [`ParquetPushDecoderBuilder`] and [`ParquetRecordBatchStreamBuilder`],
+    /// which additionally offer `with_row_group_selections`, this cannot be
+    /// combined with that method; attempting to do so returns an error from
+    /// `build`.
     ///
-    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
+    /// [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::with_row_group_selections
     pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
         self.row_group_plan.set_row_groups(row_groups);
         self
@@ -393,11 +378,13 @@ impl<T> ArrowReaderBuilder<T> {
     /// applying the row selection, and therefore rows from skipped row groups
     /// should not be included in the [`RowSelection`] (see example below)
     ///
-    /// On [`ParquetPushDecoderBuilder`] and async stream builders, which
-    /// additionally offer `with_row_group_selections`, this cannot be combined
-    /// with that method; attempting to do so returns an error from `build`.
+    /// On [`ParquetPushDecoderBuilder`] and [`ParquetRecordBatchStreamBuilder`],
+    /// which additionally offer `with_row_group_selections`, this cannot be
+    /// combined with that method; attempting to do so returns an error from
+    /// `build`.
     ///
-    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
+    /// [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::with_row_group_selections
     ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
@@ -1810,7 +1797,8 @@ pub(crate) mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowGroupPlan, RowGroupSelection, RowSelection,
+        RowSelector,
     };
     use crate::arrow::schema::{
         add_encoded_arrow_schema_to_metadata,
@@ -1845,6 +1833,80 @@ pub(crate) mod tests {
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
+
+    fn row_selection(rows: usize) -> RowSelection {
+        RowSelection::from(vec![RowSelector::select(rows)])
+    }
+
+    #[test]
+    fn row_group_selection_accessors() {
+        let row_group = RowGroupSelection::new(3, Some(row_selection(5)));
+        assert_eq!(row_group.row_group_index(), 3);
+        assert_eq!(row_group.selection().unwrap().row_count(), 5);
+
+        let row_group = RowGroupSelection::new(4, None);
+        assert_eq!(row_group.row_group_index(), 4);
+        assert!(row_group.selection().is_none());
+    }
+
+    #[test]
+    fn row_group_plan_tracks_global_configuration() {
+        let mut plan = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        plan.set_row_groups(vec![0]);
+        plan.set_row_groups(vec![1, 2]);
+        plan.set_row_selection(row_selection(3));
+        plan.set_row_selection(row_selection(4));
+
+        let (row_groups, selection) = plan.into_global().unwrap();
+        assert_eq!(row_groups, Some(vec![1, 2]));
+        assert_eq!(selection.unwrap().row_count(), 4);
+    }
+
+    #[test]
+    fn row_group_plan_replaces_local_configuration() {
+        let mut plan = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        plan.set_row_group_selections(vec![RowGroupSelection::new(0, None)]);
+        plan.set_row_group_selections(vec![RowGroupSelection::new(1, None)]);
+
+        let RowGroupPlan::PerRowGroup(row_groups) = plan else {
+            panic!("expected per-row-group plan");
+        };
+        assert_eq!(row_groups, vec![RowGroupSelection::new(1, None)]);
+    }
+
+    #[test]
+    fn row_group_plan_rejects_mixed_configuration() {
+        let mut row_groups_then_local = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        row_groups_then_local.set_row_groups(vec![0]);
+        row_groups_then_local.set_row_group_selections(vec![RowGroupSelection::new(0, None)]);
+        assert!(matches!(row_groups_then_local, RowGroupPlan::Conflicting));
+        row_groups_then_local.set_row_groups(vec![1]);
+        row_groups_then_local.set_row_selection(row_selection(1));
+        row_groups_then_local.set_row_group_selections(vec![RowGroupSelection::new(1, None)]);
+        assert!(row_groups_then_local.into_global().is_err());
+
+        let mut local_then_row_groups =
+            RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        local_then_row_groups.set_row_groups(vec![0]);
+        assert!(matches!(local_then_row_groups, RowGroupPlan::Conflicting));
+
+        let mut local_then_selection =
+            RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        local_then_selection.set_row_selection(row_selection(1));
+        assert!(matches!(local_then_selection, RowGroupPlan::Conflicting));
+
+        let local = RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        assert!(local.into_global().is_err());
+    }
 
     #[test]
     fn filter_mask_accumulator_handles_empty_single_and_multiple_chunks() {
