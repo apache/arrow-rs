@@ -45,7 +45,6 @@ on:
       - arrow-pyarrow/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-sort/**
       - arrow-string/**
       - arrow/**
 
