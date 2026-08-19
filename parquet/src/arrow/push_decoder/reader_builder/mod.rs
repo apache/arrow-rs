@@ -495,7 +495,7 @@ impl RowGroupReaderBuilder {
                         column_chunks,
                         cache_info: None,
                     }));
-                };
+                }
 
                 // we have predicates to evaluate
                 let cache_projection =
@@ -836,7 +836,7 @@ impl RowGroupReaderBuilder {
             return None;
         }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
-        for predicate in filter.predicates.iter() {
+        for predicate in &filter.predicates {
             cache_projection.union(predicate.projection());
         }
         cache_projection.intersect(&self.projection);

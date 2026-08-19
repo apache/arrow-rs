@@ -408,7 +408,7 @@ where
             match op(*slice.get_unchecked(idx), b.value_unchecked(idx)) {
                 Ok(value) => *slice.get_unchecked_mut(idx) = value,
                 Err(err) => return Ok(Err(err)),
-            };
+            }
         };
     }
     Ok(Ok(builder.finish()))

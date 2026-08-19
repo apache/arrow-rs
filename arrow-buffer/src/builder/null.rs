@@ -87,6 +87,10 @@ impl NullBufferBuilder {
     }
 
     /// Creates a new builder from a `MutableBuffer`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len > buffer.len() * 8`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         let capacity = buffer.len() * 8;
         assert!(len <= capacity);
@@ -148,6 +152,10 @@ impl NullBufferBuilder {
     }
 
     /// Sets a bit in the builder at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`BooleanBufferBuilder::set_bit`]
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         self.materialize_if_needed();
@@ -155,6 +163,11 @@ impl NullBufferBuilder {
     }
 
     /// Gets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`BooleanBufferBuilder::get_bit`], but only if
+    /// a bitmap has been materialized (i.e. a null was appended)
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
         if let Some(ref buf) = self.bitmap_builder {
