@@ -1489,6 +1489,11 @@ impl ArrayData {
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the data type does not have the buffer layout it is supposed to have,
+    /// so call this only on data whose layout was already validated.
     pub fn validate_values(&self) -> Result<(), ArrowError> {
         match &self.data_type {
             DataType::Utf8 => self.validate_utf8::<i32>(),
@@ -1789,6 +1794,10 @@ impl ArrayData {
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
 /// type are expected to have
+///
+/// # Panics
+///
+/// Panics if the size of a `FixedSizeBinary` or `FixedSizeList` is negative.
 pub fn layout(data_type: &DataType) -> DataTypeLayout {
     // based on C/C++ implementation in
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
@@ -2210,6 +2219,10 @@ impl ArrayDataBuilder {
     ///
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an [`ArrayData`] cannot be built from the provided parts.
     pub unsafe fn build_unchecked(self) -> ArrayData {
         unsafe { self.skip_validation(true) }.build().unwrap()
     }

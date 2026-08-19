@@ -200,6 +200,9 @@ fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
 
 /// Deserialize an ipc [`crate::Schema`] from flat buffers to an arrow [Schema].
 #[deprecated(since = "60.0.0", note = "Use `try_fb_to_schema` instead")]
+/// # Panics
+///
+/// Panics if the schema is not a valid Arrow schema.
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
     try_fb_to_schema(fb).expect("invalid IPC schema")
 }

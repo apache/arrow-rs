@@ -344,6 +344,11 @@ pub fn record_batch_from_json(
 }
 
 /// Construct an Arrow array from a partially typed JSON column
+///
+/// # Panics
+///
+/// Panics if the JSON is malformed, for example if a value has the wrong type
+/// or the column has no data.
 pub fn array_from_json(
     field: &Field,
     json_col: ArrowJsonColumn,
@@ -1106,6 +1111,11 @@ pub fn array_from_json(
 }
 
 /// Construct a [`DictionaryArray`] from a partially typed JSON column
+///
+/// # Panics
+///
+/// Panics if the JSON is malformed, or if a dictionary field has no dictionary id
+/// or ordering.
 pub fn dictionary_array_from_json(
     field: &Field,
     json_col: ArrowJsonColumn,

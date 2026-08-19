@@ -838,6 +838,10 @@ impl<'a> MutableArrayData<'a> {
     /// Consume self and returns the in progress array as [`ArrayDataBuilder`].
     ///
     /// This is useful for extending the default behavior of MutableArrayData.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the data type is a dictionary but no dictionary values were set.
     pub fn into_builder(self) -> ArrayDataBuilder {
         let data = self.data;
 

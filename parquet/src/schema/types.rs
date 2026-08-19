@@ -1102,6 +1102,10 @@ impl HeapSize for SchemaDescriptor {
 
 impl SchemaDescriptor {
     /// Creates new schema descriptor from Parquet schema.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tp` is not a group type.
     pub fn new(tp: TypePtr) -> Self {
         const INIT_SCHEMA_DEPTH: usize = 16;
         assert!(tp.is_group(), "SchemaDescriptor should take a GroupType");
