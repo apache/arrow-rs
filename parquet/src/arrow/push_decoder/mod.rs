@@ -256,11 +256,7 @@ impl ParquetPushDecoderBuilder {
     /// skipped. A row group listed more than once is decoded once per entry.
     /// A `None` selection reads the entire row group. A selection shorter
     /// than its row group skips the trailing rows, while a selection longer
-    /// than its row group returns an error from [`Self::build`]. Each
-    /// selection is passed through without being re-partitioned, so no
-    /// conversion between the bitmap and selector representations is forced
-    /// (how the selection is then materialized while reading is still governed
-    /// by [`ArrowReaderBuilder::with_row_selection_policy`]).
+    /// than its row group returns an error from [`Self::build`].
     ///
     /// [`ArrowReaderBuilder::with_offset`] and
     /// [`ArrowReaderBuilder::with_limit`] apply after the row-group-local
@@ -275,18 +271,25 @@ impl ParquetPushDecoderBuilder {
     /// error from [`Self::build`]. Calling this method more than once replaces
     /// the previous row-group-local configuration.
     ///
+    /// This method is defined on the push decoder rather than
+    /// [`ArrowReaderBuilder`] because the synchronous reader does not support
+    /// row-group-local selections. The async stream builder exposes the same
+    /// method because it uses the push decoder internally.
+    ///
+    /// For example, if row groups 0 and 2 each contain 200 rows, the legacy
+    /// combination of `with_row_groups(vec![0, 2])` and a global selection for
+    /// rows 10..15 of row group 0 and all of row group 2 can be expressed as:
+    ///
     /// ```no_run
-    /// # use parquet::arrow::arrow_reader::RowSelection;
+    /// # use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     /// # use parquet::arrow::push_decoder::{ParquetPushDecoderBuilder, RowGroupSelection};
-    /// # fn configure(
-    /// #     builder: ParquetPushDecoderBuilder,
-    /// #     bitmap_selection: RowSelection,
-    /// #     selector_selection: RowSelection,
-    /// # ) -> ParquetPushDecoderBuilder {
+    /// # fn configure(builder: ParquetPushDecoderBuilder) -> ParquetPushDecoderBuilder {
     /// builder.with_row_group_selections(vec![
-    ///     RowGroupSelection::new(0, Some(bitmap_selection)),
-    ///     RowGroupSelection::new(2, Some(selector_selection)),
-    ///     RowGroupSelection::new(3, None),
+    ///     RowGroupSelection::new(0, Some(RowSelection::from(vec![
+    ///         RowSelector::skip(10),
+    ///         RowSelector::select(5),
+    ///     ]))),
+    ///     RowGroupSelection::new(2, None),
     /// ])
     /// # }
     /// ```
