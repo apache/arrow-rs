@@ -1520,7 +1520,12 @@ impl ArrayData {
                 Ok(())
             }
             DataType::Dictionary(key_type, _value_type) => {
-                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
+                let dictionary_length = self.child_data[0].len;
+                let dictionary_length = i64::try_from(dictionary_length).map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Dictionary of {dictionary_length} values is too long for an i64"
+                    ))
+                })?;
                 let max_value = dictionary_length - 1;
                 match key_type.as_ref() {
                     DataType::UInt8 => self.check_bounds::<u8>(max_value),
@@ -1531,7 +1536,9 @@ impl ArrayData {
                     DataType::Int16 => self.check_bounds::<i16>(max_value),
                     DataType::Int32 => self.check_bounds::<i32>(max_value),
                     DataType::Int64 => self.check_bounds::<i64>(max_value),
-                    _ => unreachable!(),
+                    _ => Err(ArrowError::InvalidArgumentError(format!(
+                        "Dictionary key type must be an integer, got {key_type}"
+                    ))),
                 }
             }
             DataType::RunEndEncoded(run_ends, _values) => {
@@ -1540,7 +1547,9 @@ impl ArrayData {
                     DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
                     DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
                     DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
-                    _ => unreachable!(),
+                    data_type => Err(ArrowError::InvalidArgumentError(format!(
+                        "Run end type must be Int16, Int32 or Int64, got {data_type}"
+                    ))),
                 }
             }
             _ => {
@@ -2896,6 +2905,51 @@ mod tests {
         assert_eq!(
             res.to_string(),
             format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
+        );
+    }
+
+    /// Without `force_validate`, `build_unchecked` skips validation, so these can
+    /// reach `validate_values` with a data type that has an invalid child type.
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_a_non_integer_dictionary_key() {
+        let values = valid_non_nullable_int32_array_data(2);
+        let data_type = DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+        let dictionary = unsafe {
+            ArrayData::builder(data_type)
+                .len(1)
+                .add_child_data(values)
+                .build_unchecked()
+        };
+
+        let err = dictionary.validate_values().expect_err("should get error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Dictionary key type must be an integer, got Utf8"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_a_non_integer_run_end() {
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let run_end_encoded = unsafe {
+            ArrayData::builder(data_type)
+                .len(1)
+                .add_child_data(valid_non_nullable_int32_array_data(1))
+                .add_child_data(valid_non_nullable_int32_array_data(1))
+                .build_unchecked()
+        };
+
+        let err = run_end_encoded
+            .validate_values()
+            .expect_err("should get error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Run end type must be Int16, Int32 or Int64, got Utf8"
         );
     }
 

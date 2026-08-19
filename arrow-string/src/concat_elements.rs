@@ -28,6 +28,11 @@ use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns the elementwise concatenation of a [`GenericByteArray`].
+///
+/// # Errors
+///
+/// Returns an error if the arrays have different lengths, or if the concatenated
+/// data is too long for the offset type.
 pub fn concat_elements_bytes<T: ByteArrayType>(
     left: &GenericByteArray<T>,
     right: &GenericByteArray<T>,
@@ -59,7 +64,10 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
         output_values.append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
         output_values.append_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
-        output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
+        let output_len = output_values.len();
+        let offset =
+            T::Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
+        output_offsets.append(offset);
     }
 
     let builder = ArrayDataBuilder::new(T::DATA_TYPE)
@@ -108,6 +116,11 @@ pub fn concat_element_binary<Offset: OffsetSizeTrait>(
 /// ```
 ///
 /// An error will be returned if the [`StringArray`] are of different lengths
+///
+/// # Errors
+///
+/// Returns an error if the arrays have different lengths, or if the concatenated
+/// data is too long for the offset type.
 pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
 ) -> Result<GenericStringArray<Offset>, ArrowError> {
@@ -157,7 +170,10 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
                 let index_end = offset.peek().unwrap().as_usize();
                 output_values.append_slice(&values[index_start..index_end]);
             });
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
+        let output_len = output_values.len();
+        let offset =
+            Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
+        output_offsets.append(offset);
     }
 
     let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)

@@ -410,51 +410,44 @@ impl FFI_ArrowSchema {
             // On some platforms, c_char = u8, and on some, c_char = i8.
             let buffer = self.metadata.cast::<u8>();
 
-            fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
+            fn next_four_bytes(buffer: *const u8, pos: &mut usize) -> [u8; 4] {
                 let out = unsafe {
                     [
-                        *buffer.offset(*pos),
-                        *buffer.offset(*pos + 1),
-                        *buffer.offset(*pos + 2),
-                        *buffer.offset(*pos + 3),
+                        *buffer.add(*pos),
+                        *buffer.add(*pos + 1),
+                        *buffer.add(*pos + 2),
+                        *buffer.add(*pos + 3),
                     ]
                 };
                 *pos += 4;
                 out
             }
 
-            fn next_n_bytes(buffer: *const u8, pos: &mut isize, n: i32) -> &[u8] {
-                let out = unsafe {
-                    std::slice::from_raw_parts(buffer.offset(*pos), n.try_into().unwrap())
-                };
-                *pos += isize::try_from(n).unwrap();
+            fn next_n_bytes(buffer: *const u8, pos: &mut usize, n: usize) -> &[u8] {
+                let out = unsafe { std::slice::from_raw_parts(buffer.add(*pos), n) };
+                *pos += n;
                 out
             }
 
-            let num_entries = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-            if num_entries < 0 {
-                return Err(ArrowError::CDataInterface(
-                    "Negative number of metadata entries".to_string(),
-                ));
+            /// A length read from the metadata, which the producer may have got wrong.
+            fn checked_length(what: &str, length: i32) -> Result<usize, ArrowError> {
+                usize::try_from(length).map_err(|_| {
+                    ArrowError::CDataInterface(format!("Invalid {what} in metadata: {length}"))
+                })
             }
 
-            let mut metadata =
-                HashMap::with_capacity(num_entries.try_into().expect("Too many metadata entries"));
+            let num_entries = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
+            let num_entries = checked_length("number of entries", num_entries)?;
+
+            // The count comes from the producer, so do not preallocate all of it
+            let mut metadata = HashMap::with_capacity(num_entries.min(128));
 
             for _ in 0..num_entries {
                 let key_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-                if key_length < 0 {
-                    return Err(ArrowError::CDataInterface(
-                        "Negative key length in metadata".to_string(),
-                    ));
-                }
+                let key_length = checked_length("key length", key_length)?;
                 let key = String::from_utf8(next_n_bytes(buffer, &mut pos, key_length).to_vec())?;
                 let value_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
-                if value_length < 0 {
-                    return Err(ArrowError::CDataInterface(
-                        "Negative value length in metadata".to_string(),
-                    ));
-                }
+                let value_length = checked_length("value length", value_length)?;
                 let value =
                     String::from_utf8(next_n_bytes(buffer, &mut pos, value_length).to_vec())?;
                 metadata.insert(key, value);

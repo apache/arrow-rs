@@ -626,10 +626,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice(
-                (TryInto::<usize>::try_into(bitset_offset).unwrap()
-                    - TryInto::<usize>::try_into(offset).unwrap())..,
-            ),
+            Some(_) => {
+                let bitset_start = bitset_offset
+                    .checked_sub(offset)
+                    .and_then(|start| usize::try_from(start).ok())
+                    .ok_or_else(|| {
+                        ParquetError::General("Bloom filter offset is invalid".to_string())
+                    })?;
+                buffer.slice(bitset_start..)
+            }
             None => {
                 let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())

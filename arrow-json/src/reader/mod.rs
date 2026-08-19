@@ -683,12 +683,12 @@ impl Decoder {
 
         // First offset is null sentinel
         let mut next_object = 1;
-        let pos: Vec<_> = (0..tape.num_rows())
+        let pos = (0..tape.num_rows())
             .map(|_| {
-                let next = tape.next(next_object, "row").unwrap();
-                std::mem::replace(&mut next_object, next)
+                let next = tape.next(next_object, "row")?;
+                Ok(std::mem::replace(&mut next_object, next))
             })
-            .collect();
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let decoded = self.decoder.decode(&tape, &pos)?;
         self.tape_decoder.clear();

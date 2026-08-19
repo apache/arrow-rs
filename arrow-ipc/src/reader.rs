@@ -546,6 +546,11 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     /// Read the record batch, consuming the reader
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message does not describe a batch matching the schema,
+    /// for example if it declares more variadic buffer counts than the schema uses.
     pub fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
@@ -594,7 +599,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, columns, &options)
             }
         } else {
@@ -615,7 +620,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, children, &options)
             }
         }
@@ -924,6 +929,21 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
     Ok(buf.into())
+}
+
+/// Every variadic buffer count in the message must be consumed by the schema.
+///
+/// A leftover count means the message and the schema disagree, so the message is
+/// rejected rather than silently decoded.
+fn check_variadic_counts_consumed(variadic_counts: &VecDeque<i64>) -> Result<(), ArrowError> {
+    if variadic_counts.is_empty() {
+        Ok(())
+    } else {
+        Err(ArrowError::IpcError(format!(
+            "Encountered {} unused variadic buffer counts in the IPC message",
+            variadic_counts.len()
+        )))
+    }
 }
 
 /// Parse an encapsulated message
@@ -1269,10 +1289,12 @@ impl FileReaderBuilder {
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
             for kv in fb_custom_metadata {
-                custom_metadata.insert(
-                    kv.key().unwrap().to_string(),
-                    kv.value().unwrap().to_string(),
-                );
+                let (Some(key), Some(value)) = (kv.key(), kv.value()) else {
+                    return Err(ArrowError::ParseError(
+                        "Custom metadata in the IPC footer is missing a key or a value".to_string(),
+                    ));
+                };
+                custom_metadata.insert(key.to_string(), value.to_string());
             }
         }
 

@@ -226,9 +226,12 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "The key buffer of the source builder is shared with another object"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }

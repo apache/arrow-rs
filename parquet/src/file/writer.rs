@@ -260,7 +260,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.row_group_index = self
             .row_group_index
             .checked_add(1)
-            .expect("SerializedFileWriter::row_group_index overflowed");
+            .ok_or_else(|| ParquetError::General("Row group index overflowed".to_string()))?;
 
         let bloom_filter_position = self.properties().bloom_filter_position();
         let row_groups = &mut self.row_groups;

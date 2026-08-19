@@ -1137,13 +1137,21 @@ impl ArrowColumnWriter {
     }
 
     /// Close this column returning the written [`ArrowColumnChunk`]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying buffer is still shared with another writer.
     pub fn close(self) -> Result<ArrowColumnChunk> {
         let close = match self.writer {
             ArrowColumnWriterImpl::ByteArray(c) => c.close()?,
             ArrowColumnWriterImpl::Column(c) => c.close()?,
         };
-        let chunk = Arc::try_unwrap(self.chunk).ok().unwrap();
-        let data = chunk.into_inner().unwrap();
+        let chunk = Arc::try_unwrap(self.chunk).map_err(|_| {
+            general_err!("Cannot close a column chunk that is still shared with another writer")
+        })?;
+        let data = chunk
+            .into_inner()
+            .map_err(|_| general_err!("The column chunk lock is poisoned"))?;
         Ok(ArrowColumnChunk { data, close })
     }
 

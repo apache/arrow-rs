@@ -259,7 +259,11 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         }
                     };
                     dict_id = match dictionary.get("id") {
-                        Some(Value::Number(n)) => n.as_i64().unwrap(),
+                        Some(Value::Number(n)) => n.as_i64().ok_or_else(|| {
+                            ArrowError::ParseError(
+                                "Field 'id' attribute is not an integer".to_string(),
+                            )
+                        })?,
                         _ => {
                             return Err(ArrowError::ParseError(
                                 "Field missing 'id' attribute".to_string(),

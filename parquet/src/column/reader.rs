@@ -361,7 +361,11 @@ where
                     if levels_read == remaining_levels && self.has_record_delimiter {
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
-                        assert!(records_read < remaining_records); // Sanity check
+                        if remaining_records <= records_read {
+                            return Err(general_err!(
+                                "page reported {records_read} records, but only {remaining_records} remain"
+                            ));
+                        }
                         records_read += decoder.flush_partial() as usize;
                     }
 
