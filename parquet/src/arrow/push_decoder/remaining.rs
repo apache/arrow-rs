@@ -84,7 +84,7 @@ impl QueuedRowGroups {
                     let row_count =
                         parquet_metadata.row_group_num_rows(row_group.row_group_index)?;
                     if let Some(selection) = &row_group.selection {
-                        let selection_rows = selection.row_count() + selection.skipped_row_count();
+                        let selection_rows = selection.total_row_count();
                         if selection_rows > row_count {
                             return Err(ParquetError::General(format!(
                                 "Row selection for row group {} contains {selection_rows} rows, but the row group has {row_count}",
