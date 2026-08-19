@@ -330,12 +330,17 @@ where
         ))));
     }
 
-    if a.null_count() == 0 && b.null_count() == 0 {
+    // Physical and logical nulls coincide for a `PrimitiveArray`, but gate on `is_nullable` to
+    // match `try_binary`. That check is allowed to be conservative, so fall back to the no-nulls
+    // path when the union of the logical nulls turns out to be empty, instead of unwrapping it.
+    if !a.is_nullable() && !b.is_nullable() {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let nulls =
+        let Some(nulls) =
             create_union_null_buffer(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
-                .unwrap();
+        else {
+            return try_binary_no_nulls_mut(len, a, b, op);
+        };
 
         let mut builder = a.into_builder()?;
 
@@ -529,6 +534,18 @@ mod tests {
         // unwrap here means that no copying occurred
         let r2 = try_binary_mut(a, &b, |a, b| Ok(a + b)).unwrap();
         assert_eq!(r1.unwrap(), r2.unwrap());
+    }
+
+    #[test]
+    fn test_try_binary_mut_all_valid_null_buffers() {
+        // Both arrays carry a null buffer with no nulls in it: the no-nulls path must still run.
+        let a = Int32Array::new(vec![1, 2].into(), Some(vec![true, true].into()));
+        let b = Int32Array::new(vec![10, 20].into(), Some(vec![true, true].into()));
+        let c = try_binary_mut(a, &b, |a, b| Ok(a + b))
+            .expect("not shared")
+            .expect("no overflow");
+        assert_eq!(c, Int32Array::from(vec![11, 22]));
+        assert_eq!(c.logical_null_count(), 0);
     }
 
     #[test]
