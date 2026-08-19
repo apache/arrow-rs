@@ -126,6 +126,10 @@ impl VariantArrayBuilder {
     }
 
     /// Build the final builder
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the builder only produces valid variant arrays"
+    )]
     pub fn build(self) -> VariantArray {
         let Self {
             mut nulls,

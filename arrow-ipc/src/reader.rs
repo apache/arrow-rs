@@ -1093,6 +1093,10 @@ impl FileDecoder {
     }
 
     /// Read the dictionary with the given block and data buffer
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the header type was just checked to be a dictionary batch"
+    )]
     pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
         let message = self.read_message(buf)?;
         match message.header_type() {

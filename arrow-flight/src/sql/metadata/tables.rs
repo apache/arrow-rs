@@ -157,6 +157,10 @@ impl GetTablesBuilder {
     }
 
     /// builds a `RecordBatch` for `CommandGetTables`
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the filters are built from the same array, so they have equal length"
+    )]
     pub fn build(self) -> Result<RecordBatch> {
         let schema = self.schema();
         let Self {

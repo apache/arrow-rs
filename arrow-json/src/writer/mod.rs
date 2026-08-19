@@ -374,6 +374,10 @@ where
     }
 
     /// Serialize `batch` to JSON output
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the root of a `RecordBatch` is never nullable"
+    )]
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if batch.num_rows() == 0 {
             return Ok(());

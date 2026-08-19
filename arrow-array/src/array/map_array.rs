@@ -62,6 +62,10 @@ impl MapArray {
     /// * `entries.columns().len() != 2`
     /// * `field.data_type() != entries.data_type()`
     /// * the keys field is nullable
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "an `OffsetBuffer` is never empty"
+    )]
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<i32>,

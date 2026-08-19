@@ -108,6 +108,10 @@ pub fn concat_element_binary<Offset: OffsetSizeTrait>(
 /// ```
 ///
 /// An error will be returned if the [`StringArray`] are of different lengths
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the offsets of an array of length `size` always yield `size + 1` values"
+)]
 pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
 ) -> Result<GenericStringArray<Offset>, ArrowError> {
@@ -414,6 +418,10 @@ pub fn concat_elements_string_view_array(
 /// # Errors
 ///
 /// This function errors if the arrays are of different types.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "an array always matches the concrete type of its data type"
+)]
 pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8) => {

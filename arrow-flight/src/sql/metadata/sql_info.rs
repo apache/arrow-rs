@@ -406,6 +406,10 @@ pub struct SqlInfoData {
 impl SqlInfoData {
     /// Return a  [`RecordBatch`] containing only the requested `u32`, if any
     /// from [`CommandGetSqlInfo`]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the filters are built from the same array, so they have equal length"
+    )]
     pub fn record_batch(&self, info: impl IntoIterator<Item = u32>) -> Result<RecordBatch> {
         let arr = self.batch.column(0);
         let type_filter = info

@@ -743,6 +743,10 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// // NOTE: the timestamp is adjusted (08:33:20 instead of 03:33:20 as in previous example)
 /// assert_eq!("2033-05-18T08:33:20", display::array_value_to_string(&d, 1).unwrap());
 /// ```
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "an array always matches the concrete type of its data type"
+)]
 pub fn cast_with_options(
     array: &dyn Array,
     to_type: &DataType,

@@ -321,6 +321,10 @@ impl ArrayData {
     /// or [`ArrayDataBuilder`].
     ///
     /// See also [`Self::into_parts`] to recover the fields
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the local builder is never set to skip validation"
+    )]
     pub fn try_new(
         data_type: DataType,
         len: usize,
