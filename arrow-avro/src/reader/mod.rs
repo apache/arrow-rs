@@ -37,14 +37,14 @@
 //! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
 //!   string representation, reader schema, etc.) and produces either:
 //!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
-//!   * a low-level `Decoder` for **single‑object encoded** Avro bytes and Confluent
-//!     **Schema Registry** framed messages.
+//!   * a low-level `Decoder` for **unframed Avro datums**, **single‑object encoded** Avro
+//!     bytes, and Confluent **Schema Registry** framed messages.
 //! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
-//!   `RecordBatch` values when batches fill. This is suitable for integrating with async
-//!   byte streams, network protocols, or other custom data sources.
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes unframed or
+//!   framed Avro bytes and yields ready `RecordBatch` values when batches fill. This is suitable
+//!   for integrating with async byte streams, network protocols, or other custom data sources.
 //!
 //! ## Encodings and when to use which type
 //!
@@ -52,6 +52,10 @@
 //!   the writer schema, optional compression codec, and a sync marker, followed by one or
 //!   more data blocks. Use `Reader` for this format. See the Avro 1.11.1 specification
 //!   (“Object Container Files”). <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
+//! * **Unframed binary datums**: Bare Avro records without an OCF header, schema fingerprint,
+//!   or schema-registry prefix. Register the known writer schema in a `SchemaStore`, select it
+//!   with [`ReaderBuilder::with_active_fingerprint`], and call [`Decoder::decode_datum`] once
+//!   per record. This supports bare Kafka messages and consecutive records in one buffer.
 //! * **Single‑Object Encoding**: A stream‑friendly framing that prefixes each record body with
 //!   the 2‑byte marker `0xC3 0x01` followed by the **8‑byte little‑endian CRC‑64‑AVRO Rabin
 //!   fingerprint** of the writer schema, then the Avro binary body. Use `Decoder` with a
@@ -521,14 +525,15 @@ fn is_incomplete_data(err: &AvroError) -> bool {
 ///
 /// `Decoder` is designed for **streaming** scenarios:
 ///
-/// * You *feed* freshly received bytes using `Self::decode`, potentially multiple times,
-///   until at least one row is complete.
+/// * You *feed* framed bytes using [`Self::decode`] or one unframed Avro record using
+///   [`Self::decode_datum`], potentially multiple times, until at least one row is complete.
 /// * You then *drain* completed rows with `Self::flush`, which yields a `RecordBatch`
 ///   if any rows were finished since the last flush.
 ///
 /// Unlike `Reader`, which is specialized for Avro **Object Container Files**, `Decoder`
-/// understands **framed single‑object** inputs and **Confluent Schema Registry** messages,
-/// switching schemas mid‑stream when the framing indicates a new fingerprint.
+/// understands **unframed Avro datums**, **framed single‑object** inputs, and **Confluent
+/// Schema Registry** messages, switching schemas mid‑stream when framing indicates a new
+/// fingerprint. Unframed datums use the writer schema already selected on the decoder.
 ///
 /// ### Supported prefixes
 ///
@@ -955,10 +960,11 @@ impl Decoder {
 ///     schema is derived **per writer schema** in the `SchemaStore`.
 ///
 ///   See `Self::with_projection`.
-/// * **`writer_schema_store`**: Required for building a `Decoder` for single‑object or
-///   Confluent framing. Maps fingerprints to Avro schemas. See `Self::with_writer_schema_store`.
-/// * **`active_fingerprint`**: Optional starting fingerprint for streaming decode when the
-///   first frame omits one (rare). See `Self::with_active_fingerprint`.
+/// * **`writer_schema_store`**: Required for building a `Decoder` for unframed datums,
+///   single‑object encoding, or Confluent framing. Maps fingerprints to Avro schemas. See
+///   `Self::with_writer_schema_store`.
+/// * **`active_fingerprint`**: Selects the writer schema for unframed datums or provides an
+///   optional starting fingerprint for framed streaming decode. See `Self::with_active_fingerprint`.
 ///
 /// ### Examples
 ///
@@ -1288,9 +1294,9 @@ impl ReaderBuilder {
 
     /// Sets the `SchemaStore` used to resolve writer schemas by fingerprint.
     ///
-    /// This is required when building a `Decoder` for **single‑object encoding** or the
-    /// **Confluent** wire format. The store maps a fingerprint (Rabin / MD5 / SHA‑256 /
-    /// ID) to a full Avro schema.
+    /// This is required when building a `Decoder` for **unframed Avro datums**,
+    /// **single‑object encoding**, or the **Confluent** wire format. The store maps a
+    /// fingerprint (Rabin / MD5 / SHA‑256 / ID) to a full Avro schema.
     ///
     /// Defaults to `None`.
     pub fn with_writer_schema_store(mut self, store: SchemaStore) -> Self {
@@ -1300,8 +1306,9 @@ impl ReaderBuilder {
 
     /// Sets the initial schema fingerprint for stream decoding.
     ///
-    /// This can be useful for streams that **do not include** a fingerprint before the first
-    /// record body (uncommon). If not set, the first observed fingerprint is used.
+    /// Select this explicitly when decoding **unframed Avro datums** with
+    /// [`Decoder::decode_datum`]. For framed streams, the first observed fingerprint is used
+    /// when no initial fingerprint is set.
     pub fn with_active_fingerprint(mut self, fp: Fingerprint) -> Self {
         self.active_fingerprint = Some(fp);
         self
