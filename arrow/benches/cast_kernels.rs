@@ -331,6 +331,12 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast int64 to int32 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Int32))
     });
+    c.bench_function("cast int64 to decimal32(9, 0) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, 0)))
+    });
+    c.bench_function("cast int64 to decimal32(9, -1) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, -1)))
+    });
     c.bench_function("cast date64 to date32 512", |b| {
         b.iter(|| cast_array(&date64_array, DataType::Date32))
     });
