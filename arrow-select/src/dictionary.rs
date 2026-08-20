@@ -58,12 +58,8 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
     // Create a mapping from the old keys to the new keys, use a Vec for easy indexing
     let mut key_remap = vec![K::Native::ZERO; values.len()];
     for (new_idx, old_idx) in mask.set_indices().enumerate() {
-        key_remap[old_idx] = K::Native::from_usize(new_idx).ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "New dictionary key {new_idx} does not fit in {}",
-                K::DATA_TYPE
-            ))
-        })?;
+        key_remap[old_idx] =
+            K::Native::from_usize(new_idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
     }
 
     // ... and then build the new keys array
