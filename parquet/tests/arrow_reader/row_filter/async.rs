@@ -187,8 +187,12 @@ async fn test_cached_mask_reads_sparse_pages_without_error() {
         .unwrap();
         let schema = builder.parquet_schema().clone();
         let projection = ProjectionMask::leaves(&schema, [0]);
-        let page_first_rows = builder.metadata().offset_index().unwrap()[0][0]
-            .page_locations()
+        let page_first_rows = builder
+            .metadata()
+            .page_index()
+            .unwrap()
+            .page_locations(0, 0)
+            .unwrap()
             .iter()
             .map(|page| page.first_row_index)
             .collect::<Vec<_>>();
