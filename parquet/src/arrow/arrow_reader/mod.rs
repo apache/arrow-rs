@@ -1395,12 +1395,12 @@ pub struct ParquetRecordBatchReader {
 ///
 /// The first chunk keeps its [`BooleanBuffer`] without copying. A second chunk
 /// promotes the accumulator to a [`BooleanBufferBuilder`], and later chunks are
-/// appended to it. For example, chunks `1000` and `1` become `10001`:
+/// appended to it. For example, chunks `1001` and `1` become `10011`:
 ///
 /// ```text
-///           append(1000)             append(1)
+///           append(1001)             append(1)
 ///   Empty ───────────────▶ Single ───────────────▶ Combined
-///                          1000                    10001
+///                          1001                    10011
 ///                          (zero copy)             (promoted to builder)
 /// ```
 ///
@@ -1410,8 +1410,8 @@ pub struct ParquetRecordBatchReader {
 ///
 /// ```text
 ///   decoded rows:   0 1 2 3   11   <-- buffered by the array reader
-///   chunk masks:   [1 0 0 0] [1]
-///   finish():       1 0 0 0   1    <-- filters the whole batch in one pass
+///   chunk masks:   [1 0 0 1] [1]
+///   finish():       1 0 0 1   1    <-- filters the whole batch in one pass
 /// ```
 #[derive(Default)]
 enum FilterMaskAccumulator {
