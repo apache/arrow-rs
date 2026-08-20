@@ -736,13 +736,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_1() {
         let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_2() {
         let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
     }
