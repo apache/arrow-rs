@@ -579,7 +579,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 fn concat_fallback(arrays: &[&dyn Array], capacity: Capacities) -> Result<ArrayRef, ArrowError> {
     let array_data: Vec<_> = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
     let array_data = array_data.iter().collect();
-    let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
+    let mut mutable = MutableArrayData::try_with_capacities(array_data, false, capacity)?;
 
     for (i, a) in arrays.iter().enumerate() {
         mutable.try_extend(i, 0, a.len())?
@@ -1730,6 +1730,45 @@ mod tests {
         assert_dictionary_has_unique_values::<_, StringArray>(
             list.values().as_dictionary::<Int32Type>(),
         );
+    }
+
+    #[test]
+    fn concat_string_view_dictionary_overflow_returns_err() {
+        // concatenating dictionaries which results in overflowing the key type should
+        // surface an error not a panic
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+
+        let err = concat(&[&dict_a, &dict_b]).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn concat_nested_dictionary_overflow_returns_err() {
+        // same as above, but with the dictionary nested inside a FixedSizeList
+        let field = Arc::new(arrow_schema::Field::new(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View)),
+            false,
+        ));
+
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+        let list_a = FixedSizeListArray::new(field.clone(), 1, Arc::new(dict_a), None);
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+        let list_b = FixedSizeListArray::new(field, 1, Arc::new(dict_b), None);
+
+        let err = concat(&[&list_a, &list_b]).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]

@@ -20,7 +20,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, FixedSizeBinaryBuilder, make_view};
+use arrow_array::builder::{FixedSizeBinaryBuilder, make_view};
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
@@ -53,27 +53,29 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     let left_values = left.value_data();
     let right_values = right.value_data();
 
-    let mut output_values = BufferBuilder::<u8>::new(
+    let mut output_values = Vec::with_capacity(
         left_values.len() + right_values.len()
             - left_offsets[0].as_usize()
             - right_offsets[0].as_usize(),
     );
 
-    let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
-    output_offsets.append(T::Offset::usize_as(0));
+    let mut output_offsets = Vec::with_capacity(left_offsets.len());
+    output_offsets.push(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values.append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
-        output_values.append_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
+        output_values
+            .extend_from_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
+        output_values
+            .extend_from_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
         let output_len = output_values.len();
         let offset =
             T::Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
-        output_offsets.append(offset);
+        output_offsets.push(offset);
     }
 
     let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(left.len())
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
+        .add_buffer(output_offsets.into())
+        .add_buffer(output_values.into())
         .nulls(nulls);
 
     // SAFETY - offsets valid by construction
@@ -151,7 +153,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .map(|a| a.value_offsets().iter().peekable())
         .collect::<Vec<_>>();
 
-    let mut output_values = BufferBuilder::<u8>::new(
+    let mut output_values = Vec::with_capacity(
         data_values
             .iter()
             .zip(offsets.iter_mut())
@@ -159,8 +161,8 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .sum(),
     );
 
-    let mut output_offsets = BufferBuilder::<Offset>::new(size + 1);
-    output_offsets.append(Offset::zero());
+    let mut output_offsets = Vec::with_capacity(size + 1);
+    output_offsets.push(Offset::zero());
     for _ in 0..size {
         data_values
             .iter()
@@ -168,18 +170,18 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .for_each(|(values, offset)| {
                 let index_start = offset.next().unwrap().as_usize();
                 let index_end = offset.peek().unwrap().as_usize();
-                output_values.append_slice(&values[index_start..index_end]);
+                output_values.extend_from_slice(&values[index_start..index_end]);
             });
         let output_len = output_values.len();
         let offset =
             Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
-        output_offsets.append(offset);
+        output_offsets.push(offset);
     }
 
     let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
         .len(size)
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
+        .add_buffer(output_offsets.into())
+        .add_buffer(output_values.into())
         .nulls(nulls);
 
     // SAFETY - offsets valid by construction
