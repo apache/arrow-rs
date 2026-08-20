@@ -392,35 +392,44 @@ where
         let offsets = array.value_offsets();
         let raw_data = array.value_data();
 
+        // Resolve a single non-null row to its dictionary key, inserting into the
+        // dedup table if this is a new value.
+        let resolve_key = |row_idx: usize,
+                           dedup: &mut HashTable<usize>,
+                           state: &ahash::RandomState,
+                           storage: &mut GenericByteBuilder<T>|
+         -> Result<K::Native, ArrowError> {
+            let start = offsets[row_idx].as_usize();
+            let end = offsets[row_idx + 1].as_usize();
+            // SAFETY: offsets are valid by GenericByteArray invariants
+            let bytes = unsafe { raw_data.get_unchecked(start..end) };
+            let hash = state.hash_one(bytes);
+            let dict_idx = *dedup
+                .entry(
+                    hash,
+                    |idx| bytes == get_bytes(storage, *idx),
+                    |idx| state.hash_one(get_bytes(storage, *idx)),
+                )
+                .or_insert_with(|| {
+                    let idx = storage.len();
+                    // SAFETY: row_idx < row_count = array.len(), slot is non-null
+                    storage.append_value(unsafe { array.value_unchecked(row_idx) });
+                    idx
+                })
+                .get();
+            K::Native::from_usize(dict_idx).ok_or(ArrowError::DictionaryKeyOverflowError)
+        };
+
         match array.nulls() {
             None => {
                 let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
                 for row_idx in 0..row_count {
-                    let start = offsets[row_idx].as_usize();
-                    let end = offsets[row_idx + 1].as_usize();
-                    // SAFETY: offsets are valid by GenericByteArray invariants
-                    let bytes = unsafe { raw_data.get_unchecked(start..end) };
-                    let state = &self.state;
-                    let storage = &mut self.values_builder;
-                    let hash = state.hash_one(bytes);
-                    let dict_idx = *self
-                        .dedup
-                        .entry(
-                            hash,
-                            |idx| bytes == get_bytes(storage, *idx),
-                            |idx| state.hash_one(get_bytes(storage, *idx)),
-                        )
-                        .or_insert_with(|| {
-                            let idx = storage.len();
-                            // SAFETY: row_idx < row_count = array.len(), slot is non-null
-                            storage.append_value(unsafe { array.value_unchecked(row_idx) });
-                            idx
-                        })
-                        .get();
-                    key_buf.push(
-                        K::Native::from_usize(dict_idx)
-                            .ok_or(ArrowError::DictionaryKeyOverflowError)?,
-                    );
+                    key_buf.push(resolve_key(
+                        row_idx,
+                        &mut self.dedup,
+                        &self.state,
+                        &mut self.values_builder,
+                    )?);
                 }
                 self.keys_builder.append_slice(&key_buf);
             }
@@ -432,31 +441,12 @@ where
                         key_buf.push(K::Native::usize_as(0));
                         valid_buf.push(false);
                     } else {
-                        let start = offsets[row_idx].as_usize();
-                        let end = offsets[row_idx + 1].as_usize();
-                        // SAFETY: offsets are valid by GenericByteArray invariants
-                        let bytes = unsafe { raw_data.get_unchecked(start..end) };
-                        let state = &self.state;
-                        let storage = &mut self.values_builder;
-                        let hash = state.hash_one(bytes);
-                        let dict_idx = *self
-                            .dedup
-                            .entry(
-                                hash,
-                                |idx| bytes == get_bytes(storage, *idx),
-                                |idx| state.hash_one(get_bytes(storage, *idx)),
-                            )
-                            .or_insert_with(|| {
-                                let idx = storage.len();
-                                // SAFETY: row_idx < row_count = array.len(), slot is non-null
-                                storage.append_value(unsafe { array.value_unchecked(row_idx) });
-                                idx
-                            })
-                            .get();
-                        key_buf.push(
-                            K::Native::from_usize(dict_idx)
-                                .ok_or(ArrowError::DictionaryKeyOverflowError)?,
-                        );
+                        key_buf.push(resolve_key(
+                            row_idx,
+                            &mut self.dedup,
+                            &self.state,
+                            &mut self.values_builder,
+                        )?);
                         valid_buf.push(true);
                     }
                 }
@@ -696,7 +686,9 @@ mod tests {
 
     use crate::array::Int8Array;
     use crate::cast::AsArray;
-    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type};
+    use crate::types::{
+        BinaryType, Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type,
+    };
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
@@ -1246,5 +1238,27 @@ mod tests {
 
         assert_eq!(result.keys(), expected.keys());
         assert_eq!(result.values().len(), 2);
+    }
+
+    #[test]
+    fn test_append_array_overflow_binary() {
+        // Int8 keys hold at most 128 distinct values (indices 0..=127).
+        // Inserting a 129th distinct entry must return DictionaryKeyOverflowError.
+        let distinct_values: Vec<Option<Vec<u8>>> = (0u16..=128)
+            .map(|n| Some(n.to_string().into_bytes()))
+            .collect();
+        let input = BinaryArray::from_opt_vec(
+            distinct_values
+                .iter()
+                .map(|v| v.as_deref())
+                .collect::<Vec<_>>(),
+        );
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, BinaryType>::new();
+        let result = builder.append_array(&input);
+        assert!(
+            matches!(result, Err(ArrowError::DictionaryKeyOverflowError)),
+            "expected DictionaryKeyOverflowError, got {result:?}"
+        );
     }
 }
