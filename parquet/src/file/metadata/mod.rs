@@ -479,16 +479,12 @@ impl PageIndexBuilder {
 
         let column_indexes = match column_index_policy {
             PageIndexPolicy::Skip => None,
-            PageIndexPolicy::Optional | PageIndexPolicy::Required => {
-                Self::empty_index(num_row_groups, num_columns)
-            }
+            _ => Self::empty_index(num_row_groups, num_columns),
         };
 
         let offset_indexes = match offset_index_policy {
             PageIndexPolicy::Skip => None,
-            PageIndexPolicy::Optional | PageIndexPolicy::Required => {
-                Self::empty_index(num_row_groups, num_columns)
-            }
+            _ => Self::empty_index(num_row_groups, num_columns),
         };
 
         Self {

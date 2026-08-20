@@ -623,7 +623,7 @@ impl ArrowReaderOptions {
     /// This method sets the same policy for both. For fine-grained control, use
     /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
-        self.with_column_index_policy(policy)
+        self.with_column_index_policy(policy.clone())
             .with_offset_index_policy(policy)
     }
 
@@ -788,7 +788,7 @@ impl ArrowReaderOptions {
     /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
     /// or [`with_page_index_policy`][Self::with_page_index_policy].
     pub fn offset_index_policy(&self) -> PageIndexPolicy {
-        self.offset_index
+        self.offset_index.clone()
     }
 
     /// Retrieve the currently set [`PageIndexPolicy`] for the column index.
@@ -796,7 +796,7 @@ impl ArrowReaderOptions {
     /// This can be set via [`with_column_index_policy`][Self::with_column_index_policy]
     /// or [`with_page_index_policy`][Self::with_page_index_policy].
     pub fn column_index_policy(&self) -> PageIndexPolicy {
-        self.column_index
+        self.column_index.clone()
     }
 
     /// Retrieve the currently set metadata decoding options.
@@ -892,8 +892,8 @@ impl ArrowReaderMetadata {
     /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
-            .with_column_index_policy(options.column_index)
-            .with_offset_index_policy(options.offset_index)
+            .with_column_index_policy(options.column_index.clone())
+            .with_offset_index_policy(options.offset_index.clone())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
