@@ -448,9 +448,17 @@ impl<'a> MutableArrayData<'a> {
     /// Fallible variant of [MutableArrayData::with_capacities].
     ///
     /// Returns an error instead of panicking when merging dictionary arrays whose
-    /// combined values would overflow the dictionary key type. Still panics for
-    /// other unsupported combinations (inconsistent input types, unsupported
-    /// `Capacities` variants) as documented on [MutableArrayData::with_capacities].
+    /// combined values would overflow the dictionary key type.
+    ///
+    /// # Panics
+    ///
+    /// Only the dictionary key overflow becomes an error. The other cases listed on
+    /// [MutableArrayData::with_capacities] still panic:
+    ///
+    /// * if `arrays` is empty
+    /// * if the given `capacities` don't match the data type of `arrays`
+    /// * if a [Capacities] variant is not yet supported
+    /// * if the arrays do not all have the same data type
     pub fn try_with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,
