@@ -952,11 +952,11 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
-    // Run encode the physical indices into new_run_ends_builder
+    // Run encode the physical indices into new_run_ends
     // Keep track of the physical indices to take in take_value_indices
     // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
-    let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
-    let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
+    let mut new_run_ends = Vec::with_capacity(1);
+    let mut take_value_indices = Vec::with_capacity(1);
 
     let values_cmp = make_comparator(
         run_array.values().as_ref(),
@@ -969,25 +969,20 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
         let cur_idx = physical_indices[ix];
         let is_new_run = cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne();
         if is_new_run {
-            take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
-            new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
+            take_value_indices.push(I::Native::from_usize(prev_idx).unwrap());
+            new_run_ends.push(T::Native::from_usize(ix).unwrap());
         }
     }
     take_value_indices
-        .append(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
-    new_run_ends_builder.append(T::Native::from_usize(physical_indices.len()).unwrap());
+        .push(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
+    new_run_ends.push(T::Native::from_usize(physical_indices.len()).unwrap());
 
     // SAFETY: run-ends are strictly increasing with last value == logical length.
     let run_ends = unsafe {
-        RunEndBuffer::new_unchecked(
-            ScalarBuffer::from(new_run_ends_builder.finish()),
-            0,
-            physical_indices.len(),
-        )
+        RunEndBuffer::new_unchecked(ScalarBuffer::from(new_run_ends), 0, physical_indices.len())
     };
 
-    let take_value_indices =
-        PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices.finish()), None);
+    let take_value_indices = PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices), None);
 
     let new_values = take(run_array.values(), &take_value_indices, None)?;
 

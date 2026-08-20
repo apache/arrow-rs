@@ -44,6 +44,8 @@ use crate::column::writer::{
     ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
+use std::collections::HashSet;
+type DistinctValuesSet = HashSet<u64>;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
@@ -1068,6 +1070,9 @@ impl ArrowColumnChunk {
 pub struct ArrowColumnWriter {
     writer: ArrowColumnWriterImpl,
     chunk: SharedColumnChunk,
+    /// Non-null value hashes accumulated across all writes for this column's row group.
+    /// `None` when tracking is disabled via [`WriterProperties::write_row_group_number_distinct_values`].
+    distinct_values_seen: Option<DistinctValuesSet>,
 }
 
 impl std::fmt::Debug for ArrowColumnWriter {
@@ -1117,6 +1122,32 @@ impl ArrowColumnWriter {
     }
 
     fn write_internal(&mut self, levels: &ArrayLevels) -> Result<()> {
+        if let Some(seen) = &mut self.distinct_values_seen {
+            let array = levels.array();
+            let non_null = levels.non_null_indices();
+            match array.as_any_dictionary_opt() {
+                Some(dict) => {
+                    // For dictionary arrays, hash the integer keys rather than the actual values.
+                    // Key cardinality equals value cardinality, so distinct-value counting stays
+                    // correct while avoiding the cost of hashing arbitrary-length values.
+                    let keys = dict.keys();
+                    let key_data = keys.to_data();
+                    let offset = key_data.offset();
+                    let width = arrow_key_byte_width(keys.data_type());
+                    if width > 0 {
+                        let buffer = key_data.buffers()[0].as_slice();
+                        // Only visit non-null rows to avoid counting nulls as a distinct value.
+                        for &row in non_null {
+                            let pos = (offset + row) * width;
+                            seen.insert(hash_bytes(&buffer[pos..pos + width]));
+                        }
+                    }
+                }
+                // For plain arrays, hash the actual values directly.
+                None => update_distinct_values_seen(array.as_ref(), non_null, seen),
+            }
+        }
+
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
                 let leaf = levels.array();
@@ -1138,9 +1169,24 @@ impl ArrowColumnWriter {
 
     /// Close this column returning the written [`ArrowColumnChunk`]
     pub fn close(self) -> Result<ArrowColumnChunk> {
+        let distinct_count = self
+            .distinct_values_seen
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.len() as u64);
         let close = match self.writer {
-            ArrowColumnWriterImpl::ByteArray(c) => c.close()?,
-            ArrowColumnWriterImpl::Column(c) => c.close()?,
+            ArrowColumnWriterImpl::ByteArray(mut c) => {
+                if let Some(count) = distinct_count {
+                    c.set_distinct_count_override(count);
+                }
+                c.close()?
+            }
+            ArrowColumnWriterImpl::Column(mut c) => {
+                if let Some(count) = distinct_count {
+                    c.set_distinct_count_override(count);
+                }
+                c.close()?
+            }
         };
         let chunk = Arc::try_unwrap(self.chunk).ok().unwrap();
         let data = chunk.into_inner().unwrap();
@@ -1405,6 +1451,8 @@ impl ArrowColumnWriterFactory {
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
+        let write_distinct_values = props.write_row_group_number_distinct_values();
+
         // Instantiate writers for normal columns
         let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
@@ -1413,6 +1461,7 @@ impl ArrowColumnWriterFactory {
             Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::Column(writer),
+                distinct_values_seen: write_distinct_values.then(HashSet::new),
             })
         };
 
@@ -1424,6 +1473,7 @@ impl ArrowColumnWriterFactory {
             Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::ByteArray(writer),
+                distinct_values_seen: write_distinct_values.then(HashSet::new),
             })
         };
 
@@ -1897,6 +1947,109 @@ fn chunk_contiguous_vec(arena: Vec<u8>, chunk_size: usize) -> Vec<FixedLenByteAr
         values.push(FixedLenByteArray::from(ByteArray::from(slice)));
     }
     values
+}
+
+/// Hash a byte slice to a u64 for NDV tracking.
+#[inline]
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    twox_hash::XxHash64::oneshot(0, bytes)
+}
+
+/// Returns the byte width of an Arrow dictionary key type, or 0 if unsupported.
+fn arrow_key_byte_width(dt: &ArrowDataType) -> usize {
+    match dt {
+        ArrowDataType::Int8 | ArrowDataType::UInt8 => 1,
+        ArrowDataType::Int16 | ArrowDataType::UInt16 => 2,
+        ArrowDataType::Int32 | ArrowDataType::UInt32 => 4,
+        ArrowDataType::Int64 | ArrowDataType::UInt64 => 8,
+        _ => 0,
+    }
+}
+
+/// Returns the fixed byte width for primitive Arrow types, or `None` for variable-length types.
+fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
+    use ArrowDataType::*;
+    match dt {
+        Int8 | UInt8 => Some(1),
+        Int16 | UInt16 | Float16 => Some(2),
+        Int32 | UInt32 | Float32 | Date32 | Time32(_) | Decimal32(_, _) => Some(4),
+        Int64
+        | UInt64
+        | Float64
+        | Date64
+        | Time64(_)
+        | Timestamp(_, _)
+        | Duration(_)
+        | Decimal64(_, _) => Some(8),
+        Interval(IntervalUnit::YearMonth) => Some(4),
+        Interval(IntervalUnit::DayTime) => Some(8),
+        Interval(IntervalUnit::MonthDayNano) => Some(16),
+        Decimal128(_, _) => Some(16),
+        Decimal256(_, _) => Some(32),
+        _ => None,
+    }
+}
+
+/// Hash the non-null values in `array` (at `non_null_indices`) into `seen`.
+///
+/// Handles primitive, boolean, fixed-size-binary, and variable-length (Utf8/Binary)
+/// arrays. Unsupported types are silently skipped, leaving `seen` unchanged for
+/// those values (NDV is best-effort).
+fn update_distinct_values_seen(
+    array: &dyn arrow_array::Array,
+    non_null_indices: &[usize],
+    seen: &mut DistinctValuesSet,
+) {
+    let data = array.to_data();
+    let offset = data.offset();
+
+    match array.data_type() {
+        ArrowDataType::Boolean => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow_array::BooleanArray>()
+                .unwrap();
+            for &row in non_null_indices {
+                seen.insert(arr.value(row) as u64);
+            }
+        }
+        ArrowDataType::Utf8 | ArrowDataType::Binary => {
+            let offsets = data.buffers()[0].typed_data::<i32>();
+            let values = data.buffers()[1].as_slice();
+            for &row in non_null_indices {
+                let start = offsets[offset + row] as usize;
+                let end = offsets[offset + row + 1] as usize;
+                seen.insert(hash_bytes(&values[start..end]));
+            }
+        }
+        ArrowDataType::LargeUtf8 | ArrowDataType::LargeBinary => {
+            let offsets = data.buffers()[0].typed_data::<i64>();
+            let values = data.buffers()[1].as_slice();
+            for &row in non_null_indices {
+                let start = offsets[offset + row] as usize;
+                let end = offsets[offset + row + 1] as usize;
+                seen.insert(hash_bytes(&values[start..end]));
+            }
+        }
+        ArrowDataType::FixedSizeBinary(byte_width) => {
+            let byte_width = *byte_width as usize;
+            let buffer = data.buffers()[0].as_slice();
+            for &row in non_null_indices {
+                let start = (offset + row) * byte_width;
+                seen.insert(hash_bytes(&buffer[start..start + byte_width]));
+            }
+        }
+        data_type => {
+            if let Some(width) = fixed_byte_width(data_type) {
+                let buffer = data.buffers()[0].as_slice();
+                for &row in non_null_indices {
+                    let pos = (offset + row) * width;
+                    seen.insert(hash_bytes(&buffer[pos..pos + width]));
+                }
+            }
+            // Utf8View, BinaryView, nested types: skip
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6024,6 +6177,58 @@ mod tests {
         let sliced = full.slice(2, 5);
         let flat: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "b", "c", "c"]));
         ree_write_read_roundtrip(sliced, flat);
+    }
+
+    #[test]
+    fn test_number_distinct_values_exact_count() {
+        // 50 distinct Int32 values repeated across 100k rows, with every 7th row null.
+        // Nulls must not be counted as a distinct value.
+        let cardinality = 50u32;
+        let array: ArrayRef = Arc::new(Int32Array::from_iter((0..100_000u32).map(|i| {
+            if i % 7 == 0 {
+                None
+            } else {
+                Some((i % cardinality) as i32)
+            }
+        })));
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        // Must equal cardinality exactly; nulls must not inflate the count.
+        assert_eq!(count, cardinality as u64);
+    }
+
+    #[test]
+    fn test_number_distinct_values_not_written_by_default() {
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt());
+        assert!(count.is_none());
     }
 
     #[test]

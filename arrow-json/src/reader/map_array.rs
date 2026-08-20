@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrayRef, MapArray, StructArray};
 use arrow_buffer::{ArrowNativeType, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
@@ -83,8 +82,8 @@ impl MapArrayDecoder {
 
 impl ArrayDecoder for MapArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-        let mut offsets = BufferBuilder::<i32>::new(pos.len() + 1);
-        offsets.append(0);
+        let mut offsets = Vec::with_capacity(pos.len() + 1);
+        offsets.push(0);
 
         let mut key_pos = Vec::with_capacity(pos.len());
         let mut value_pos = Vec::with_capacity(pos.len());
@@ -122,7 +121,7 @@ impl ArrayDecoder for MapArrayDecoder {
             let offset = i32::from_usize(key_pos.len()).ok_or_else(|| {
                 ArrowError::JsonError("offset overflow decoding MapArray".to_string())
             })?;
-            offsets.append(offset)
+            offsets.push(offset)
         }
 
         assert_eq!(key_pos.len(), value_pos.len());
@@ -139,7 +138,7 @@ impl ArrayDecoder for MapArrayDecoder {
 
         let nulls = nulls.as_mut().and_then(|x| x.finish());
         // SAFETY: offsets are built monotonically starting from 0
-        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets.finish())) };
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
 
         let array = MapArray::try_new(
             self.entries_field.clone(),
