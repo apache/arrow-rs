@@ -29,8 +29,19 @@ use std::fmt::Write;
 /// Uses `u32` for offsets to ensure `TapeElement` is 64-bits. A future
 /// iteration may increase this to a custom `u56` type.
 ///
+/// Numbers arrive in more than one form and matches must handle all of them.
+/// [`Self::Number`] holds the value textually (read via [`Tape::get_string`]) and is
+/// what parsing JSON text always yields. Serializing Rust values (see
+/// [`Decoder::serialize`](super::Decoder::serialize)) yields [`Self::I32`],
+/// [`Self::I64`], [`Self::F32`] or [`Self::F64`] — 64-bit values occupying two
+/// consecutive elements, high bits first — falling back to [`Self::Number`] for
+/// integers too large for `i64`.
+///
+/// `#[non_exhaustive]` as the encoding is an implementation detail.
+///
 /// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TapeElement {
     /// The start of an object, i.e. `{`
     ///
@@ -90,6 +101,10 @@ pub enum TapeElement {
 /// The first element is always [`TapeElement::Null`]
 ///
 /// This approach to decoding JSON is inspired by [simdjson]
+///
+/// A `Tape` is borrowed, never constructed, by code that decodes it. String data is
+/// copied into the tape with escapes resolved, so [`Tape::get_string`] borrows from
+/// the tape, not the input. See [`TapeElement`] for how numbers are represented.
 ///
 /// [simdjson]: https://github.com/simdjson/simdjson/blob/master/doc/tape.md
 #[derive(Debug)]
