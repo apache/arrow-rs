@@ -228,7 +228,8 @@ where
             map,
             keys_builder: new_keys.into_builder().map_err(|_| {
                 ArrowError::ComputeError(
-                    "The key buffer of the source builder is shared with another object"
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
                         .to_string(),
                 )
             })?,
