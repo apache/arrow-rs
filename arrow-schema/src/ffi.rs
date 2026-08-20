@@ -206,11 +206,22 @@ impl FFI_ArrowSchema {
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
     {
-        // empty() leaves private_data null; error instead of deref-ing it (#10286).
+        // empty() leaves private_data null; build one (with a valid format and
+        // release, so it still drops cleanly) instead of deref-ing null (#10286).
         if self.private_data.is_null() {
-            return Err(ArrowError::CDataInterface(
-                "Cannot add metadata to a schema with no private data".to_string(),
-            ));
+            // format is always null here today (only try_new sets it,
+            // and it sets private_data too); guard anyway so we never leak a
+            // CString if that ever stops holding.
+            if self.format.is_null() {
+                self.format = CString::new("").unwrap().into_raw();
+            }
+            self.release = Some(release_schema);
+            let private_data = Box::new(SchemaPrivateData {
+                children: Box::new([]),
+                dictionary: std::ptr::null_mut(),
+                metadata: None,
+            });
+            self.private_data = Box::into_raw(private_data).cast::<c_void>();
         }
 
         let metadata: Vec<(S, S)> = metadata.into_iter().collect();
@@ -1088,11 +1099,13 @@ mod tests {
     }
 
     #[test]
-    fn test_with_metadata_on_empty_schema_errors() {
-        // empty() has null private_data; with_metadata errors instead of UB (#10286).
-        let schema = FFI_ArrowSchema::empty();
-        let result = unsafe { schema.with_metadata([("key", "value")]) };
-        assert!(result.is_err());
+    fn test_with_metadata_on_empty_schema() {
+        // empty() has null private_data; with_metadata builds one instead of
+        // deref-ing null, so metadata round-trips (#10286).
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        // SAFETY: empty() is a schema this crate produced.
+        let schema = unsafe { FFI_ArrowSchema::empty().with_metadata(&metadata) }.unwrap();
+        assert_eq!(schema.metadata().unwrap(), metadata);
     }
 
     #[test]
