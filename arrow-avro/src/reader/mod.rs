@@ -9616,7 +9616,7 @@ mod test {
         let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
         let mut out = Vec::new();
         {
-            let mut writer = ApacheWriter::new(&schema, &mut out);
+            let mut writer = ApacheWriter::new(&schema, &mut out).unwrap();
             let ts_val = |s: i64, n: i32| {
                 Value::Record(vec![
                     ("seconds".into(), Value::Long(s)),
@@ -9753,7 +9753,7 @@ mod test {
         let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
         let mut bytes = Vec::new();
         {
-            let mut writer = ApacheWriter::new(&schema, &mut bytes);
+            let mut writer = ApacheWriter::new(&schema, &mut bytes).unwrap();
             // One row: ts={100, 5}, events=[{time={200, 1}}]
             let ts_val = |s: i64, n: i32| {
                 Value::Record(vec![

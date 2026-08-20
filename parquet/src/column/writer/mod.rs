@@ -114,6 +114,14 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.add_data_page())
     }
 
+    /// Sets a pre-computed distinct count on this column writer.
+    ///
+    /// See [`GenericColumnWriter::set_distinct_count_override`] for details.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        downcast_writer!(self, typed, typed.set_distinct_count_override(count))
+    }
+
     /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
@@ -461,6 +469,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Metrics per column writer
     column_metrics: ColumnMetrics<E::T>,
 
+    /// Pre-computed distinct count to write into column chunk statistics.
+    /// When set, takes precedence over `column_metrics.column_distinct_count`.
+    distinct_count_override: Option<u64>,
+
     /// The order of encodings within the generated metadata does not impact its meaning,
     /// but we use a BTreeSet so that the output is deterministic
     encodings: BTreeSet<Encoding>,
@@ -542,6 +554,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_pages: VecDeque::new(),
             page_metrics,
             column_metrics,
+            distinct_count_override: None,
             column_index_builder,
             offset_index_builder,
             encodings,
@@ -550,6 +563,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
         }
+    }
+
+    /// Sets a pre-computed distinct count to write into column chunk statistics.
+    ///
+    /// When set, this value is written as `distinct_count` in the row group statistics
+    /// footer. It takes precedence over any `distinct_count` passed through
+    /// [`Self::write_batch_with_statistics`].
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        self.distinct_count_override = Some(count);
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -1540,10 +1563,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if self.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
+            let distinct_count = self
+                .distinct_count_override
+                .or(self.column_metrics.column_distinct_count);
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
                 self.column_metrics.max_column_value.clone(),
-                self.column_metrics.column_distinct_count,
+                distinct_count,
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )

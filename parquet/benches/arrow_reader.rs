@@ -128,6 +128,18 @@ const BATCH_SIZE: usize = 8192;
 const MAX_LIST_LEN: usize = 10;
 const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PER_PAGE;
 
+// Params for the large dictionary value benchmark. Binary columns holding large
+// payloads are commonly dictionary encoded in practice, because a writer's
+// dictionary size limit is checked lazily and so is never reached before the
+// column ends. Values there are distinct, which means the dictionary page holds
+// the whole column and each entry is referenced exactly once: the gather reads
+// from a source far too large to stay cached, unlike the small-value cases above
+// whose dictionary is a few KiB. Values are correspondingly larger and fewer per
+// page, keeping one iteration to 64 MiB of output over a 32 MiB dictionary.
+const LARGE_VALUE_LEN: usize = 64 * 1024;
+const LARGE_VALUES_PER_PAGE: usize = 128;
+const EXPECTED_LARGE_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * LARGE_VALUES_PER_PAGE;
+
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
@@ -641,6 +653,67 @@ fn build_dictionary_encoded_string_page_iterator(
                 }
                 def_levels.push(def_level);
             }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            let _ = dict_encoder.put(&values);
+            let indices = dict_encoder
+                .write_indices()
+                .expect("write_indices() should be OK");
+            page_builder.add_indices(indices);
+            column_chunk_pages.push_back(page_builder.consume());
+        }
+        // add dictionary page
+        let dict = dict_encoder
+            .write_dict()
+            .expect("write_dict() should be OK");
+        let dict_page = parquet::column::page::Page::DictionaryPage {
+            buf: dict,
+            num_values: dict_encoder.num_entries() as u32,
+            encoding: Encoding::RLE_DICTIONARY,
+            is_sorted: false,
+        };
+        column_chunk_pages.push_front(dict_page);
+        pages.push(column_chunk_pages.into());
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
+/// Builds pages of dictionary encoded values that are individually large and all
+/// distinct, to cover the cost of gathering the dictionary values into the output
+/// buffer. The small-value generator above is dominated by per-key overhead
+/// instead, and its dictionary is small enough to stay cached throughout.
+fn build_dictionary_encoded_large_value_page_iterator(
+    column_desc: ColumnDescPtr,
+) -> impl PageIterator + Clone {
+    use parquet::encoding::{DictEncoder, Encoder};
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; LARGE_VALUES_PER_PAGE];
+    let def_levels = vec![max_def_level; LARGE_VALUES_PER_PAGE];
+    // Every value is distinct, so the dictionary holds one entry per row and each
+    // entry is referenced exactly once, as it is for a column of large unique
+    // payloads. The leading bytes make each value unique; the rest is filler.
+    let make_value = |index: usize| {
+        let mut value = vec![(index % 251) as u8; LARGE_VALUE_LEN];
+        value[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        value
+    };
+    let mut next_value = 0;
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = VecDeque::new();
+        let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
+        // add data pages
+        for _j in 0..PAGES_PER_GROUP {
+            let values = (0..LARGE_VALUES_PER_PAGE)
+                .map(|_| {
+                    next_value += 1;
+                    parquet::data_type::ByteArray::from(make_value(next_value - 1))
+                })
+                .collect::<Vec<_>>();
             let mut page_builder =
                 DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
@@ -2276,6 +2349,23 @@ fn add_benches(c: &mut Criterion) {
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+
+    // byte array, dictionary encoded, large values, no NULLs
+    let dictionary_large_value_data =
+        build_dictionary_encoded_large_value_page_iterator(mandatory_binary_column_desc.clone());
+    group.bench_function(
+        "dictionary encoded, mandatory, no NULLs, large values",
+        |b| {
+            b.iter(|| {
+                let array_reader = create_byte_array_reader(
+                    dictionary_large_value_data.clone(),
+                    mandatory_binary_column_desc.clone(),
+                );
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_LARGE_VALUE_COUNT);
+        },
+    );
 
     group.finish();
 

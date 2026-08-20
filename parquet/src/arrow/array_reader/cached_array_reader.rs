@@ -135,6 +135,9 @@ impl CachedArrayReader {
             self.inner_position += skipped;
         }
 
+        // For sparse mask reads, this full-batch fallback relies on `MaskCursor`
+        // ending every chunk at a selected row. Predicate fetch expands cached
+        // columns to batch boundaries, so the batch containing that row is loaded.
         let read = self.inner.read_records(self.batch_size)?;
 
         // If there are no remaining records (EOF), return immediately without
