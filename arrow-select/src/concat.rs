@@ -40,7 +40,6 @@ use arrow_array::*;
 use arrow_buffer::{
     ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
-use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
@@ -436,9 +435,6 @@ where
         )
         .collect::<Vec<_>>();
 
-    // This works out nicely to be the total (logical) length of the resulting array.
-    let total_len = needed_run_end_adjustments.last().unwrap().as_usize();
-
     let run_ends_array =
         PrimitiveArray::<R>::from_iter_values(run_arrays.iter().enumerate().flat_map(
             move |(i, run_array)| {
@@ -457,15 +453,10 @@ where
 
     let all_values = concat(&values_slices.iter().map(|x| x.as_ref()).collect::<Vec<_>>())?;
 
-    let builder = ArrayDataBuilder::new(run_arrays[0].data_type().clone())
-        .len(total_len)
-        .child_data(vec![run_ends_array.into_data(), all_values.into_data()]);
-
-    // `build_unchecked` is used to avoid recursive validation of child arrays.
-    let array_data = unsafe { builder.build_unchecked() };
-    array_data.validate_data()?;
-
-    Ok(Arc::<RunArray<R>>::new(array_data.into()))
+    Ok(Arc::new(RunArray::<R>::try_new(
+        &run_ends_array,
+        all_values.as_ref(),
+    )?))
 }
 
 macro_rules! dict_helper {
