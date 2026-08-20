@@ -931,16 +931,17 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
     Ok(buf.into())
 }
 
-/// Every variadic buffer count in the message must be consumed by the schema.
+/// One variadic buffer count is consumed per `BinaryView` or `Utf8View` column in
+/// the schema, so any count left over means the message and the schema disagree.
 ///
-/// A leftover count means the message and the schema disagree, so the message is
-/// rejected rather than silently decoded.
+/// The opposite case, too few counts, is reported by [`RecordBatchDecoder::create_array`].
 fn check_variadic_counts_consumed(variadic_counts: &VecDeque<i64>) -> Result<(), ArrowError> {
     if variadic_counts.is_empty() {
         Ok(())
     } else {
         Err(ArrowError::IpcError(format!(
-            "Encountered {} unused variadic buffer counts in the IPC message",
+            "Mismatch between schema and data: the IPC message declares {} more variadic \
+             buffer count(s) than the schema has BinaryView or Utf8View columns",
             variadic_counts.len()
         )))
     }
