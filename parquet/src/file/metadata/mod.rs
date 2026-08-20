@@ -279,6 +279,14 @@ impl PageIndex {
         self.column_indexes.is_some()
     }
 
+    /// Returns `true` if both the offset and column index structures are present
+    ///
+    /// This is equivalent to both [`Self::has_offset_indexes`] and [`Self::has_column_indexes`]
+    /// returning `true`.
+    pub fn is_complete(&self) -> bool {
+        self.has_column_indexes() && self.has_offset_indexes()
+    }
+
     /// Returns column indexes for all columns in the specified row group
     ///
     /// Returns `None` if:

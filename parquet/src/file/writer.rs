@@ -2472,11 +2472,15 @@ mod tests {
         check_def_hist(column.definition_level_histogram().unwrap().values());
         check_rep_hist(column.repetition_level_histogram().unwrap().values());
 
-        assert!(reader.metadata().page_index().is_some());
+        assert!(
+            reader
+                .metadata()
+                .page_index()
+                .is_some_and(PageIndex::is_complete)
+        );
         let page_index = reader.metadata().page_index().unwrap();
 
         // check histogram in column index as well
-        assert!(page_index.has_column_indexes());
         let col_idx = if let Some(ColumnIndexMetaData::INT32(index)) = page_index.column_index(0, 0)
         {
             assert_eq!(index.num_pages(), 1);
@@ -2488,7 +2492,6 @@ mod tests {
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
         check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
-        assert!(page_index.has_offset_indexes());
         assert!(
             page_index
                 .offset_index(0, 0)
