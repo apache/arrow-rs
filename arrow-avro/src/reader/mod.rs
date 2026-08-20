@@ -9804,4 +9804,150 @@ mod test {
             .unwrap();
         assert_eq!(seconds.value(0), 100);
     }
+
+    /// Builds a `Decoder` for a single Confluent-framed writer schema registered under `id`.
+    fn confluent_decoder(id: u32, writer_schema: AvroSchema) -> Decoder {
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .expect("decoder")
+    }
+
+    /// An Avro record with no fields is legal: it holds no data and encodes to zero bytes. It
+    /// still has to decode to a zero-field struct whose length tracks the rows, which is not a
+    /// length `StructArray::try_new` can infer with no child array to read it from.
+    #[test]
+    fn test_record_with_no_fields_decodes_as_zero_field_struct() {
+        let id = 11u32;
+        let mut decoder = confluent_decoder(
+            id,
+            AvroSchema::new(
+                r#"{"type":"record","name":"Reading","fields":[
+                    {"name":"id","type":"long"},
+                    {"name":"heartbeat","type":{"type":"record","name":"Heartbeat","fields":[]}}
+                ]}"#
+                .to_string(),
+            ),
+        );
+        // Two messages; `heartbeat` contributes no bytes to either.
+        let mut input = Vec::new();
+        for id_value in [7i64, 8i64] {
+            input.extend_from_slice(&make_id_prefix(id, 0));
+            input.extend_from_slice(&encode_zigzag(id_value));
+        }
+        assert_eq!(decoder.decode(&input).unwrap(), input.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+
+        assert_eq!(batch.num_rows(), 2);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("long column");
+        assert_eq!(ids.value(0), 7);
+        assert_eq!(ids.value(1), 8);
+        let heartbeat = batch.column(1).as_struct();
+        assert_eq!(heartbeat.num_columns(), 0);
+        assert_eq!(heartbeat.len(), 2);
+        assert_eq!(heartbeat.null_count(), 0);
+    }
+
+    /// The nullable form: the union index still selects the branch, and the absent rows have to
+    /// be counted as well so the struct's length covers nulls and values alike.
+    #[test]
+    fn test_nullable_record_with_no_fields_tracks_nulls() {
+        let id = 12u32;
+        let mut decoder = confluent_decoder(
+            id,
+            AvroSchema::new(
+                r#"{"type":"record","name":"Reading","fields":[
+                    {"name":"heartbeat","type":["null",
+                        {"type":"record","name":"Heartbeat","fields":[]}]}
+                ]}"#
+                .to_string(),
+            ),
+        );
+        // Branch 1 (the record, zero bytes), then branch 0 (null), then branch 1 again.
+        let mut input = Vec::new();
+        for branch in [1i64, 0, 1] {
+            input.extend_from_slice(&make_id_prefix(id, 0));
+            input.extend_from_slice(&encode_zigzag(branch));
+        }
+        assert_eq!(decoder.decode(&input).unwrap(), input.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+
+        assert_eq!(batch.num_rows(), 3);
+        let heartbeat = batch.column(0).as_struct();
+        assert_eq!(heartbeat.num_columns(), 0);
+        assert_eq!(heartbeat.len(), 3);
+        assert!(heartbeat.is_valid(0));
+        assert!(heartbeat.is_null(1));
+        assert!(heartbeat.is_valid(2));
+    }
+
+    /// Inside a list the element count comes from the block header alone, since the elements
+    /// themselves occupy no bytes.
+    #[test]
+    fn test_list_of_records_with_no_fields() {
+        let id = 13u32;
+        let mut decoder = confluent_decoder(
+            id,
+            AvroSchema::new(
+                r#"{"type":"record","name":"Reading","fields":[
+                    {"name":"heartbeats","type":{"type":"array","items":
+                        {"type":"record","name":"Heartbeat","fields":[]}}}
+                ]}"#
+                .to_string(),
+            ),
+        );
+        // One row holding a block of three elements, then the terminating zero block.
+        let mut input = make_id_prefix(id, 0);
+        input.extend_from_slice(&encode_zigzag(3));
+        input.extend_from_slice(&encode_zigzag(0));
+        assert_eq!(decoder.decode(&input).unwrap(), input.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+
+        assert_eq!(batch.num_rows(), 1);
+        let heartbeats = batch.column(0).as_list::<i32>();
+        assert_eq!(heartbeats.value_length(0), 3);
+        let elements = heartbeats.values().as_struct();
+        assert_eq!(elements.num_columns(), 0);
+        assert_eq!(elements.len(), 3);
+    }
+
+    /// The same shape written by this crate's own writer and read back.
+    #[test]
+    fn test_ocf_roundtrip_record_with_no_fields() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("heartbeat", DataType::Struct(Fields::empty()), false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let bytes = write_ocf(&schema, &[batch]);
+        let mut reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("reader");
+        let out = reader.next().expect("batch").expect("read");
+
+        assert_eq!(out.num_rows(), 2);
+        assert_eq!(out.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+        let heartbeat = out.column(1).as_struct();
+        assert_eq!(heartbeat.num_columns(), 0);
+        assert_eq!(heartbeat.len(), 2);
+    }
 }
