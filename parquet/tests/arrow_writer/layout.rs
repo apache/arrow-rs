@@ -754,12 +754,9 @@ fn test_large_string_delta_byte_array_shared_prefix() {
     // `ArrowWriter` level the report used.
     //
     // Same shape as `test_large_string` — 64 KiB values against a 16 KiB
-    // page limit — but `DELTA_BYTE_ARRAY` and identical values. Cutting one
-    // page per value would reset the encoder's shared-prefix state every
-    // time and reproduce `PLAIN` byte for byte (32 pages, ~2 MiB). Instead
-    // the page's mandatory first value is exempt from the byte limit, so all
-    // 32 values share one page: one value stored in full plus 31 empty
-    // suffixes.
+    // page limit — but `DELTA_BYTE_ARRAY` and 32 identical values. Expect a
+    // single page holding all 32 rows and about one value's worth of bytes,
+    // rather than the 32 pages and ~2 MiB `PLAIN` produces.
     let value_size = 64 * 1024;
     let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
     let array = Arc::new(StringArray::from(strings)) as _;

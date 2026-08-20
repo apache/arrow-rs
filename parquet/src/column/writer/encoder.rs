@@ -133,19 +133,22 @@ pub trait ColumnValueEncoder {
     fn has_dictionary(&self) -> bool;
 
     /// Returns true if the encoder compresses each value against the value
-    /// before it *within the current page* — today, `DELTA_BYTE_ARRAY` and
-    /// its shared-prefix lengths.
+    /// immediately before it, within the current page.
     ///
     /// For such encodings a page boundary is not free: flushing discards the
     /// previous value, so the first value of the next page is stored in full.
-    /// A column of large values that share long prefixes therefore collapses
-    /// to `PLAIN` if every value is cut into its own page. The column writer
-    /// uses this to exempt a page's mandatory first value from the data page
-    /// byte limit; see `should_add_data_page`.
+    /// [`GenericColumnWriter::should_add_data_page`] uses this to exempt a
+    /// page's mandatory first value from the data page byte limit.
     ///
-    /// Defaults to `false`: for `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` a
-    /// value costs the same wherever it lands, so there is nothing to
-    /// preserve by keeping values together.
+    /// Per encoding:
+    /// * `DELTA_BYTE_ARRAY`: true. Each value is stored as the length of the
+    ///   prefix it shares with its predecessor plus the remaining suffix.
+    /// * Everything else: false, the default. `PLAIN` and
+    ///   `DELTA_LENGTH_BYTE_ARRAY` store a value at the same cost wherever it
+    ///   lands, and a dictionary outlives the pages that index into it, so no
+    ///   page boundary makes a value more expensive.
+    ///
+    /// [`GenericColumnWriter::should_add_data_page`]: crate::column::writer::GenericColumnWriter::should_add_data_page
     fn compresses_against_previous_value(&self) -> bool {
         false
     }

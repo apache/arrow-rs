@@ -261,7 +261,7 @@ struct PageMetrics {
     /// moved elsewhere. Zero unless that value alone exceeded the limit
     /// *and* the encoding compresses against the preceding value; see
     /// [`ColumnValueEncoder::compresses_against_previous_value`].
-    page_size_floor: usize,
+    page_size_exemption: usize,
     num_page_nulls: u64,
     num_page_nans: Option<u64>,
     repetition_level_histogram: Option<LevelHistogram>,
@@ -290,7 +290,7 @@ impl PageMetrics {
     fn new_page(&mut self) {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
-        self.page_size_floor = 0;
+        self.page_size_exemption = 0;
         self.num_page_nulls = 0;
         self.num_page_nans = None;
         self.repetition_level_histogram
@@ -1044,7 +1044,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.page_metrics.num_buffered_values += num_levels as u32;
 
         if page_was_empty && values_to_write == 1 {
-            self.set_page_size_floor();
+            self.set_page_size_exemption();
         }
 
         if self.should_add_data_page() {
@@ -1080,7 +1080,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Parquet requires every data page to hold at least one value, so such a
     /// value cannot be split out no matter how the limit is set. Counting it
     /// against the limit makes the limit unsatisfiable, and
-    /// `should_add_data_page` then cuts a page after every single value.
+    /// [`Self::should_add_data_page`] then cuts a page after every single
+    /// value.
     ///
     /// For `DELTA_BYTE_ARRAY` that costs more than the extra pages. A value is
     /// stored as a suffix of the value before it, and a page boundary resets
@@ -1100,13 +1101,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// exemption and dedup is only partial; see
     /// `test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup`.
     #[cold]
-    fn set_page_size_floor(&mut self) {
+    fn set_page_size_exemption(&mut self) {
         if !self.encoder.compresses_against_previous_value() {
             return;
         }
         let size = self.encoder.estimated_data_page_size();
         if size >= self.props.column_data_page_size_limit(self.descr.path()) {
-            self.page_metrics.page_size_floor = size;
+            self.page_metrics.page_size_exemption = size;
         }
     }
 
@@ -1125,7 +1126,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             || self
                 .encoder
                 .estimated_data_page_size()
-                .saturating_sub(self.page_metrics.page_size_floor)
+                .saturating_sub(self.page_metrics.page_size_exemption)
                 >= self.props.column_data_page_size_limit(self.descr.path())
     }
 
@@ -3040,17 +3041,9 @@ mod tests {
     #[test]
     fn test_column_writer_delta_byte_array_dedups_large_shared_prefix_values() {
         // Regression for https://github.com/apache/arrow-rs/issues/10489.
-        // `DELTA_BYTE_ARRAY` stores each value as a prefix shared with its
-        // predecessor plus a suffix, but that context is per-page: flushing a
-        // page clears the encoder's `previous`, so the first value on every
-        // page pays full price.
-        //
-        // A value larger than `data_page_size_limit` blows the limit on its
-        // own, so the post-write `should_add_data_page` check cuts a page
-        // after every single value and the encoding degenerates to exactly
-        // PLAIN. Parquet requires at least one value per page, so that first
-        // value is unsplittable and must be exempt from the limit — the
-        // values after it then cost ~nothing.
+        // 16 identical 64 KiB values against a 16 KiB page limit: every value
+        // is over the limit on its own, and `DELTA_BYTE_ARRAY` should still
+        // dedup them down to about one value's worth of bytes in total.
         let value_size = 64 * 1024; // 64 KiB per value, > the page limit
         let page_byte_limit = 16 * 1024;
         let num_rows = 16;
@@ -3079,19 +3072,19 @@ mod tests {
         let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
         assert!(
             total_bytes < 2 * value_size,
-            "expected ~one value's worth of bytes for {num_rows} identical values, \
-             got {total_bytes}B across pages {:?}",
+            "expected under 2x a single value ({}B) for {num_rows} identical \
+             values, got {total_bytes}B across pages {:?}",
+            2 * value_size,
             pages.data_pages,
         );
     }
 
     #[test]
     fn test_column_writer_delta_byte_array_bounds_pages_without_shared_prefix() {
-        // Companion to the test above, and the reason the first-value
-        // exemption is scoped to *one* value rather than dropping the byte
-        // budget altogether: when large values share no prefix there is
-        // nothing to dedup, and pages must stay bounded by the value size
-        // rather than growing with `write_batch_size`.
+        // Companion to the test above: same shape, but the values share no
+        // prefix, so there is nothing to dedup and pages must stay bounded
+        // by the value size. This is why the exemption covers one value
+        // rather than dropping the byte budget altogether.
         let value_size = 64 * 1024;
         let page_byte_limit = 16 * 1024;
         let num_rows = 16;
@@ -3104,7 +3097,7 @@ mod tests {
             .set_statistics_enabled(EnabledStatistics::None)
             .build();
 
-        // Each value differs from byte 0, so every prefix length is 0.
+        // No two values share a prefix: they differ at the first byte.
         let data: Vec<_> = (0..num_rows)
             .map(|i| ByteArray::from(vec![i as u8; value_size]))
             .collect();
@@ -3113,9 +3106,8 @@ mod tests {
         let total_values: u32 = pages.data_pages.iter().map(|(_, n)| n).sum();
         assert_eq!(total_values as usize, num_rows);
 
-        // The exempted first value plus one more that trips the budget: at
-        // most two values' worth of payload on any page, never the whole
-        // 1024-row mini-batch.
+        // Expect at most two values per page: the exempted first value plus
+        // one more that trips the budget.
         let upper_bound = 2 * value_size + 64;
         for (size, n_values) in &pages.data_pages {
             assert!(
