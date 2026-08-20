@@ -178,6 +178,10 @@ pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnW
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
+///
+/// # Panics
+///
+/// Panics if `col_writer` is not a writer for type `T`.
 pub fn get_typed_column_writer_ref<'a, 'b: 'a, T: DataType>(
     col_writer: &'b ColumnWriter<'a>,
 ) -> &'b ColumnWriterImpl<'a, T> {
@@ -190,6 +194,10 @@ pub fn get_typed_column_writer_ref<'a, 'b: 'a, T: DataType>(
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
+///
+/// # Panics
+///
+/// Panics if `col_writer` is not a writer for type `T`.
 pub fn get_typed_column_writer_mut<'a, 'b: 'a, T: DataType>(
     col_writer: &'a mut ColumnWriter<'b>,
 ) -> &'a mut ColumnWriterImpl<'b, T> {
@@ -487,6 +495,11 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
 
 impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Returns a new instance of [`GenericColumnWriter`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the compression codec is unsupported, or if the encoder cannot be
+    /// created for `descr`.
     pub fn new(
         descr: ColumnDescPtr,
         props: WriterPropertiesPtr,

@@ -39,6 +39,10 @@ pub struct UnalignedBitChunk<'a> {
 
 impl<'a> UnalignedBitChunk<'a> {
     /// Create a from a byte array, and and an offset and length in bits
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer` is shorter than `offset + len` bits.
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         if len == 0 {
             return Self {
@@ -229,6 +233,11 @@ pub struct BitChunks<'a> {
 
 impl<'a> BitChunks<'a> {
     /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len` overflows, or if `buffer` is shorter than
+    /// `offset + len` bits.
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let end = offset.checked_add(len).expect("offset + len out of bounds");
         assert!(ceil(end, 8) <= buffer.len(), "offset + len out of bounds");

@@ -218,6 +218,9 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 /// }
 /// ```
 ///
+/// # Panics
+///
+/// Panics if the struct does not have named fields.
 #[proc_macro_derive(ParquetRecordReader)]
 pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);

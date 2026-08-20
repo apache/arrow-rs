@@ -320,6 +320,10 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// # Safety
     /// This requires the iterator be a trusted length. This could instead require
     /// the iterator implement `TrustedLen` once that is stabilized.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the iterator does not report an upper bound on its length.
     #[inline]
     pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
         let iter = iter.into_iter();

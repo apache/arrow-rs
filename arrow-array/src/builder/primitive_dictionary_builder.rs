@@ -140,6 +140,10 @@ where
     /// # Safety
     ///
     /// caller must ensure that the passed in builders are valid for DictionaryArray.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a key in `keys_builder` cannot be converted to a `usize`.
     pub unsafe fn new_from_builders(
         keys_builder: PrimitiveBuilder<K>,
         values_builder: PrimitiveBuilder<V>,
@@ -197,6 +201,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>

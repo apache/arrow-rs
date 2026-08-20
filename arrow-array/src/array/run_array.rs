@@ -147,6 +147,11 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
+    ///
+    /// # Panics
+    ///
+    /// With the `force_validate` feature enabled, panics if `data_type`, `run_ends`
+    /// and `values` are inconsistent.
     pub unsafe fn new_unchecked(
         data_type: DataType,
         run_ends: RunEndBuffer<R::Native>,
