@@ -20,7 +20,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, FixedSizeBinaryBuilder, make_view};
+use arrow_array::builder::{FixedSizeBinaryBuilder, make_view};
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
