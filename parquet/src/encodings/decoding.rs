@@ -21,7 +21,7 @@ use bytes::Bytes;
 use num_traits::{FromPrimitive, WrappingAdd};
 use std::{cmp, marker::PhantomData, mem};
 
-use super::rle::RleDecoder;
+use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
@@ -386,10 +386,9 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         }
 
         let bit_width = data.as_ref()[0];
-        if bit_width > 32 {
+        if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
             return Err(general_err!(
-                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
-                bit_width
+                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
             ));
         }
         let mut rle_decoder = RleDecoder::new(bit_width);
