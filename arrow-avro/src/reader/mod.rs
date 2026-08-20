@@ -741,6 +741,8 @@ impl Decoder {
     /// This is intended for transports such as Kafka where the message boundary is external to
     /// Avro. It returns the number of datum bytes consumed, allowing the caller to ignore transport
     /// payload bytes after the first datum when its format contract requires that behavior.
+    /// Consecutive unframed datums can be decoded by repeatedly passing the unconsumed suffix.
+    /// If the current batch is full, this method returns `Ok(0)` until [`Self::flush`] is called.
     ///
     /// The decoder must already have the desired active fingerprint, and this method does not
     /// inspect or switch framing fingerprints.
@@ -755,6 +757,7 @@ impl Decoder {
         }
         let consumed = self.active_decoder.decode(data, 1)?;
         self.remaining_capacity -= 1;
+        self.awaiting_body = false;
         Ok(consumed)
     }
 
@@ -2712,6 +2715,161 @@ mod test {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(col.value(0), 42);
+    }
+
+    #[test]
+    fn test_decode_datum_concatenated_records_across_batch_boundaries() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(2)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .build_decoder()
+            .unwrap();
+        let input = [encode_zigzag(42), encode_zigzag(300), encode_zigzag(-7)].concat();
+        let mut remaining = input.as_slice();
+
+        let consumed = decoder.decode_datum(remaining).unwrap();
+        assert_eq!(consumed, encode_zigzag(42).len());
+        remaining = &remaining[consumed..];
+        let consumed = decoder.decode_datum(remaining).unwrap();
+        assert_eq!(consumed, encode_zigzag(300).len());
+        remaining = &remaining[consumed..];
+        assert!(decoder.batch_is_full());
+        assert_eq!(decoder.decode_datum(remaining).unwrap(), 0);
+
+        let first = decoder.flush().unwrap().expect("first batch");
+        let values = first.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[42, 300]);
+
+        assert_eq!(decoder.decode_datum(remaining).unwrap(), remaining.len());
+        let second = decoder.flush().unwrap().expect("second batch");
+        let values = second.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[-7]);
+        assert!(decoder.flush().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_decode_datum_incomplete_input_preserves_capacity() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = make_decoder(&store, fp, &reader_schema);
+
+        assert!(decoder.decode_datum(&[0x80]).is_err());
+        assert_eq!(decoder.capacity(), decoder.batch_size());
+        assert!(decoder.flush().unwrap().is_none());
+
+        let datum = encode_zigzag(42);
+        assert_eq!(decoder.decode_datum(&datum).unwrap(), datum.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.column(0).as_primitive::<Int32Type>().value(0), 42);
+    }
+
+    #[test]
+    fn test_decode_datum_completes_previously_consumed_framed_prefix() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = make_decoder(&store, fp, &reader_schema);
+        let prefix = make_prefix(fp);
+        let datum = encode_zigzag(42);
+
+        assert_eq!(decoder.decode(&prefix).unwrap(), prefix.len());
+        assert_eq!(decoder.decode_datum(&datum).unwrap(), datum.len());
+
+        let framed = make_message(fp, 11);
+        assert_eq!(decoder.decode(&framed).unwrap(), framed.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(
+            batch.column(0).as_primitive::<Int32Type>().values(),
+            &[42, 11]
+        );
+    }
+
+    #[test]
+    fn test_decode_datum_nested_nullable_runs_across_flushes() {
+        let writer_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[{"name":"event","type":["null",{"type":"record","name":"Event","fields":[{"name":"id","type":"int"},{"name":"name","type":"string"},{"name":"details","type":["null",{"type":"record","name":"Details","fields":[{"name":"score","type":"long"}]}]}]}]}]}"#
+                .to_string(),
+        );
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .build_decoder()
+            .unwrap();
+
+        let null = vec![0];
+        let event = |id, name: &str, score: Option<i64>| {
+            let mut datum = vec![2];
+            datum.extend(encode_zigzag(id));
+            datum.extend(encode_zigzag(name.len() as i64));
+            datum.extend(name.as_bytes());
+            match score {
+                Some(score) => {
+                    datum.push(2);
+                    datum.extend(encode_zigzag(score));
+                }
+                None => datum.push(0),
+            }
+            datum
+        };
+
+        for datum in [
+            null.clone(),
+            null.clone(),
+            event(7, "one", None),
+            null.clone(),
+            event(8, "two", Some(9)),
+            null.clone(),
+        ] {
+            assert_eq!(decoder.decode_datum(&datum).unwrap(), datum.len());
+        }
+
+        let batch = decoder.flush().unwrap().expect("mixed batch");
+        let events = batch.column(0).as_struct();
+        assert_eq!(events.len(), 6);
+        assert!(events.is_null(0));
+        assert!(events.is_null(1));
+        assert!(events.is_valid(2));
+        assert!(events.is_null(3));
+        assert!(events.is_valid(4));
+        assert!(events.is_null(5));
+        assert_eq!(events.column(0).as_primitive::<Int32Type>().value(2), 7);
+        assert_eq!(events.column(0).as_primitive::<Int32Type>().value(4), 8);
+        assert_eq!(events.column(1).as_string::<i32>().value(2), "one");
+        assert_eq!(events.column(1).as_string::<i32>().value(4), "two");
+        let details = events.column(2).as_struct();
+        assert!(details.is_null(2));
+        assert!(details.is_valid(4));
+        let scores = details
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(scores.value(4), 9);
+
+        decoder.decode_datum(&null).unwrap();
+        decoder.decode_datum(&null).unwrap();
+        let all_null = decoder.flush().unwrap().expect("all-null batch");
+        let events = all_null.column(0).as_struct();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events.null_count(), 2);
+        assert_eq!(events.column(2).as_struct().len(), 2);
+
+        let datum = event(10, "three", Some(11));
+        decoder.decode_datum(&datum).unwrap();
+        let final_batch = decoder.flush().unwrap().expect("batch after null runs");
+        let event = final_batch.column(0).as_struct();
+        assert_eq!(event.column(0).as_primitive::<Int32Type>().value(0), 10);
+        assert_eq!(event.column(1).as_string::<i32>().value(0), "three");
     }
 
     #[test]
