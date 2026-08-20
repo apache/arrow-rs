@@ -22,15 +22,14 @@ use crate::cast::*;
 /// Returns a clone of `values` with parent nulls propagated to the child elements.
 pub(crate) fn mask_fixed_size_list_values(array: &FixedSizeListArray) -> ArrayRef {
     let size = array.value_length() as usize;
-    if array.null_count() == 0 || size == 0 {
+    let Some(nulls) = array.nulls() else {
+        return Arc::clone(array.values());
+    };
+    if size == 0 {
         return Arc::clone(array.values());
     }
 
-    let mut builder = BooleanBufferBuilder::new(array.values().len());
-    for i in 0..array.len() {
-        builder.append_n(size, array.is_valid(i));
-    }
-    let parent_nulls = NullBuffer::from(builder.finish());
+    let parent_nulls = nulls.expand(size);
     let combined_nulls = NullBuffer::union(Some(&parent_nulls), array.values().nulls());
     if combined_nulls.as_ref() != array.values().nulls() {
         let data = array
