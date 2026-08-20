@@ -1207,7 +1207,7 @@ mod tests {
         let result = builder.finish();
 
         let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
-        for value in input.iter() {
+        for value in &input {
             expected_builder.append_option(value);
         }
         let expected = expected_builder.finish();
@@ -1239,7 +1239,7 @@ mod tests {
         let result = builder.finish();
 
         let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
-        for value in input.iter() {
+        for value in &input {
             expected_builder.append_option(value);
         }
         let expected = expected_builder.finish();
