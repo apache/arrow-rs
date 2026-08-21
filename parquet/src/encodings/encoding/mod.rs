@@ -722,6 +722,7 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             previous = current;
             previous_array = current_array;
         }
+        // Avoid keeping big values alive by copying previous slice into buffer
         self.previous.clear();
         self.previous.extend_from_slice(previous_array.data());
 
@@ -764,6 +765,8 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.prefix_len_encoder.estimated_memory_size()
             + self.suffix_writer.estimated_memory_size()
+            + self.prefix_lengths.capacity() * std::mem::size_of::<i32>()
+            + self.suffixes.capacity() * std::mem::size_of::<ByteArray>()
             + (self.previous.capacity() * std::mem::size_of::<u8>())
     }
 }
