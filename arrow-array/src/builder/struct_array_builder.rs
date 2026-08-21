@@ -124,4 +124,31 @@ mod tests {
         assert_eq!(array.fields()[1].metadata(), &metadata);
         assert_eq!(array.nulls(), Some(&nulls));
     }
+
+    #[test]
+    #[should_panic(
+        expected = "Incorrect array length for StructArray field \\\"value\\\", expected 2 got 1"
+    )]
+    fn build_panics_on_mismatched_child_lengths() {
+        let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
+        let values = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+
+        StructArrayBuilder::new()
+            .with_field("name", names, false)
+            .with_field("value", values, false)
+            .build();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Incorrect datatype for StructArray field \\\"value\\\", expected Int64 got Int32"
+    )]
+    fn build_panics_on_mismatched_field_data_type() {
+        let value_field = Arc::new(Field::new("value", DataType::Int64, false));
+        let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+
+        StructArrayBuilder::new()
+            .with_field_ref(value_field, values)
+            .build();
+    }
 }
