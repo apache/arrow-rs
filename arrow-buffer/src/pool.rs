@@ -23,15 +23,15 @@
 //! is as follows:
 //!
 //! ```text
-//!     (pool tracker)                        (resizable)           
+//!     (pool tracker)                        (resizable)
 //!  ┌──────────────────┐ fn reserve() ┌─────────────────────────┐
-//!  │ trait MemoryPool │─────────────►│ trait MemoryReservation │
+//!  │ trait MemoryPool │────────────►│ trait MemoryReservation │
 //!  └──────────────────┘              └─────────────────────────┘
 //! ```
 
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A memory reservation within a [`MemoryPool`] that is freed on drop
 pub trait MemoryReservation: Debug + Send + Sync {
@@ -52,20 +52,20 @@ pub trait MemoryReservation: Debug + Send + Sync {
 /// tell if the buffer is shared or not.
 ///
 /// ```text
-///       Array A           Array B    
+///       Array A           Array B
 ///    ┌────────────┐    ┌────────────┐
 ///    │ slices...  │    │ slices...  │
 ///    │────────────│    │────────────│
 ///    │ Arc<Bytes> │    │ Arc<Bytes> │ (shared buffer)
-///    └─────▲──────┘    └───────▲────┘
-///          │                   │     
-///          │       Bytes       │     
-///          │  ┌─────────────┐  │     
-///          │  │   data...   │  │     
-///          │  │─────────────│  │     
-///          └──│   Memory    │──┘   (tracked with a memory pool)  
-///             │ Reservation │        
-///             └─────────────┘        
+///    └─────▲─────┘    └───────▲───┘
+///          │                   │
+///          │       Bytes       │
+///          │  ┌─────────────┐  │
+///          │  │   data...   │  │
+///          │  │─────────────│  │
+///          └──│   Memory    │──┘   (tracked with a memory pool)
+///             │ Reservation │
+///             └─────────────┘
 /// ```
 ///
 /// With a memory pool, we can count the memory usage by the shared buffer
@@ -147,6 +147,77 @@ impl MemoryReservation for Tracker {
     }
 }
 
+/// This is a wrapper for the reservation so we can standardize on changing
+/// and avoid race conditions in memory accounting
+#[derive(Debug, Default)]
+pub(crate) struct TrackedReservation {
+    reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
+}
+
+impl TrackedReservation {
+    /// Claim memory from a pool, replacing the current reservation (if exists).
+    pub fn claim(&self, pool: &dyn MemoryPool, capacity: usize) {
+        // get the existing reservation
+        let mut guard = self
+            .reservation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // drop it before we reserve the new one
+        drop(guard.take());
+
+        // reserve the new one
+        *guard = Some(pool.reserve(capacity))
+    }
+
+    /// Resize the memory reservation of this buffer
+    ///
+    /// This is a no-op if this buffer doesn't have a reservation.
+    pub fn resize(&self, new_size: usize) {
+        let mut guard = self
+            .reservation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if let Some(reservation) = guard.as_mut() {
+            // Resize the reservation
+            reservation.resize(new_size);
+        }
+    }
+
+    /// Takes ownership of the reservation and returns it in a new `TrackedReservation`
+    pub fn take(&self) -> Self {
+        let mut guard = self
+            .reservation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let reservation = guard.take();
+
+        Self {
+            reservation: Mutex::new(reservation),
+        }
+    }
+
+    /// Replaces the current tracked reservation with `other`, consuming it.
+    pub fn replace(&self, other: Self) {
+        // get the owned value out, preventing double lock
+        let reservation = other
+            .reservation
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let mut guard = self
+            .reservation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // drop the old reservation before installing the new one
+        drop(guard.take());
+        *guard = reservation;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +256,55 @@ mod tests {
         // Drop the second reservation
         drop(reservation2);
         assert_eq!(pool.used(), 0);
+    }
+
+    /// A [`MemoryPool`] that records the peak usage observed at the instant
+    /// each reservation is taken, letting a single-threaded test witness the
+    /// transient double-count that [`TrackedReservation::claim`] must avoid.
+    #[derive(Debug, Default)]
+    struct PeakPool {
+        inner: TrackingMemoryPool,
+        peak: AtomicUsize,
+    }
+
+    impl MemoryPool for PeakPool {
+        fn reserve(&self, size: usize) -> Box<dyn MemoryReservation> {
+            let reservation = self.inner.reserve(size);
+            self.peak.fetch_max(self.inner.used(), Ordering::Relaxed);
+            reservation
+        }
+
+        fn available(&self) -> isize {
+            self.inner.available()
+        }
+
+        fn used(&self) -> usize {
+            self.inner.used()
+        }
+
+        fn capacity(&self) -> usize {
+            self.inner.capacity()
+        }
+    }
+
+    #[test]
+    fn test_claim_reclaims_before_reserving() {
+        let pool = PeakPool::default();
+        let reservation = TrackedReservation::default();
+
+        // Claim 512 bytes.
+        reservation.claim(&pool, 512);
+        assert_eq!(pool.used(), 512);
+
+        // Re-claim the same amount. The old reservation must be released
+        // before the new one is taken, so usage never transiently doubles
+        // (see #10139).
+        reservation.claim(&pool, 512);
+        assert_eq!(pool.used(), 512);
+        assert_eq!(
+            pool.peak.load(Ordering::Relaxed),
+            512,
+            "claim double-counted memory while reclaiming"
+        );
     }
 }
