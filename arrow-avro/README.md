@@ -105,8 +105,9 @@ fn main() -> anyhow::Result<()> {
 ```
 
 See the crate docs for runnable unframed-datum, SOE, and Confluent examples. Unframed Kafka
-messages or consecutive raw records can be decoded directly with `Decoder::decode_datum` after
-selecting the known writer schema with `ReaderBuilder::with_active_fingerprint`.
+messages or consecutive raw records can be decoded directly with `Decoder::decode` after
+selecting the known writer schema with `ReaderBuilder::with_active_fingerprint` and configuring
+`ReaderBuilder::with_decoder_mode(DecoderMode::UnframedDatum)`.
 
 ### Async reading (`async` feature)
 
@@ -212,7 +213,7 @@ the example on the `AsyncFileReader` trait documentation.
 ## What formats are supported?
 
 * **OCF (Object Container Files)**: self‑describing Avro files with header, optional compression, sync markers; reader and writer supported.
-* **Unframed binary datums**: bare Avro records with an externally known writer schema; decode directly with `Decoder::decode_datum`, without adding a synthetic framing prefix.
+* **Unframed binary datums**: bare Avro records with an externally known writer schema; configure `DecoderMode::UnframedDatum` and decode directly with `Decoder::decode`, without adding a synthetic framing prefix.
 * **Confluent Schema Registry wire format**: 1‑byte magic `0x00` + 4‑byte BE schema ID + Avro body; supports decode + encode helpers.
 * **Avro Single‑Object Encoding (SOE)**: 2‑byte magic `0xC3 0x01` + 8‑byte LE CRC‑64‑AVRO fingerprint + Avro body; supports decode + encode helpers.
 

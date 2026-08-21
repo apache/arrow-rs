@@ -69,12 +69,13 @@
 //!
 //! Kafka messages and other transports can contain bare Avro records without an OCF header,
 //! single-object prefix, or schema-registry framing. When the writer schema is already known,
-//! register it, select its fingerprint, and call [`reader::Decoder::decode_datum`] once per
-//! record. The returned byte count also supports consecutive datums in one buffer.
+//! register it, select its fingerprint and [`reader::DecoderMode::UnframedDatum`], and call
+//! [`reader::Decoder::decode`] once per record. The returned byte count also supports
+//! consecutive datums in one buffer.
 //!
 //! ```
 //! use arrow_array::{Array, Int64Array};
-//! use arrow_avro::reader::ReaderBuilder;
+//! use arrow_avro::reader::{DecoderMode, ReaderBuilder};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,12 +88,13 @@
 //! let mut decoder = ReaderBuilder::new()
 //!     .with_writer_schema_store(store)
 //!     .with_active_fingerprint(fingerprint)
+//!     .with_decoder_mode(DecoderMode::UnframedDatum)
 //!     .build_decoder()?;
 //!
 //! // Two consecutive records, {id: 7} and {id: 42}, in Avro zigzag encoding.
 //! let mut remaining: &[u8] = &[0x0e, 0x54];
 //! while !remaining.is_empty() {
-//!     let consumed = decoder.decode_datum(remaining)?;
+//!     let consumed = decoder.decode(remaining)?;
 //!     remaining = &remaining[consumed..];
 //! }
 //!
