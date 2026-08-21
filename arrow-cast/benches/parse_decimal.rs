@@ -15,11 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::types::{Decimal128Type, Decimal256Type};
-use arrow_cast::cast::parse_string_to_decimal_native;
+use arrow_array::types::{
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
+};
 use arrow_cast::parse::parse_decimal;
 use criterion::*;
 use std::hint;
+
+fn bench_parse<T: DecimalType>(
+    c: &mut Criterion,
+    name: &str,
+    decimal: &str,
+    precision: u8,
+    scale: i8,
+) {
+    let d = hint::black_box(decimal);
+    c.bench_function(name, |b| {
+        b.iter(|| parse_decimal::<T>(d, precision, scale).unwrap());
+    });
+}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let decimals = [
@@ -47,13 +61,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     ];
 
     for decimal in decimals {
-        let d = hint::black_box(decimal);
-        c.bench_function(d, |b| {
-            b.iter(|| parse_decimal::<Decimal256Type>(d, 20, 3).unwrap());
-        });
+        bench_parse::<Decimal256Type>(c, decimal, decimal, 20, 3);
     }
 
-    let string_decimals = [
+    let decimal128 = [
         ("string decimal128 integer", "12345678912345678", 3),
         ("string decimal128 exact scale", "12345678912345.123", 3),
         ("string decimal128 padded scale", "12345678912345.1", 6),
@@ -64,6 +75,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             "99999999999999999999999999999999999999",
             0,
         ),
+        ("string decimal128 exponent", "1.2345678912345e13", 3),
+        (
+            "string decimal128 negative exponent",
+            "12345678912345678e-3",
+            3,
+        ),
+        ("string decimal128 negative scale", "12345678912345678", -3),
+        (
+            "string decimal128 long fraction",
+            "1.2345678912345678912345678912345678912345",
+            3,
+        ),
+    ];
+    for (name, decimal, scale) in decimal128 {
+        bench_parse::<Decimal128Type>(c, name, decimal, 38, scale);
+    }
+
+    let decimal256 = [
         (
             "string decimal256 76 digits",
             "9999999999999999999999999999999999999999999999999999999999999999999999999999",
@@ -75,19 +104,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             3,
         ),
     ];
+    for (name, decimal, scale) in decimal256 {
+        bench_parse::<Decimal256Type>(c, name, decimal, 76, scale);
+    }
 
-    for (name, decimal, scale) in string_decimals {
-        let d = hint::black_box(decimal);
-        let scale = hint::black_box(scale);
-        if name.contains("decimal256") {
-            c.bench_function(name, |b| {
-                b.iter(|| parse_string_to_decimal_native::<Decimal256Type>(d, scale).unwrap());
-            });
-        } else {
-            c.bench_function(name, |b| {
-                b.iter(|| parse_string_to_decimal_native::<Decimal128Type>(d, scale).unwrap());
-            });
-        }
+    let decimal32 = [
+        ("string decimal32 short", "1234.56", 2),
+        ("string decimal32 9 digits", "9999999.99", 2),
+    ];
+    for (name, decimal, scale) in decimal32 {
+        bench_parse::<Decimal32Type>(c, name, decimal, 9, scale);
+    }
+
+    let decimal64 = [
+        ("string decimal64 short", "1234.56", 2),
+        ("string decimal64 18 digits", "9999999999999999.99", 2),
+    ];
+    for (name, decimal, scale) in decimal64 {
+        bench_parse::<Decimal64Type>(c, name, decimal, 18, scale);
     }
 }
 

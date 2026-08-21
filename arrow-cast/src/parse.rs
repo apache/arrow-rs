@@ -796,249 +796,352 @@ impl Parser for Date64Type {
     }
 }
 
-fn parse_e_notation<T: DecimalType>(
-    s: &str,
-    mut digits: u16,
-    mut fractionals: i16,
-    mut result: T::Native,
-    index: usize,
-    precision: u16,
-    scale: i16,
-) -> Result<T::Native, ArrowError> {
-    let mut exp: i16 = 0;
-    let base = T::Native::usize_as(10);
-
-    // e has a plus sign
-    let mut pos_shift_direction = true;
-
-    // skip to the exponent index directly or just after any processed fractionals
-    let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
-
-    // This function is only called from `parse_decimal`, in which we skip parsing any fractionals
-    // after we reach `scale` digits, not knowing ahead of time whether the decimal contains an
-    // e-notation or not.
-    // So once we do hit into an e-notation, and drop down into this function, we need to parse the
-    // remaining unprocessed fractionals too, since otherwise we might lose precision.
-    for b in bs.by_ref() {
-        match b {
-            b'0'..=b'9' => {
-                result = result.mul_wrapping(base);
-                result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
-                fractionals += 1;
-                digits += 1;
-            }
-            b'e' | b'E' => {
-                break;
-            }
-            _ => {
-                return Err(ArrowError::ParseError(format!(
-                    "can't parse the string value {s} to decimal"
-                )));
-            }
-        }
-    }
-
-    // parse the exponent itself
-    let mut signed = false;
-    for b in bs {
-        match b {
-            b'-' if !signed => {
-                pos_shift_direction = false;
-                signed = true;
-            }
-            b'+' if !signed => {
-                pos_shift_direction = true;
-                signed = true;
-            }
-            b if b.is_ascii_digit() => {
-                exp *= 10;
-                exp += (b - b'0') as i16;
-            }
-            _ => {
-                return Err(ArrowError::ParseError(format!(
-                    "can't parse the string value {s} to decimal"
-                )));
-            }
-        }
-    }
-
-    if digits == 0 && fractionals == 0 && exp == 0 {
-        return Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )));
-    }
-
-    if !pos_shift_direction {
-        // exponent has a large negative sign
-        // 1.12345e-30 => 0.0{29}12345, scale = 5
-        if exp - (digits as i16 + scale) > 0 {
-            return Ok(T::Native::usize_as(0));
-        }
-        exp *= -1;
-    }
-
-    // point offset
-    exp = fractionals - exp;
-    // We have zeros on the left, we need to count them
-    if !pos_shift_direction && exp > digits as i16 {
-        digits = exp as u16;
-    }
-    // Number of numbers to be removed or added
-    exp = scale - exp;
-
-    if (digits as i16 + exp) as u16 > precision {
-        return Err(ArrowError::ParseError(format!(
-            "parse decimal overflow ({s})"
-        )));
-    }
-
-    if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping(-exp as _));
-    } else {
-        result = result.mul_wrapping(base.pow_wrapping(exp as _));
-    }
-
-    Ok(result)
-}
-
-/// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
-/// Expected behavior:
-/// - The result value can't be out of bounds.
-/// - When parsing a decimal with scale 0, all fractional digits will be discarded. The final
-///   fractional digits may be a subset or a superset of the digits after the decimal point when
-///   e-notation is used.
+/// Parses the string representation of a decimal number into the unscaled
+/// native value of a decimal type with the given `precision` and `scale`.
+///
+/// The accepted syntax is:
+///
+/// ```text
+/// [whitespace] [+|-] digits [. [digits]] [(e|E) [+|-] digits] [whitespace]
+/// ```
+///
+/// or the same with the integer digits omitted (e.g. `.5`), as long as at
+/// least one digit is present in the mantissa. ASCII whitespace is trimmed
+/// from both ends. The exponent is applied before scaling, so `1.5e2` and
+/// `150` parse identically.
+///
+/// Fractional digits beyond `scale` are not stored but round the result half
+/// away from zero (e.g. `1.005` at scale 2 is `101`, `-1.005` is `-101`).
+/// Negative scales are supported and round the integer part in the same way
+/// (e.g. `150` at scale -2 is `2`).
+///
+/// Returns an error if the input is not a valid decimal string, or if the
+/// result does not fit the given precision.
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::types::Decimal128Type;
+/// # use arrow_cast::parse::parse_decimal;
+/// assert_eq!(parse_decimal::<Decimal128Type>("123.45", 10, 2).unwrap(), 12345);
+/// assert_eq!(parse_decimal::<Decimal128Type>("1.005", 10, 2).unwrap(), 101);
+/// assert_eq!(parse_decimal::<Decimal128Type>("1.5e2", 10, 0).unwrap(), 150);
+/// assert!(parse_decimal::<Decimal128Type>("1234.5", 5, 2).is_err()); // does not fit
+/// ```
 pub fn parse_decimal<T: DecimalType>(
     s: &str,
     precision: u8,
     scale: i8,
 ) -> Result<T::Native, ArrowError> {
-    let mut result = T::Native::usize_as(0);
-    let mut fractionals: i8 = 0;
-    let mut digits: u8 = 0;
-    let base = T::Native::usize_as(10);
+    parse_decimal_checked::<T>(s, precision, scale).map_err(|e| match e {
+        DecimalParseError::Overflow => ArrowError::ParseError(format!(
+            "{s:?} does not fit in {}({precision}, {scale})",
+            T::PREFIX
+        )),
+        DecimalParseError::InvalidFormat => {
+            ArrowError::ParseError(format!("Invalid decimal format: {s:?}"))
+        }
+    })
+}
 
-    let bs = s.as_bytes();
+/// The reason a decimal string could not be parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecimalParseError {
+    /// The input is not a valid decimal string
+    InvalidFormat,
+    /// The value does not fit in the precision or the native type of the decimal
+    Overflow,
+}
 
-    if !bs
-        .last()
-        .is_some_and(|b| b.is_ascii_digit() || (b == &b'.' && s.len() > 1))
-    {
-        // If the last character is not a digit (or a decimal point prefixed with some digits), then
-        // it's not a valid decimal.
-        return Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )));
+/// Like [`parse_decimal`], but reports failures as a [`DecimalParseError`]
+/// instead of formatting an error message, for callers that discard or
+/// re-wrap the error.
+pub(crate) fn parse_decimal_checked<T: DecimalType>(
+    s: &str,
+    precision: u8,
+    scale: i8,
+) -> Result<T::Native, DecimalParseError> {
+    let value = parse_decimal_native::<T>(s, scale)?;
+    if T::is_valid_decimal_precision(value, precision) {
+        Ok(value)
+    } else {
+        Err(DecimalParseError::Overflow)
     }
+}
 
-    let (signed, negative) = match bs.first() {
-        Some(b'-') => (true, true),
-        Some(b'+') => (true, false),
-        _ => (false, false),
+/// Parses `s` as a decimal with the given `scale` into the native type of `T`,
+/// checking only that the result fits the native type (not the precision).
+///
+/// See [`parse_decimal`] for the accepted syntax and rounding behaviour.
+fn parse_decimal_native<T: DecimalType>(
+    s: &str,
+    scale: i8,
+) -> Result<T::Native, DecimalParseError> {
+    let bytes = s.as_bytes().trim_ascii();
+    let (negative, mut mantissa) = split_sign(bytes);
+
+    let mut scale = scale as i64;
+    loop {
+        let exponent_at = match parse_decimal_mantissa::<T>(mantissa, negative, scale) {
+            Ok(value) => return Ok(value),
+            Err(MantissaError::InvalidFormat) => return Err(DecimalParseError::InvalidFormat),
+            Err(MantissaError::Exponent(index)) => index,
+            // The digits before an exponent marker need not fit on their own
+            // (e.g. "4825037936439135476E-14"), so the overflow only stands
+            // if no marker follows
+            Err(MantissaError::Overflow) => mantissa
+                .iter()
+                .position(|b| matches!(b, b'e' | b'E'))
+                .ok_or(DecimalParseError::Overflow)?,
+        };
+
+        // If we saw an exponent, update the effective scale and rescan.
+        // Exponents are rare, so the risk of repeated work is preferable to
+        // the cost of scanning ahead for an exponent marker for every input.
+        let exponent = parse_decimal_exponent(&mantissa[exponent_at + 1..])?;
+        scale = scale.saturating_add(exponent);
+
+        // Trim the exponent so the next iteration succeeds without rescanning
+        mantissa = &mantissa[..exponent_at];
+    }
+}
+
+/// Why scanning the digits of a decimal string stopped.
+enum MantissaError {
+    /// The input is not a valid decimal string
+    InvalidFormat,
+    /// The value does not fit in the native type
+    Overflow,
+    /// An exponent marker (`e` or `E`) was found at the given byte offset
+    Exponent(usize),
+}
+
+impl From<DecimalParseError> for MantissaError {
+    fn from(e: DecimalParseError) -> Self {
+        match e {
+            DecimalParseError::InvalidFormat => Self::InvalidFormat,
+            DecimalParseError::Overflow => Self::Overflow,
+        }
+    }
+}
+
+/// The maximum number of decimal digits accumulated in a `u64` before the
+/// chunk is folded into the native value: every 18-digit number fits in a
+/// `u64`, and splits into two halves that each fit in a `u32` (see
+/// [`decimal_chunk_to_native`]).
+const MAX_CHUNK_DIGITS: usize = 18;
+
+/// Scans `mantissa` (digits with at most one decimal point; the sign has
+/// already been removed) and folds the digits that are significant at
+/// `scale` into a native value, rounding half away from zero on the first
+/// digit that is not.
+#[inline]
+fn parse_decimal_mantissa<T: DecimalType>(
+    mantissa: &[u8],
+    negative: bool,
+    scale: i64,
+) -> Result<T::Native, MantissaError> {
+    // The number of integer and fractional digits that contribute to the
+    // result. For a non-negative scale that is every integer digit and the
+    // first `scale` fractional digits. For a negative scale the last `-scale`
+    // integer digits (and every fractional digit) only matter for rounding.
+    let (int_keep, frac_keep, mut round) = if scale >= 0 {
+        (
+            usize::MAX,
+            usize::try_from(scale).unwrap_or(usize::MAX),
+            true,
+        )
+    } else {
+        let int_digits = mantissa.iter().take_while(|b| b.is_ascii_digit()).count();
+        match usize::try_from(int_digits as i64 + scale) {
+            Ok(keep) => (keep, 0, true),
+            // Even the first digit is more than one position below the
+            // least significant digit of the result: the value rounds to
+            // zero regardless of what the digits are
+            Err(_) => (0, 0, false),
+        }
     };
 
-    // Iterate over the raw input bytes, skipping the sign if any
-    let mut bs = bs.iter().enumerate().skip(signed as usize);
+    let mut value = T::Native::ZERO;
+    let mut chunk = 0_u64;
+    let mut chunk_len = 0_usize;
+    let mut saw_point = false;
+    let mut int_kept = 0_usize;
+    let mut frac_kept = 0_usize;
+    let mut first_discarded_digit = None;
 
-    let mut is_e_notation = false;
-
-    // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
-    // Thus, if we validate the precision correctly, we can skip overflow checks.
-    while let Some((index, b)) = bs.next() {
+    let mut index = 0;
+    while let Some(&b) = mantissa.get(index) {
         match b {
             b'0'..=b'9' => {
-                if digits == 0 && *b == b'0' {
-                    // Ignore leading zeros.
-                    continue;
-                }
-                digits += 1;
-                result = result.mul_wrapping(base);
-                result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
-            }
-            b'.' => {
-                let point_index = index;
-
-                for (_, b) in bs.by_ref() {
-                    if !b.is_ascii_digit() {
-                        if *b == b'e' || *b == b'E' {
-                            result = parse_e_notation::<T>(
-                                s,
-                                digits as u16,
-                                fractionals as i16,
-                                result,
-                                point_index + 1,
-                                precision as u16,
-                                scale as i16,
-                            )?;
-
-                            is_e_notation = true;
-
-                            break;
-                        }
-                        return Err(ArrowError::ParseError(format!(
-                            "can't parse the string value {s} to decimal"
-                        )));
+                let digit = b - b'0';
+                let (kept, keep) = if saw_point {
+                    (&mut frac_kept, frac_keep)
+                } else {
+                    (&mut int_kept, int_keep)
+                };
+                if *kept < keep {
+                    *kept += 1;
+                    // Cannot overflow: the chunk is folded into `value` before it
+                    // exceeds MAX_CHUNK_DIGITS digits, all of which fit in a u64
+                    chunk = chunk * 10 + digit as u64;
+                    chunk_len += 1;
+                    if chunk_len == MAX_CHUNK_DIGITS {
+                        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
+                        chunk = 0;
+                        chunk_len = 0;
                     }
-                    if fractionals == scale {
-                        // We have processed all the digits that we need. All that
-                        // is left is to validate that the rest of the string contains
-                        // valid digits.
-                        continue;
-                    }
-                    fractionals += 1;
-                    digits += 1;
-                    result = result.mul_wrapping(base);
-                    result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
-                }
-
-                if is_e_notation {
-                    break;
+                } else {
+                    first_discarded_digit.get_or_insert(digit);
                 }
             }
-            b'e' | b'E' => {
-                result = parse_e_notation::<T>(
-                    s,
-                    digits as u16,
-                    fractionals as i16,
-                    result,
-                    index,
-                    precision as u16,
-                    scale as i16,
-                )?;
-
-                is_e_notation = true;
-
-                break;
-            }
-            _ => {
-                return Err(ArrowError::ParseError(format!(
-                    "can't parse the string value {s} to decimal"
-                )));
-            }
+            b'.' if !saw_point => saw_point = true,
+            b'e' | b'E' => return Err(MantissaError::Exponent(index)),
+            _ => return Err(MantissaError::InvalidFormat),
         }
+        index += 1;
     }
 
-    if !is_e_notation {
-        if fractionals < scale {
-            let exp = scale - fractionals;
-            if exp as u8 + digits > precision {
-                return Err(ArrowError::ParseError(format!(
-                    "parse decimal overflow ({s})"
-                )));
-            }
-            let mul = base.pow_wrapping(exp as _);
-            result = result.mul_wrapping(mul);
-        } else if digits > precision {
-            return Err(ArrowError::ParseError(format!(
-                "parse decimal overflow ({s})"
-            )));
-        }
+    if chunk_len > 0 {
+        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
     }
 
-    Ok(if negative {
-        result.neg_wrapping()
+    if int_kept == 0 && frac_kept == 0 && first_discarded_digit.is_none() {
+        return Err(MantissaError::InvalidFormat);
+    }
+
+    // Scale the value up to the target scale. Skipped for zero, where computing
+    // 10^missing could overflow the native type even though the result (zero)
+    // is always representable.
+    let missing = scale - frac_kept as i64;
+    if missing > 0 && !value.is_zero() {
+        value = value
+            .mul_checked(decimal_pow::<T>(missing)?)
+            .map_err(|_| MantissaError::Overflow)?;
+    }
+
+    round &= first_discarded_digit.is_some_and(|digit| digit >= 5);
+    if round {
+        value = if negative {
+            value.sub_checked(T::Native::ONE)
+        } else {
+            value.add_checked(T::Native::ONE)
+        }
+        .map_err(|_| MantissaError::Overflow)?;
+    }
+
+    Ok(value)
+}
+
+/// Parses the digits of an exponent (`[+|-] digits`), saturating at the bounds
+/// of `i64`; any exponent that large scales every non-zero mantissa out of
+/// range of every decimal type.
+fn parse_decimal_exponent(exponent: &[u8]) -> Result<i64, DecimalParseError> {
+    let (negative, digits) = split_sign(exponent);
+    if digits.is_empty() {
+        return Err(DecimalParseError::InvalidFormat);
+    }
+    let mut value = 0_i64;
+    for &b in digits {
+        if !b.is_ascii_digit() {
+            return Err(DecimalParseError::InvalidFormat);
+        }
+        value = value.saturating_mul(10).saturating_add((b - b'0') as i64);
+    }
+    Ok(if negative { -value } else { value })
+}
+
+/// Splits an optional leading sign from `bytes`, returning whether it is `-`
+/// and the bytes that follow it.
+#[inline]
+fn split_sign(bytes: &[u8]) -> (bool, &[u8]) {
+    match bytes.first() {
+        Some(b'-') => (true, &bytes[1..]),
+        Some(b'+') => (false, &bytes[1..]),
+        _ => (false, bytes),
+    }
+}
+
+/// Folds a chunk of up to [`MAX_CHUNK_DIGITS`] digits into `value`, producing
+/// `value * 10^chunk_len + chunk` (`chunk` is negated first when parsing a
+/// negative number).
+#[inline]
+fn fold_decimal_chunk<T: DecimalType>(
+    value: T::Native,
+    chunk: u64,
+    chunk_len: usize,
+    negative: bool,
+) -> Result<T::Native, DecimalParseError> {
+    let chunk = decimal_chunk_to_native::<T>(chunk, negative)?;
+
+    // When `value` is zero the multiply would be a no-op; skipping it avoids
+    // computing 10^chunk_len, which can overflow a narrow native type even
+    // though the result (the chunk itself) is representable.
+    if value.is_zero() {
+        return Ok(chunk);
+    }
+
+    value
+        .mul_checked(decimal_pow::<T>(chunk_len as i64)?)
+        .map_err(|_| DecimalParseError::Overflow)?
+        .add_checked(chunk)
+        .map_err(|_| DecimalParseError::Overflow)
+}
+
+/// Converts a chunk of at most [`MAX_CHUNK_DIGITS`] digits to the native type,
+/// negated if `negative`.
+#[inline]
+fn decimal_chunk_to_native<T: DecimalType>(
+    chunk: u64,
+    negative: bool,
+) -> Result<T::Native, DecimalParseError> {
+    // Every native type can represent +/- 10^9, so a chunk below that converts
+    // losslessly through usize on every target. So does any chunk when the
+    // native type holds MAX_CHUNK_DIGITS digits and usize holds a u64.
+    const HALF: u64 = 1_000_000_000;
+    if chunk < HALF || (T::MAX_PRECISION as usize >= MAX_CHUNK_DIGITS && usize::BITS >= 64) {
+        let chunk = T::Native::usize_as(chunk as usize);
+        // `ZERO.sub_wrapping` rather than `neg_wrapping`: the latter compiles
+        // to measurably slower code for i256 (~10% on casting strings to
+        // Decimal256)
+        return Ok(if negative {
+            T::Native::ZERO.sub_wrapping(chunk)
+        } else {
+            chunk
+        });
+    }
+    // Otherwise narrow the chunk in two halves that are each below 10^9
+    let low = T::Native::usize_as((chunk % HALF) as usize);
+    let high = T::Native::usize_as((chunk / HALF) as usize)
+        .mul_checked(T::Native::usize_as(HALF as usize))
+        .map_err(|_| DecimalParseError::Overflow)?;
+    // Negate before combining so that a chunk with the magnitude of the
+    // native type's minimum value (e.g. "2147483648" for Decimal32) remains
+    // representable
+    if negative {
+        T::Native::ZERO
+            .sub_checked(high)
+            .map_err(|_| DecimalParseError::Overflow)?
+            .sub_checked(low)
+            .map_err(|_| DecimalParseError::Overflow)
     } else {
-        result
-    })
+        high.add_checked(low)
+            .map_err(|_| DecimalParseError::Overflow)
+    }
+}
+
+/// Returns `10^exp` as a `T::Native`, or an overflow error if the result does
+/// not fit in the native type.
+#[inline]
+fn decimal_pow<T: DecimalType>(exp: i64) -> Result<T::Native, DecimalParseError> {
+    // T::MAX_FOR_EACH_PRECISION[k] holds 10^k - 1, so adding one yields 10^k
+    // without computing a power at runtime. Exponents beyond the table always
+    // overflow: the native type cannot hold 10^(MAX_PRECISION + 1).
+    usize::try_from(exp)
+        .ok()
+        .and_then(|exp| T::MAX_FOR_EACH_PRECISION.get(exp))
+        .map(|max| max.add_wrapping(T::Native::ONE))
+        .ok_or(DecimalParseError::Overflow)
 }
 
 /// Parse human-readable interval string to Arrow [IntervalYearMonthType]
@@ -2659,6 +2762,9 @@ mod tests {
             ("4749.3e+5", "474930000", 1),
             ("0E-8", "0", 10),
             ("0E+6", "0", 10),
+            ("0e0", "0", 10),
+            ("-0e0", "0", 10),
+            ("00e48", "0", 10),
             ("1E-8", "0.00000001", 10),
             ("12E+6", "12000000", 10),
             ("12E-6", "0.000012", 10),
@@ -2670,14 +2776,17 @@ mod tests {
             ("000001.1034567002e0", "000001.1034567002", 3),
             ("1.234e16", "12340000000000000", 0),
             ("123.4e16", "1234000000000000000", 0),
+            ("15e-1", "1.5", 0),
+            ("1.25e1", "12.5", 0),
+            ("1.5e-1", "0.15", 1),
         ];
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
             let result_128_d = parse_decimal::<Decimal128Type>(d, 20, scale);
-            assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
+            assert_eq!(result_128_e.unwrap(), result_128_d.unwrap(), "{e} vs {d}");
             let result_256_e = parse_decimal::<Decimal256Type>(e, 20, scale);
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
-            assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
+            assert_eq!(result_256_e.unwrap(), result_256_d.unwrap(), "{e} vs {d}");
         }
         let can_not_parse_tests = [
             "123,123",
@@ -2687,6 +2796,11 @@ mod tests {
             "+",
             "-",
             "e",
+            "e5",
+            "-.",
+            "+e-11",
+            "-.E+3",
+            ".e5",
             "1.3e+e3",
             "5.6714ee-2",
             "4.11ee-+4",
@@ -2697,16 +2811,26 @@ mod tests {
             "1e",
             "1e+",
             "1e-",
+            "1e5e5",
+            "1 000",
+            "1_000",
+            "- 1",
+            "1.5 x",
+            "0x10",
+            "NaN",
+            "inf",
+            "\u{661}\u{662}",
+            "\u{ff11}",
         ];
         for s in can_not_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
             assert_eq!(
-                format!("Parser error: can't parse the string value {s} to decimal"),
+                format!("Parser error: Invalid decimal format: {s:?}"),
                 result_128.unwrap_err().to_string()
             );
             let result_256 = parse_decimal::<Decimal256Type>(s, 20, 3);
             assert_eq!(
-                format!("Parser error: can't parse the string value {s} to decimal"),
+                format!("Parser error: Invalid decimal format: {s:?}"),
                 result_256.unwrap_err().to_string()
             );
         }
@@ -2722,25 +2846,20 @@ mod tests {
             ("1234560000000", 0),
             ("12345678900.0", 0),
             ("1.23456e12", 0),
+            ("9999999.9995", 3),
+            ("1e99999", 0),
+            ("1e40", 0),
         ];
         for (s, scale) in overflow_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 10, scale);
-            let expected_128 = "Parser error: parse decimal overflow";
-            let actual_128 = result_128.unwrap_err().to_string();
-
-            assert!(
-                actual_128.contains(expected_128),
-                "actual: '{actual_128}', expected: '{expected_128}'"
-            );
+            let expected_128 =
+                format!("Parser error: {s:?} does not fit in Decimal128(10, {scale})");
+            assert_eq!(result_128.unwrap_err().to_string(), expected_128);
 
             let result_256 = parse_decimal::<Decimal256Type>(s, 10, scale);
-            let expected_256 = "Parser error: parse decimal overflow";
-            let actual_256 = result_256.unwrap_err().to_string();
-
-            assert!(
-                actual_256.contains(expected_256),
-                "actual: '{actual_256}', expected: '{expected_256}'"
-            );
+            let expected_256 =
+                format!("Parser error: {s:?} does not fit in Decimal256(10, {scale})");
+            assert_eq!(result_256.unwrap_err().to_string(), expected_256);
         }
 
         let edge_tests_128 = [
@@ -2778,11 +2897,25 @@ mod tests {
             ("-1e3", -1000000000i128, 6),
             ("+1e3", 1000000000i128, 6),
             ("-1e31", -10000000000000000000000000000000000000i128, 6),
+            // More digits than an i128 can hold, but a small value
+            ("10000000000000000000000000000000000000000e-39", 10i128, 0),
+            // Digits beyond the scale round; here the result still fits
+            (
+                "99999999999999999999999999999999999994e-1",
+                9999999999999999999999999999999999999i128,
+                0,
+            ),
         ];
         for (s, i, scale) in edge_tests_128 {
             let result_128 = parse_decimal::<Decimal128Type>(s, 38, scale);
-            assert_eq!(i, result_128.unwrap());
+            assert_eq!(i, result_128.unwrap(), "{s}");
         }
+        // Rounding carries into a 39th digit, which does not fit
+        assert!(
+            parse_decimal::<Decimal128Type>("999999999999999999999999999999999999999e-1", 38, 0)
+                .is_err()
+        );
+
         let edge_tests_256 = [
             (
                 "9999999999999999999999999999999999999999999999999999999999999999999999999999",
@@ -2847,10 +2980,13 @@ mod tests {
             ("1.23", 1, 3),
             ("1.000", 1, 3),
             ("1.123", 1, 3),
+            ("1.5", 2, 3),
+            ("1.9", 2, 3),
             ("123.0", 123, 3),
             ("123.4", 123, 3),
             ("123.00", 123, 3),
             ("123.45", 123, 3),
+            ("123.5", 124, 3),
             ("123.000000000000000000004", 123, 3),
             ("0.123e2", 12, 3),
             ("0.123e4", 1230, 10),
@@ -2865,17 +3001,452 @@ mod tests {
         ];
         for (s, i, precision) in zero_scale_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, precision, 0).unwrap();
-            assert_eq!(i, result_128);
+            assert_eq!(i, result_128, "{s}");
         }
 
         let can_not_parse_zero_scale = [".", "blag", "", "+", "-", "e"];
         for s in can_not_parse_zero_scale {
             let result_128 = parse_decimal::<Decimal128Type>(s, 5, 0);
             assert_eq!(
-                format!("Parser error: can't parse the string value {s} to decimal"),
+                format!("Parser error: Invalid decimal format: {s:?}"),
                 result_128.unwrap_err().to_string(),
             );
         }
+    }
+
+    #[test]
+    fn test_parse_decimal_rounds_half_away_from_zero() {
+        let tests = [
+            ("1.234", 2, 123),
+            ("1.235", 2, 124),
+            ("1.2350000", 2, 124),
+            ("1.2349999", 2, 123),
+            ("-1.234", 2, -123),
+            ("-1.235", 2, -124),
+            ("-0.004", 2, 0),
+            ("-0.005", 2, -1),
+            (".5", 0, 1),
+            ("-.5", 0, -1),
+            ("0.5", 0, 1),
+            ("1.5", 0, 2),
+            ("2.5", 0, 3),
+            ("-2.5", 0, -3),
+            ("1.99", 1, 20),
+            ("0.995", 2, 100),
+            ("9.99", 1, 100),
+            ("123.4567891", 5, 12345679),
+            ("123.45", 0, 123),
+            ("0.0000123", 3, 0),
+            ("12.", 2, 1200),
+            (".12", 2, 12),
+            ("+.12", 2, 12),
+            ("-.12", 2, -12),
+        ];
+        for (s, scale, expected) in tests {
+            assert_eq!(
+                parse_decimal::<Decimal128Type>(s, 38, scale).unwrap(),
+                expected,
+                "{s} at scale {scale}"
+            );
+            assert_eq!(
+                parse_decimal::<Decimal256Type>(s, 76, scale).unwrap(),
+                i256::from_i128(expected),
+                "{s} at scale {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_decimal_rounding_overflow() {
+        // Rounding up can push the value past the precision ...
+        assert!(parse_decimal::<Decimal128Type>("99999.5", 5, 0).is_err());
+        assert!(parse_decimal::<Decimal128Type>("9.995", 3, 2).is_err());
+        assert_eq!(parse_decimal::<Decimal128Type>("9.994", 3, 2).unwrap(), 999);
+        assert_eq!(parse_decimal::<Decimal128Type>("0.995", 3, 2).unwrap(), 100);
+
+        // ... or past the native type itself
+        assert_eq!(
+            parse_decimal_native::<Decimal32Type>("2147483647.5", 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal32Type>("-2147483648.5", 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MAX), 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MIN), 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MAX), 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MIN), 0),
+            Err(DecimalParseError::Overflow)
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_native_full_range() {
+        // The native range exceeds the largest precision; the precision check
+        // is the caller's responsibility
+        assert_eq!(
+            parse_decimal_native::<Decimal32Type>("-2147483648", 0),
+            Ok(i32::MIN)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal32Type>("2147483648", 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal64Type>("-9223372036854775808", 0),
+            Ok(i64::MIN)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal64Type>("9223372036854775808", 0),
+            Err(DecimalParseError::Overflow)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal128Type>(&i128::MAX.to_string(), 0),
+            Ok(i128::MAX)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal128Type>(&i128::MIN.to_string(), 0),
+            Ok(i128::MIN)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal256Type>(&i256::MAX.to_string(), 0),
+            Ok(i256::MAX)
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal256Type>(&i256::MIN.to_string(), 0),
+            Ok(i256::MIN)
+        );
+        // The unscaled value (integer digits scaled by 10^21) far exceeds the
+        // i256 range, so this must report overflow rather than wrapping to an
+        // arbitrary (possibly in-range) value
+        let input = format!("{}.12345678901234567890123", "7".repeat(71));
+        assert_eq!(
+            parse_decimal_native::<Decimal256Type>(&input, 21),
+            Err(DecimalParseError::Overflow)
+        );
+
+        assert!(parse_decimal::<Decimal128Type>(&i128::MAX.to_string(), 38, 0).is_err());
+        assert!(parse_decimal::<Decimal32Type>("-2147483648", 9, 0).is_err());
+    }
+
+    #[test]
+    fn test_parse_decimal_integer_widths() {
+        assert_eq!(
+            parse_decimal::<Decimal32Type>("123.45", 9, 2).unwrap(),
+            12_345_i32
+        );
+        assert_eq!(
+            parse_decimal::<Decimal32Type>("-9999999.994", 9, 2).unwrap(),
+            -999_999_999_i32
+        );
+        assert!(parse_decimal::<Decimal32Type>("9999999.995", 9, 2).is_err());
+        assert!(parse_decimal::<Decimal32Type>("-9999999.995", 9, 2).is_err());
+        assert_eq!(
+            parse_decimal::<Decimal64Type>("123.45", 18, 2).unwrap(),
+            12_345_i64
+        );
+        assert_eq!(
+            parse_decimal::<Decimal64Type>("9999999999999999.99", 18, 2).unwrap(),
+            999_999_999_999_999_999_i64
+        );
+        assert!(parse_decimal::<Decimal64Type>("10000000000000000.00", 18, 2).is_err());
+        // Fractional parts longer than any native integer type parse fine;
+        // digits beyond the scale only matter for rounding
+        assert_eq!(
+            parse_decimal::<Decimal64Type>(&format!(".{}", "5".repeat(100)), 18, 4).unwrap(),
+            5_556_i64
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!(".{}", "1".repeat(100)), 38, 4).unwrap(),
+            1_111_i128
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_exponent() {
+        let tests = [
+            ("1e2", 0, 100),
+            ("1E2", 0, 100),
+            ("1e+2", 0, 100),
+            ("1e+02", 0, 100),
+            ("1.5e2", 0, 150),
+            ("1.5e2", 2, 15000),
+            ("1.5e-1", 1, 2),
+            ("15e-1", 0, 2),
+            ("1e-2", 1, 0),
+            ("1e-3", 2, 0),
+            ("0e0", 2, 0),
+            ("-0e0", 2, 0),
+            ("0E5", 2, 0),
+            ("0e99999", 2, 0),
+            ("00e48", 8, 0),
+            ("+00.0E+41", 12, 0),
+            ("1.25e1", 0, 13),
+            ("1e-99999", 2, 0),
+            ("1.5e-400", 2, 0),
+            ("123456789e-9", 9, 123456789),
+            ("0.000000001e9", 0, 1),
+            ("5e-1", 0, 1),
+            ("4e-1", 0, 0),
+            ("-5e-1", 0, -1),
+        ];
+        for (s, scale, expected) in tests {
+            assert_eq!(
+                parse_decimal::<Decimal128Type>(s, 38, scale).unwrap(),
+                expected,
+                "{s} at scale {scale}"
+            );
+            assert_eq!(
+                parse_decimal::<Decimal32Type>(s, 9, scale).unwrap(),
+                expected as i32,
+                "{s} at scale {scale}"
+            );
+        }
+
+        // Exponents shift digits across the decimal point without losing any
+        assert_eq!(
+            parse_decimal::<Decimal32Type>("4825037936439135476.2609835314269495255615E-14", 9, 4)
+                .unwrap(),
+            482503794
+        );
+        assert_eq!(
+            parse_decimal::<Decimal32Type>(
+                "+18232335063972188138031550982650807591758238.0724251287782783777442440E-58",
+                1,
+                0
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("4825037936439135476.2609835314269495255615E-14", 9, 1)
+                .unwrap(),
+            482504
+        );
+        assert!(
+            parse_decimal::<Decimal128Type>("4825037936439135476.2609835314269495255615E-14", 5, 1)
+                .is_err()
+        );
+        // Absurdly long exponents saturate rather than wrap
+        assert!(parse_decimal::<Decimal128Type>(&format!("1e{}", "9".repeat(30)), 38, 0).is_err());
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!("1e-{}", "9".repeat(30)), 38, 0).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_negative_scale() {
+        let tests = [
+            ("1234.5", -2, 12),
+            ("150", -2, 2),
+            ("149", -2, 1),
+            ("-150", -2, -2),
+            ("-149", -2, -1),
+            ("50", -2, 1),
+            ("49", -2, 0),
+            ("5", -1, 1),
+            ("4", -1, 0),
+            ("0.5", -1, 0),
+            ("5.9", -1, 1),
+            ("1e5", -2, 1000),
+            ("1.5e5", -2, 1500),
+            ("0.9e2", -1, 9),
+            (".5e3", -2, 5),
+            ("12345", -5, 0),
+            ("12345", -4, 1),
+            ("000123456", -3, 123),
+            ("0", -5, 0),
+            ("-0.0", -5, 0),
+        ];
+        for (s, scale, expected) in tests {
+            assert_eq!(
+                parse_decimal::<Decimal128Type>(s, 38, scale).unwrap(),
+                expected,
+                "{s} at scale {scale}"
+            );
+            assert_eq!(
+                parse_decimal::<Decimal32Type>(s, 9, scale).unwrap(),
+                expected as i32,
+                "{s} at scale {scale}"
+            );
+            assert_eq!(
+                parse_decimal::<Decimal256Type>(s, 76, scale).unwrap(),
+                i256::from_i128(expected),
+                "{s} at scale {scale}"
+            );
+        }
+        // The integer part can be wider than the native type as long as the
+        // scaled value fits
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!("1{}", "0".repeat(50)), 38, -40).unwrap(),
+            10_000_000_000
+        );
+        assert_eq!(
+            parse_decimal::<Decimal32Type>("123456789012", 9, -5).unwrap(),
+            1234568
+        );
+        assert!(parse_decimal::<Decimal32Type>("123456789012", 9, -2).is_err());
+    }
+
+    #[test]
+    fn test_parse_decimal_whitespace_and_long_input() {
+        for s in [" 1.5", "1.5 ", " 1.5 ", "\t1.5\n", "\r\n1.5\x0c"] {
+            assert_eq!(
+                parse_decimal::<Decimal128Type>(s, 38, 1).unwrap(),
+                15,
+                "{s:?}"
+            );
+        }
+        // Only ASCII whitespace is trimmed, as for the other CSV parsers
+        assert!(parse_decimal::<Decimal128Type>("\u{a0}1.5", 38, 1).is_err());
+        assert!(parse_decimal::<Decimal128Type>("1.5\u{2003}", 38, 1).is_err());
+        assert!(parse_decimal::<Decimal128Type>(" ", 38, 1).is_err());
+
+        // Long inputs report overflow rather than wrapping or panicking
+        for s in [
+            "1".repeat(255),
+            "1".repeat(256),
+            "1".repeat(300),
+            format!("{}.5", "1".repeat(300)),
+            format!("1e{}", "9".repeat(300)),
+        ] {
+            let err = parse_decimal::<Decimal128Type>(&s, 38, 0).unwrap_err();
+            assert!(err.to_string().contains("does not fit"), "{err}");
+        }
+        // Long fractions only matter for rounding
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!("0.{}", "0".repeat(200)), 38, 10).unwrap(),
+            0
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!("0.{}1", "0".repeat(200)), 38, 10).unwrap(),
+            0
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>(&format!("1.{}", "9".repeat(300)), 38, 2).unwrap(),
+            200
+        );
+        // 10^scale overflows the native type, but zero is still representable
+        assert_eq!(parse_decimal::<Decimal32Type>("0", 9, 10).unwrap(), 0);
+        assert_eq!(parse_decimal::<Decimal32Type>("-0.0", 9, 10).unwrap(), 0);
+        assert_eq!(parse_decimal::<Decimal64Type>("0", 18, 20).unwrap(), 0);
+        assert_eq!(parse_decimal::<Decimal128Type>("0", 38, 40).unwrap(), 0);
+        assert!(parse_decimal::<Decimal32Type>("1", 9, 10).is_err());
+    }
+
+    #[test]
+    fn test_parse_decimal_matches_bigint_reference() {
+        use num_bigint::BigInt;
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        /// Generates random decimal strings with a known exact value and checks
+        /// that `parse_decimal` rounds them correctly or reports overflow
+        fn check<T: DecimalType>(rng: &mut StdRng, iterations: usize)
+        where
+            T::Native: std::fmt::Display,
+        {
+            let random_digits = |rng: &mut StdRng, len: usize| -> String {
+                (0..len)
+                    .map(|_| char::from(b'0' + rng.random_range(0..10u8)))
+                    .collect()
+            };
+            for _ in 0..iterations {
+                let sign = ["", "+", "-"][rng.random_range(0..3)];
+                let int_len = rng.random_range(0..=40);
+                let frac_len = if rng.random_bool(0.3) {
+                    0
+                } else {
+                    rng.random_range(0..=40)
+                };
+                if int_len == 0 && frac_len == 0 {
+                    continue;
+                }
+                let int = random_digits(rng, int_len);
+                let frac = random_digits(rng, frac_len);
+                let mut s = format!("{sign}{int}");
+                if frac_len > 0 || rng.random_bool(0.2) {
+                    s.push('.');
+                    s.push_str(&frac);
+                }
+                let exponent: i64 = if rng.random_bool(0.3) {
+                    rng.random_range(-60..=60)
+                } else {
+                    0
+                };
+                if exponent != 0 || rng.random_bool(0.1) {
+                    s.push(if rng.random_bool(0.5) { 'e' } else { 'E' });
+                    if exponent >= 0 && rng.random_bool(0.5) {
+                        s.push('+');
+                    }
+                    s.push_str(&exponent.to_string());
+                }
+                let precision = rng.random_range(1..=T::MAX_PRECISION);
+                let scale = rng.random_range(-10..=T::MAX_SCALE.min(precision as i8));
+
+                // value = mantissa * 10^(exponent - frac_len), scaled by 10^scale
+                // and rounded half away from zero
+                let mantissa: BigInt = format!("{int}{frac}").parse().unwrap();
+                let shift = exponent - frac_len as i64 + scale as i64;
+                let mut expected = if shift >= 0 {
+                    mantissa * BigInt::from(10).pow(shift as u32)
+                } else {
+                    let divisor = BigInt::from(10).pow((-shift) as u32);
+                    let quotient = &mantissa / &divisor;
+                    if (&mantissa % &divisor) * 2 >= divisor {
+                        quotient + 1
+                    } else {
+                        quotient
+                    }
+                };
+                if sign == "-" {
+                    expected = -expected;
+                }
+                let limit = BigInt::from(10).pow(precision as u32);
+                let fits = expected < limit && expected > -limit;
+
+                match (fits, parse_decimal::<T>(&s, precision, scale)) {
+                    (true, Ok(actual)) => {
+                        let actual: BigInt = actual.to_string().parse().unwrap();
+                        assert_eq!(
+                            actual,
+                            expected,
+                            "{s:?} as {}({precision}, {scale})",
+                            T::PREFIX
+                        );
+                    }
+                    (false, Err(_)) => {}
+                    (true, Err(e)) => {
+                        panic!(
+                            "{s:?} as {}({precision}, {scale}): expected {expected}, got {e}",
+                            T::PREFIX
+                        )
+                    }
+                    (false, Ok(actual)) => panic!(
+                        "{s:?} as {}({precision}, {scale}): expected overflow, got {actual}",
+                        T::PREFIX
+                    ),
+                }
+            }
+        }
+
+        let mut rng = StdRng::seed_from_u64(0xDEC1_3A15);
+        check::<Decimal32Type>(&mut rng, 5_000);
+        check::<Decimal64Type>(&mut rng, 5_000);
+        check::<Decimal128Type>(&mut rng, 5_000);
+        check::<Decimal256Type>(&mut rng, 5_000);
     }
 
     #[test]

@@ -301,6 +301,7 @@ dependencies = [
  "half",
  "insta",
  "lexical-core",
+ "num-bigint 0.5.1",
  "num-traits",
  "rand",
  "ryu",

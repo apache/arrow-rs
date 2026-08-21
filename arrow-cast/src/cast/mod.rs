@@ -72,9 +72,9 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
-pub use decimal::{
-    DecimalCast, parse_string_to_decimal_native, rescale_decimal, single_float_to_decimal,
-};
+#[expect(deprecated)]
+pub use decimal::parse_string_to_decimal_native;
+pub use decimal::{DecimalCast, rescale_decimal, single_float_to_decimal};
 pub use string::cast_single_string_to_boolean_default;
 
 /// Lossy conversion from decimal to float.
@@ -2895,6 +2895,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
@@ -11111,10 +11112,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_string_to_decimal() {
+    fn test_parse_decimal_and_format() {
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("123.45", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("123.45", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11122,7 +11123,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11130,7 +11131,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("0.12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("0.12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11138,7 +11139,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11146,7 +11147,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11154,7 +11155,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11163,7 +11164,7 @@ mod tests {
 
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("123.45", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("123.45", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11171,7 +11172,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11179,7 +11180,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("0.12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("0.12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11187,7 +11188,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11195,7 +11196,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".1265", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".1265", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11528,7 +11529,7 @@ mod tests {
             },
         );
         assert_eq!(
-            "Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999",
+            "Cast error: Cannot cast string '1000' to value of Decimal128(10, 8) type: value does not fit",
             err.unwrap_err().to_string()
         );
     }
@@ -11614,7 +11615,7 @@ mod tests {
             },
         );
         assert_eq!(
-            "Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999",
+            "Cast error: Cannot cast string '1000' to value of Decimal256(10, 8) type: value does not fit",
             err.unwrap_err().to_string()
         );
     }
