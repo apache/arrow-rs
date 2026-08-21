@@ -46,6 +46,9 @@ pub use buffer::*;
 pub mod builder;
 pub use builder::*;
 
+mod error;
+pub use error::OutOfBoundsError;
+
 mod bigint;
 pub use bigint::i256;
 
