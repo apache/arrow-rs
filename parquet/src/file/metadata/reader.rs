@@ -91,12 +91,12 @@ pub enum PageIndexPolicy {
     Optional,
     /// Require the page index to exist, and error if it does not.
     Required,
-    /// `Required`` for the listed column indexes, `Skip` otherwise
+    /// `Required` for the listed column indexes, `Skip` otherwise
     OnlyColumns(Arc<HashSet<usize>>),
 }
 
 impl PageIndexPolicy {
-    /// Create a `ParquetStatisticsPolicy` to skip all columns except those in `keep`.
+    /// Create a `PageIndexPolicy` to skip all columns except those in `keep`.
     ///
     /// If `keep` is empty, then this returns [`Self::Skip`]
     pub fn only_columns(keep: &[usize]) -> Self {
@@ -109,7 +109,7 @@ impl PageIndexPolicy {
         }
     }
 
-    /// we want this index
+    /// Test whether a given column is in the "keep" set.
     pub fn is_keep_column(&self, col_idx: usize) -> bool {
         match self {
             Self::OnlyColumns(cols) => cols.contains(&col_idx),
