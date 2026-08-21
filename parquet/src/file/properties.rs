@@ -1517,44 +1517,26 @@ pub enum DictionaryFallback {
     /// This is the default, and the historical behavior of this crate.
     OnPageSizeLimit,
     /// Keep the dictionary past [`WriterProperties::dictionary_page_size_limit`]
-    /// (which acts as a grace floor) for as long as it stays profitable,
-    /// falling back unconditionally at `max_dictionary_page_size`.
+    /// (which acts as a grace floor) while the dictionary page stays smaller
+    /// than `worth_ratio` times the PLAIN-encoded size of the values appended
+    /// so far, falling back unconditionally at `max_dictionary_page_size`.
     ///
-    /// The dictionary is considered profitable while the dictionary page is
-    /// smaller than `worth_ratio` times the total size the values appended so
-    /// far would occupy PLAIN-encoded. For example, with a `worth_ratio` of
-    /// `0.1` the dictionary is kept (past the grace floor) only while it is at
-    /// least 10x smaller than the PLAIN encoding of the data.
+    /// This helps columns with large but highly repetitive values, where a
+    /// handful of distinct values overflows the page size limit even though
+    /// the dictionary is deduplicating many times its size. A `worth_ratio`
+    /// of `0.1` and a `max_dictionary_page_size` of 64 MiB are reasonable
+    /// starting points.
     ///
-    /// This helps columns whose values are large but highly repetitive: with
-    /// [`Self::OnPageSizeLimit`], a handful of distinct multi-kilobyte values
-    /// overflows the (default 1 MiB) dictionary page size limit and each
-    /// repeated value is written out in full by the fallback encoding, even
-    /// though a slightly larger dictionary would have deduplicated them.
-    ///
-    /// `max_dictionary_page_size` is a memory guard: readers must decompress
-    /// and materialize the entire dictionary page (the format allows at most
-    /// one dictionary page per column chunk, so it cannot be split), so an
-    /// unboundedly profitable dictionary must still be capped. A value of
-    /// `64 * 1024 * 1024` (64 MiB) is a reasonable upper bound; a
-    /// `worth_ratio` of `0.1` is a conservative choice that avoids regressions
-    /// on columns where a delta fallback encoding would beat a nominally
-    /// "profitable" dictionary (e.g. sorted numeric keys).
-    ///
-    /// The PLAIN-encoded size is used as a pessimistic upper bound for the
-    /// fallback encoding's size: the Parquet specification requires the delta
-    /// encodings to never exceed the PLAIN encoding of the same values. The
-    /// exact profitability estimate is an implementation detail and may be
-    /// refined in the future (for example, by measuring the actual fallback
-    /// encoding) without changing this API.
+    /// PLAIN size is a pessimistic upper bound for the fallback encoding's
+    /// size; the exact profitability estimate may be refined in the future
+    /// without changing this API.
     WhenProfitable {
-        /// Maximum ratio of the dictionary page size to the PLAIN-encoded size
-        /// of the values appended so far for the dictionary to be considered
-        /// profitable. Must be finite and greater than zero.
+        /// Maximum ratio of dictionary page size to the PLAIN-encoded size of
+        /// the values appended so far. Must be finite and greater than zero.
         worth_ratio: f64,
-        /// Hard cap on the dictionary page size, in bytes: the writer always
-        /// falls back once the dictionary page reaches this size, regardless
-        /// of profitability.
+        /// Hard cap on the dictionary page size, in bytes; the writer always
+        /// falls back at this size. Bounds the memory a reader needs to
+        /// materialize the dictionary page.
         max_dictionary_page_size: usize,
     },
 }
