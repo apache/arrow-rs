@@ -291,7 +291,7 @@ impl VariantArray {
     ///    binary_view
     ///
     /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, list_view or struct
+    ///    or be a list, large_list, fixed_size_list, list_view or struct
     ///
     /// NOTE: It is also permissible for the metadata field to be
     /// Dictionary-Encoded, preferably (but not required) with an index type of
@@ -1242,7 +1242,7 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
-        FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
+        FixedSizeBinary(_) => fail!(),
 
         // List-like containers and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
@@ -1260,6 +1260,10 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         LargeListView(field) => match canonicalize_and_verify_field(field)? {
             Cow::Borrowed(_) => borrow!(),
             Cow::Owned(new_field) => Cow::Owned(DataType::LargeListView(new_field)),
+        },
+        FixedSizeList(field, size) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::FixedSizeList(new_field, *size)),
         },
         // Struct is used by the internal layout, and can also represent a shredded variant object.
         Struct(fields) => {
@@ -1340,8 +1344,8 @@ mod test {
     use super::*;
     use arrow::array::{
         BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        FixedSizeBinaryArray, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
-        LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
+        FixedSizeBinaryArray, FixedSizeListArray, Int32Array, Int64Array, LargeBinaryArray,
+        LargeListArray, LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1541,6 +1545,10 @@ mod test {
             DataType::LargeList(make_item_binary_view()),
             DataType::ListView(make_item_binary_view()),
             DataType::LargeListView(make_item_binary_view()),
+            // Fixed-size list items
+            DataType::FixedSizeList(make_item_binary(), 2),
+            DataType::FixedSizeList(make_large_binary(), 2),
+            DataType::FixedSizeList(make_item_binary_view(), 2),
         ];
 
         for input in cases {
@@ -1581,6 +1589,12 @@ mod test {
                 ScalarBuffer::from(vec![0_i64, 2]),
                 ScalarBuffer::from(vec![2_i64, 1]),
                 values,
+                None,
+            )) as ArrayRef,
+            Arc::new(FixedSizeListArray::new(
+                Arc::new(Field::new("item", DataType::Int64, true)),
+                2,
+                Arc::new(Int64Array::from(vec![Some(1), None, Some(3), Some(4)])),
                 None,
             )) as ArrayRef,
         ];
