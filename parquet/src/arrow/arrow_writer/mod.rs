@@ -4206,6 +4206,75 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_dict_fallback_before_first_data_page() {
+        // All values distinct: the dictionary overflows its 1 KiB size limit
+        // long before the first data page is flushed. The buffered values are
+        // re-encoded with the fallback encoding and the dictionary discarded:
+        // no dictionary page is written and no data page is dictionary
+        // encoded, and in particular no dictionary page exceeding the
+        // configured limit reaches the reader.
+        let values: Vec<String> = (0..1024).map(|i| format!("value-{i:04}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_page_size_limit(1024)
+            .build();
+
+        // Validates the values roundtrip, across the fallback point included.
+        let file = roundtrip_opts(&batch, props);
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert_eq!(column.dictionary_page_offset(), None);
+        let encodings: Vec<_> = column.encodings().collect();
+        assert!(
+            !encodings.contains(&Encoding::RLE_DICTIONARY),
+            "unexpected dictionary encoding: {encodings:?}"
+        );
+        let mask = column.page_encoding_stats_mask().unwrap();
+        assert!(
+            mask.is_only(Encoding::PLAIN),
+            "expected only plain-encoded data pages: {mask:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_writer_dict_fallback_after_data_page_keeps_dictionary() {
+        // Flush dictionary-encoded data pages every 32 rows, so that when the
+        // dictionary overflows its size limit part-way through the chunk,
+        // pages referencing it have already been written: the dictionary page
+        // must then still be written, while the remainder of the chunk uses
+        // the fallback encoding.
+        let values: Vec<String> = (0..1024).map(|i| format!("value-{i:04}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_page_size_limit(4096)
+            .set_data_page_row_count_limit(32)
+            .set_write_batch_size(32)
+            .build();
+
+        let file = roundtrip_opts(&batch, props);
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_some());
+        let mask = column.page_encoding_stats_mask().unwrap();
+        assert!(
+            mask.is_set(Encoding::RLE_DICTIONARY),
+            "expected dictionary-encoded pages before the fallback: {mask:?}"
+        );
+        assert!(
+            mask.is_set(Encoding::PLAIN),
+            "expected plain pages after the fallback: {mask:?}"
+        );
+    }
+
+    #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -5667,10 +5736,14 @@ mod tests {
 
         assert_eq!(default_data, explicit_data);
 
-        // the dictionary overflowed the 64 KiB limit, so the writer fell back
+        // the dictionary overflowed the 64 KiB limit, so the writer fell
+        // back; no data page had been flushed at that point, so the buffered
+        // values were re-encoded and the dictionary was discarded entirely
         let (num_dict, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
-        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_dict, 0, "expected no dictionary encoded pages");
         assert!(num_fallback > 0, "expected fallback encoded pages");
+        let column = default_metadata.row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_none());
     }
 
     #[test]

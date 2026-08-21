@@ -168,6 +168,22 @@ impl<T: DataType> DictEncoder<T> {
         self.indices.push(self.interner.intern(value));
     }
 
+    /// Returns the values buffered for the in-progress data page, resolving
+    /// dictionary ids back to their values, and clears the buffer.
+    ///
+    /// Used on dictionary fallback to re-encode the buffered values with the
+    /// fallback encoder.
+    pub fn take_buffered_values(&mut self) -> Vec<T::T> {
+        let uniques = &self.interner.storage().uniques;
+        let values = self
+            .indices
+            .iter()
+            .map(|&i| uniques[i as usize].clone())
+            .collect();
+        self.indices.clear();
+        values
+    }
+
     #[inline]
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
