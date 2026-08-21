@@ -892,8 +892,8 @@ impl ArrowReaderMetadata {
     /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
-            .with_column_index_policy(options.column_index.clone())
-            .with_offset_index_policy(options.offset_index.clone())
+            .with_column_index_policy(options.column_index_policy())
+            .with_offset_index_policy(options.offset_index_policy())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
