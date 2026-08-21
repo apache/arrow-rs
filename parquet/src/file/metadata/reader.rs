@@ -90,8 +90,11 @@ pub enum PageIndexPolicy {
     /// Read the page index if it exists, otherwise do not error.
     Optional,
     /// Require the page index to exist, and error if it does not.
+    ///
+    /// Only enforced for the offset index; this is the same as [`Self::Optional`]
+    /// for the column index.
     Required,
-    /// `Required` for the listed column indexes, `Skip` otherwise
+    /// Behaves as [`Self::Required`] for the listed column indexes, [`Self::Skip`] otherwise
     OnlyColumns(Arc<HashSet<usize>>),
 }
 

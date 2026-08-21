@@ -349,7 +349,10 @@ fn parse_offset_index(
                     col_idx,
                 )?;
                 page_index_builder.put_offset_index(idx, rg_idx, col_idx);
-            } else if *offset_index_policy == PageIndexPolicy::Required {
+            } else if matches!(
+                offset_index_policy,
+                PageIndexPolicy::Required | PageIndexPolicy::OnlyColumns(_)
+            ) {
                 return Err(general_err!("missing offset index"));
             }
         }
