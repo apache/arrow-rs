@@ -412,6 +412,11 @@ impl PageIndex {
             None
         }
     }
+
+    /// Convert this `PageIndex` into a [`PageIndexBuilder`]
+    pub fn into_builder(self) -> PageIndexBuilder {
+        self.into()
+    }
 }
 
 /// Builder for constructing [`PageIndex`] structures
@@ -421,7 +426,7 @@ impl PageIndex {
 /// - Populating column indexes for predicate columns (for page filtering)
 /// - Populating offset indexes for projected columns (for direct I/O)
 /// - Automatic conversion of empty structures to `None` to save memory
-pub(crate) struct PageIndexBuilder {
+pub struct PageIndexBuilder {
     column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
     offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
 }
@@ -448,8 +453,7 @@ impl PageIndexBuilder {
     /// This allocates empty index structures for the specified number of row groups and columns.
     /// All index entries are initialized to `None` and can be populated using
     /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub(crate) fn new(num_row_groups: usize, num_columns: usize) -> Self {
+    pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
         Self {
             column_indexes: Self::empty_index(num_row_groups, num_columns),
             offset_indexes: Self::empty_index(num_row_groups, num_columns),
@@ -469,7 +473,7 @@ impl PageIndexBuilder {
     /// * `num_columns` - Number of columns in the schema
     /// * `column_index_policy` - Policy for column index allocation
     /// * `offset_index_policy` - Policy for offset index allocation
-    pub(crate) fn new_with_policy(
+    pub fn new_with_policy(
         num_row_groups: usize,
         num_columns: usize,
         column_index_policy: reader::PageIndexPolicy,
@@ -497,7 +501,6 @@ impl PageIndexBuilder {
     ///
     /// This takes ownership of the index structures from the provided [`PageIndex`],
     /// allowing them to be modified and rebuilt. Useful for updating existing page indexes.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn new_from(page_index: PageIndex) -> Self {
         Self {
             column_indexes: page_index.column_indexes,
@@ -509,7 +512,7 @@ impl PageIndexBuilder {
     ///
     /// If column indexes were not allocated (policy was `Skip`), this method does nothing.
     /// If the row group or column index is out of bounds, this method does nothing.
-    pub(crate) fn put_column_index(
+    pub fn put_column_index(
         &mut self,
         column_index: ColumnIndexMetaData,
         row_group_idx: usize,
@@ -527,7 +530,7 @@ impl PageIndexBuilder {
     ///
     /// If offset indexes were not allocated (policy was `Skip`), this method does nothing.
     /// If the row group or column index is out of bounds, this method does nothing.
-    pub(crate) fn put_offset_index(
+    pub fn put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,
         row_group_idx: usize,
@@ -558,7 +561,7 @@ impl PageIndexBuilder {
     /// - Empty structures don't consume memory unnecessarily
     /// - [`PageIndex::has_column_indexes()`] and [`PageIndex::has_offset_indexes()`]
     ///   correctly return `false` for unpopulated indexes
-    pub(crate) fn build(self) -> PageIndex {
+    pub fn build(self) -> PageIndex {
         let column_indexes = if Self::is_empty_index(self.column_indexes.as_ref()) {
             None
         } else {
@@ -572,6 +575,12 @@ impl PageIndexBuilder {
         };
 
         PageIndex::new(column_indexes, offset_indexes)
+    }
+}
+
+impl From<PageIndex> for PageIndexBuilder {
+    fn from(page_index: PageIndex) -> Self {
+        Self::new_from(page_index)
     }
 }
 
