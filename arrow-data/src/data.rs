@@ -965,7 +965,8 @@ impl ArrayData {
             }
 
             let actual_len = nulls.validity().len();
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
+            // ArrayData::offset does not apply to the null buffer, which carries its own offset
+            let needed_len = bit_util::ceil(nulls.offset() + nulls.len(), 8);
             if actual_len < needed_len {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "null_bit_buffer size too small. got {actual_len} needed {needed_len}",
@@ -3240,6 +3241,35 @@ mod tests {
 
         ArrayData::new_empty(&dt).validate_full().unwrap();
         ArrayData::new_null(&dt, 1).validate_full().unwrap();
+    }
+
+    #[test]
+    fn null_buffer_offset_is_independent_of_data_offset() {
+        // 100 values sliced down to the last 50, so the data has offset 50.
+        let int_data = ArrayData::builder(DataType::UInt32)
+            .offset(50)
+            .len(50)
+            .add_buffer(Buffer::from_vec(vec![0_u32; 100]))
+            .build()
+            .unwrap();
+        int_data.validate().unwrap();
+
+        // A null buffer that happens to share the data's offset.
+        let nulls = NullBuffer::new(BooleanBuffer::from(vec![false; 100]).slice(0, 50));
+        let with_sliced_nulls = int_data
+            .clone()
+            .into_builder()
+            .nulls(Some(nulls))
+            .build()
+            .unwrap();
+        with_sliced_nulls.validate().unwrap();
+
+        // The same 50 nulls at offset 0. ArrayData::offset does not apply to the
+        // null buffer, so this is just as valid and must not be rejected.
+        let nulls = NullBuffer::new(BooleanBuffer::from(vec![false; 50]));
+        let with_unsliced_nulls = int_data.into_builder().nulls(Some(nulls)).build().unwrap();
+        with_unsliced_nulls.validate().unwrap();
+        assert_eq!(with_unsliced_nulls.null_count(), 50);
     }
 
     fn test_both_builder_and_array_data(
