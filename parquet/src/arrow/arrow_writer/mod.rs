@@ -3119,10 +3119,13 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
-
-        let page_locations = offset_indexes[0].page_locations.clone();
+        let page_index = reader
+            .metadata()
+            .page_index()
+            .expect("page index should be present");
+        let page_locations = page_index
+            .page_locations(0, 0)
+            .expect("page locations should exist");
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
@@ -3526,10 +3529,12 @@ mod tests {
                 assert!(column.column_index_length().is_some());
             }
         }
-        assert!(file_meta_data.column_index().is_some());
-        if let Some(col_indexes) = file_meta_data.column_index() {
-            for rg_idx in col_indexes {
-                for idx in rg_idx {
+        if let Some(page_index) = file_meta_data.page_index() {
+            for rg in 0..file_meta_data.num_row_groups() {
+                for col in 0..file_meta_data.row_group(rg).num_columns() {
+                    let idx = page_index
+                        .column_index(rg, col)
+                        .expect("column index should exist");
                     assert!(idx.nan_counts().is_some());
                     let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
                         panic!("expected double statistics")
@@ -3547,6 +3552,8 @@ mod tests {
                     }
                 }
             }
+        } else {
+            panic!("page index should be present");
         }
     }
 
@@ -3604,12 +3611,12 @@ mod tests {
         assert_eq!(col_stats.min_bytes_opt(), Some((-1.0f64).as_bytes()));
         assert_eq!(col_stats.max_bytes_opt(), Some(1.0f64.as_bytes()));
 
-        assert!(file_meta_data.column_index().is_some());
-        let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
-        assert_eq!(col_idx.num_pages(), 4);
+        assert!(file_meta_data.page_index().is_some());
+        let col_idx = &file_meta_data.page_index().unwrap().column_index(0, 0);
+        assert_eq!(col_idx.as_ref().unwrap().num_pages(), 4);
 
         // test each page
-        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+        let Some(ColumnIndexMetaData::DOUBLE(float_idx)) = col_idx else {
             panic!("expected double statistics")
         };
 
@@ -5099,12 +5106,10 @@ mod tests {
         let bytes = Bytes::from(buf);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(bytes, options).unwrap();
-        let index = reader.metadata().offset_index().unwrap();
+        let index = reader.metadata().page_index().unwrap();
 
-        assert_eq!(index.len(), 1);
-        assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
-        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
+        assert_eq!(index.num_data_pages(0, 0), Some(1)); // 1 page
+        assert_eq!(index.num_data_pages(0, 1), Some(1)); // 1 page
     }
 
     #[test]
@@ -5165,21 +5170,15 @@ mod tests {
         // The column chunk for column "b" shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1); // 1 row group
-        assert_eq!(offset_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
-
-        let a_idx = &column_index[0][0];
+        let a_idx = page_index.column_index(0, 0);
         assert!(
-            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            matches!(a_idx, Some(ColumnIndexMetaData::BYTE_ARRAY(_))),
             "{a_idx:?}"
         );
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5240,14 +5239,12 @@ mod tests {
         // The column chunk for column "b"  shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let a_idx = page_index.column_index(0, 0);
+        assert!(a_idx.is_none(), "{a_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]

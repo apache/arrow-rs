@@ -1313,12 +1313,11 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
-        let offset_index = self.metadata.offset_index();
-        // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
-        let page_locations = offset_index
-            .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
+        let page_locations = self
+            .metadata
+            .page_index()
+            .map(|i| i.page_locations(rg_idx, self.column_idx).cloned())
+            .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -4686,7 +4685,19 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            let page_index = builder
+                .metadata()
+                .page_index()
+                .expect("page index should be present");
+            let num_columns = builder.metadata().row_group(0).num_columns();
+            let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(offset_indexes.is_some_and(|ois| ois.len() == num_columns));
+            let column_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
+            assert!(page_index.offset_index(0, 0).is_some());
+            assert!(page_index.column_index(0, 0).is_some());
+            assert!(page_index.page_locations(0, 0).is_some());
+            assert_eq!(page_index.num_data_pages(0, 0), Some(325));
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
@@ -4703,7 +4714,7 @@ pub(crate) mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            assert!(builder.metadata().offset_index().is_none());
+            assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);

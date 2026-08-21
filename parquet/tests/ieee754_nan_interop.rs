@@ -61,11 +61,7 @@ fn validate_float_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float32Array::from(FLOAT_MAXS.to_vec()));
@@ -73,22 +69,16 @@ fn validate_float_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs = converter.data_page_maxes(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_maxs =
+        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans = converter.data_page_nan_counts(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_nans =
+        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
@@ -116,11 +106,7 @@ fn validate_double_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float64Array::from(DOUBLE_MAXS.to_vec()));
@@ -128,22 +114,16 @@ fn validate_double_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs = converter.data_page_maxes(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_maxs =
+        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans = converter.data_page_nan_counts(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_nans =
+        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
@@ -183,11 +163,7 @@ fn validate_float16_metadata(
     assert_eq!(&mins, &exp);
 
     // verify page mins (should be 1 page per row group, so should be same)
-    let page_mins = converter.data_page_mins(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_mins = converter.data_page_mins(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_mins, &exp);
 
     let exp: Arc<dyn Array> = Arc::new(Float16Array::from(FLOAT16_MAXS.to_vec()));
@@ -195,22 +171,16 @@ fn validate_float16_metadata(
     assert_eq!(&maxs, &exp);
 
     // verify page maxs (should be 1 page per row group, so should be same)
-    let page_maxs = converter.data_page_maxes(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_maxs =
+        converter.data_page_maxes(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_maxs, &exp);
 
     let exp = UInt64Array::from(NAN_COUNTS.to_vec());
     let nans = converter.row_group_nan_counts(metadata.row_groups())?;
     assert_eq!(&nans, &exp);
 
-    let page_nans = converter.data_page_nan_counts(
-        metadata.column_index().unwrap(),
-        metadata.offset_index().unwrap(),
-        &row_group_indices,
-    )?;
+    let page_nans =
+        converter.data_page_nan_counts(metadata.page_index().unwrap(), &row_group_indices)?;
     assert_eq!(&page_nans, &exp);
 
     Ok(())
