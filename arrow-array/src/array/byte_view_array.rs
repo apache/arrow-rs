@@ -238,14 +238,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
-    pub unsafe fn new_unchecked<U>(
+    pub unsafe fn new_unchecked(
         views: ScalarBuffer<u128>,
-        buffers: U,
+        buffers: Arc<[Buffer]>,
         nulls: Option<NullBuffer>,
-    ) -> Self
-    where
-        U: Into<Arc<[Buffer]>>,
-    {
+    ) -> Self {
         if cfg!(feature = "force_validate") {
             return Self::new(views, buffers, nulls);
         }
@@ -254,7 +251,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),
             views,
-            buffers: buffers.into(),
+            buffers,
             nulls,
         }
     }
@@ -300,27 +297,14 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         &self.views
     }
 
-    /// Returns the buffers storing string data
+    /// Returns the shared collection of buffers storing non-inline string or binary data.
+    ///
+    /// The returned `Arc` can be cloned to share the buffers with another array without
+    /// allocating a new collection or cloning the individual buffers. To consume this
+    /// array and take ownership of its buffers, use [`Self::into_parts`].
     #[inline]
-    pub fn data_buffers(&self) -> &[Buffer] {
+    pub fn data_buffers(&self) -> &Arc<[Buffer]> {
         &self.buffers
-    }
-
-    /// Returns a cloned `Arc` of the buffers storing non-inline string or binary data.
-    ///
-    /// This is useful when needing to construct a new byte view array from this existing
-    /// array, but [`into_parts`] is not feasible (e.g. need to keep both arrays around),
-    /// and trying to reconstruct the buffers from [`data_buffers`] would require a
-    /// `Vec` allocation and cloning of each buffer element, which can be expensive
-    /// if there is a large number of buffers.
-    ///
-    /// This operation is `O(1)` and clones only the collection's `Arc`.
-    ///
-    /// [`into_parts`]: Self::into_parts
-    /// [`data_buffers`]: Self::data_buffers
-    #[inline]
-    pub fn data_buffers_cloned(&self) -> Arc<[Buffer]> {
-        Arc::clone(&self.buffers)
     }
 
     /// Returns the element at index `i`
@@ -555,7 +539,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             return unsafe {
                 GenericByteViewArray::new_unchecked(
                     self.views().clone(),
-                    vec![], // empty data blocks
+                    Arc::from([]), // empty data blocks
                     nulls,
                 )
             };
@@ -570,7 +554,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             return unsafe {
                 GenericByteViewArray::new_unchecked(
                     self.views().clone(),
-                    vec![], // empty data blocks
+                    Arc::from([]), // empty data blocks
                     nulls,
                 )
             };
@@ -669,7 +653,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let views_scalar = ScalarBuffer::from(views_buf);
 
         // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
-        unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks.into(), nulls) }
     }
 
     /// Copy the i‑th view into `data_buf` if it refers to an out‑of‑line buffer.
@@ -1648,7 +1632,7 @@ mod tests {
             gced.data_buffers().len()
         );
         // No output buffer may exceed the cap.
-        for buf in gced.data_buffers() {
+        for buf in gced.data_buffers().iter() {
             assert!(buf.len() <= max_buffer_size, "buffer exceeded max size");
         }
         // Every value (inline, large, and null) is unchanged and in order.
