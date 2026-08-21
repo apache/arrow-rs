@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::temporal_conversions::{
     as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
@@ -995,9 +995,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
 
         let nulls = self.nulls().cloned();
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let f = |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
@@ -1009,7 +1008,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => (0..len).try_for_each(f)?,
         }
 
-        let values = buffer.finish().into();
+        let values = values.into();
         Ok(PrimitiveArray::new(values, nulls))
     }
 
@@ -1079,9 +1078,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => null_builder.append_n(len, true),
         }
 
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let mut out_null_count = null_count;
 
@@ -1097,7 +1095,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         });
 
         let nulls = null_builder.finish();
-        let values = buffer.finish().into();
+        let values = values.into();
         let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
         PrimitiveArray::new(values, Some(nulls))
     }
