@@ -86,6 +86,8 @@
 //!
 //!                         * Same name, different struct
 //! ```
+#[cfg(feature = "arrow")]
+mod dictionary;
 mod footer_tail;
 mod memory;
 mod options;
