@@ -476,8 +476,8 @@ impl PageIndexBuilder {
     pub fn new_with_policy(
         num_row_groups: usize,
         num_columns: usize,
-        column_index_policy: reader::PageIndexPolicy,
-        offset_index_policy: reader::PageIndexPolicy,
+        column_index_policy: &PageIndexPolicy,
+        offset_index_policy: &PageIndexPolicy,
     ) -> Self {
         use reader::PageIndexPolicy;
 
@@ -2632,8 +2632,8 @@ mod tests {
         let mut builder = PageIndexBuilder::new_with_policy(
             1,
             1,
-            PageIndexPolicy::Skip,
-            PageIndexPolicy::Optional,
+            &PageIndexPolicy::Skip,
+            &PageIndexPolicy::Optional,
         );
 
         // Try to add a column index - should be silently ignored

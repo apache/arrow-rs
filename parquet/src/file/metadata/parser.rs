@@ -260,8 +260,8 @@ pub(crate) fn parse_page_index(
     let mut builder = PageIndexBuilder::new_with_policy(
         num_row_groups,
         num_columns,
-        column_index_policy.clone(),
-        offset_index_policy.clone(),
+        column_index_policy,
+        offset_index_policy,
     );
     parse_column_index(
         metadata,
