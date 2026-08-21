@@ -173,24 +173,28 @@ impl FallbackEncoder {
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
     {
-        self.num_values += indices.len();
+        self.encode_all(indices.map(|idx| values.value(idx)))
+    }
+
+    /// Encode each value yielded by `values` to the in-progress page
+    fn encode_all(&mut self, values: impl Iterator<Item = impl AsRef<[u8]>>) {
         match &mut self.encoder {
             FallbackEncoderImpl::Plain { buffer } => {
-                for idx in indices {
-                    let value = values.value(idx);
+                for value in values {
                     let value = value.as_ref();
                     buffer.extend_from_slice((value.len() as u32).as_bytes());
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
+                    self.num_values += 1;
                 }
             }
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
-                for idx in indices {
-                    let value = values.value(idx);
+                for value in values {
                     let value = value.as_ref();
                     lengths.put(&[value.len() as i32]).unwrap();
                     buffer.extend_from_slice(value);
                     self.variable_length_bytes += value.len() as i64;
+                    self.num_values += 1;
                 }
             }
             FallbackEncoderImpl::Delta {
@@ -199,8 +203,7 @@ impl FallbackEncoder {
                 prefix_lengths,
                 suffix_lengths,
             } => {
-                for idx in indices {
-                    let value = values.value(idx);
+                for value in values {
                     let value = value.as_ref();
 
                     let prefix_length = common_prefix_length(last_value, value);
@@ -213,6 +216,7 @@ impl FallbackEncoder {
                     prefix_lengths.put(&[prefix_length as i32]).unwrap();
                     suffix_lengths.put(&[suffix_length as i32]).unwrap();
                     self.variable_length_bytes += value.len() as i64;
+                    self.num_values += 1;
                 }
             }
         }
@@ -418,6 +422,12 @@ impl DictEncoder {
 pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
+    /// A dictionary encoder retained by
+    /// [`ColumnValueEncoder::fall_back_from_dictionary`] so that
+    /// [`ColumnValueEncoder::flush_dict_page`] can still produce the dictionary
+    /// page required by already flushed dictionary-encoded data pages. It no
+    /// longer receives values.
+    retired_dict_encoder: Option<DictEncoder>,
     statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
@@ -457,6 +467,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             bloom_filter,
             bloom_filter_target_fpp,
             dict_encoder: dictionary,
+            retired_dict_encoder: None,
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
@@ -603,18 +614,43 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
-        match self.dict_encoder.take() {
+        let encoder = match self.dict_encoder.take() {
             Some(encoder) => {
                 if !encoder.indices.is_empty() {
                     return Err(general_err!(
                         "Must flush data pages before flushing dictionary"
                     ));
                 }
-
-                Ok(Some(encoder.flush_dict_page()))
+                encoder
             }
-            _ => Ok(None),
+            // A dictionary retained by `fall_back_from_dictionary`: its
+            // buffered indices were re-encoded through the fallback encoder
+            // when the fallback happened.
+            None => match self.retired_dict_encoder.take() {
+                Some(encoder) => encoder,
+                None => return Ok(None),
+            },
+        };
+
+        Ok(Some(encoder.flush_dict_page()))
+    }
+
+    fn fall_back_from_dictionary(&mut self, retain_dictionary: bool) -> Result<()> {
+        if let Some(mut dict_encoder) = self.dict_encoder.take() {
+            // Statistics, bloom filter and variable length bytes were all
+            // updated when these values were first written; `encode_all`
+            // re-counts `variable_length_bytes` in the fallback encoder, so
+            // reset the dictionary's per-page count to match.
+            let storage = dict_encoder.interner.storage();
+            self.fallback
+                .encode_all(dict_encoder.indices.iter().map(|&idx| storage.get(idx)));
+            dict_encoder.indices.clear();
+            dict_encoder.variable_length_bytes = 0;
+            if retain_dictionary {
+                self.retired_dict_encoder = Some(dict_encoder);
+            }
         }
+        Ok(())
     }
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<ByteArray>> {
