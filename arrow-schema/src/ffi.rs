@@ -198,32 +198,17 @@ impl FFI_ArrowSchema {
     ///
     /// # Safety
     ///
-    /// Reinterprets `private_data` as a value this crate produced. `self` must
-    /// come from arrow-rs (e.g. [`FFI_ArrowSchema::try_new`] or a `TryFrom`),
-    /// not a foreign producer. See <https://github.com/apache/arrow-rs/issues/10679>.
+    /// `self` must be a schema this crate produced (e.g. via
+    /// [`FFI_ArrowSchema::try_new`] or a `TryFrom`), not one from a foreign
+    /// producer and not [`FFI_ArrowSchema::empty`]. It reinterprets
+    /// `private_data` as our own type, so any other schema is undefined
+    /// behavior. See <https://github.com/apache/arrow-rs/issues/10679> and
+    /// <https://github.com/apache/arrow-rs/issues/10286>.
     pub unsafe fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
     {
-        // empty() leaves private_data null; build one (with a valid format and
-        // release, so it still drops cleanly) instead of deref-ing null (#10286).
-        if self.private_data.is_null() {
-            // format is always null here today (only try_new sets it,
-            // and it sets private_data too); guard anyway so we never leak a
-            // CString if that ever stops holding.
-            if self.format.is_null() {
-                self.format = CString::new("").unwrap().into_raw();
-            }
-            self.release = Some(release_schema);
-            let private_data = Box::new(SchemaPrivateData {
-                children: Box::new([]),
-                dictionary: std::ptr::null_mut(),
-                metadata: None,
-            });
-            self.private_data = Box::into_raw(private_data).cast::<c_void>();
-        }
-
         let metadata: Vec<(S, S)> = metadata.into_iter().collect();
         // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
         let new_metadata = if !metadata.is_empty() {
@@ -1096,16 +1081,6 @@ mod tests {
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
-    }
-
-    #[test]
-    fn test_with_metadata_on_empty_schema() {
-        // empty() has null private_data; with_metadata builds one instead of
-        // deref-ing null, so metadata round-trips (#10286).
-        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
-        // SAFETY: empty() is a schema this crate produced.
-        let schema = unsafe { FFI_ArrowSchema::empty().with_metadata(&metadata) }.unwrap();
-        assert_eq!(schema.metadata().unwrap(), metadata);
     }
 
     #[test]
