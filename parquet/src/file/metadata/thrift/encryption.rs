@@ -298,8 +298,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     let ParquetMetaData {
         mut file_metadata,
         row_groups,
-        column_index: _,
-        offset_index: _,
+        page_index: _,
         file_decryptor: _,
     } = parquet_meta;
 

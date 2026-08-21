@@ -53,10 +53,10 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::FOOTER_SIZE;
-use parquet::file::metadata::PageIndexPolicy;
 #[cfg(feature = "async")]
 use parquet::file::metadata::ParquetMetaDataReader;
-use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
+use parquet::file::metadata::{FooterTail, ParquetMetaData};
+use parquet::file::metadata::{PageIndex, PageIndexPolicy};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;
@@ -261,11 +261,11 @@ impl TestParquetFile {
 
         let parquet_metadata = Arc::clone(builder.metadata());
 
-        let offset_index = parquet_metadata
-            .offset_index()
+        let page_index = parquet_metadata
+            .page_index()
             .expect("Parquet metadata should have a page index");
 
-        let row_groups = TestRowGroups::new(&parquet_metadata, offset_index);
+        let row_groups = TestRowGroups::new(&parquet_metadata, page_index);
 
         // figure out the footer location in the file
         let footer_location = bytes.len() - FOOTER_SIZE..bytes.len();
@@ -342,7 +342,7 @@ struct TestRowGroups {
 }
 
 impl TestRowGroups {
-    fn new(parquet_metadata: &ParquetMetaData, offset_index: &ParquetOffsetIndex) -> Self {
+    fn new(parquet_metadata: &ParquetMetaData, page_index: &PageIndex) -> Self {
         let row_groups = parquet_metadata
             .row_groups()
             .iter()
@@ -354,7 +354,10 @@ impl TestRowGroups {
                     .enumerate()
                     .map(|(col_idx, col_meta)| {
                         let column_name = col_meta.column_descr().name().to_string();
-                        let page_locations = offset_index[rg_index][col_idx].page_locations();
+                        let page_locations = page_index
+                            .offset_index(rg_index, col_idx)
+                            .unwrap()
+                            .page_locations();
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk

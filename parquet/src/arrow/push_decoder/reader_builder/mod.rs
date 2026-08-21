@@ -851,12 +851,14 @@ impl RowGroupReaderBuilder {
     }
 
     /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
+    fn row_group_offset_index(
+        &self,
+        row_group_idx: usize,
+    ) -> Option<&[Option<OffsetIndexMetaData>]> {
         self.metadata
-            .offset_index()
-            .filter(|index| !index.is_empty())
-            .and_then(|index| index.get(row_group_idx))
-            .map(|columns| columns.as_slice())
+            .page_index()
+            .map(|pi| pi.offset_indexes_for_rowgroup(row_group_idx))
+            .unwrap_or(None)
     }
 }
 
@@ -883,7 +885,7 @@ impl RowGroupReaderBuilder {
 fn prepare_selection_for_page_skipping(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
+    offset_index: Option<&[Option<OffsetIndexMetaData>]>,
     total_rows: usize,
 ) -> ReadPlanBuilder {
     match plan_builder.resolve_selection_strategy() {
@@ -908,7 +910,7 @@ fn prepare_selection_for_page_skipping(
 fn loaded_row_ranges_for_projection(
     selection: Option<&RowSelection>,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
+    offset_index: Option<&[Option<OffsetIndexMetaData>]>,
     total_rows: usize,
 ) -> Option<LoadedRowRanges> {
     let selection = selection?;
@@ -918,7 +920,8 @@ fn loaded_row_ranges_for_projection(
         .iter()
         .enumerate()
         .filter_map(|(leaf_idx, column)| {
-            let pages = column.page_locations();
+            let column_metadata = column.as_ref()?;
+            let pages = column_metadata.page_locations();
             (projection_mask.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
                 RowSelection::from_consecutive_ranges(
                     selection
@@ -947,17 +950,19 @@ mod tests {
 
     #[test]
     fn test_loaded_row_ranges_intersect_column_page_boundaries() {
-        let column = |first_rows: &[i64]| OffsetIndexMetaData {
-            page_locations: first_rows
-                .iter()
-                .enumerate()
-                .map(|(idx, first_row_index)| PageLocation {
-                    offset: (idx * 10) as i64,
-                    compressed_page_size: 10,
-                    first_row_index: *first_row_index,
-                })
-                .collect(),
-            unencoded_byte_array_data_bytes: None,
+        let column = |first_rows: &[i64]| {
+            Some(OffsetIndexMetaData {
+                page_locations: first_rows
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, first_row_index)| PageLocation {
+                        offset: (idx * 10) as i64,
+                        compressed_page_size: 10,
+                        first_row_index: *first_row_index,
+                    })
+                    .collect(),
+                unencoded_byte_array_data_bytes: None,
+            })
         };
         let columns = vec![column(&[0, 4, 8]), column(&[0, 6, 10])];
         let selection = RowSelection::from(vec![
@@ -980,7 +985,7 @@ mod tests {
 
     #[test]
     fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
-        let columns = vec![OffsetIndexMetaData {
+        let columns = vec![Some(OffsetIndexMetaData {
             page_locations: [0, 2, 4, 6, 8, 10]
                 .into_iter()
                 .enumerate()
@@ -991,7 +996,7 @@ mod tests {
                 })
                 .collect(),
             unencoded_byte_array_data_bytes: None,
-        }];
+        })];
         let selection = RowSelection::from(vec![
             RowSelector::select(1),
             RowSelector::skip(10),
