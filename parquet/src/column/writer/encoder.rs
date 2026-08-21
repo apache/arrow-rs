@@ -57,6 +57,30 @@ pub struct DictionaryPage {
     pub is_sorted: bool,
 }
 
+/// Measured cost inputs for the `Adaptive` dictionary fallback policy, see
+/// [`ColumnValueEncoder::sample_dictionary_cost`]
+///
+/// [`DictionaryFallback::Adaptive`]: crate::file::properties::DictionaryFallback::Adaptive
+pub struct DictionaryCostSample {
+    /// Total bytes the values appended to this column chunk so far would
+    /// occupy PLAIN-encoded
+    pub plain_bytes: u64,
+    /// Current size of the dictionary page, in bytes
+    pub dict_page_bytes: u64,
+    /// Upper-bound estimate of the RLE/bit-packed size of the dictionary
+    /// indices for every value appended to this column chunk so far
+    pub indices_bytes: u64,
+    /// PLAIN-encoded size of the sampled values; `0` if no values are
+    /// currently buffered (in which case `sample_fallback` is empty)
+    pub sample_plain_bytes: u64,
+    /// A bounded sample of the currently-buffered values (resolved through the
+    /// dictionary), encoded with the column's fallback encoding
+    pub sample_fallback: Bytes,
+    /// A bounded prefix of the dictionary page bytes, for estimating the
+    /// dictionary page's compressibility
+    pub dict_page_prefix: Bytes,
+}
+
 /// The encoded values for a data page, with optional statistics
 pub struct DataPageValues<T> {
     pub buf: Bytes,
@@ -148,6 +172,23 @@ pub trait ColumnValueEncoder {
     ///
     /// [`DictionaryFallback::WhenProfitable`]: crate::file::properties::DictionaryFallback::WhenProfitable
     fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    /// Measures the cost inputs for the `Adaptive` dictionary fallback policy,
+    /// or `None` if no dictionary encoder is active (or the encoder does not
+    /// support measurement, in which case the policy preserves the
+    /// absolute-limit fallback behavior).
+    ///
+    /// The measured sample is bounded: at most `max_sample_bytes` of buffered
+    /// values (PLAIN-encoded size) are resolved through the dictionary and
+    /// re-encoded through a scratch fallback encoder, and at most
+    /// `max_sample_bytes` of the dictionary page is copied as a
+    /// compressibility sample, so a single measurement costs no more than
+    /// encoding one data page's worth of values.
+    ///
+    /// [`DictionaryFallback::Adaptive`]: crate::file::properties::DictionaryFallback::Adaptive
+    fn sample_dictionary_cost(&self, _max_sample_bytes: usize) -> Option<DictionaryCostSample> {
         None
     }
 
@@ -385,6 +426,37 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
         Some(self.dict_encoder.as_ref()?.plain_encoded_bytes())
+    }
+
+    fn sample_dictionary_cost(&self, max_sample_bytes: usize) -> Option<DictionaryCostSample> {
+        let dict_encoder = self.dict_encoder.as_ref()?;
+
+        let (sample_values, sample_plain_bytes) =
+            dict_encoder.sample_buffered_values(max_sample_bytes);
+        let sample_fallback = if sample_values.is_empty() {
+            Bytes::new()
+        } else {
+            // `self.encoder` is the live fallback encoder awaiting a potential
+            // fallback; measure with a scratch encoder of the same encoding so
+            // its state is not disturbed.
+            let mut scratch = get_encoder::<T>(self.encoder.encoding(), &self.descr).ok()?;
+            scratch.put(&sample_values).ok()?;
+            scratch.flush_buffer().ok()?
+        };
+        let dict_page_prefix = if sample_plain_bytes == 0 {
+            Bytes::new()
+        } else {
+            dict_encoder.write_dict_prefix(max_sample_bytes).ok()?
+        };
+
+        Some(DictionaryCostSample {
+            plain_bytes: dict_encoder.plain_encoded_bytes(),
+            dict_page_bytes: dict_encoder.dict_encoded_size() as u64,
+            indices_bytes: dict_encoder.estimated_total_indices_bytes(),
+            sample_plain_bytes,
+            sample_fallback,
+            dict_page_prefix,
+        })
     }
 
     fn estimated_data_page_size(&self) -> usize {

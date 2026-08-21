@@ -18,7 +18,7 @@
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
+    ColumnValueEncoder, DataPageValues, DictionaryCostSample, DictionaryPage, create_bloom_filter,
 };
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
@@ -38,6 +38,7 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
+use bytes::Bytes;
 
 macro_rules! downcast_dict_impl {
     ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
@@ -140,6 +141,12 @@ impl FallbackEncoder {
                     WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
                 });
 
+        Self::new_from_encoding(encoding)
+    }
+
+    /// Create a fallback encoder producing the given (already validated)
+    /// fallback `encoding`
+    fn new_from_encoding(encoding: Encoding) -> Result<Self> {
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
             Encoding::DELTA_LENGTH_BYTE_ARRAY => FallbackEncoderImpl::DeltaLength {
@@ -165,6 +172,15 @@ impl FallbackEncoder {
             num_values: 0,
             variable_length_bytes: 0,
         })
+    }
+
+    /// Returns the encoding this fallback encoder produces
+    fn encoding(&self) -> Encoding {
+        match &self.encoder {
+            FallbackEncoderImpl::Plain { .. } => Encoding::PLAIN,
+            FallbackEncoderImpl::DeltaLength { .. } => Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            FallbackEncoderImpl::Delta { .. } => Encoding::DELTA_BYTE_ARRAY,
+        }
     }
 
     /// Encode `values` to the in-progress page
@@ -344,6 +360,10 @@ struct DictEncoder {
     /// over all appended values (not just the dictionary's unique values);
     /// never reset per page
     plain_encoded_bytes: u64,
+    /// Total number of values appended to this column chunk, over all pages;
+    /// never reset per page (unlike `indices`, which is cleared on each page
+    /// flush)
+    num_appended_values: u64,
 }
 
 impl DictEncoder {
@@ -361,6 +381,7 @@ impl DictEncoder {
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
             self.plain_encoded_bytes += 4 + value.as_ref().len() as u64;
+            self.num_appended_values += 1;
         }
     }
 
@@ -610,6 +631,54 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
     fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
         Some(self.dict_encoder.as_ref()?.plain_encoded_bytes)
+    }
+
+    fn sample_dictionary_cost(&self, max_sample_bytes: usize) -> Option<DictionaryCostSample> {
+        let dict_encoder = self.dict_encoder.as_ref()?;
+        let storage = dict_encoder.interner.storage();
+
+        // Resolve up to `max_sample_bytes` worth of the values buffered for
+        // the in-progress page (dictionary ids) and measure their size in the
+        // fallback encoding. `self.fallback` is the live encoder awaiting a
+        // potential fallback, so measure with a scratch encoder of the same
+        // encoding.
+        let mut sample_plain_bytes = 0u64;
+        let mut num_sampled = 0usize;
+        for &idx in &dict_encoder.indices {
+            sample_plain_bytes += 4 + storage.get(idx).len() as u64;
+            num_sampled += 1;
+            if sample_plain_bytes >= max_sample_bytes as u64 {
+                break;
+            }
+        }
+        let sample_fallback = if num_sampled == 0 {
+            Bytes::new()
+        } else {
+            let mut scratch = FallbackEncoder::new_from_encoding(self.fallback.encoding()).ok()?;
+            scratch.encode_all(
+                dict_encoder.indices[..num_sampled]
+                    .iter()
+                    .map(|&idx| storage.get(idx)),
+            );
+            scratch.flush_data_page(None, None).ok()?.buf
+        };
+        let dict_page_prefix = if num_sampled == 0 {
+            Bytes::new()
+        } else {
+            let prefix_len = storage.page.len().min(max_sample_bytes);
+            Bytes::copy_from_slice(&storage.page[..prefix_len])
+        };
+
+        let num_appended = usize::try_from(dict_encoder.num_appended_values).unwrap_or(usize::MAX);
+        Some(DictionaryCostSample {
+            plain_bytes: dict_encoder.plain_encoded_bytes,
+            dict_page_bytes: storage.page.len() as u64,
+            indices_bytes: 1 + RleEncoder::max_buffer_size(dict_encoder.bit_width(), num_appended)
+                as u64,
+            sample_plain_bytes,
+            sample_fallback,
+            dict_page_prefix,
+        })
     }
 
     /// Returns an estimate of the data page size in bytes

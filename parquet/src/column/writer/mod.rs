@@ -445,6 +445,60 @@ impl LevelDataRef<'_> {
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
+/// Byte budget for each measurement taken by [`DictionaryFallback::Adaptive`]:
+/// at most this many bytes (PLAIN-encoded) of buffered values are re-encoded
+/// through a scratch fallback encoder, and at most this many bytes of the
+/// dictionary page are sampled for compressibility, per checkpoint. Together
+/// with the geometric checkpoint spacing this bounds the total measurement
+/// cost per column chunk to `log2(cap / floor) + 1` single-page encodes.
+const ADAPTIVE_SAMPLE_BYTES: usize = 1024 * 1024;
+
+/// A dictionary whose measured cost is within this factor of the measured
+/// fallback cost at the *first* checkpoint is considered too close to call:
+/// the decision is deferred to the next checkpoint to observe a trend.
+const ADAPTIVE_TIE_RATIO: f64 = 1.02;
+
+/// Minimum fraction of the chunk's PLAIN bytes so far that must have been
+/// repeats of values already in the dictionary for the dictionary to be kept
+/// past a checkpoint. The repeat fraction bounds the dictionary's possible
+/// win over the fallback (every non-repeated byte is stored once either
+/// way), so below this floor a measured win is indistinguishable from
+/// sampling noise and the writer falls back exactly like
+/// [`DictionaryFallback::OnPageSizeLimit`] — in particular, a column with no
+/// repeats at all produces output identical to the default policy.
+const ADAPTIVE_MIN_REPEAT_FRACTION: f64 = 0.01;
+
+/// A dictionary measured worse than the fallback may still be deferred (repeat
+/// trend rising, or break-even hit rate) while its measured cost is within
+/// this factor of the fallback cost; measured worse than this, the writer
+/// always falls back.
+const ADAPTIVE_DEFER_RATIO: f64 = 1.5;
+
+/// Minimum increase of the windowed dictionary hit rate between checkpoints to
+/// count as "repeats are (still) arriving" for deferral.
+const ADAPTIVE_HIT_RATE_RISE: f64 = 0.05;
+
+/// Windowed dictionary hit rate (fraction of appended PLAIN bytes since the
+/// previous checkpoint that were already in the dictionary) at which the
+/// dictionary is at worst break-even on incoming values, warranting deferral
+/// even when the whole-chunk measurement is (boundedly) behind.
+const ADAPTIVE_HIT_RATE_BREAK_EVEN: f64 = 0.5;
+
+/// Per-column-chunk state for the [`DictionaryFallback::Adaptive`] policy,
+/// tracking the geometric measurement checkpoints and the repeat trend
+/// between them. See [`GenericColumnWriter::adaptive_should_fallback`].
+struct AdaptiveFallbackState {
+    /// Dictionary page size at which the next measured evaluation runs.
+    next_checkpoint: usize,
+    /// Dictionary page size at the previously evaluated checkpoint.
+    last_dict_page_bytes: u64,
+    /// PLAIN-encoded bytes appended at the previously evaluated checkpoint.
+    last_plain_bytes: u64,
+    /// Windowed dictionary hit rate observed at the previously evaluated
+    /// checkpoint.
+    last_hit_rate: f64,
+}
+
 /// Generic column writer for a primitive Parquet column
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
@@ -477,6 +531,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     /// column chunk. Once set, a dictionary fallback can no longer skip
     /// writing the dictionary page, as the flushed pages reference it.
     has_dictionary_encoded_data_pages: bool,
+    /// Measurement checkpoints for the [`DictionaryFallback::Adaptive`]
+    /// policy; `None` until the dictionary first crosses the grace floor
+    /// (and always `None` under other policies).
+    adaptive_fallback: Option<AdaptiveFallbackState>,
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: Option<OffsetIndexBuilder>,
@@ -544,6 +602,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             encoder,
             data_pages: VecDeque::new(),
             has_dictionary_encoded_data_pages: false,
+            adaptive_fallback: None,
             page_metrics,
             column_metrics,
             distinct_count_override: None,
@@ -1057,7 +1116,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// dictionary is abandoned is controlled by the column's [`DictionaryFallback`]
     /// policy.
     #[inline]
-    fn should_dict_fallback(&self) -> bool {
+    fn should_dict_fallback(&mut self) -> bool {
         let Some(dict_page_size) = self.encoder.estimated_dict_page_size() else {
             return false;
         };
@@ -1087,7 +1146,161 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     None => true,
                 }
             }
+            DictionaryFallback::Adaptive {
+                max_dictionary_page_size,
+            } => {
+                if dict_page_size >= max_dictionary_page_size {
+                    return true;
+                }
+
+                if dict_page_size < limit {
+                    return false;
+                }
+
+                self.adaptive_should_fallback(dict_page_size, limit)
+            }
         }
+    }
+
+    /// Measured fallback decision for [`DictionaryFallback::Adaptive`].
+    ///
+    /// Called once the dictionary page size has crossed the grace floor (the
+    /// configured `dictionary_page_size_limit`) but not the policy's hard cap.
+    /// Evaluations run at geometric checkpoints of the dictionary page size
+    /// (the floor, then 2x, 4x, ... the floor); between checkpoints this
+    /// returns `false` without doing any work.
+    ///
+    /// At each checkpoint the measured cost of keeping the dictionary — the
+    /// dictionary page (scaled by the compressibility of a sampled prefix)
+    /// plus an upper-bound estimate of the RLE-encoded indices — is compared
+    /// against the measured cost of the fallback encoding — a bounded sample
+    /// of the buffered values resolved through the dictionary, re-encoded with
+    /// the fallback encoder, compressed with the chunk's codec, and scaled to
+    /// the PLAIN-encoded bytes appended so far. Each measurement is bounded by
+    /// [`ADAPTIVE_SAMPLE_BYTES`].
+    ///
+    /// A column whose repeat fraction is below
+    /// [`ADAPTIVE_MIN_REPEAT_FRACTION`] always falls back: the repeat
+    /// fraction bounds what the dictionary can possibly win, so below it a
+    /// measured win is sampling noise. Otherwise a dictionary measured to be
+    /// winning is kept (until the next checkpoint), and one measured to be
+    /// losing falls back, unless the repeat trend warrants deferring the
+    /// decision to the next checkpoint: at the first checkpoint, a near-tie
+    /// ([`ADAPTIVE_TIE_RATIO`]) — the floor is typically crossed after too
+    /// few values to judge a shuffled distribution; at later checkpoints, a
+    /// windowed hit rate that is rising ([`ADAPTIVE_HIT_RATE_RISE`]) or at
+    /// break-even ([`ADAPTIVE_HIT_RATE_BREAK_EVEN`]), within
+    /// [`ADAPTIVE_DEFER_RATIO`]. A column that keeps producing fresh values
+    /// therefore falls back within a bounded number of checkpoints, while a
+    /// column drawing from a bounded pool of repeating values converges to a
+    /// kept dictionary.
+    fn adaptive_should_fallback(&mut self, dict_page_size: usize, grace_floor: usize) -> bool {
+        if let Some(state) = &self.adaptive_fallback
+            && dict_page_size < state.next_checkpoint
+        {
+            return false;
+        }
+
+        let Some(sample) = self.encoder.sample_dictionary_cost(ADAPTIVE_SAMPLE_BYTES) else {
+            // The encoder cannot measure the fallback encoding: preserve the
+            // absolute-limit behavior
+            return true;
+        };
+        if sample.sample_plain_bytes == 0 {
+            // No values are buffered to measure (the page was just flushed):
+            // hold the checkpoint and re-evaluate on the next write
+            return false;
+        }
+
+        // Compressed size of `buf` under the chunk's codec (identity when
+        // uncompressed); an incompressible buffer never counts for more than
+        // its input, matching how pages are stored
+        let mut compressed_len = |buf: &[u8]| -> usize {
+            match &mut self.compressor {
+                Some(compressor) => {
+                    let mut compressed = Vec::new();
+                    match compressor.compress(buf, &mut compressed) {
+                        Ok(()) => compressed.len().min(buf.len()),
+                        Err(_) => buf.len(),
+                    }
+                }
+                None => buf.len(),
+            }
+        };
+
+        let fallback_ratio =
+            compressed_len(&sample.sample_fallback) as f64 / sample.sample_plain_bytes as f64;
+        // Compressor efficiency varies strongly with input size, so measure
+        // the dictionary's compressibility on a prefix of about the same size
+        // as the fallback buffer: a checkpoint can land right after a page
+        // flush with only a few values buffered, and compressing a small
+        // fallback sample against the full dictionary prefix would bias the
+        // comparison toward the dictionary.
+        let matched_prefix_len = sample
+            .dict_page_prefix
+            .len()
+            .min(sample.sample_fallback.len());
+        let dict_ratio = match matched_prefix_len {
+            0 => 1.0,
+            prefix_len => {
+                compressed_len(&sample.dict_page_prefix[..prefix_len]) as f64 / prefix_len as f64
+            }
+        };
+
+        let fallback_cost = fallback_ratio * sample.plain_bytes as f64;
+        let dict_cost = dict_ratio * sample.dict_page_bytes as f64 + sample.indices_bytes as f64;
+        let cost_ratio = dict_cost / fallback_cost.max(1.0);
+
+        let last = self.adaptive_fallback.as_ref();
+        let last_plain_bytes = last.map(|s| s.last_plain_bytes).unwrap_or(0);
+        let last_dict_page_bytes = last.map(|s| s.last_dict_page_bytes).unwrap_or(0);
+        let last_hit_rate = last.map(|s| s.last_hit_rate);
+
+        // Fraction of the PLAIN bytes appended since the previous checkpoint
+        // (or, at the first checkpoint, since the chunk began) that were
+        // repeats of values already in the dictionary
+        let window_plain = sample.plain_bytes.saturating_sub(last_plain_bytes) as f64;
+        let window_dict = sample.dict_page_bytes.saturating_sub(last_dict_page_bytes) as f64;
+        let hit_rate = if window_plain > 0.0 {
+            (1.0 - window_dict / window_plain).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // Fraction of the whole chunk's PLAIN bytes that were repeats: the
+        // PLAIN accounting of the dictionary entries matches the appended
+        // values exactly, so this is 0 iff no value has ever repeated
+        let repeat_fraction = if sample.plain_bytes > 0 {
+            1.0 - sample.dict_page_bytes as f64 / sample.plain_bytes as f64
+        } else {
+            0.0
+        };
+
+        let keep = repeat_fraction >= ADAPTIVE_MIN_REPEAT_FRACTION
+            && (cost_ratio <= 1.0
+                || (cost_ratio <= ADAPTIVE_DEFER_RATIO
+                    && hit_rate >= ADAPTIVE_HIT_RATE_BREAK_EVEN)
+                || (cost_ratio <= ADAPTIVE_DEFER_RATIO
+                    && last_hit_rate
+                        .is_some_and(|prev| hit_rate >= prev + ADAPTIVE_HIT_RATE_RISE))
+                || (cost_ratio <= ADAPTIVE_TIE_RATIO && last_hit_rate.is_none()));
+        if !keep {
+            return true;
+        }
+
+        let mut next_checkpoint = match &self.adaptive_fallback {
+            Some(state) => state.next_checkpoint,
+            None => grace_floor.max(1),
+        };
+        while next_checkpoint <= dict_page_size {
+            next_checkpoint = next_checkpoint.saturating_mul(2);
+        }
+        self.adaptive_fallback = Some(AdaptiveFallbackState {
+            next_checkpoint,
+            last_dict_page_bytes: sample.dict_page_bytes,
+            last_plain_bytes: sample.plain_bytes,
+            last_hit_rate: hit_rate,
+        });
+        false
     }
 
     /// Returns true if there is enough data for a data page, false otherwise.

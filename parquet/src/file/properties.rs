@@ -1557,6 +1557,53 @@ pub enum DictionaryFallback {
         /// of profitability.
         max_dictionary_page_size: usize,
     },
+    /// Keep the dictionary past [`WriterProperties::dictionary_page_size_limit`]
+    /// (which acts as a grace floor) while a *measured* comparison shows it
+    /// beating the column's fallback encoding, falling back unconditionally at
+    /// `max_dictionary_page_size`.
+    ///
+    /// Unlike [`Self::WhenProfitable`], there is no ratio to tune: whenever the
+    /// dictionary page size crosses a checkpoint (the grace floor, then
+    /// geometrically — 2x, 4x, ... the floor, up to the hard cap), the writer
+    /// compares the measured cost of the dictionary (the dictionary page plus
+    /// an estimate of the RLE-encoded indices) against the measured cost of the
+    /// fallback encoding, obtained by re-encoding a bounded sample of the
+    /// buffered values through the fallback encoder. When the column chunk is
+    /// compressed, both sides of the comparison are compressed with the chunk's
+    /// codec, so a dictionary that only looks smaller before compression (e.g.
+    /// sorted numeric keys, where the fallback compresses extremely well but a
+    /// dictionary of distinct keys does not) is correctly rejected.
+    ///
+    /// The decision is not final at the first crossing: when the comparison is
+    /// too close to call, and repeated values are still arriving (so the
+    /// dictionary may simply not have seen enough data yet — e.g. a bounded
+    /// pool of values in shuffled order, where hardly any repeats are visible
+    /// by the time the floor is crossed), the writer defers to the next
+    /// checkpoint instead. A column whose values keep repeating converges to a
+    /// kept dictionary; a column that keeps producing new values falls back
+    /// within a bounded number of checkpoints.
+    ///
+    /// The measurement cost is bounded: each checkpoint encodes (and, if the
+    /// chunk is compressed, compresses) at most a fixed byte budget of sampled
+    /// values — see `GenericColumnWriter` — and the geometric spacing bounds
+    /// the number of checkpoints per column chunk by
+    /// `log2(max_dictionary_page_size / dictionary_page_size_limit) + 1`.
+    ///
+    /// `max_dictionary_page_size` is a memory guard, exactly as in
+    /// [`Self::WhenProfitable`]: readers must decompress and materialize the
+    /// entire dictionary page, so an unboundedly winning dictionary must still
+    /// be capped. A value of `64 * 1024 * 1024` (64 MiB) is a reasonable upper
+    /// bound.
+    ///
+    /// The exact decision procedure (checkpoint spacing, sample budget, tie
+    /// margins) is an implementation detail and may be refined without
+    /// changing this API.
+    Adaptive {
+        /// Hard cap on the dictionary page size, in bytes: the writer always
+        /// falls back once the dictionary page reaches this size, regardless
+        /// of the measured comparison.
+        max_dictionary_page_size: usize,
+    },
 }
 
 impl Default for DictionaryFallback {
@@ -2155,6 +2202,40 @@ mod tests {
         assert_eq!(
             props.column_dictionary_fallback(&ColumnPath::from("other")),
             when_profitable
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_dictionary_fallback_adaptive() {
+        let adaptive = DictionaryFallback::Adaptive {
+            max_dictionary_page_size: 64 * 1024 * 1024,
+        };
+        let props = WriterProperties::builder()
+            .set_dictionary_fallback(adaptive)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::OnPageSizeLimit,
+            )
+            .build();
+        assert_eq!(props.dictionary_fallback(), adaptive);
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("other")),
+            adaptive
+        );
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("col")),
+            DictionaryFallback::OnPageSizeLimit
+        );
+
+        // survives the round trip through into_builder
+        let props = props.into_builder().build();
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("col")),
+            DictionaryFallback::OnPageSizeLimit
+        );
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("other")),
+            adaptive
         );
     }
 

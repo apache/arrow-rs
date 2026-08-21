@@ -93,6 +93,11 @@ pub struct DictEncoder<T: DataType> {
     /// PLAIN-encoded, accumulated over all appended values (not just the
     /// dictionary's unique values); never reset per page
     plain_encoded_bytes: u64,
+
+    /// Total number of values appended to this column chunk, over all pages;
+    /// never reset per page (unlike `indices`, which is cleared on each page
+    /// flush)
+    num_appended_values: u64,
 }
 
 impl<T: DataType> DictEncoder<T> {
@@ -108,6 +113,7 @@ impl<T: DataType> DictEncoder<T> {
             interner: Interner::new(storage),
             indices: vec![],
             plain_encoded_bytes: 0,
+            num_appended_values: 0,
         }
     }
 
@@ -157,6 +163,67 @@ impl<T: DataType> DictEncoder<T> {
         self.plain_encoded_bytes
     }
 
+    /// Returns an upper bound on the RLE/bit-packed encoded size of the
+    /// dictionary indices for every value appended to this encoder so far
+    /// (including values already flushed to data pages), at the current
+    /// bit width.
+    pub fn estimated_total_indices_bytes(&self) -> u64 {
+        let num_appended = usize::try_from(self.num_appended_values).unwrap_or(usize::MAX);
+        1 + RleEncoder::max_buffer_size(self.bit_width(), num_appended) as u64
+    }
+
+    /// Returns up to `max_plain_bytes` worth (and always at least one, if any
+    /// are buffered) of the values buffered for the in-progress data page,
+    /// resolved through the dictionary, together with their PLAIN-encoded
+    /// size. Unlike [`Self::take_buffered_values`] the buffer is left intact.
+    ///
+    /// Used by the `Adaptive` dictionary fallback policy to measure the size
+    /// of the fallback encoding on a bounded sample of real values.
+    pub fn sample_buffered_values(&self, max_plain_bytes: usize) -> (Vec<T::T>, u64) {
+        let storage = self.interner.storage();
+        let mut plain_bytes = 0u64;
+        let mut values = Vec::new();
+        for &idx in &self.indices {
+            let value = &storage.uniques[idx as usize];
+            let (base_size, num_elements) = value.dict_encoding_size();
+            let plain_size = match T::get_physical_type() {
+                Type::BYTE_ARRAY => base_size + num_elements,
+                Type::FIXED_LEN_BYTE_ARRAY => storage.type_length,
+                _ => base_size,
+            };
+            plain_bytes += plain_size as u64;
+            values.push(value.clone());
+            if plain_bytes >= max_plain_bytes as u64 {
+                break;
+            }
+        }
+        (values, plain_bytes)
+    }
+
+    /// PLAIN-encodes a prefix of the dictionary entries of up to `max_bytes`
+    /// bytes (always at least one entry, if any exist), as a sample of the
+    /// dictionary page's contents.
+    pub fn write_dict_prefix(&self, max_bytes: usize) -> Result<Bytes> {
+        let storage = self.interner.storage();
+        let mut prefix_bytes = 0usize;
+        let mut num_entries = 0usize;
+        for value in &storage.uniques {
+            let (base_size, num_elements) = value.dict_encoding_size();
+            prefix_bytes += match T::get_physical_type() {
+                Type::BYTE_ARRAY => base_size + num_elements,
+                Type::FIXED_LEN_BYTE_ARRAY => storage.type_length,
+                _ => base_size,
+            };
+            num_entries += 1;
+            if prefix_bytes >= max_bytes {
+                break;
+            }
+        }
+        let mut plain_encoder = PlainEncoder::<T>::new();
+        plain_encoder.put(&storage.uniques[..num_entries])?;
+        plain_encoder.flush_buffer()
+    }
+
     fn put_one(&mut self, value: &T::T) {
         let (base_size, num_elements) = value.dict_encoding_size();
         let plain_size = match T::get_physical_type() {
@@ -165,6 +232,7 @@ impl<T: DataType> DictEncoder<T> {
             _ => base_size,
         };
         self.plain_encoded_bytes += plain_size as u64;
+        self.num_appended_values += 1;
         self.indices.push(self.interner.intern(value));
     }
 
