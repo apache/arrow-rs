@@ -3670,6 +3670,45 @@ mod tests {
     }
 
     #[test]
+    fn test_read_run_end_encoded_nullability() {
+        for field_nullable in [false, true] {
+            for values_nullable in [false, true] {
+                let ree_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                );
+                let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+
+                for buf in [
+                    r#"{"a": "x"}
+                    {"a": null}
+                    {"a": "y"}"#,
+                    r#"{"a": "x"}
+                    {}
+                    {"a": "y"}"#,
+                ] {
+                    let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+                    let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
+
+                    if field_nullable && values_nullable {
+                        result.expect("REE field and values are both nullable");
+                    } else {
+                        let err = result.expect_err(
+                            "REE nulls require both the field and values to be nullable",
+                        );
+                        assert!(
+                            err.to_string().contains(
+                                "Encountered nulls in non-nullable values of RunEndEncoded"
+                            ),
+                            "unexpected error: {err}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_run_end_encoded_all_unique() {
         let buf = r#"
         {"a": 1}
