@@ -45,7 +45,7 @@ use crate::file::metadata::{
     OffsetIndexBuilder, PageEncodingStats,
 };
 use crate::file::properties::{
-    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+    DictionaryFallback, EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
@@ -1048,17 +1048,40 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Returns true if we need to fall back to non-dictionary encoding.
     ///
-    /// We can only fall back if dictionary encoder is set and we have exceeded dictionary
-    /// size.
+    /// We can only fall back if a dictionary encoder is set. When and whether the
+    /// dictionary is abandoned is controlled by the column's [`DictionaryFallback`]
+    /// policy.
     #[inline]
     fn should_dict_fallback(&self) -> bool {
-        match self.encoder.estimated_dict_page_size() {
-            Some(size) => {
-                size >= self
-                    .props
-                    .column_dictionary_page_size_limit(self.descr.path())
+        let Some(dict_page_size) = self.encoder.estimated_dict_page_size() else {
+            return false;
+        };
+
+        let limit = self
+            .props
+            .column_dictionary_page_size_limit(self.descr.path());
+
+        match self.props.column_dictionary_fallback(self.descr.path()) {
+            DictionaryFallback::OnPageSizeLimit => dict_page_size >= limit,
+            DictionaryFallback::WhenProfitable {
+                worth_ratio,
+                max_dictionary_page_size,
+            } => {
+                if dict_page_size >= max_dictionary_page_size {
+                    return true;
+                }
+
+                if dict_page_size < limit {
+                    return false;
+                }
+
+                match self.encoder.estimated_plain_encoded_bytes() {
+                    Some(plain_bytes) => dict_page_size as f64 > worth_ratio * plain_bytes as f64,
+                    // No estimate of the plain-encoded size is available:
+                    // preserve the absolute-limit behavior
+                    None => true,
+                }
             }
-            None => false,
         }
     }
 

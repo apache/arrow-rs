@@ -335,6 +335,11 @@ struct DictEncoder {
     interner: Interner<ByteArrayStorage>,
     indices: Vec<u64>,
     variable_length_bytes: i64,
+    /// Total bytes the values appended to this column chunk would occupy
+    /// PLAIN-encoded (4-byte length prefix + payload per value), accumulated
+    /// over all appended values (not just the dictionary's unique values);
+    /// never reset per page
+    plain_encoded_bytes: u64,
 }
 
 impl DictEncoder {
@@ -351,6 +356,7 @@ impl DictEncoder {
             let interned = self.interner.intern(value.as_ref());
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
+            self.plain_encoded_bytes += 4 + value.as_ref().len() as u64;
         }
     }
 
@@ -589,6 +595,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
         Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
+    }
+
+    fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
+        Some(self.dict_encoder.as_ref()?.plain_encoded_bytes)
     }
 
     /// Returns an estimate of the data page size in bytes

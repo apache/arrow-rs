@@ -139,6 +139,18 @@ pub trait ColumnValueEncoder {
     /// Returns an estimate of the encoded size of dictionary page size in bytes, or `None` if no dictionary
     fn estimated_dict_page_size(&self) -> Option<usize>;
 
+    /// Returns an estimate of the total bytes the values appended to this column
+    /// chunk so far would occupy PLAIN-encoded, or `None` if unknown
+    ///
+    /// Used together with [`Self::estimated_dict_page_size`] to decide whether
+    /// dictionary encoding is still paying for itself relative to the fallback
+    /// encoding, see [`DictionaryFallback::WhenProfitable`]
+    ///
+    /// [`DictionaryFallback::WhenProfitable`]: crate::file::properties::DictionaryFallback::WhenProfitable
+    fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns an estimate of the encoded data page size in bytes
     ///
     /// This should include:
@@ -349,6 +361,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
         Some(self.dict_encoder.as_ref()?.dict_encoded_size())
+    }
+
+    fn estimated_plain_encoded_bytes(&self) -> Option<u64> {
+        Some(self.dict_encoder.as_ref()?.plain_encoded_bytes())
     }
 
     fn estimated_data_page_size(&self) -> usize {

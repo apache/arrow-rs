@@ -2076,15 +2076,16 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer, i256};
     use arrow_schema::Fields;
+    use arrow_select::concat::concat_batches;
     use half::f16;
     use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
-    use crate::basic::Encoding;
+    use crate::basic::{Encoding, PageType};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, DictionaryFallback, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -5587,6 +5588,237 @@ mod tests {
 
         assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    }
+
+    /// A single-column batch of `pool_size * repeats` strings, each of the
+    /// `pool_size` distinct `value_len` byte values repeated `repeats` times
+    /// consecutively. The consecutive runs keep the ratio of distinct to total
+    /// values seen so far at `1 / repeats`, independent of how the writer
+    /// slices the batch internally
+    fn repetitive_string_batch(pool_size: usize, value_len: usize, repeats: usize) -> RecordBatch {
+        let pool: Vec<String> = (0..pool_size)
+            .map(|i| {
+                let mut v = format!("value-{i:06}-").repeat(value_len / 8 + 1);
+                v.truncate(value_len);
+                v
+            })
+            .collect();
+        let array =
+            StringArray::from_iter_values((0..pool_size * repeats).map(|i| &pool[i / repeats]));
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Writes `batch` with `props`, returning the encoded bytes and the metadata
+    fn write_batch_with_props(
+        batch: &RecordBatch,
+        props: WriterProperties,
+    ) -> (Bytes, ParquetMetaData) {
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let reader = SerializedFileReader::new_with_options(data.clone(), options).unwrap();
+        let metadata = reader.metadata().clone();
+        (data, metadata)
+    }
+
+    /// Returns the number of data pages in the first column chunk of the first
+    /// row group encoded with the dictionary, and the number encoded otherwise
+    /// (i.e. with the fallback encoding)
+    fn count_dict_and_fallback_pages(metadata: &ParquetMetaData) -> (i32, i32) {
+        let stats = metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats()
+            .unwrap();
+        let mut num_dict = 0;
+        let mut num_fallback = 0;
+        for s in stats {
+            if s.page_type == PageType::DATA_PAGE || s.page_type == PageType::DATA_PAGE_V2 {
+                match s.encoding {
+                    Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => num_dict += s.count,
+                    _ => num_fallback += s.count,
+                }
+            }
+        }
+        (num_dict, num_fallback)
+    }
+
+    #[test]
+    fn test_dictionary_fallback_explicit_default_policy_unchanged() {
+        // Explicitly configuring `DictionaryFallback::OnPageSizeLimit` must be
+        // byte-identical to the default properties, on data that does overflow
+        // the dictionary page size limit and trigger the fallback
+        let batch = repetitive_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let explicit_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::OnPageSizeLimit)
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (explicit_data, _) = write_batch_with_props(&batch, explicit_props);
+
+        assert_eq!(default_data, explicit_data);
+
+        // the dictionary overflowed the 64 KiB limit, so the writer fell back
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_keeps_dictionary() {
+        // 64 distinct 2 KiB values (~131 KiB dictionary) overflow a 64 KiB
+        // dictionary page size limit, but each value recurs 32 times: the
+        // dictionary is profitable, so `WhenProfitable` must keep it while
+        // `OnPageSizeLimit` falls back
+        let batch = repetitive_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let profitable_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.1,
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, _) = write_batch_with_props(&batch, default_props);
+        let (profitable_data, profitable_metadata) =
+            write_batch_with_props(&batch, profitable_props);
+
+        // no fallback: all data pages are dictionary encoded and the
+        // dictionary page is present
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&profitable_metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        let column = profitable_metadata.row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_some());
+
+        // deduplicating the repeated values must beat writing them out in full
+        assert!(
+            profitable_data.len() < default_data.len() / 2,
+            "expected dictionary encoded file to be much smaller, got {} vs {}",
+            profitable_data.len(),
+            default_data.len()
+        );
+
+        // roundtrip: the data must read back identically
+        let read = ParquetRecordBatchReader::try_new(profitable_data, 2048)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_hard_cap() {
+        // 80 distinct 2 KiB values (~164 KiB dictionary) are profitable at a
+        // worth_ratio of 0.5, but the 128 KiB `max_dictionary_page_size` cap
+        // must force the fallback regardless
+        let batch = repetitive_string_batch(80, 2048, 16);
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.5,
+                max_dictionary_page_size: 128 * 1024,
+            })
+            .build();
+
+        let (_, metadata) = write_batch_with_props(&batch, props);
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_high_cardinality_matches_default() {
+        // On a column of unique values the dictionary is never profitable: the
+        // profitability test fails right at the dictionary page size limit, so
+        // `WhenProfitable` must produce output byte-identical to the default
+        // policy. This uses an Int64 column to also exercise the non-byte-array
+        // dictionary encoder
+        let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let default_props = WriterProperties::builder().build();
+        let profitable_props = WriterProperties::builder()
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.1,
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (profitable_data, _) = write_batch_with_props(&batch, profitable_props);
+
+        // both fall back at the dictionary page size limit
+        let (_, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        assert_eq!(default_data, profitable_data);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_int64_keeps_dictionary() {
+        // Exercise the non-byte-array dictionary encoder's profitability
+        // accounting: 16 Ki distinct Int64 values (128 KiB dictionary), each
+        // repeated 16 times, against a 64 KiB dictionary page size limit
+        let array = Arc::new(Int64Array::from_iter(
+            (0..16 * 1024i64).flat_map(|i| std::iter::repeat_n(i, 16)),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::WhenProfitable {
+                    worth_ratio: 0.1,
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                },
+            )
+            .build();
+
+        let (data, metadata) = write_batch_with_props(&batch, props);
+
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        assert!(
+            metadata
+                .row_group(0)
+                .column(0)
+                .dictionary_page_offset()
+                .is_some()
+        );
+
+        let read = ParquetRecordBatchReader::try_new(data, 8192)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
     }
 
     #[test]
