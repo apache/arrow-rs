@@ -104,6 +104,14 @@
 //!     serde_json::json!({"a": 2}),
 //! );
 //! ```
+//!
+//! ## Customizing the encoder
+//!
+//! The output produced for each data type can be customized using
+//! [`WriterBuilder::with_encoder_factory`]. For example, you can override the
+//! default hex encoding of binary data to use `Base64` instead, or provide
+//! encoders for types with no built-in encoding, such as unions.
+//! See the example on [`EncoderFactory`].
 mod encoder;
 
 use std::{fmt::Debug, io::Write, sync::Arc};
