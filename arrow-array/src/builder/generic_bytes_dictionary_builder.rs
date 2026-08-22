@@ -392,40 +392,15 @@ where
         let offsets = array.value_offsets();
         let raw_data = array.value_data();
 
-        // Resolve a single non-null row to its dictionary key, inserting into the
-        // dedup table if this is a new value.
-        let resolve_key = |row_idx: usize,
-                           dedup: &mut HashTable<usize>,
-                           state: &ahash::RandomState,
-                           storage: &mut GenericByteBuilder<T>|
-         -> Result<K::Native, ArrowError> {
-            let start = offsets[row_idx].as_usize();
-            let end = offsets[row_idx + 1].as_usize();
-            // SAFETY: offsets are valid by GenericByteArray invariants
-            let bytes = unsafe { raw_data.get_unchecked(start..end) };
-            let hash = state.hash_one(bytes);
-            let dict_idx = *dedup
-                .entry(
-                    hash,
-                    |idx| bytes == get_bytes(storage, *idx),
-                    |idx| state.hash_one(get_bytes(storage, *idx)),
-                )
-                .or_insert_with(|| {
-                    let idx = storage.len();
-                    // SAFETY: row_idx < row_count = array.len(), slot is non-null
-                    storage.append_value(unsafe { array.value_unchecked(row_idx) });
-                    idx
-                })
-                .get();
-            K::Native::from_usize(dict_idx).ok_or(ArrowError::DictionaryKeyOverflowError)
-        };
-
         match array.nulls() {
             None => {
                 let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
                 for row_idx in 0..row_count {
-                    key_buf.push(resolve_key(
+                    key_buf.push(resolve_key::<K, T>(
                         row_idx,
+                        offsets,
+                        raw_data,
+                        array,
                         &mut self.dedup,
                         &self.state,
                         &mut self.values_builder,
@@ -441,8 +416,11 @@ where
                         key_buf.push(K::Native::usize_as(0));
                         valid_buf.push(false);
                     } else {
-                        key_buf.push(resolve_key(
+                        key_buf.push(resolve_key::<K, T>(
                             row_idx,
+                            offsets,
+                            raw_data,
+                            array,
                             &mut self.dedup,
                             &self.state,
                             &mut self.values_builder,
@@ -593,6 +571,41 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Op
             self.append_option(v)
         }
     }
+}
+
+#[inline]
+fn resolve_key<K, T>(
+    row_idx: usize,
+    offsets: &[T::Offset],
+    raw_data: &[u8],
+    array: &GenericByteArray<T>,
+    dedup: &mut HashTable<usize>,
+    state: &ahash::RandomState,
+    storage: &mut GenericByteBuilder<T>,
+) -> Result<K::Native, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    let start = offsets[row_idx].as_usize();
+    let end = offsets[row_idx + 1].as_usize();
+    // SAFETY: offsets are valid by GenericByteArray invariants
+    let bytes = unsafe { raw_data.get_unchecked(start..end) };
+    let hash = state.hash_one(bytes);
+    let dict_idx = *dedup
+        .entry(
+            hash,
+            |idx| bytes == get_bytes(storage, *idx),
+            |idx| state.hash_one(get_bytes(storage, *idx)),
+        )
+        .or_insert_with(|| {
+            let idx = storage.len();
+            // SAFETY: row_idx < row_count = array.len(), slot is non-null
+            storage.append_value(unsafe { array.value_unchecked(row_idx) });
+            idx
+        })
+        .get();
+    K::Native::from_usize(dict_idx).ok_or(ArrowError::DictionaryKeyOverflowError)
 }
 
 fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[u8] {
