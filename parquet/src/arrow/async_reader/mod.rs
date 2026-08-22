@@ -58,7 +58,6 @@ mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
-#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -835,7 +834,7 @@ where
                     match self.decoder.try_next_reader()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(reader) => {
                             self.request_state = RequestState::None { input };
@@ -849,7 +848,7 @@ where
                     // Push the requested data to the decoder and try again
                     self.decoder.push_ranges(ranges, data)?;
                     self.request_state = RequestState::None { input };
-                    continue; // try and decode on next iteration
+                    // Will try and decode on the next iteration.
                 }
                 RequestState::Done => {
                     self.request_state = RequestState::Done;
@@ -897,7 +896,7 @@ where
                     match self.decoder.try_decode()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(batch) => {
                             self.request_state = RequestState::None { input };
@@ -916,7 +915,7 @@ where
                         // Push the requested data to the decoder
                         self.decoder.push_ranges(ranges, data)?;
                         self.request_state = RequestState::None { input };
-                        continue; // next iteration will try to decode the next batch
+                        // The next iteration will try to decode the next batch.
                     }
                     Poll::Pending => {
                         self.request_state = RequestState::Outstanding { ranges, future };
@@ -943,8 +942,8 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
-    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
+    use crate::file::metadata::{PageIndex, PageIndexPolicy};
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -1127,25 +1126,23 @@ mod tests {
         let metadata_with_index = builder.metadata();
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
-        // Check offset indexes are present for all columns
-        let offset_index = metadata_with_index.offset_index().unwrap();
-        let column_index = metadata_with_index.column_index().unwrap();
-
-        assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
-        assert_eq!(column_index.len(), metadata_with_index.num_row_groups());
-
+        // Check offset indexes are present for all columns of all row groups
+        let page_index = metadata_with_index.page_index().unwrap();
+        let num_rowgroups = metadata_with_index.num_row_groups();
         let num_columns = metadata_with_index
             .file_metadata()
             .schema_descr()
             .num_columns();
-
-        // Check page indexes are present for all columns
-        offset_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
-        column_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
+        for rgidx in 0..num_rowgroups {
+            let column_index = page_index.column_indexes_for_rowgroup(rgidx);
+            let offset_index = page_index.offset_indexes_for_rowgroup(rgidx);
+            assert!(column_index.is_some_and(|ci| ci.len() == num_columns));
+            assert!(offset_index.is_some_and(|oi| oi.len() == num_columns));
+            // some column indexes are not defined, but all offset indexes should be
+            for colidx in 0..num_columns {
+                assert!(page_index.offset_index(rgidx, colidx).is_some());
+            }
+        }
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
@@ -1715,7 +1712,8 @@ mod tests {
             .await
             .unwrap();
 
-        metadata.set_offset_index(Some(vec![]));
+        let page_index = PageIndex::new(None, Some(vec![]));
+        metadata.set_page_index(Some(page_index));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =

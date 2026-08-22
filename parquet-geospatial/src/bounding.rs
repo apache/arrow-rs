@@ -200,9 +200,7 @@ fn visit_intervals(
     dimension: char,
     func: &mut impl FnMut(Interval),
 ) -> Result<(), ArrowError> {
-    let n = if let Some(n) = dimension_index(geom.dim(), dimension) {
-        n
-    } else {
+    let Some(n) = dimension_index(geom.dim(), dimension) else {
         return Ok(());
     };
 

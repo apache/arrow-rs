@@ -3241,7 +3241,7 @@ mod tests {
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
-            other => panic!("expected record schema, got: {:?}", other),
+            other => panic!("expected record schema, got: {other:?}"),
         }
         // Avro to Arrow conversion
         let field = crate::codec::AvroField::try_from(&schema)

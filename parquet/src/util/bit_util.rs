@@ -954,7 +954,7 @@ impl From<Vec<u8>> for BitReader {
 ///
 /// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
 /// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
-#[allow(dead_code)]
+#[cfg_attr(all(not(feature = "arrow"), not(test)), expect(dead_code))]
 #[inline]
 pub(crate) fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]

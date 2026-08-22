@@ -254,10 +254,7 @@ mod test {
             wkb_array_xy([Some((1.0, 2.0)), Some((11.0, 12.0))]),
             create_array!(
                 Binary,
-                [
-                    "this is not valid wkb".as_bytes(),
-                    &wkb_point_xy(31.0, 32.0)
-                ]
+                [b"this is not valid wkb", &wkb_point_xy(31.0, 32.0)]
             ),
             wkb_array_xy([Some((21.0, 22.0)), None]),
             wkb_array_xy([None, None]),

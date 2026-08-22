@@ -332,11 +332,18 @@ impl FixedSizeListArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (FieldRef, i32, ArrayRef, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::FixedSizeList(f, _) => f,
-            _ => unreachable!(),
+        let DataType::FixedSizeList(f, _) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_length, self.values, self.nulls)
+    }
+
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the values of this list.
@@ -383,6 +390,9 @@ impl FixedSizeListArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -448,6 +458,15 @@ impl FixedSizeListArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> FixedSizeListIter<'_> {
+        FixedSizeListIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a FixedSizeListArray {
+    type Item = Option<ArrayRef>;
+    type IntoIter = FixedSizeListIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         FixedSizeListIter::new(self)
     }
 }
