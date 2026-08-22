@@ -22,7 +22,7 @@ use arrow_array::ArrowNativeTypeOp;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::prelude::*;
 use half::f16;
 use std::str::FromStr;
@@ -1090,11 +1090,82 @@ pub fn parse_interval_month_day_nano(
     parse_interval_month_day_nano_config(value, IntervalParseConfig::new(IntervalUnit::Month))
 }
 
+/// Parse a human-readable or ISO 8601 duration string to an Arrow duration value.
+///
+/// Human-readable durations use the same syntax as intervals, for example
+/// `2 days 3 hours 4.5 seconds`. Values without an explicit unit use the unit
+/// of `T`. Year and month fields are rejected because their lengths are not
+/// fixed. ISO 8601 strings produced by [`crate::display::DurationFormat::ISO8601`]
+/// are also supported.
+pub(crate) fn parse_duration<T: ArrowTemporalType<Native = i64>>(
+    value: &str,
+) -> Result<i64, ArrowError> {
+    let (default_unit, scale) = match T::DATA_TYPE {
+        DataType::Duration(TimeUnit::Second) => (IntervalUnit::Second, NANOS_PER_SECOND),
+        DataType::Duration(TimeUnit::Millisecond) => (IntervalUnit::Millisecond, NANOS_PER_MILLIS),
+        DataType::Duration(TimeUnit::Microsecond) => (IntervalUnit::Microsecond, 1_000),
+        DataType::Duration(TimeUnit::Nanosecond) => (IntervalUnit::Nanosecond, 1),
+        _ => unreachable!(),
+    };
+
+    let value = value.trim_ascii();
+
+    // Preserve the full i64 range for the common case of a unitless integer.
+    if let Ok(value) = value.parse::<i64>() {
+        return Ok(value);
+    }
+
+    // Duration display currently emits ISO 8601 values as a number of seconds,
+    // for example `PT1.5S` or `-PT1.5S`. Convert this to the interval parser's
+    // human-readable syntax so both representations share the same validation.
+    let normalized;
+    let value = if let Some(seconds) = value
+        .strip_prefix("PT")
+        .and_then(|value| value.strip_suffix('S'))
+    {
+        normalized = format!("{seconds} seconds");
+        normalized.as_str()
+    } else if let Some(seconds) = value
+        .strip_prefix("-PT")
+        .and_then(|value| value.strip_suffix('S'))
+    {
+        normalized = format!("-{seconds} seconds");
+        normalized.as_str()
+    } else {
+        value
+    };
+
+    let config = IntervalParseConfig::new(default_unit);
+    let components = parse_interval_components(value, &config)?;
+
+    if components.iter().any(|(_, unit)| {
+        matches!(
+            unit,
+            IntervalUnit::Century | IntervalUnit::Decade | IntervalUnit::Year | IntervalUnit::Month
+        )
+    }) {
+        return Err(ArrowError::CastError(format!(
+            "Cannot cast {value} to {}. Year and month fields are not supported.",
+            T::DATA_TYPE
+        )));
+    }
+
+    let interval = components
+        .into_iter()
+        .try_fold(Interval::default(), |result, (amount, unit)| {
+            result.add(amount, unit)
+        })?;
+    let nanos = i64::from(interval.days)
+        .mul_checked(NANOS_PER_DAY)?
+        .add_checked(interval.nanos)?;
+
+    Ok(nanos / scale)
+}
+
 const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
-#[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 /// Config to parse interval strings
