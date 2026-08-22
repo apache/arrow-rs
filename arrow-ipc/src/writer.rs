@@ -1,5 +1,3 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
@@ -271,31 +269,37 @@ impl<T: IpcMessageSink + ?Sized> IpcMessageSinkExt for T {}
 
 /// Optional hot-path hook for record batch messages.
 trait IpcRecordBatchSink: IpcMessageSinkExt {
-    /// Writes a record batch message from its encoded metadata and body buffers.
+    /// Writes a record batch (or dictionary batch) message from its encoded
+    /// metadata and body buffers.
     ///
-    /// The body buffers are already materialized as [`EncodedBuffer`] segments,
-    /// allowing buffer output to preserve uncompressed Arrow buffers.
+    /// `metadata` is the raw flatbuffer [`crate::Message`] (without continuation
+    /// prefix), borrowed from the reused [`FlatBufferBuilder`]. The body buffers are
+    /// already materialized as [`EncodedBuffer`] segments, allowing buffer output to
+    /// preserve uncompressed Arrow buffers. They are drained out of
+    /// `encoded_buffers` so the caller can reuse its allocation.
+    ///
+    /// Each body buffer is padded to the alignment as it is written, so the body
+    /// needs no trailing padding.
+    ///
     /// Returns the padded metadata length and body length written.
     fn write_record_batch(
         &mut self,
-        metadata: Vec<u8>,
-        encoded_buffers: Vec<EncodedBuffer>,
+        metadata: &[u8],
+        encoded_buffers: &mut Vec<EncodedBuffer>,
         body_len: usize,
-        tail_pad: usize,
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
         let layout = MetadataLayout::new(metadata.len(), write_options);
 
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
-        self.write_vec(metadata)?;
+        self.write_slice(metadata)?;
         self.write_padding(layout.metadata_padding)?;
-        for enc in encoded_buffers {
+        for enc in encoded_buffers.drain(..) {
             let len = enc.len();
             self.write_encoded_buffer(enc)?;
             self.write_padding(pad_to_alignment(alignment, len))?;
         }
-        self.write_padding(tail_pad)?;
 
         Ok((layout.padded_header_len, body_len))
     }
@@ -319,23 +323,21 @@ where
 {
     fn write_record_batch(
         &mut self,
-        metadata: Vec<u8>,
-        encoded_buffers: Vec<EncodedBuffer>,
+        metadata: &[u8],
+        encoded_buffers: &mut Vec<EncodedBuffer>,
         body_len: usize,
-        tail_pad: usize,
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let alignment = write_options.alignment;
         let layout = MetadataLayout::new(metadata.len(), write_options);
 
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
-        self.write_all(&metadata)?;
+        self.write_all(metadata)?;
         self.write_all(&PADDING[..layout.metadata_padding])?;
-        for enc in &encoded_buffers {
+        for enc in encoded_buffers.drain(..) {
             self.write_all(enc.as_slice())?;
             self.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
         }
-        self.write_all(&PADDING[..tail_pad])?;
 
         Ok((layout.padded_header_len, body_len))
     }
@@ -382,7 +384,7 @@ struct IpcWriteMetadata {
     dictionary_block_sizes: Vec<(usize, usize)>,
     /// Flatbuffer header size including continuation prefix and alignment padding.
     padded_header_len: usize,
-    /// Total length of the record-batch body including trailing alignment padding.
+    /// Total length of the record-batch body including alignment padding
     body_len: usize,
 }
 
@@ -569,6 +571,27 @@ impl Default for IpcWriteOptions {
 /// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 pub struct IpcDataGenerator {}
 
+/// A dictionary determined to need sending as a part of a record batch.
+struct DictionaryToEncode {
+    id: i64,
+    data: ArrayData,
+    is_delta: bool,
+}
+
+/// The result of encoding a record batch's body and flatbuffer `RecordBatch` table
+/// via [`IpcDataGenerator::encode_record_batch_data`].
+///
+/// The `RecordBatch` table is left in-progress in the caller's [`FlatBufferBuilder`];
+/// the caller wraps `record_batch` in a `Message` (directly for a record batch
+/// message, or inside a `DictionaryBatch` for a dictionary message).
+struct EncodedRecordBatchMeta {
+    /// In-progress flatbuffer offset of the `RecordBatch` table.
+    fb_offset: flatbuffers::WIPOffset<crate::RecordBatch<'static>>,
+    /// Total body length written to the sink (the sum of each buffer's encoded
+    /// length and its alignment padding).
+    body_len: usize,
+}
+
 impl IpcDataGenerator {
     /// Converts a schema to an IPC message along with `dictionary_tracker`
     /// and returns it encoded inside [EncodedData] as a flatbuffer.
@@ -602,27 +625,25 @@ impl IpcDataGenerator {
         }
     }
 
-    fn _encode_dictionaries<I: Iterator<Item = i64>>(
+    fn _collect_dict_updates<I: Iterator<Item = i64>>(
         &self,
         column: &ArrayRef,
-        encoded_dictionaries: &mut Vec<EncodedData>,
+        encoded_dictionaries: &mut Vec<DictionaryToEncode>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id: &mut I,
-        ipc_write_context: &mut IpcWriteContext,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
                 for (field, column) in fields.iter().zip(s.columns()) {
-                    self.encode_dictionaries(
+                    self.collect_dict_updates(
                         field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
                         dict_id,
-                        ipc_write_context,
                     )?;
                 }
             }
@@ -637,62 +658,57 @@ impl IpcDataGenerator {
                 // The run_ends array is not expected to be dictionary encoded. Hence encode dictionaries
                 // only for values array.
                 let values_array = make_array(data.child_data()[1].clone());
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     values,
                     &values_array,
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::List(field) => {
                 let list = as_list_array(column);
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::LargeList(field) => {
                 let list = as_large_list_array(column);
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::ListView(field) => {
                 let list = column.as_list_view::<i32>();
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::LargeListView(field) => {
                 let list = column.as_list_view::<i64>();
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::FixedSizeList(field, _) => {
@@ -700,14 +716,13 @@ impl IpcDataGenerator {
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .expect("Unable to downcast to fixed size list array");
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     field,
                     list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::Map(field, _) => {
@@ -719,39 +734,36 @@ impl IpcDataGenerator {
                 };
 
                 // keys
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     keys,
                     map_array.keys(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
 
                 // values
-                self.encode_dictionaries(
+                self.collect_dict_updates(
                     values,
                     map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id,
-                    ipc_write_context,
                 )?;
             }
             DataType::Union(fields, _) => {
                 let union = as_union_array(column);
                 for (type_id, field) in fields.iter() {
                     let column = union.child(type_id);
-                    self.encode_dictionaries(
+                    self.collect_dict_updates(
                         field,
                         column,
                         encoded_dictionaries,
                         dictionary_tracker,
                         write_options,
                         dict_id,
-                        ipc_write_context,
                     )?;
                 }
             }
@@ -761,16 +773,17 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    #[expect(clippy::too_many_arguments)]
-    fn encode_dictionaries<I: Iterator<Item = i64>>(
+    // Collect all dicts that need a dictionary message i.e. ones that were
+    // either not in the tracker previously or ones that were but need a
+    // replacement or delta.
+    fn collect_dict_updates<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
         column: &ArrayRef,
-        encoded_dictionaries: &mut Vec<EncodedData>,
+        dictionaries: &mut Vec<DictionaryToEncode>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id_seq: &mut I,
-        ipc_write_context: &mut IpcWriteContext,
     ) -> Result<(), ArrowError> {
         match column.data_type() {
             DataType::Dictionary(_key_type, value_type) => {
@@ -786,13 +799,12 @@ impl IpcDataGenerator {
 
                 let values = make_array(dict_data.child_data()[0].clone());
 
-                self._encode_dictionaries(
+                self._collect_dict_updates(
                     &values,
-                    encoded_dictionaries,
+                    dictionaries,
                     dictionary_tracker,
                     write_options,
                     dict_id_seq,
-                    ipc_write_context,
                 )?;
 
                 // It's important to only take the dict_id at this point, because the dict ID
@@ -814,32 +826,27 @@ impl IpcDataGenerator {
                 )? {
                     DictionaryUpdate::None => {}
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
-                        encoded_dictionaries.push(self.dictionary_batch_to_bytes(
-                            dict_id,
-                            dict_values,
-                            write_options,
-                            false,
-                            ipc_write_context,
-                        )?);
+                        dictionaries.push(DictionaryToEncode {
+                            id: dict_id,
+                            data: dict_values.clone(),
+                            is_delta: false,
+                        });
                     }
                     DictionaryUpdate::Delta(data) => {
-                        encoded_dictionaries.push(self.dictionary_batch_to_bytes(
-                            dict_id,
-                            &data,
-                            write_options,
-                            true,
-                            ipc_write_context,
-                        )?);
+                        dictionaries.push(DictionaryToEncode {
+                            id: dict_id,
+                            data,
+                            is_delta: true,
+                        });
                     }
                 }
             }
-            _ => self._encode_dictionaries(
+            _ => self._collect_dict_updates(
                 column,
-                encoded_dictionaries,
+                dictionaries,
                 dictionary_tracker,
                 write_options,
                 dict_id_seq,
-                ipc_write_context,
             )?,
         }
 
@@ -856,49 +863,53 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
         ipc_write_context: &mut IpcWriteContext,
     ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
-        let encoded_dictionaries =
-            self.encode_all_dicts(batch, dictionary_tracker, write_options, ipc_write_context)?;
+        let dictionaries = self.collect_all_dicts(batch, dictionary_tracker, write_options)?;
+        let mut encoded_dictionaries = Vec::with_capacity(dictionaries.len());
+        for dict in dictionaries {
+            encoded_dictionaries.push(self.dictionary_batch_to_bytes(
+                dict,
+                write_options,
+                ipc_write_context,
+            )?);
+        }
         let mut arrow_data = ipc_write_context.scratch();
-        let (metadata, _, tail_pad) = self.record_batch_to_bytes(
+        self.record_batch_to_bytes(
             batch,
             write_options,
             ipc_write_context,
             &mut IpcBodySink::Write(&mut arrow_data),
         )?;
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
         ipc_write_context.reserve_scratch_with_capacity(arrow_data.capacity());
         Ok((
             encoded_dictionaries,
             EncodedData {
-                ipc_message: metadata,
+                ipc_message: ipc_write_context.mut_fbb().finished_data().to_vec(),
                 arrow_data,
             },
         ))
     }
 
-    /// Encode dictionary batches for all columns in `batch`.
-    fn encode_all_dicts(
+    /// Walk the record batch and collect dictionaries for later encoding.
+    fn collect_all_dicts(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-        ipc_write_context: &mut IpcWriteContext,
-    ) -> Result<Vec<EncodedData>, ArrowError> {
+    ) -> Result<Vec<DictionaryToEncode>, ArrowError> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
+        let mut dictionaries = Vec::with_capacity(schema.flattened_fields().len());
         let mut dict_id = dictionary_tracker.dict_ids.clone().into_iter();
         for (i, field) in schema.fields().iter().enumerate() {
-            self.encode_dictionaries(
+            self.collect_dict_updates(
                 field,
                 batch.column(i),
-                &mut encoded_dictionaries,
+                &mut dictionaries,
                 dictionary_tracker,
                 write_options,
                 &mut dict_id,
-                ipc_write_context,
             )?;
         }
-        Ok(encoded_dictionaries)
+        Ok(dictionaries)
     }
 
     /// Write dictionary batches and the record batch directly to `writer`, skipping the
@@ -949,13 +960,8 @@ impl IpcDataGenerator {
         ipc_write_context: &mut IpcWriteContext,
         sink: &mut S,
     ) -> Result<IpcWriteMetadata, ArrowError> {
-        let encoded_dictionaries =
-            self.encode_all_dicts(batch, dictionary_tracker, write_options, ipc_write_context)?;
-
-        let mut dictionary_block_sizes = Vec::with_capacity(encoded_dictionaries.len());
-        for dict in encoded_dictionaries {
-            dictionary_block_sizes.push(sink.write_encoded_data(dict, write_options)?);
-        }
+        let dictionaries = self.collect_all_dicts(batch, dictionary_tracker, write_options)?;
+        let mut dictionary_block_sizes = Vec::with_capacity(dictionaries.len());
 
         let capacity = batch
             .columns()
@@ -963,15 +969,39 @@ impl IpcDataGenerator {
             .map(|a| estimate_encoded_buffer_count(a.data_type()))
             .sum();
         let mut encoded_buffers: Vec<EncodedBuffer> = Vec::with_capacity(capacity);
-        let (metadata, body_len, tail_pad) = self.record_batch_to_bytes(
+
+        for dict in &dictionaries {
+            encoded_buffers.clear();
+
+            let body_len = self.dictionary_batch_to_sink(
+                dict,
+                write_options,
+                ipc_write_context,
+                &mut IpcBodySink::Collect(&mut encoded_buffers),
+            )?;
+
+            dictionary_block_sizes.push(sink.write_record_batch(
+                ipc_write_context.mut_fbb().finished_data(),
+                &mut encoded_buffers,
+                body_len,
+                write_options,
+            )?);
+        }
+
+        encoded_buffers.clear();
+        let body_len = self.record_batch_to_bytes(
             batch,
             write_options,
             ipc_write_context,
             &mut IpcBodySink::Collect(&mut encoded_buffers),
         )?;
 
-        let (padded_header_len, body_len) =
-            sink.write_record_batch(metadata, encoded_buffers, body_len, tail_pad, write_options)?;
+        let (padded_header_len, body_len) = sink.write_record_batch(
+            ipc_write_context.mut_fbb().finished_data(),
+            &mut encoded_buffers,
+            body_len,
+            write_options,
+        )?;
 
         Ok(IpcWriteMetadata {
             dictionary_block_sizes,
@@ -1001,15 +1031,141 @@ impl IpcDataGenerator {
     /// Encodes a `RecordBatch` into a flatbuffer IPC message and fills `sink` with the
     /// serialised buffer data.
     ///
-    /// Returns `(metadata, body_len, tail_pad)`: the FlatBuffer [`crate::Message`] bytes, the
-    /// total body length including trailing padding, and the trailing alignment padding byte count.
+    /// Returns the total body length written to `sink` (including per-buffer alignment
+    /// padding).
+    ///
+    /// The FlatBuffer [`crate::Message`] is located in `ipc_write_context`'s
+    /// [`FlatBufferBuilder`] finished bytes. A successful Result from this function
+    /// guarantees the builder is in a finished state to call
+    /// [`FlatBufferBuilder::finished_data`].
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
         ipc_write_context: &mut IpcWriteContext,
         sink: &mut IpcBodySink<'_>,
-    ) -> Result<(Vec<u8>, usize, usize), ArrowError> {
+    ) -> Result<usize, ArrowError> {
+        // Reset the fbb
+        ipc_write_context.mut_fbb().reset();
+
+        let EncodedRecordBatchMeta {
+            fb_offset: record_batch,
+            body_len,
+        } = self.encode_record_batch_data(
+            batch.columns().iter().map(|array| array.to_data()),
+            batch.num_rows() as i64,
+            write_options,
+            ipc_write_context,
+            sink,
+        )?;
+
+        let fbb = ipc_write_context.mut_fbb();
+        let mut message = crate::MessageBuilder::new(fbb);
+        message.add_version(write_options.metadata_version);
+        message.add_header_type(crate::MessageHeader::RecordBatch);
+        message.add_bodyLength(body_len as i64);
+        message.add_header(record_batch.as_union_value());
+        let root = message.finish();
+        fbb.finish(root, None);
+
+        Ok(body_len)
+    }
+
+    /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
+    /// other for the data
+    fn dictionary_batch_to_bytes(
+        &self,
+        dict: DictionaryToEncode,
+        write_options: &IpcWriteOptions,
+        ipc_write_context: &mut IpcWriteContext,
+    ) -> Result<EncodedData, ArrowError> {
+        let mut arrow_data: Vec<u8> = vec![];
+        self.dictionary_batch_to_sink(
+            &dict,
+            write_options,
+            ipc_write_context,
+            &mut IpcBodySink::Write(&mut arrow_data),
+        )?;
+
+        Ok(EncodedData {
+            ipc_message: ipc_write_context.mut_fbb().finished_data().to_vec(),
+            arrow_data,
+        })
+    }
+
+    /// Encodes a dictionary batch's flatbuffer metadata into `ipc_write_context`'s
+    /// builder (read back via `ipc_write_context.mut_fbb().finished_data()`) and fills
+    /// `sink` with its body buffers.
+    ///
+    /// Returns the total body length written to `sink` (including per-buffer alignment
+    /// padding).
+    fn dictionary_batch_to_sink(
+        &self,
+        dict: &DictionaryToEncode,
+        write_options: &IpcWriteOptions,
+        ipc_write_context: &mut IpcWriteContext,
+        sink: &mut IpcBodySink<'_>,
+    ) -> Result<usize, ArrowError> {
+        // Reset fbb
+        ipc_write_context.mut_fbb().reset();
+
+        // A dictionary batch is a record batch (the single column of dictionary
+        // values) wrapped in a DictionaryBatch, so we share the record batch body
+        // and table encoding and only differ in the message framing.
+        let EncodedRecordBatchMeta {
+            fb_offset: record_batch,
+            body_len,
+        } = self.encode_record_batch_data(
+            std::iter::once(dict.data.clone()),
+            dict.data.len() as i64,
+            write_options,
+            ipc_write_context,
+            sink,
+        )?;
+
+        let fbb = ipc_write_context.mut_fbb();
+        let root = {
+            let mut batch_builder = crate::DictionaryBatchBuilder::new(fbb);
+            batch_builder.add_id(dict.id);
+            batch_builder.add_data(record_batch);
+            batch_builder.add_isDelta(dict.is_delta);
+            batch_builder.finish().as_union_value()
+        };
+
+        let root = {
+            let mut message_builder = crate::MessageBuilder::new(fbb);
+            message_builder.add_version(write_options.metadata_version);
+            message_builder.add_header_type(crate::MessageHeader::DictionaryBatch);
+            message_builder.add_bodyLength(body_len as i64);
+            message_builder.add_header(root);
+            message_builder.finish()
+        };
+
+        fbb.finish(root, None);
+
+        Ok(body_len)
+    }
+
+    /// Encode the body buffers of a single record batch into `sink` and build the
+    /// flatbuffer `RecordBatch` table into `ipc_write_context`'s builder.
+    ///
+    /// This is the shared core of [`Self::record_batch_to_bytes`] and
+    /// [`Self::dictionary_batch_to_sink`]: a dictionary message embeds a record
+    /// batch (its single column of values), so both encode the same `RecordBatch`
+    /// table and only differ in how they wrap the returned offset in a message.
+    ///
+    /// `columns` yields the column data in IPC buffer order and `row_count` is the
+    /// logical length recorded in the `RecordBatch` header. The caller is responsible
+    /// for wrapping the returned [`EncodedRecordBatchMeta::fb_offset`] in a `Message`
+    /// and calling [`FlatBufferBuilder::finish`].
+    fn encode_record_batch_data(
+        &self,
+        columns: impl IntoIterator<Item = ArrayData>,
+        row_count: i64,
+        write_options: &IpcWriteOptions,
+        ipc_write_context: &mut IpcWriteContext,
+        sink: &mut IpcBodySink<'_>,
+    ) -> Result<EncodedRecordBatchMeta, ArrowError> {
         let batch_compression_type = write_options.batch_compression_type;
 
         let compression = batch_compression_type.map(|batch_compression_type| {
@@ -1030,13 +1186,11 @@ impl IpcDataGenerator {
             })
             .transpose()?;
 
-        let alignment = write_options.alignment;
-        let mut variadic_buffer_counts = vec![];
         let mut meta = IpcMetadataBuilder::default();
+        let mut variadic_buffer_counts: Vec<i64> = vec![];
         let mut offset = 0i64;
 
-        for array in batch.columns() {
-            let array_data = array.to_data();
+        for array_data in columns {
             offset = write_array_data(
                 &array_data,
                 &mut meta,
@@ -1049,8 +1203,10 @@ impl IpcDataGenerator {
             append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
         }
 
-        let tail_pad = pad_to_alignment(alignment, offset as usize);
-        let body_len = offset as usize + tail_pad;
+        // Each buffer is padded to the alignment as it is written, so `offset` is
+        // already a multiple of the alignment -- the body needs no trailing padding.
+        debug_assert!(offset % write_options.alignment as i64 == 0);
+        let body_len = offset as usize;
 
         let fbb = ipc_write_context.mut_fbb();
         let buffers = fbb.create_vector(&meta.buffers);
@@ -1061,133 +1217,21 @@ impl IpcDataGenerator {
             Some(fbb.create_vector(&variadic_buffer_counts))
         };
 
-        let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
-            batch_builder.add_length(batch.num_rows() as i64);
-            batch_builder.add_nodes(nodes);
-            batch_builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                batch_builder.add_compression(c);
-            }
-            if let Some(v) = variadic_buffer {
-                batch_builder.add_variadicBufferCounts(v);
-            }
-            batch_builder.finish().as_union_value()
-        };
-        let mut message = crate::MessageBuilder::new(fbb);
-        message.add_version(write_options.metadata_version);
-        message.add_header_type(crate::MessageHeader::RecordBatch);
-        message.add_bodyLength(body_len as i64);
-        message.add_header(root);
-        let root = message.finish();
-        fbb.finish(root, None);
+        let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
+        batch_builder.add_length(row_count);
+        batch_builder.add_nodes(nodes);
+        batch_builder.add_buffers(buffers);
+        if let Some(c) = compression {
+            batch_builder.add_compression(c);
+        }
+        if let Some(v) = variadic_buffer {
+            batch_builder.add_variadicBufferCounts(v);
+        }
+        let record_batch = batch_builder.finish();
 
-        let metadata = fbb.finished_data().to_vec();
-        fbb.reset();
-        Ok((metadata, body_len, tail_pad))
-    }
-
-    /// Write dictionary values into two sets of bytes, one for the header (crate::Message) and the
-    /// other for the data
-    fn dictionary_batch_to_bytes(
-        &self,
-        dict_id: i64,
-        array_data: &ArrayData,
-        write_options: &IpcWriteOptions,
-        is_delta: bool,
-        ipc_write_context: &mut IpcWriteContext,
-    ) -> Result<EncodedData, ArrowError> {
-        let mut arrow_data: Vec<u8> = vec![];
-
-        // get the type of compression
-        let batch_compression_type = write_options.batch_compression_type;
-
-        let compression = batch_compression_type.map(|batch_compression_type| {
-            let fbb = ipc_write_context.mut_fbb();
-            let mut c = crate::BodyCompressionBuilder::new(fbb);
-            c.add_method(crate::BodyCompressionMethod::BUFFER);
-            c.add_codec(batch_compression_type);
-            c.finish()
-        });
-
-        let batch_compression_level = write_options.batch_compression_level;
-        let compression_codec: Option<CompressionCodec> = batch_compression_type
-            .map(|batch_compression_type| match batch_compression_level {
-                Some(level) => {
-                    CompressionCodec::try_new_with_compression_level(batch_compression_type, level)
-                }
-                None => batch_compression_type.try_into(),
-            })
-            .transpose()?;
-
-        let alignment = write_options.alignment;
-        let mut meta = IpcMetadataBuilder::default();
-        let mut sink = IpcBodySink::Write(&mut arrow_data);
-        let offset = write_array_data(
-            array_data,
-            &mut meta,
-            &mut sink,
-            0,
-            compression_codec,
-            ipc_write_context,
-            write_options,
-        )?;
-
-        let mut variadic_buffer_counts = vec![];
-        append_variadic_buffer_counts(&mut variadic_buffer_counts, array_data);
-
-        // pad the tail of body data
-        let tail_pad = pad_to_alignment(alignment, offset as usize);
-        let body_len = offset as usize + tail_pad;
-        arrow_data.extend_from_slice(&PADDING[..tail_pad]);
-
-        let fbb = ipc_write_context.mut_fbb();
-        let buffers = fbb.create_vector(&meta.buffers);
-        let nodes = fbb.create_vector(&meta.nodes);
-        let variadic_buffer = if variadic_buffer_counts.is_empty() {
-            None
-        } else {
-            Some(fbb.create_vector(&variadic_buffer_counts))
-        };
-
-        let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(fbb);
-            batch_builder.add_length(array_data.len() as i64);
-            batch_builder.add_nodes(nodes);
-            batch_builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                batch_builder.add_compression(c);
-            }
-            if let Some(v) = variadic_buffer {
-                batch_builder.add_variadicBufferCounts(v);
-            }
-            batch_builder.finish()
-        };
-
-        let root = {
-            let mut batch_builder = crate::DictionaryBatchBuilder::new(fbb);
-            batch_builder.add_id(dict_id);
-            batch_builder.add_data(root);
-            batch_builder.add_isDelta(is_delta);
-            batch_builder.finish().as_union_value()
-        };
-
-        let root = {
-            let mut message_builder = crate::MessageBuilder::new(fbb);
-            message_builder.add_version(write_options.metadata_version);
-            message_builder.add_header_type(crate::MessageHeader::DictionaryBatch);
-            message_builder.add_bodyLength(body_len as i64);
-            message_builder.add_header(root);
-            message_builder.finish()
-        };
-
-        fbb.finish(root, None);
-        let metadata = fbb.finished_data().to_vec();
-        fbb.reset();
-
-        Ok(EncodedData {
-            ipc_message: metadata,
-            arrow_data,
+        Ok(EncodedRecordBatchMeta {
+            fb_offset: record_batch,
+            body_len,
         })
     }
 }
@@ -1242,7 +1286,7 @@ fn append_variadic_buffer_counts(counts: &mut Vec<i64>, array: &ArrayData) {
         }
         DataType::Dictionary(_, _) => {
             // Do nothing
-            // Dictionary types are handled in `encode_dictionaries`.
+            // Dictionary values are handled in special dictionary messages
         }
         _ => {
             for child in array.child_data() {
@@ -1610,6 +1654,9 @@ pub struct FileWriter<W> {
 
     data_gen: IpcDataGenerator,
 
+    /// Holds reusable scratch state shared across all messages -- including the
+    /// [`FlatBufferBuilder`] whose internal buffer is reused to avoid reallocating
+    /// on every batch.
     ipc_write_context: IpcWriteContext,
 }
 
@@ -1729,9 +1776,7 @@ impl<W: Write> FileWriter<W> {
         }
 
         // write EOS
-        {
-            self.writer.write_eos(&self.write_options)?;
-        }
+        self.writer.write_eos(&self.write_options)?;
 
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
@@ -2022,6 +2067,7 @@ pub struct StreamWriter<W> {
 
     data_gen: IpcDataGenerator,
 
+    /// Reusable scratch state shared across all messages.
     ipc_write_context: IpcWriteContext,
 }
 
@@ -2105,9 +2151,7 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        {
-            self.writer.write_eos(&self.write_options)?;
-        }
+        self.writer.write_eos(&self.write_options)?;
         self.writer.flush()?;
 
         self.finished = true;
@@ -2372,11 +2416,10 @@ fn write_array_data(
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
     let num_rows = array_data.len();
+    let null_count = array_data.null_count();
     if !matches!(array_data.data_type(), DataType::Null) {
-        meta.nodes.push(crate::FieldNode::new(
-            num_rows as i64,
-            array_data.null_count() as i64,
-        ));
+        meta.nodes
+            .push(crate::FieldNode::new(num_rows as i64, null_count as i64));
     } else {
         // NullArray's null_count equals to len, but ArrayData null_count is always 0.
         meta.nodes
