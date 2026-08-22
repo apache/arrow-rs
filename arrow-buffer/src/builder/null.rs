@@ -129,16 +129,14 @@ impl NullBufferBuilder {
     /// to indicate that these `n` items are nulls.
     #[inline]
     pub fn append_n_nulls(&mut self, n: usize) {
-        self.materialize_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.materialize_if_needed().append_n(n, false);
     }
 
     /// Appends a `false` into the builder
     /// to indicate that this item is null.
     #[inline]
     pub fn append_null(&mut self) {
-        self.materialize_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append(false);
+        self.materialize_if_needed().append(false);
     }
 
     /// Appends a boolean value into the builder.
@@ -158,8 +156,7 @@ impl NullBufferBuilder {
     /// Panics for the same reasons as [`BooleanBufferBuilder::set_bit`]
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
-        self.materialize_if_needed();
-        self.bitmap_builder.as_mut().unwrap().set_bit(index, v);
+        self.materialize_if_needed().set_bit(index, v);
     }
 
     /// Gets a bit in the buffer at `index`
@@ -194,7 +191,7 @@ impl NullBufferBuilder {
     pub fn append_slice(&mut self, slice: &[bool]) {
         // First check if not already materialized before checking if there are any nulls
         if self.bitmap_builder.is_none() && slice.iter().any(|v| !v) {
-            self.materialize()
+            self.materialize_if_needed();
         }
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_slice(slice)
@@ -244,19 +241,17 @@ impl NullBufferBuilder {
         Some(self.bitmap_builder.as_ref()?.as_slice())
     }
 
-    fn materialize_if_needed(&mut self) {
-        if self.bitmap_builder.is_none() {
-            self.materialize()
-        }
+    fn materialize_if_needed(&mut self) -> &mut BooleanBufferBuilder {
+        let (len, capacity) = (self.len, self.capacity);
+        self.bitmap_builder
+            .get_or_insert_with(|| Self::materialize(len, capacity))
     }
 
     #[cold]
-    fn materialize(&mut self) {
-        if self.bitmap_builder.is_none() {
-            let mut b = BooleanBufferBuilder::new(self.len.max(self.capacity));
-            b.append_n(self.len, true);
-            self.bitmap_builder = Some(b);
-        }
+    fn materialize(len: usize, capacity: usize) -> BooleanBufferBuilder {
+        let mut b = BooleanBufferBuilder::new(len.max(capacity));
+        b.append_n(len, true);
+        b
     }
 
     /// Return a mutable reference to the inner bitmap slice.

@@ -163,7 +163,7 @@ where
     #[inline]
     pub fn append_null(&mut self) {
         self.offsets_builder.push(self.current_offset);
-        self.sizes_builder.push(OffsetSize::from_usize(0).unwrap());
+        self.sizes_builder.push(OffsetSize::usize_as(0));
         self.null_buffer_builder.append_null();
     }
 

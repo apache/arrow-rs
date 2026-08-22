@@ -718,8 +718,9 @@ impl i256 {
 
         // Layered approach to calculate logarithm using i128 log operations only
         // Consult int_log10.rs stdlib implementiation for u128
-        let pow_64: i256 = i256::from(10).checked_pow(64).unwrap();
-        let pow_32: i256 = i256::from(10).checked_pow(32).unwrap();
+        // 10^32 fits in an i128, and 10^64 is its square, well below i256::MAX
+        let pow_32 = i256::from_i128(10_i128.pow(32));
+        let pow_64 = pow_32.wrapping_mul(pow_32);
         if self >= pow_64 {
             let value = self.checked_div(pow_64)?;
             // self is between 10^64 and 10^77 (~i256::MAX).

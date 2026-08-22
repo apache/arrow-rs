@@ -562,19 +562,23 @@ impl<'a> RecordBatchDecoder<'a> {
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
                 // A projected field can appear more than once, so collect all matching positions.
-                let mut child = None;
+                let mut decoded = None;
                 for (proj_idx, projected_idx) in projection.iter().enumerate() {
                     if *projected_idx == idx {
-                        if child.is_none() {
-                            child = Some(self.create_array(field, &mut variadic_counts)?);
-                        }
-
                         // Reuse the decoded array for duplicate projection entries.
-                        arrays.push((proj_idx, child.as_ref().unwrap().clone()));
+                        let child = match decoded.clone() {
+                            Some(child) => child,
+                            None => {
+                                let child = self.create_array(field, &mut variadic_counts)?;
+                                decoded = Some(Arc::clone(&child));
+                                child
+                            }
+                        };
+                        arrays.push((proj_idx, child));
                     }
                 }
 
-                if child.is_none() {
+                if decoded.is_none() {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
@@ -949,7 +953,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
     }
 
     // read footer length
-    let footer_len = i32::from_le_bytes(buf[..4].try_into().unwrap());
+    let footer_len = i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
     footer_len
         .try_into()
         .map_err(|_| ArrowError::ParseError(format!("Invalid footer length: {footer_len}")))

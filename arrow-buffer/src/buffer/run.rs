@@ -209,8 +209,9 @@ where
             &self.run_ends[start..=end]
         };
         physical_slice.iter().map(move |&val| {
+            // `len` is at most the largest run end, so it always fits in `E`
             let val = val.as_usize().saturating_sub(offset).min(len);
-            E::from_usize(val).unwrap()
+            E::usize_as(val)
         })
     }
 
@@ -230,8 +231,8 @@ where
     ///
     /// The result is arbitrary if `logical_index >= self.len()`.
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
-        let logical_index = E::usize_as(self.logical_offset + logical_index);
-        let cmp = |p: &E| p.partial_cmp(&logical_index).unwrap();
+        let logical_index = self.logical_offset + logical_index;
+        let cmp = |p: &E| p.as_usize().cmp(&logical_index);
 
         match self.run_ends.binary_search_by(cmp) {
             Ok(idx) => idx + 1,
@@ -337,16 +338,13 @@ where
 
         // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
         // whose values are index of `logical_indices`
-        ordered_indices.sort_unstable_by(|lhs, rhs| {
-            logical_indices[*lhs]
-                .partial_cmp(&logical_indices[*rhs])
-                .unwrap()
-        });
+        ordered_indices.sort_unstable_by_key(|&idx| logical_indices[idx].as_usize());
 
         // Return early if all the logical indices cannot be converted to physical indices.
-        let largest_logical_index = logical_indices[*ordered_indices.last().unwrap()].as_usize();
-        if largest_logical_index >= len {
-            return Err(logical_indices[*ordered_indices.last().unwrap()]);
+        // `ordered_indices` has `indices_len` entries, and the empty case returned above.
+        let largest_logical_index = logical_indices[ordered_indices[indices_len - 1]];
+        if largest_logical_index.as_usize() >= len {
+            return Err(largest_logical_index);
         }
 
         // Skip some physical indices based on offset.

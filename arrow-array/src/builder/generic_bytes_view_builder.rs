@@ -416,8 +416,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
         let view = ByteView {
             length,
-            // This won't panic as we checked the length of prefix earlier.
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
+            // `v` is longer than `MAX_INLINE_VIEW_LEN`, so it has at least four bytes
+            prefix: u32::from_le_bytes([v[0], v[1], v[2], v[3]]),
             buffer_index,
             offset,
         };
@@ -702,7 +702,8 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
         _ => {
             let view = ByteView {
                 length: len as u32,
-                prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+                // this arm only matches lengths above 12, so there are at least four bytes
+                prefix: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
                 buffer_index: block_id,
                 offset,
             };

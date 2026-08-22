@@ -30,8 +30,8 @@
 //! ```
 
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// A memory reservation within a [`MemoryPool`] that is freed on drop
 pub trait MemoryReservation: Debug + Send + Sync {
@@ -145,6 +145,17 @@ impl MemoryReservation for Tracker {
         };
         self.size = new;
     }
+}
+
+/// Lock a memory reservation, recovering from a poisoned lock.
+///
+/// A poisoned lock only means that some other thread panicked. The reservation it
+/// guards is plain size accounting, so there is no broken invariant to protect, and
+/// recovering it is always preferable to panicking.
+pub(crate) fn lock_reservation(
+    reservation: &Mutex<Option<Box<dyn MemoryReservation>>>,
+) -> MutexGuard<'_, Option<Box<dyn MemoryReservation>>> {
+    reservation.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
