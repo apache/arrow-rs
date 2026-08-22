@@ -283,7 +283,7 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.column_index_policy = page_index_policy;
+        self.column_index_policy = page_index_policy.clone();
         self.offset_index_policy = page_index_policy;
         self
     }
@@ -410,8 +410,8 @@ impl ParquetMetaDataPushDecoder {
                     // the specified policies
                     let range = range_for_page_index(
                         &metadata,
-                        self.column_index_policy,
-                        self.offset_index_policy,
+                        &self.column_index_policy,
+                        &self.offset_index_policy,
                     );
 
                     let Some(page_index_range) = range else {
@@ -428,8 +428,8 @@ impl ParquetMetaDataPushDecoder {
                     let offset = page_index_range.start;
                     parse_page_index(
                         &mut metadata,
-                        self.column_index_policy,
-                        self.offset_index_policy,
+                        &self.column_index_policy,
+                        &self.offset_index_policy,
                         &buffer,
                         offset,
                     )?;
@@ -487,15 +487,15 @@ enum DecodeState {
 /// Returns None if no page indexes are needed
 pub fn range_for_page_index(
     metadata: &ParquetMetaData,
-    column_index_policy: PageIndexPolicy,
-    offset_index_policy: PageIndexPolicy,
+    column_index_policy: &PageIndexPolicy,
+    offset_index_policy: &PageIndexPolicy,
 ) -> Option<Range<u64>> {
     let mut range = None;
     for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-        if column_index_policy != PageIndexPolicy::Skip {
+        if *column_index_policy != PageIndexPolicy::Skip {
             range = acc_range(range, c.column_index_range());
         }
-        if offset_index_policy != PageIndexPolicy::Skip {
+        if *offset_index_policy != PageIndexPolicy::Skip {
             range = acc_range(range, c.offset_index_range());
         }
     }

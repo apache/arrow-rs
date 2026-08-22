@@ -412,6 +412,176 @@ impl PageIndex {
             None
         }
     }
+
+    /// Convert this `PageIndex` into a [`PageIndexBuilder`]
+    pub fn into_builder(self) -> PageIndexBuilder {
+        self.into()
+    }
+}
+
+/// Builder for constructing [`PageIndex`] structures
+///
+/// It supports:
+/// - Allocating space for indexes based on [`PageIndexPolicy`]
+/// - Populating column indexes for predicate columns (for page filtering)
+/// - Populating offset indexes for projected columns (for direct I/O)
+/// - Automatic conversion of empty structures to `None` to save memory
+pub struct PageIndexBuilder {
+    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
+    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+}
+
+impl PageIndexBuilder {
+    /// Creates an empty index structure with space for the specified number of row groups and columns
+    ///
+    /// Returns `Some` containing a nested vector structure where all entries are initialized to `None`.
+    /// The outer vector has one entry per row group, and each inner vector has one entry per column.
+    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
+        Some(
+            (0..num_row_groups)
+                .map(|_| {
+                    let mut idx = Vec::with_capacity(num_columns);
+                    idx.resize_with(num_columns, || None);
+                    idx
+                })
+                .collect(),
+        )
+    }
+
+    /// Creates a new [`PageIndexBuilder`] with space allocated for both column and offset indexes
+    ///
+    /// This allocates empty index structures for the specified number of row groups and columns.
+    /// All index entries are initialized to `None` and can be populated using
+    /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
+    pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
+        Self {
+            column_indexes: Self::empty_index(num_row_groups, num_columns),
+            offset_indexes: Self::empty_index(num_row_groups, num_columns),
+        }
+    }
+
+    /// Creates a new [`PageIndexBuilder`] with selective allocation based on policies
+    ///
+    /// This allows fine-grained control over which indexes are allocated:
+    /// - [`PageIndexPolicy::Skip`]: No allocation, the index structure is set to `None`
+    /// - [`PageIndexPolicy::Optional`] or [`PageIndexPolicy::Required`]: Allocates empty index structure
+    ///
+    /// This is more memory-efficient than [`new`](Self::new) when only one type of index is needed.
+    ///
+    /// # Arguments
+    /// * `num_row_groups` - Number of row groups in the file
+    /// * `num_columns` - Number of columns in the schema
+    /// * `column_index_policy` - Policy for column index allocation
+    /// * `offset_index_policy` - Policy for offset index allocation
+    pub fn new_with_policy(
+        num_row_groups: usize,
+        num_columns: usize,
+        column_index_policy: &PageIndexPolicy,
+        offset_index_policy: &PageIndexPolicy,
+    ) -> Self {
+        use reader::PageIndexPolicy;
+
+        let column_indexes = match column_index_policy {
+            PageIndexPolicy::Skip => None,
+            _ => Self::empty_index(num_row_groups, num_columns),
+        };
+
+        let offset_indexes = match offset_index_policy {
+            PageIndexPolicy::Skip => None,
+            _ => Self::empty_index(num_row_groups, num_columns),
+        };
+
+        Self {
+            column_indexes,
+            offset_indexes,
+        }
+    }
+
+    /// Creates a new [`PageIndexBuilder`] from an existing [`PageIndex`]
+    ///
+    /// This takes ownership of the index structures from the provided [`PageIndex`],
+    /// allowing them to be modified and rebuilt. Useful for updating existing page indexes.
+    pub(crate) fn new_from(page_index: PageIndex) -> Self {
+        Self {
+            column_indexes: page_index.column_indexes,
+            offset_indexes: page_index.offset_indexes,
+        }
+    }
+
+    /// Sets the column index for a specific row group and column
+    ///
+    /// If column indexes were not allocated (policy was `Skip`), this method does nothing.
+    /// If the row group or column index is out of bounds, this method does nothing.
+    pub fn put_column_index(
+        &mut self,
+        column_index: ColumnIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) {
+        if let Some(ref mut indexes) = self.column_indexes
+            && let Some(row_group) = indexes.get_mut(row_group_idx)
+            && let Some(column_slot) = row_group.get_mut(column_idx)
+        {
+            *column_slot = Some(column_index);
+        }
+    }
+
+    /// Sets the offset index for a specific row group and column
+    ///
+    /// If offset indexes were not allocated (policy was `Skip`), this method does nothing.
+    /// If the row group or column index is out of bounds, this method does nothing.
+    pub fn put_offset_index(
+        &mut self,
+        offset_index: OffsetIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) {
+        if let Some(ref mut indexes) = self.offset_indexes
+            && let Some(row_group) = indexes.get_mut(row_group_idx)
+            && let Some(column_slot) = row_group.get_mut(column_idx)
+        {
+            *column_slot = Some(offset_index);
+        }
+    }
+
+    /// Checks if an index structure is entirely empty (all entries are None)
+    fn is_empty_index<T>(index: Option<&Vec<Vec<Option<T>>>>) -> bool {
+        match index {
+            None => true,
+            Some(row_groups) => row_groups
+                .iter()
+                .all(|columns| columns.iter().all(|entry| entry.is_none())),
+        }
+    }
+
+    /// Consumes the builder and returns a [`PageIndex`]
+    ///
+    /// If an index structure was allocated but remains entirely empty (all entries are `None`),
+    /// it will be converted to `None` in the final [`PageIndex`]. This ensures that:
+    /// - Empty structures don't consume memory unnecessarily
+    /// - [`PageIndex::has_column_indexes()`] and [`PageIndex::has_offset_indexes()`]
+    ///   correctly return `false` for unpopulated indexes
+    pub fn build(self) -> PageIndex {
+        let column_indexes = if Self::is_empty_index(self.column_indexes.as_ref()) {
+            None
+        } else {
+            self.column_indexes
+        };
+
+        let offset_indexes = if Self::is_empty_index(self.offset_indexes.as_ref()) {
+            None
+        } else {
+            self.offset_indexes
+        };
+
+        PageIndex::new(column_indexes, offset_indexes)
+    }
+}
+
+impl From<PageIndex> for PageIndexBuilder {
+    fn from(page_index: PageIndex) -> Self {
+        Self::new_from(page_index)
+    }
 }
 
 /// Parsed metadata for a single Parquet file
@@ -2319,12 +2489,18 @@ mod tests {
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
+        let mut page_index = PageIndexBuilder::new(1, 1);
+
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
         let column_index = column_index.build().unwrap();
-        let ColumnIndexMetaData::BOOLEAN(native_index) = column_index else {
-            panic!("wrong type of column index")
-        };
+        {
+            let ColumnIndexMetaData::BOOLEAN(_) = column_index else {
+                panic!("wrong type of column index")
+            };
+        }
+
+        page_index.put_column_index(column_index, 0, 0);
 
         // Now, add in OffsetIndex
         let mut offset_index = OffsetIndexBuilder::new();
@@ -2334,16 +2510,12 @@ mod tests {
         offset_index.append_row_count(1);
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
-        let offset_index = Some(offset_index.build());
-
-        let page_index = PageIndex::new(
-            Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(native_index))]]),
-            Some(vec![vec![offset_index]]),
-        );
+        let offset_index = offset_index.build();
+        page_index.put_offset_index(offset_index, 0, 0);
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_page_index(Some(page_index))
+            .set_page_index(Some(page_index.build()))
             .build();
 
         #[cfg(not(feature = "encryption"))]
@@ -2450,5 +2622,94 @@ mod tests {
             .unwrap();
 
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    #[test]
+    fn test_page_index_builder_skip_policy() {
+        use crate::file::metadata::reader::PageIndexPolicy;
+
+        // Create builder with column indexes skipped
+        let mut builder = PageIndexBuilder::new_with_policy(
+            1,
+            1,
+            &PageIndexPolicy::Skip,
+            &PageIndexPolicy::Optional,
+        );
+
+        // Try to add a column index - should be silently ignored
+        let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
+        col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
+        let col_idx = col_idx_builder.build().unwrap();
+        builder.put_column_index(col_idx, 0, 0);
+
+        // Add an offset index - should work
+        let mut offset_idx_builder = OffsetIndexBuilder::new();
+        offset_idx_builder.append_row_count(50);
+        offset_idx_builder.append_offset_and_size(1000, 500);
+        let offset_idx = offset_idx_builder.build();
+        builder.put_offset_index(offset_idx, 0, 0);
+
+        let page_index = builder.build();
+
+        // Column indexes should not exist
+        assert!(!page_index.has_column_indexes());
+        // Offset indexes should exist
+        assert!(page_index.has_offset_indexes());
+    }
+
+    #[test]
+    fn test_page_index_builder_empty_to_none() {
+        // Create builder but don't populate any indexes
+        let builder = PageIndexBuilder::new(2, 2);
+
+        let page_index = builder.build();
+
+        // Both should be None since they were never populated
+        assert!(!page_index.has_column_indexes());
+        assert!(!page_index.has_offset_indexes());
+    }
+
+    #[test]
+    fn test_rebuild_page_index() {
+        // Create builder with one rowgroup and two columns
+        let mut builder = PageIndexBuilder::new(1, 2);
+
+        // Add column index for first column
+        let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
+        col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
+        let col_idx = col_idx_builder.build().unwrap();
+        builder.put_column_index(col_idx.clone(), 0, 0);
+
+        // Add an offset index for first column
+        let mut offset_idx_builder = OffsetIndexBuilder::new();
+        offset_idx_builder.append_row_count(50);
+        offset_idx_builder.append_offset_and_size(1000, 500);
+        let offset_idx = offset_idx_builder.build();
+        builder.put_offset_index(offset_idx.clone(), 0, 0);
+
+        let page_index = builder.build();
+
+        // Check indexes
+        assert!(page_index.is_complete());
+
+        // first column populated
+        assert!(page_index.column_index(0, 0).is_some());
+        assert!(page_index.offset_index(0, 0).is_some());
+        // second column not populated
+        assert!(page_index.column_index(0, 1).is_none());
+        assert!(page_index.offset_index(0, 1).is_none());
+
+        let mut builder = PageIndexBuilder::new_from(page_index);
+
+        // Add indexes for second column
+        builder.put_column_index(col_idx, 0, 1);
+        builder.put_offset_index(offset_idx, 0, 1);
+        let page_index = builder.build();
+
+        // now all populated
+        assert!(page_index.column_index(0, 0).is_some());
+        assert!(page_index.offset_index(0, 0).is_some());
+        assert!(page_index.column_index(0, 1).is_some());
+        assert!(page_index.offset_index(0, 1).is_some());
     }
 }
