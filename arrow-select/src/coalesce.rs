@@ -30,10 +30,12 @@ use std::sync::Arc;
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
+mod byte;
 mod byte_view;
 mod generic;
 mod primitive;
 
+use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
@@ -698,6 +700,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+            Box::new(InProgressByteArray::new(data_type.clone()))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
