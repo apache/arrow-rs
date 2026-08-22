@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, UInt32Builder};
+use arrow_array::builder::UInt32Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -830,7 +830,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         size_usize: usize,
     ) -> Buffer {
         let values_buffer = values.values().as_slice();
-        let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+        let mut output = Vec::with_capacity(indices.len() * size_usize);
 
         if indices.null_count() == 0 {
             let array_iter = indices.values().iter().map(|idx| {
@@ -838,7 +838,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
                 &values_buffer[offset..offset + size_usize]
             });
             for slice in array_iter {
-                values_buffer_builder.append_slice(slice);
+                output.extend_from_slice(slice);
             }
         } else {
             // The indices nullability cannot be ignored here because the values buffer may contain
@@ -851,13 +851,13 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
             });
             for slice in array_iter {
                 match slice {
-                    None => values_buffer_builder.append_n(size_usize, 0),
-                    Some(slice) => values_buffer_builder.append_slice(slice),
+                    None => output.resize(output.len() + size_usize, 0),
+                    Some(slice) => output.extend_from_slice(slice),
                 }
             }
         }
 
-        values_buffer_builder.finish()
+        output.into()
     }
 }
 
