@@ -151,7 +151,7 @@ impl<'a> Tape<'a> {
     pub fn iter_elements(&self, idx: u32) -> impl Iterator<Item = u32> {
         let end = match self.get(idx) {
             TapeElement::StartList(end) => end,
-            elem => panic!("Expected the start of a list, found {:?}", elem),
+            elem => panic!("Expected the start of a list, found {elem:?}"),
         };
 
         self.iter_values(idx, end)
@@ -161,7 +161,7 @@ impl<'a> Tape<'a> {
     pub fn iter_fields(&self, idx: u32) -> impl Iterator<Item = (&'a str, u32)> {
         let end = match self.get(idx) {
             TapeElement::StartObject(end) => end,
-            elem => panic!("Expected the start of an object, found {:?}", elem),
+            elem => panic!("Expected the start of an object, found {elem:?}"),
         };
 
         let mut idx = idx + 1;
@@ -170,7 +170,7 @@ impl<'a> Tape<'a> {
             (idx < end).then(|| {
                 let key = match self.get(idx) {
                     TapeElement::String(s) => self.get_string(s),
-                    elem => panic!("Expected a string, found {:?}", elem),
+                    elem => panic!("Expected a string, found {elem:?}"),
                 };
                 let value_idx = idx + 1;
                 idx = self.next(value_idx, "field value").unwrap();
