@@ -263,7 +263,7 @@ impl UnionBuilder {
             }
             // Sparse Union
             None => {
-                for (_, fd) in self.fields.iter_mut() {
+                for fd in self.fields.values_mut() {
                     // Append to all bar the FieldData currently being appended to
                     fd.append_null();
                 }
@@ -378,9 +378,11 @@ impl ArrayBuilder for UnionBuilder {
     fn finish_cloned(&self) -> ArrayRef {
         // We construct the UnionArray carefully to ensure try_new cannot fail.
         // Since UnionBuilder controls all the invariants, this should never panic.
-        Arc::new(self.build_cloned().unwrap_or_else(|err| {
-            panic!("UnionBuilder::build_cloned failed unexpectedly: {}", err)
-        }))
+        Arc::new(
+            self.build_cloned().unwrap_or_else(|err| {
+                panic!("UnionBuilder::build_cloned failed unexpectedly: {err}")
+            }),
+        )
     }
 
     /// Returns the builder as a non-mutable `Any` reference

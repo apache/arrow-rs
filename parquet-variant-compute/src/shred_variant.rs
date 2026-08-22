@@ -82,16 +82,12 @@ pub(crate) fn shred_variant_with_options(
         ));
     }
 
-    if array.value_column().is_none() {
-        // all-null case -- nothing to do.
-        return Ok(array.clone());
-    };
-
     let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
         as_type,
         cast_options,
         array.len(),
         NullValue::TopLevelVariant,
+        true,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -103,7 +99,7 @@ pub(crate) fn shred_variant_with_options(
     let (value, typed_value, nulls) = builder.finish()?;
     Ok(VariantArray::from_parts(
         array.metadata_column().clone(),
-        Some(Arc::new(value)),
+        Arc::new(value),
         Some(typed_value),
         nulls,
     ))
@@ -145,6 +141,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     cast_options: &'a CastOptions,
     capacity: usize,
     null_value: NullValue,
+    shred: bool,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -153,6 +150,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 cast_options,
                 capacity,
                 null_value,
+                shred,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -193,7 +191,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, shred)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
@@ -214,7 +212,7 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 
-impl<'a> VariantToShreddedVariantRowBuilder<'a> {
+impl VariantToShreddedVariantRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
@@ -369,6 +367,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         cast_options: &'a CastOptions,
         capacity: usize,
         null_value: NullValue,
+        shred: bool,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
@@ -376,6 +375,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
                 cast_options,
                 capacity,
                 NullValue::ObjectField,
+                shred,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -452,11 +452,8 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         let mut builder = StructArrayBuilder::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
-            let array = ShreddedVariantFieldArray::from_parts(
-                Some(Arc::new(value)),
-                Some(typed_value),
-                nulls,
-            );
+            let array =
+                ShreddedVariantFieldArray::from_parts(Arc::new(value), Some(typed_value), nulls);
             builder = builder.with_field(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
@@ -595,7 +592,7 @@ impl ShreddedSchemaBuilder {
     {
         let path: VariantPath<'a> = path
             .try_into()
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("{:?}", e)))?;
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
         self.root.insert_path(&path, field.into_shredding_field());
         Ok(self)
     }
@@ -642,11 +639,11 @@ impl VariantSchemaNode {
                 // Ensure this node is a Struct node
                 let children = match self {
                     Self::Struct(children) => children,
-                    _ => {
+                    Self::Leaf(_) => {
                         *self = Self::Struct(BTreeMap::new());
                         match self {
                             Self::Struct(children) => children,
-                            _ => unreachable!(),
+                            Self::Leaf(_) => unreachable!(),
                         }
                     }
                 };
@@ -701,18 +698,22 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use crate::variant_array::{binary_array_value, variant_from_arrays_at};
+    use crate::variant_array::{all_null_value_column, binary_array_value, variant_from_arrays_at};
     use arrow::array::{
-        Array, BinaryViewArray, FixedSizeBinaryArray, FixedSizeListArray, Float64Array,
-        GenericListArray, GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray,
-        ListArray, ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        Array, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
+        FixedSizeBinaryArray, FixedSizeListArray, Float64Array, GenericListArray,
+        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
+        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
     };
+    use arrow_schema::IntervalUnit;
+    use chrono::{DateTime, NaiveDate, NaiveTime};
     use parquet_variant::{
         BuilderSpecificState, EMPTY_VARIANT_METADATA_BYTES, ObjectBuilder, ReadOnlyMetadataBuilder,
-        Variant, VariantBuilder, VariantPath, VariantPathElement,
+        ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
+        VariantPath, VariantPathElement,
     };
     use std::sync::Arc;
     use uuid::Uuid;
@@ -880,7 +881,7 @@ mod tests {
     ) {
         assert_eq!(array.len(), expected_len);
 
-        let fallback_value = array.value_column().unwrap();
+        let fallback_value = array.value_column();
         let fallback_metadata = array.metadata_column();
         let array = downcast_list_like_array::<O>(array);
 
@@ -995,7 +996,7 @@ mod tests {
         }
 
         // Validate fallback variants for list elements that could not be shredded
-        let element_fallbacks = element_array.value_column().unwrap();
+        let element_fallbacks = element_array.value_column();
         assert_eq!(element_fallbacks.len(), expected_fallbacks.len());
         for (idx, expected_fallback) in expected_fallbacks.iter().enumerate() {
             match expected_fallback {
@@ -1046,6 +1047,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             primitive_builder.append_null().unwrap();
@@ -1076,6 +1078,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             array_builder.append_null().unwrap();
@@ -1104,6 +1107,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
+                true,
             )
             .unwrap();
             object_builder.append_null().unwrap();
@@ -1123,7 +1127,7 @@ mod tests {
                     typed_struct.column_by_name(field_name).unwrap(),
                 )
                 .unwrap();
-                assert!(field.value_column().unwrap().is_null(0));
+                assert!(field.value_column().is_null(0));
                 assert!(field.typed_value_column().unwrap().is_null(0));
             }
         }
@@ -1135,11 +1139,10 @@ mod tests {
         // First create a valid VariantArray, then extract its parts to construct a shredded one
         let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
         let metadata = temp_array.metadata_column().clone();
-        let value = temp_array.value_column().unwrap().clone();
+        let value = temp_array.value_column().clone();
         let typed_value = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
 
-        let shredded_array =
-            VariantArray::from_parts(metadata, Some(value), Some(typed_value), None);
+        let shredded_array = VariantArray::from_parts(metadata, value, Some(typed_value), None);
 
         let result = shred_variant(&shredded_array, &DataType::Int64);
         assert!(matches!(
@@ -1150,14 +1153,18 @@ mod tests {
 
     #[test]
     fn test_all_null_input() {
-        // Create VariantArray with no value field (all null case)
-        let metadata = Arc::new(BinaryViewArray::from_iter_values([&[1u8, 0u8]])); // minimal valid metadata
-        let all_null_array = VariantArray::from_parts(metadata, None, None, None);
+        // Create VariantArray whose value column is entirely null
+        let metadata = Arc::new(BinaryViewArray::from_iter_values([
+            EMPTY_VARIANT_METADATA_BYTES,
+        ]));
+        let all_null_array =
+            VariantArray::from_parts(metadata, all_null_value_column(1), None, None);
         let result = shred_variant(&all_null_array, &DataType::Int64).unwrap();
 
-        // Should return array with no value/typed_value fields
-        assert!(result.value_column().is_none());
-        assert!(result.typed_value_column().is_none());
+        // The row is valid but has no value, so it shreds to an explicit Variant::Null
+        // stored in the value column, with a null typed_value
+        assert!(result.typed_value_column().unwrap().is_null(0));
+        assert_eq!(result.value(0), Variant::Null);
     }
 
     #[test]
@@ -1259,7 +1266,7 @@ mod tests {
 
         // Verify structure
         let metadata_field = result.metadata_column();
-        let value_field = result.value_column().unwrap();
+        let value_field = result.value_column();
         let typed_value_field = result
             .typed_value_column()
             .unwrap()
@@ -1326,7 +1333,7 @@ mod tests {
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         assert_eq!(typed_value_int32.value(0), 42);
-        assert_eq!(typed_value_int32.value(1), 3);
+        assert!(typed_value_int32.is_null(1)); // float doesn't shred to int32
         assert!(typed_value_int32.is_null(2)); // string doesn't convert to int32
 
         // Test Float64 target
@@ -1337,7 +1344,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert_eq!(typed_value_float64.value(0), 42.0); // int converts to float
+        assert!(typed_value_float64.is_null(0)); // int doesn't shred to float
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
     }
@@ -1354,7 +1361,7 @@ mod tests {
 
         let result = shred_variant(&input, &DataType::LargeUtf8).unwrap();
         let metadata = result.metadata_column();
-        let value = result.value_column().unwrap();
+        let value = result.value_column();
         let typed_value = result
             .typed_value_column()
             .unwrap()
@@ -1410,7 +1417,7 @@ mod tests {
 
         let result = shred_variant(&input, &DataType::LargeBinary).unwrap();
         let metadata = result.metadata_column();
-        let value = result.value_column().unwrap();
+        let value = result.value_column();
         let typed_value = result
             .typed_value_column()
             .unwrap()
@@ -1496,9 +1503,7 @@ mod tests {
             let err = shred_variant(&input, &data_type).unwrap_err();
             assert!(
                 matches!(err, ArrowError::InvalidArgumentError(_)),
-                "expected InvalidArgumentError for {:?}, got {:?}",
-                data_type,
-                err
+                "expected InvalidArgumentError for {data_type:?}, got {err:?}"
             );
         }
     }
@@ -1660,20 +1665,20 @@ mod tests {
         // The first row should be shredded, so the `value` field should be null and the
         // `typed_value` field should contain the list
         assert!(result.is_valid(0));
-        assert!(result.value_column().unwrap().is_null(0));
+        assert!(result.value_column().is_null(0));
         assert!(result.typed_value_column().unwrap().is_valid(0));
 
         // The second row should not be shredded because the provided schema for shredding did not
         // match. Hence, the `value` field should contain the raw value and the `typed_value` field
         // should be null.
         assert!(result.is_valid(1));
-        assert!(result.value_column().unwrap().is_valid(1));
+        assert!(result.value_column().is_valid(1));
         assert!(result.typed_value_column().unwrap().is_null(1));
 
         // The third row should be shredded, so the `value` field should be null and the
         // `typed_value` field should contain the list
         assert!(result.is_valid(2));
-        assert!(result.value_column().unwrap().is_null(2));
+        assert!(result.value_column().is_null(2));
         assert!(result.typed_value_column().unwrap().is_valid(2));
 
         let typed_value = result.typed_value_column().unwrap();
@@ -1781,7 +1786,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let outer_fallbacks = outer_elements.value_column().unwrap();
+        let outer_fallbacks = outer_elements.value_column();
 
         let outer_metadata = Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
             EMPTY_VARIANT_METADATA_BYTES,
@@ -1789,7 +1794,7 @@ mod tests {
         )));
         let outer_variant = VariantArray::from_parts(
             outer_metadata,
-            Some(outer_fallbacks.clone()),
+            outer_fallbacks.clone(),
             Some(Arc::new(outer_values.clone())),
             None,
         );
@@ -1881,7 +1886,7 @@ mod tests {
         let id_field =
             ShreddedVariantFieldArray::try_new(element_objects.column_by_name("id").unwrap())
                 .unwrap();
-        let id_values = id_field.value_column().unwrap();
+        let id_values = id_field.value_column();
         let id_typed_values = id_field
             .typed_value_column()
             .unwrap()
@@ -1905,7 +1910,7 @@ mod tests {
         let name_field =
             ShreddedVariantFieldArray::try_new(element_objects.column_by_name("name").unwrap())
                 .unwrap();
-        let name_values = name_field.value_column().unwrap();
+        let name_values = name_field.value_column();
         let name_typed_values = name_field
             .typed_value_column()
             .unwrap()
@@ -1965,12 +1970,11 @@ mod tests {
         let result = shred_variant(&input, &target_schema).unwrap();
 
         // Verify structure
-        assert!(result.value_column().is_some());
         assert!(result.typed_value_column().is_some());
         assert_eq!(result.len(), 9);
 
         let metadata = result.metadata_column();
-        let value = result.value_column().unwrap();
+        let value = result.value_column();
         let typed_value = result
             .typed_value_column()
             .unwrap()
@@ -1985,14 +1989,14 @@ mod tests {
         let age_field =
             ShreddedVariantFieldArray::try_new(typed_value.column_by_name("age").unwrap()).unwrap();
 
-        let score_value = score_field.value_column().unwrap();
+        let score_value = score_field.value_column();
         let score_typed_value = score_field
             .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        let age_value = age_field.value_column().unwrap();
+        let age_value = age_field.value_column();
         let age_typed_value = age_field
             .typed_value_column()
             .unwrap()
@@ -2094,7 +2098,7 @@ mod tests {
                 None => {
                     assert!(result.is_null(i));
                 }
-            };
+            }
         };
 
         // Row 0: Fully shredded - both fields shred successfully
@@ -2295,7 +2299,7 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         // Access base value/typed_value columns
-        let value_field = result.value_column().unwrap();
+        let value_field = result.value_column();
         let typed_struct = result
             .typed_value_column()
             .unwrap()
@@ -2331,7 +2335,7 @@ mod tests {
                     EMPTY_VARIANT_METADATA_BYTES,
                     scores_field.len(),
                 ))),
-                Some(scores_field.value_column().unwrap().clone()),
+                scores_field.value_column().clone(),
                 Some(scores_field.typed_value_column().unwrap().clone()),
                 None,
             ),
@@ -2360,7 +2364,7 @@ mod tests {
             .with_path("id", &DataType::Int32)?
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
-        let value_field1 = result1.value_column().unwrap();
+        let value_field1 = result1.value_column();
         assert!(!value_field1.is_null(0)); // should contain {"age": 25, "score": 95.5}
 
         // Test with schema containing id and age fields
@@ -2369,7 +2373,7 @@ mod tests {
             .with_path("age", &DataType::Int64)?
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
-        let value_field2 = result2.value_column().unwrap();
+        let value_field2 = result2.value_column();
         assert!(!value_field2.is_null(0)); // should contain {"score": 95.5}
 
         // Test with schema containing all fields
@@ -2379,7 +2383,7 @@ mod tests {
             .with_path("score", &DataType::Float64)?
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
-        let value_field3 = result3.value_column().unwrap();
+        let value_field3 = result3.value_column();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
 
         Ok(())
@@ -2426,12 +2430,11 @@ mod tests {
 
         let result = shred_variant(&input, &target_schema).unwrap();
 
-        assert!(result.value_column().is_some());
         assert!(result.typed_value_column().is_some());
         assert_eq!(result.len(), 6);
 
         let metadata = result.metadata_column();
-        let value = result.value_column().unwrap();
+        let value = result.value_column();
         let typed_value = result
             .typed_value_column()
             .unwrap()
@@ -2446,14 +2449,14 @@ mod tests {
             ShreddedVariantFieldArray::try_new(typed_value.column_by_name("session_id").unwrap())
                 .unwrap();
 
-        let id_value = id_field.value_column().unwrap();
+        let id_value = id_field.value_column();
         let id_typed_value = id_field
             .typed_value_column()
             .unwrap()
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
-        let session_id_value = session_id_field.value_column().unwrap();
+        let session_id_value = session_id_field.value_column();
         let session_id_typed_value = session_id_field
             .typed_value_column()
             .unwrap()
@@ -2546,6 +2549,257 @@ mod tests {
         Ok(())
     }
 
+    macro_rules! validate_decimal_shredding {
+        ($shred_type: expr, $array_type: ty, $expected_typed_value: ident $(, $expected_precision: literal, $expected_scale:literal)? $(,)?) => {{
+            let input = VariantArray::from_iter(vec![
+                Variant::from(12i8),
+                Variant::from(234i16),
+                Variant::from(456i32),
+                Variant::from(456i64),
+                Variant::from(VariantDecimal4::try_new(1200, 2).unwrap()),
+                Variant::from(VariantDecimal8::try_new(1230, 2).unwrap()),
+                Variant::from(VariantDecimal16::try_new(1234, 2).unwrap()),
+            ]);
+
+            let result = shred_variant(&input, &$shred_type).unwrap();
+
+            assert!(result.typed_value_column().is_some());
+            assert_eq!(result.len(), input.len());
+
+            let value = result.value_column();
+            let typed_value = result
+                .typed_value_column()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<$array_type>()
+                .unwrap();
+
+            $(assert_eq!(typed_value.precision(), $expected_precision);)?
+            $(assert_eq!(typed_value.scale(), $expected_scale);)?
+
+            for i in 0..$expected_typed_value.len() {
+                assert_eq!(value.is_valid(i), $expected_typed_value.is_null(i));
+                assert_eq!(typed_value.is_valid(i), $expected_typed_value.is_valid(i));
+                assert_eq!(typed_value.value(i), $expected_typed_value.value(i));
+            }
+        }};
+    }
+
+    #[test]
+    fn test_shredding_decimal32_with_same_scale() {
+        let expected_array = Decimal32Array::from(vec![
+            Some(1200),
+            None, // 234 can't convert decimal32(4, 2)
+            None, // 456 can't convert to decimal32(4, 2)
+            None, // 456 can't convert to decimal32(4, 2)
+            Some(1200),
+            Some(1230),
+            Some(1234),
+        ])
+        .with_precision_and_scale(4, 2)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal32(4, 2),
+            arrow::array::Decimal32Array,
+            expected_array,
+            4,
+            2,
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal32_with_bigger_scale() {
+        let expected_array = Decimal32Array::from(vec![
+            Some(12000),
+            Some(234000),
+            Some(456000),
+            Some(456000),
+            Some(12000),
+            Some(12300),
+            Some(12340),
+        ])
+        .with_precision_and_scale(6, 3)
+        .unwrap();
+
+        validate_decimal_shredding!(
+            DataType::Decimal32(6, 3),
+            arrow::array::Decimal32Array,
+            expected_array,
+            6,
+            3,
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal32_with_smaller_scale() {
+        let expected_array = Decimal32Array::from(vec![
+            Some(12),
+            Some(234),
+            Some(456),
+            Some(456),
+            Some(12),
+            None, // VariantDecimal8(1230, 2) can't convert to decimal32(6, 0),
+            None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
+        ])
+        .with_precision_and_scale(6, 0)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal32(6, 0),
+            arrow::array::Decimal32Array,
+            expected_array,
+            6,
+            0
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal64_with_same_scale() {
+        let expected_array_decimal64_same_scale = Decimal64Array::from(vec![
+            Some(1200),
+            None, // 234 can't convert decimal64(4, 2)
+            None, // 456 can't convert to decimal64(4, 2)
+            None, // 456 can't convert to decimal64(4, 2)
+            Some(1200),
+            Some(1230),
+            Some(1234),
+        ])
+        .with_precision_and_scale(4, 2)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal64(4, 2),
+            arrow::array::Decimal64Array,
+            expected_array_decimal64_same_scale,
+            4,
+            2
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal64_with_big_scale() {
+        let expected_array = Decimal64Array::from(vec![
+            Some(12000),
+            Some(234000),
+            Some(456000),
+            Some(456000),
+            Some(12000),
+            Some(12300),
+            Some(12340),
+        ])
+        .with_precision_and_scale(6, 3)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal64(6, 3),
+            arrow::array::Decimal64Array,
+            expected_array,
+            6,
+            3,
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal64_with_smaller_scale() {
+        let expected_array = Decimal64Array::from(vec![
+            Some(12),
+            Some(234),
+            Some(456),
+            Some(456),
+            Some(12),
+            None, // VariantDecimal8(1234, 2) can't convert to decimal32(6, 0),
+            None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
+        ])
+        .with_precision_and_scale(6, 0)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal64(6, 0),
+            arrow::array::Decimal64Array,
+            expected_array,
+            6,
+            0
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal128_with_same_scale() {
+        let expected_array = Decimal128Array::from(vec![
+            Some(1200),
+            None, // 234 can't convert decimal128(4, 2)
+            None, // 456 can't convert to decimal128(4, 2)
+            None, // 456 can't convert to decimal128(4, 2)
+            Some(1200),
+            Some(1230),
+            Some(1234),
+        ])
+        .with_precision_and_scale(4, 2)
+        .unwrap();
+
+        validate_decimal_shredding!(
+            DataType::Decimal128(4, 2),
+            arrow::array::Decimal128Array,
+            expected_array,
+            4,
+            2,
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal128_with_big_scale() {
+        let expected_array = Decimal128Array::from(vec![
+            Some(12000),
+            Some(234000),
+            Some(456000),
+            Some(456000),
+            Some(12000),
+            Some(12300),
+            Some(12340),
+        ])
+        .with_precision_and_scale(6, 3)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal128(6, 3),
+            arrow::array::Decimal128Array,
+            expected_array,
+            6,
+            3
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal128_with_smaller_scale() {
+        let expected_array = Decimal128Array::from(vec![
+            Some(12),
+            Some(234),
+            Some(456),
+            Some(456),
+            Some(12),
+            None, // VariantDecimal8(1234, 2) can't convert to decimal32(6, 0),
+            None, // VariantDecimal16(1234, 2) can't convert to decimal32(6, 0),
+        ])
+        .with_precision_and_scale(6, 0)
+        .unwrap();
+        validate_decimal_shredding!(
+            DataType::Decimal128(6, 0),
+            arrow::array::Decimal128Array,
+            expected_array,
+            6,
+            0
+        );
+    }
+
+    #[test]
+    fn test_shredding_decimal128_to_integer() {
+        let expected_array = Int64Array::from(vec![
+            Some(12),
+            Some(234),
+            Some(456),
+            Some(456),
+            Some(12),
+            None, // VariantDecimal8(1230, 2) can't convert to integer
+            None, // VariantDecimal8(1234, 2) can't convert to integer
+        ]);
+
+        validate_decimal_shredding!(DataType::Int64, arrow::array::Int64Array, expected_array);
+    }
+
     #[test]
     fn test_spec_compliance() {
         let input = VariantArray::from_iter(vec![Variant::from(42i64), Variant::from("hello")]);
@@ -2572,12 +2826,11 @@ mod tests {
 
         // Test output structure correctness
         assert_eq!(result.len(), input.len());
-        assert!(result.value_column().is_some());
         assert!(result.typed_value_column().is_some());
 
         // For primitive shredding, verify that value and typed_value are never both non-null
         // (This rule applies to primitives; for objects, both can be non-null for partial shredding)
-        let value_field = result.value_column().unwrap();
+        let value_field = result.value_column();
         let typed_value_field = result
             .typed_value_column()
             .unwrap()
@@ -2592,8 +2845,7 @@ mod tests {
                 // For primitive shredding, at least one should be null
                 assert!(
                     value_is_null || typed_value_is_null,
-                    "Row {}: both value and typed_value are non-null for primitive shredding",
-                    i
+                    "Row {i}: both value and typed_value are non-null for primitive shredding"
                 );
             }
         }
@@ -2828,5 +3080,181 @@ mod tests {
     fn test_variant_schema_builder_default() {
         let shredding_type = ShreddedSchemaBuilder::default().build();
         assert_eq!(shredding_type, DataType::Null);
+    }
+
+    // This test wants to cover that the variant can/can't be shredded to the given data type.
+    #[test]
+    fn test_variant_type_shredded_correctly() {
+        // array contains all variant types
+        let mut array_builder = VariantArrayBuilder::new(30);
+        array_builder.append_value(Variant::Null);
+        array_builder.append_value(Variant::Int8(1));
+        array_builder.append_value(Variant::Int16(2));
+        array_builder.append_value(Variant::Int32(3));
+        array_builder.append_value(Variant::Int64(4));
+        array_builder.append_value(Variant::Date(NaiveDate::from_epoch_days(12345).unwrap()));
+        array_builder.append_value(Variant::TimestampMicros(
+            DateTime::from_timestamp_micros(123456789).unwrap(),
+        ));
+        array_builder.append_value(Variant::TimestampNtzMicros(
+            DateTime::from_timestamp_micros(123456789)
+                .unwrap()
+                .naive_utc(),
+        ));
+        array_builder.append_value(Variant::TimestampNanos(DateTime::from_timestamp_nanos(
+            1234567890000,
+        )));
+        array_builder.append_value(Variant::TimestampNtzNanos(
+            DateTime::from_timestamp_nanos(1234567890000).naive_utc(),
+        ));
+        array_builder.append_value(VariantDecimal4::try_new(123, 0).unwrap());
+        array_builder.append_value(VariantDecimal8::try_new(123, 0).unwrap());
+        array_builder.append_value(VariantDecimal16::try_new(123, 0).unwrap());
+        array_builder.append_value(Variant::Float(5.0));
+        array_builder.append_value(Variant::Double(6f64));
+        array_builder.append_value(Variant::BooleanTrue);
+        array_builder.append_value(Variant::BooleanFalse);
+        array_builder.append_value(Variant::Binary(b"helow"));
+        array_builder.append_value(Variant::String("hello"));
+        array_builder.append_value(Variant::ShortString(
+            ShortString::try_from("world").unwrap(),
+        ));
+        array_builder.append_value(Variant::Time(
+            NaiveTime::from_num_seconds_from_midnight_opt(12345, 123).unwrap(),
+        ));
+
+        let array = array_builder.build();
+
+        fn can_shred_to(v: &Variant, dt: &DataType) -> bool {
+            matches!(
+                (v, dt),
+                (
+                    Variant::Int8(_)
+                        | Variant::Int16(_)
+                        | Variant::Int32(_)
+                        | Variant::Int64(_)
+                        | Variant::Decimal4(_)
+                        | Variant::Decimal8(_)
+                        | Variant::Decimal16(_),
+                    DataType::Int8
+                        | DataType::Int16
+                        | DataType::Int32
+                        | DataType::Int64
+                        | DataType::Decimal32(_, _)
+                        | DataType::Decimal64(_, _)
+                        | DataType::Decimal128(_, _)
+                ) | (Variant::Date(_), DataType::Date32)
+                    | (
+                        Variant::TimestampMicros(_) | Variant::TimestampNanos(_),
+                        DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, Some(_))
+                    )
+                    | (
+                        Variant::TimestampNtzMicros(_) | Variant::TimestampNtzNanos(_),
+                        DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, None)
+                    )
+                    | (Variant::Float(_), DataType::Float32)
+                    | (Variant::Double(_), DataType::Float64)
+                    | (
+                        Variant::BooleanFalse | Variant::BooleanTrue,
+                        DataType::Boolean
+                    )
+                    | (
+                        Variant::Binary(_),
+                        DataType::Binary | DataType::BinaryView | DataType::LargeBinary
+                    )
+                    | (
+                        Variant::ShortString(_) | Variant::String(_),
+                        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+                    )
+                    | (Variant::Time(_), DataType::Time64(_))
+            )
+        }
+
+        macro_rules! assert_shred_type {
+            ($shred_type:expr, $expected_value_valid_bits:expr) => {
+                let shredded_array_result = shred_variant(&array, &$shred_type);
+                match shredded_array_result {
+                    Ok(shredded_array) => {
+                        let value_column = shredded_array.inner().column_by_name("value").unwrap();
+                        for (idx, valid) in $expected_value_valid_bits.iter().enumerate() {
+                            match valid {
+                                true => assert!(
+                                    value_column.is_null(idx),
+                                    "{:?} should be shredded to {}",
+                                    array.value(idx),
+                                    $shred_type
+                                ),
+                                false => assert!(
+                                    value_column.is_valid(idx),
+                                    "{:?} should not be shredded to {}",
+                                    array.value(idx),
+                                    $shred_type
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("is not a valid variant shredding type");
+                        assert!(
+                            e.to_string().contains(error_msg.as_str()),
+                            "{} => {}",
+                            $shred_type,
+                            e.to_string()
+                        );
+                    }
+                }
+            };
+        }
+
+        let types = [
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("-00:00".into())),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("-00:00".into())),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Binary,
+            DataType::FixedSizeBinary(16), // uuid
+            DataType::FixedSizeBinary(32),
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Decimal32(7, 4),
+            DataType::Decimal64(7, 4),
+            DataType::Decimal128(7, 4),
+            DataType::Decimal256(7, 4),
+        ];
+
+        for data_type in types {
+            let expected_bits = array
+                .iter()
+                .map(|v| can_shred_to(&v.unwrap(), &data_type))
+                .collect::<Vec<bool>>();
+            assert_shred_type!(data_type, expected_bits);
+        }
     }
 }

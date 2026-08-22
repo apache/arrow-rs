@@ -19,7 +19,7 @@ use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::distr::{Distribution, StandardUniform};
 use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::hint;
 use std::ops::Range;
 use std::sync::Arc;

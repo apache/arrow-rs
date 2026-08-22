@@ -131,7 +131,7 @@ impl From<&Field> for ArrowJsonField {
         };
 
         Self {
-            name: field.name().to_string(),
+            name: field.name().clone(),
             field_type: data_type_to_json(field.data_type()),
             nullable: field.is_nullable(),
             children: vec![],
@@ -177,7 +177,6 @@ pub struct ArrowJsonBatch {
 
 /// A struct that partially reads the Arrow JSON dictionary batch
 #[derive(Deserialize, Serialize, Debug, Clone)]
-#[allow(non_snake_case)]
 pub struct ArrowJsonDictionaryBatch {
     /// The unique identifier for the dictionary
     pub id: i64,
@@ -223,7 +222,7 @@ impl ArrowJson {
             return Ok(false);
         }
 
-        for json_batch in self.get_record_batches()?.into_iter() {
+        for json_batch in self.get_record_batches()? {
             let batch = reader.next();
             match batch {
                 Some(Ok(batch)) => {
@@ -364,7 +363,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_bool().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -382,7 +381,7 @@ pub fn array_from_json(
                         ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
                     })? as i8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -398,7 +397,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -414,7 +413,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -431,7 +430,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -455,7 +454,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -496,7 +495,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -512,7 +511,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u8),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -528,7 +527,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u16),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -544,7 +543,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -574,7 +573,7 @@ pub fn array_from_json(
                         }
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -612,7 +611,7 @@ pub fn array_from_json(
                         _ => panic!("Unable to parse {value:?} as MonthDayNano"),
                     }),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -628,7 +627,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap() as f32),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -644,7 +643,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -663,7 +662,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -682,7 +681,7 @@ pub fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -698,7 +697,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -714,7 +713,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -733,7 +732,7 @@ pub fn array_from_json(
                         b.append_value(&v)?
                     }
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(b.finish()))
         }
@@ -869,7 +868,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
@@ -907,7 +906,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -925,7 +924,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -943,7 +942,7 @@ pub fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
                     _ => b.append_null(),
-                };
+                }
             }
             Ok(Arc::new(
                 b.finish().with_precision_and_scale(*precision, *scale)?,
@@ -1000,9 +999,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Union(fields, _) => {
-            let type_ids = if let Some(type_id) = json_col.type_id {
-                type_id
-            } else {
+            let Some(type_ids) = json_col.type_id else {
                 return Err(ArrowError::JsonError(
                     "Cannot find expected type_id in json column".to_string(),
                 ));
@@ -1129,12 +1126,12 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary fields must have a dict_id value"),
@@ -1272,9 +1269,6 @@ impl ArrowJsonBatch {
 mod tests {
     use super::*;
 
-    use std::fs::File;
-    use std::io::Read;
-
     #[test]
     fn test_schema_equality() {
         let json = r#"
@@ -1341,18 +1335,10 @@ mod tests {
         let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
-            Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(
-                [("k".to_string(), "v".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
-            Field::new("bools-with-metadata-vec", DataType::Boolean, true).with_metadata(
-                [("k2".to_string(), "v2".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
+            Field::new("bools-with-metadata-map", DataType::Boolean, true)
+                .with_metadata([("k", "v")]),
+            Field::new("bools-with-metadata-vec", DataType::Boolean, true)
+                .with_metadata([("k2", "v2")]),
             Field::new("bools", DataType::Boolean, true),
             Field::new("int8s", DataType::Int8, true),
             Field::new("int16s", DataType::Int16, true),
@@ -1604,9 +1590,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut file = File::open("data/integration.json").unwrap();
-        let mut json = String::new();
-        file.read_to_string(&mut json).unwrap();
+        let json = std::fs::read_to_string("data/integration.json").unwrap();
         let arrow_json: ArrowJson = serde_json::from_str(&json).unwrap();
         // test schemas
         assert!(arrow_json.schema.equals_schema(&schema));

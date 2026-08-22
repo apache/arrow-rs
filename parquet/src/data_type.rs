@@ -143,12 +143,12 @@ impl PartialOrd for Int96 {
 impl Ord for Int96 {
     /// Order `Int96` correctly for (deprecated) timestamp types.
     ///
-    /// Note: this is done even though the Int96 type is deprecated and the
-    /// [spec does not define the sort order]
-    /// because some engines, notably Spark and Databricks Photon still write
-    /// Int96 timestamps and rely on their order for optimization.
+    /// Note: this is done even though the Int96 type is deprecated.
+    /// Because some engines, notably Spark and Databricks Photon, still write
+    /// Int96 timestamps, a new `ColumnOrder` variant has been added to
+    /// the Parquet specification. See [parquet-format/#584].
     ///
-    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
+    /// [parquet-format/#584]: https://github.com/apache/parquet-format/pull/584
     fn cmp(&self, other: &Self) -> Ordering {
         match self.get_days().cmp(&other.get_days()) {
             Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
@@ -217,6 +217,10 @@ impl ByteArray {
     }
 
     /// Gets length of the underlying byte buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, e.g. on a [`ByteArray::new`] instance
     #[inline]
     pub fn len(&self) -> usize {
         assert!(self.data.is_some());
@@ -224,12 +228,20 @@ impl ByteArray {
     }
 
     /// Checks if the underlying buffer is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, see [`Self::len`]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns slice of data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set
     #[inline]
     pub fn data(&self) -> &[u8] {
         self.data
@@ -245,6 +257,10 @@ impl ByteArray {
     }
 
     /// Returns `ByteArray` instance with slice of values for a data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no data has been set, or if `start + len` is out of bounds
     #[inline]
     pub fn slice(&self, start: usize, len: usize) -> Self {
         Self::from(
@@ -257,11 +273,12 @@ impl ByteArray {
 
     /// Try to convert the byte array to a utf8 slice
     pub fn as_utf8(&self) -> Result<&str> {
-        self.data
+        let bytes = self
+            .data
             .as_ref()
             .map(|ptr| ptr.as_ref())
-            .ok_or_else(|| general_err!("Can't convert empty byte array to utf8"))
-            .and_then(|bytes| from_utf8(bytes).map_err(|e| e.into()))
+            .ok_or_else(|| general_err!("Can't convert empty byte array to utf8"))?;
+        from_utf8(bytes).map_err(|e| e.into())
     }
 }
 
@@ -548,13 +565,12 @@ impl AsBytes for [u8] {
 macro_rules! gen_as_bytes {
     ($source_ty:ident) => {
         impl AsBytes for $source_ty {
-            #[allow(clippy::size_of_in_element_count)]
             fn as_bytes(&self) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
                 unsafe {
                     std::slice::from_raw_parts(
-                        self as *const $source_ty as *const u8,
+                        std::ptr::from_ref::<$source_ty>(self).cast::<u8>(),
                         std::mem::size_of::<$source_ty>(),
                     )
                 }
@@ -563,27 +579,25 @@ macro_rules! gen_as_bytes {
 
         impl SliceAsBytes for $source_ty {
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             fn slice_as_bytes(self_: &[Self]) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
                 unsafe {
                     std::slice::from_raw_parts(
-                        self_.as_ptr() as *const u8,
+                        self_.as_ptr().cast::<u8>(),
                         std::mem::size_of_val(self_),
                     )
                 }
             }
 
             #[inline]
-            #[allow(clippy::size_of_in_element_count)]
             unsafe fn slice_as_bytes_mut(self_: &mut [Self]) -> &mut [u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory. Moreover, self has no
                 // invalid bit patterns, so all writes to the resulting slice will be valid.
                 unsafe {
                     std::slice::from_raw_parts_mut(
-                        self_.as_mut_ptr() as *mut u8,
+                        self_.as_mut_ptr().cast::<u8>(),
                         std::mem::size_of_val(self_),
                     )
                 }
@@ -627,14 +641,16 @@ impl AsBytes for bool {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: a bool is guaranteed to be either 0x00 or 0x01 in memory, so the memory is
         // valid.
-        unsafe { std::slice::from_raw_parts(self as *const bool as *const u8, 1) }
+        unsafe { std::slice::from_raw_parts(std::ptr::from_ref::<bool>(self).cast::<u8>(), 1) }
     }
 }
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: Int96::data is a &[u32; 3].
-        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
+        unsafe {
+            std::slice::from_raw_parts(std::ptr::from_ref::<[u32]>(self.data()).cast::<u8>(), 12)
+        }
     }
 }
 
@@ -829,7 +845,7 @@ pub(crate) mod private {
                     // SAFETY: Self is one of i32, i64, f32, f64, which have no padding.
                     let raw = unsafe {
                         std::slice::from_raw_parts(
-                            values.as_ptr() as *const u8,
+                            values.as_ptr().cast::<u8>(),
                             std::mem::size_of_val(values),
                         )
                     };

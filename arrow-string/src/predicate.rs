@@ -24,7 +24,7 @@ use regex::{Regex, RegexBuilder};
 use std::iter::zip;
 
 /// A string based predicate
-#[allow(clippy::large_enum_variant)]
+#[cfg_attr(target_arch = "x86_64", expect(clippy::large_enum_variant))]
 pub(crate) enum Predicate<'a> {
     Eq(&'a str),
     Contains(Finder<'a>),
@@ -253,7 +253,7 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
             chars_iter.next();
         }
         _ => result.push('^'),
-    };
+    }
 
     while let Some(c) = chars_iter.next() {
         match c {

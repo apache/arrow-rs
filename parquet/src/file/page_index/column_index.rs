@@ -43,6 +43,7 @@ pub struct ColumnIndex {
     pub(crate) null_counts: Option<Vec<i64>>,
     pub(crate) repetition_level_histograms: Option<Vec<i64>>,
     pub(crate) definition_level_histograms: Option<Vec<i64>>,
+    pub(crate) nan_counts: Option<Vec<i64>>,
 }
 
 impl ColumnIndex {
@@ -56,6 +57,13 @@ impl ColumnIndex {
     /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         self.null_counts.as_ref().map(|nc| nc[idx])
+    }
+
+    /// Returns the number of NaN values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no NaN counts have been set in the index
+    pub fn nan_count(&self, idx: usize) -> Option<i64> {
+        self.nan_counts.as_ref().map(|nc| nc[idx])
     }
 
     /// Returns the repetition level histogram for the page indexed by `idx`
@@ -95,10 +103,12 @@ pub struct PrimitiveColumnIndex<T> {
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
         null_counts: Option<Vec<i64>>,
+        nan_counts: Option<Vec<i64>>,
         repetition_level_histograms: Option<Vec<i64>>,
         definition_level_histograms: Option<Vec<i64>>,
         min_bytes: Vec<&[u8]>,
@@ -113,27 +123,29 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
                 max_bytes.len()
             )));
         }
-        if let Some(ref nc) = null_counts {
-            if nc.len() != len {
-                return Err(ParquetError::General(format!(
-                    "ColumnIndex null_counts length mismatch: expected {len}, got {}",
-                    nc.len()
-                )));
-            }
+        if let Some(ref nc) = null_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex null_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
         }
-        if let Some(ref rep) = repetition_level_histograms {
-            if len != 0 && rep.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid repetition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref rep) = repetition_level_histograms
+            && len != 0
+            && rep.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid repetition_level_histograms length".to_string(),
+            ));
         }
-        if let Some(ref def) = definition_level_histograms {
-            if len != 0 && def.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid definition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref def) = definition_level_histograms
+            && len != 0
+            && def.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid definition_level_histograms length".to_string(),
+            ));
         }
 
         let mut min_values = Vec::with_capacity(len);
@@ -160,6 +172,7 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
                 null_counts,
                 repetition_level_histograms,
                 definition_level_histograms,
+                nan_counts,
             },
             min_values,
             max_values,
@@ -171,6 +184,7 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
             index.null_pages,
             index.boundary_order,
             index.null_counts,
+            index.nan_counts,
             index.repetition_level_histograms,
             index.definition_level_histograms,
             index.min_values,
@@ -286,7 +300,11 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
                 repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id =
+                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if let Some(nan_counts) = &self.nan_counts {
+            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -304,10 +322,12 @@ pub struct ByteArrayColumnIndex {
 }
 
 impl ByteArrayColumnIndex {
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
         null_counts: Option<Vec<i64>>,
+        nan_counts: Option<Vec<i64>>,
         repetition_level_histograms: Option<Vec<i64>>,
         definition_level_histograms: Option<Vec<i64>>,
         min_values: Vec<&[u8]>,
@@ -322,27 +342,29 @@ impl ByteArrayColumnIndex {
                 max_values.len()
             )));
         }
-        if let Some(ref nc) = null_counts {
-            if nc.len() != len {
-                return Err(ParquetError::General(format!(
-                    "ColumnIndex null_counts length mismatch: expected {len}, got {}",
-                    nc.len()
-                )));
-            }
+        if let Some(ref nc) = null_counts
+            && nc.len() != len
+        {
+            return Err(ParquetError::General(format!(
+                "ColumnIndex null_counts length mismatch: expected {len}, got {}",
+                nc.len()
+            )));
         }
-        if let Some(ref rep) = repetition_level_histograms {
-            if len != 0 && rep.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid repetition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref rep) = repetition_level_histograms
+            && len != 0
+            && rep.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid repetition_level_histograms length".to_string(),
+            ));
         }
-        if let Some(ref def) = definition_level_histograms {
-            if len != 0 && def.len() % len != 0 {
-                return Err(ParquetError::General(
-                    "Invalid definition_level_histograms length".to_string(),
-                ));
-            }
+        if let Some(ref def) = definition_level_histograms
+            && len != 0
+            && def.len() % len != 0
+        {
+            return Err(ParquetError::General(
+                "Invalid definition_level_histograms length".to_string(),
+            ));
         }
 
         let min_len = min_values.iter().map(|&v| v.len()).sum();
@@ -385,6 +407,7 @@ impl ByteArrayColumnIndex {
                 null_counts,
                 repetition_level_histograms,
                 definition_level_histograms,
+                nan_counts,
             },
             min_bytes,
             min_offsets,
@@ -398,6 +421,7 @@ impl ByteArrayColumnIndex {
             index.null_pages,
             index.boundary_order,
             index.null_counts,
+            index.nan_counts,
             index.repetition_level_histograms,
             index.definition_level_histograms,
             index.min_values,
@@ -485,7 +509,11 @@ impl WriteThrift for ByteArrayColumnIndex {
                 repetition_level_histograms.write_thrift_field(writer, 6, last_field_id)?;
         }
         if let Some(definition_level_histograms) = &self.definition_level_histograms {
-            definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+            last_field_id =
+                definition_level_histograms.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if let Some(nan_counts) = &self.nan_counts {
+            nan_counts.write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -503,11 +531,6 @@ macro_rules! colidx_enum_func {
             Self::DOUBLE(ref typed) => typed.$func($arg),
             Self::BYTE_ARRAY(ref typed) => typed.$func($arg),
             Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func($arg),
-            _ => panic!(concat!(
-                "Cannot call ",
-                stringify!($func),
-                " on ColumnIndexMetaData::NONE"
-            )),
         }
     }};
     ($self:ident, $func:ident) => {{
@@ -520,28 +543,19 @@ macro_rules! colidx_enum_func {
             Self::DOUBLE(ref typed) => typed.$func(),
             Self::BYTE_ARRAY(ref typed) => typed.$func(),
             Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func(),
-            _ => panic!(concat!(
-                "Cannot call ",
-                stringify!($func),
-                " on ColumnIndexMetaData::NONE"
-            )),
         }
     }};
 }
 
 /// Parsed [`ColumnIndex`] information for a Parquet file.
 ///
-/// See [`ParquetColumnIndex`] for more information.
+/// See [`PageIndex`] for more information.
 ///
-/// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+/// [`PageIndex`]: crate::file::metadata::PageIndex
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum ColumnIndexMetaData {
-    /// Sometimes reading page index from parquet file
-    /// will only return pageLocations without min_max index,
-    /// `NONE` represents this lack of index information
-    NONE,
     /// Boolean type index
     BOOLEAN(PrimitiveColumnIndex<bool>),
     /// 32-bit integer type index
@@ -574,7 +588,6 @@ impl ColumnIndexMetaData {
     /// Get boundary_order of this page index.
     pub fn get_boundary_order(&self) -> Option<BoundaryOrder> {
         match self {
-            Self::NONE => None,
             Self::BOOLEAN(index) => Some(index.boundary_order),
             Self::INT32(index) => Some(index.boundary_order),
             Self::INT64(index) => Some(index.boundary_order),
@@ -588,10 +601,9 @@ impl ColumnIndexMetaData {
 
     /// Returns array of null counts, one per page.
     ///
-    /// Returns `None` if now null counts have been set in the index
+    /// Returns `None` if no null counts have been set in the index
     pub fn null_counts(&self) -> Option<&Vec<i64>> {
         match self {
-            Self::NONE => None,
             Self::BOOLEAN(index) => index.null_counts.as_ref(),
             Self::INT32(index) => index.null_counts.as_ref(),
             Self::INT64(index) => index.null_counts.as_ref(),
@@ -600,6 +612,22 @@ impl ColumnIndexMetaData {
             Self::DOUBLE(index) => index.null_counts.as_ref(),
             Self::BYTE_ARRAY(index) => index.null_counts.as_ref(),
             Self::FIXED_LEN_BYTE_ARRAY(index) => index.null_counts.as_ref(),
+        }
+    }
+
+    /// Returns array of NaN counts, one per page.
+    ///
+    /// Returns `None` if no NaN counts have been set in the index
+    pub fn nan_counts(&self) -> Option<&Vec<i64>> {
+        match self {
+            Self::BOOLEAN(index) => index.nan_counts.as_ref(),
+            Self::INT32(index) => index.nan_counts.as_ref(),
+            Self::INT64(index) => index.nan_counts.as_ref(),
+            Self::INT96(index) => index.nan_counts.as_ref(),
+            Self::FLOAT(index) => index.nan_counts.as_ref(),
+            Self::DOUBLE(index) => index.nan_counts.as_ref(),
+            Self::BYTE_ARRAY(index) => index.nan_counts.as_ref(),
+            Self::FIXED_LEN_BYTE_ARRAY(index) => index.nan_counts.as_ref(),
         }
     }
 
@@ -613,6 +641,13 @@ impl ColumnIndexMetaData {
     /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         colidx_enum_func!(self, null_count, idx)
+    }
+
+    /// Returns the number of NaN values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no NaN counts have been set in the index
+    pub fn nan_count(&self, idx: usize) -> Option<i64> {
+        colidx_enum_func!(self, nan_count, idx)
     }
 
     /// Returns the repetition level histogram for the page indexed by `idx`
@@ -700,7 +735,6 @@ impl WriteThrift for ColumnIndexMetaData {
             ColumnIndexMetaData::DOUBLE(index) => index.write_thrift(writer),
             ColumnIndexMetaData::BYTE_ARRAY(index) => index.write_thrift(writer),
             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => index.write_thrift(writer),
-            _ => Err(general_err!("Cannot serialize NONE index")),
         }
     }
 }
@@ -716,6 +750,7 @@ mod tests {
                 null_pages: vec![false],
                 boundary_order: BoundaryOrder::ASCENDING,
                 null_counts: Some(vec![0]),
+                nan_counts: None,
                 repetition_level_histograms: Some(vec![1, 2]),
                 definition_level_histograms: Some(vec![1, 2, 3]),
             },
@@ -740,6 +775,7 @@ mod tests {
                 null_pages: vec![true],
                 boundary_order: BoundaryOrder::ASCENDING,
                 null_counts: Some(vec![1]),
+                nan_counts: None,
                 repetition_level_histograms: None,
                 definition_level_histograms: Some(vec![1, 0]),
             },
@@ -767,6 +803,7 @@ mod tests {
                 &[], // this shouldn't be empty as null_pages[1] is false
             ],
             null_counts: None,
+            nan_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
             boundary_order: BoundaryOrder::UNORDERED,
@@ -791,6 +828,7 @@ mod tests {
             repetition_level_histograms: None,
             definition_level_histograms: None,
             boundary_order: BoundaryOrder::UNORDERED,
+            nan_counts: None,
         };
 
         // ColumnIndex arrays must align with the number of pages (null_pages.len()).

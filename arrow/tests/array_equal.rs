@@ -201,7 +201,7 @@ fn test_primitive_slice() {
     }
 }
 
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn test_equal(lhs: &dyn Array, rhs: &dyn Array, expected: bool) {
     // equality is symmetric
     assert_eq!(lhs, lhs);
@@ -1358,7 +1358,7 @@ fn make_struct(elements: Vec<Option<(Option<&'static str>, Option<i32>)>>) -> St
                 .field_builder::<StringBuilder>(0)
                 .unwrap()
                 .append_value(s),
-        };
+        }
 
         builder
             .field_builder::<Int32Builder>(1)

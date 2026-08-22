@@ -52,10 +52,10 @@ lz4 = ["lz4_flex"]
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = "3.3"
-tokio = "1.43.0"
 # used in benches
 memmap2 = "0.9.3"
 bytes = "1.9"
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util"] }
 
 [[bench]]
 name = "ipc_writer"
@@ -64,3 +64,6 @@ harness = false
 [[bench]]
 name = "ipc_reader"
 harness = false
+
+[lints]
+workspace = true

@@ -23,12 +23,13 @@ use half::f16;
 use crate::bloom_filter::Sbbf;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, IntType, LogicalType,
-    PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
+    SortOrder, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -47,7 +48,7 @@ use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
@@ -113,6 +114,14 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.add_data_page())
     }
 
+    /// Sets a pre-computed distinct count on this column writer.
+    ///
+    /// See [`GenericColumnWriter::set_distinct_count_override`] for details.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        downcast_writer!(self, typed, typed.set_distinct_count_override(count))
+    }
+
     /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
@@ -155,6 +164,8 @@ pub fn get_column_writer<'a>(
 
 /// Gets a typed column writer for the specific type `T`, by "up-casting" `col_writer` of
 /// non-generic type to a generic column writer type `ColumnWriterImpl`.
+///
+/// # Panics
 ///
 /// Panics if actual enum value for `col_writer` does not match the type `T`.
 pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnWriterImpl<T> {
@@ -230,7 +241,7 @@ impl ColumnCloseResult {
                 .build()?;
             if let Some(offset_index) = self.offset_index.as_mut() {
                 let mut offset = dictionary_len as i64;
-                for location in offset_index.page_locations.iter_mut() {
+                for location in &mut offset_index.page_locations {
                     location.offset = offset;
                     offset += location.compressed_page_size as i64;
                 }
@@ -246,6 +257,7 @@ struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
+    num_page_nans: Option<u64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
 }
@@ -273,6 +285,7 @@ impl PageMetrics {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
         self.num_page_nulls = 0;
+        self.num_page_nans = None;
         self.repetition_level_histogram
             .as_mut()
             .map(LevelHistogram::reset);
@@ -295,6 +308,7 @@ struct ColumnMetrics<T: Default> {
     min_column_value: Option<T>,
     max_column_value: Option<T>,
     num_column_nulls: u64,
+    num_column_nans: Option<u64>,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
@@ -321,7 +335,7 @@ impl<T: Default> ColumnMetrics<T> {
     /// Sum `page_histogram` into `chunk_histogram`
     fn update_histogram(
         chunk_histogram: &mut Option<LevelHistogram>,
-        page_histogram: &Option<LevelHistogram>,
+        page_histogram: Option<&LevelHistogram>,
     ) {
         if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
             chunk_hist.add(page_hist);
@@ -333,11 +347,11 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
         ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
-            &page_metrics.definition_level_histogram,
+            page_metrics.definition_level_histogram.as_ref(),
         );
         ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
-            &page_metrics.repetition_level_histogram,
+            page_metrics.repetition_level_histogram.as_ref(),
         );
     }
 
@@ -375,7 +389,7 @@ impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
     }
 }
 
-impl<'a> LevelDataRef<'a> {
+impl LevelDataRef<'_> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Absent => 0,
@@ -446,6 +460,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     page_metrics: PageMetrics,
     // Metrics per column writer
     column_metrics: ColumnMetrics<E::T>,
+
+    /// Pre-computed distinct count to write into column chunk statistics.
+    /// When set, takes precedence over `column_metrics.column_distinct_count`.
+    distinct_count_override: Option<u64>,
 
     /// The order of encodings within the generated metadata does not impact its meaning,
     /// but we use a BTreeSet so that the output is deterministic
@@ -523,6 +541,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_pages: VecDeque::new(),
             page_metrics,
             column_metrics,
+            distinct_count_override: None,
             column_index_builder,
             offset_index_builder,
             encodings,
@@ -533,7 +552,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Sets a pre-computed distinct count to write into column chunk statistics.
+    ///
+    /// When set, this value is written as `distinct_count` in the row group statistics
+    /// footer. It takes precedence over any `distinct_count` passed through
+    /// [`Self::write_batch_with_statistics`].
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        self.distinct_count_override = Some(count);
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
@@ -566,7 +595,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -589,6 +618,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             && !matches!(rep_levels, LevelDataRef::Materialized(_));
         let has_levels = !matches!(def_levels, LevelDataRef::Absent)
             || !matches!(rep_levels, LevelDataRef::Absent);
+
         // When both level vectors are compact (Uniform or Absent), there is no
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
@@ -597,6 +627,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         } else {
             self.props.write_batch_size()
         };
+        debug_assert!(base_batch_size > 0);
+
         let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
@@ -821,7 +853,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `#[inline(never)]` keeps this slow path — only reached for
     /// variable-width columns whose values need page splitting — out of
     /// the hot `write_batch_internal` loop.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline(never)]
     fn write_granular_chunk(
         &mut self,
@@ -929,7 +961,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             })
                         }
                         None => encoder.put_n_with_observer(value, count, |_, _| {}),
-                    };
+                    }
                     let values_to_write = count * (value == max_def) as usize;
                     self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
                     values_to_write
@@ -983,7 +1015,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None => encoder.put_n_with_observer(value, count, |level, run_len| {
                             new_rows += (run_len as u32) * (level == 0) as u32;
                         }),
-                    };
+                    }
                 }
             }
             self.page_metrics.num_buffered_rows += new_rows;
@@ -1058,6 +1090,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
+    // For float columns, always provide Some(n), even if n is 0
+    // For non-float columns, always provide None
+    fn get_nan_count<T: ParquetValueType>(&self) -> Option<i64> {
+        let nan_count = || {
+            let nan_count = self.page_metrics.num_page_nans.unwrap_or(0);
+            match i64::try_from(nan_count) {
+                Ok(count) => Some(count),
+                _ => Some(i64::MAX),
+            }
+        };
+        match T::PHYSICAL_TYPE {
+            Type::FLOAT | Type::DOUBLE => nan_count(),
+            Type::FIXED_LEN_BYTE_ARRAY
+                if matches!(self.descr.logical_type_ref(), Some(LogicalType::Float16)) =>
+            {
+                nan_count()
+            }
+            _ => None,
+        }
+    }
+
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
@@ -1075,6 +1128,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 vec![],
                 vec![],
                 self.page_metrics.num_page_nulls as i64,
+                self.get_nan_count::<E::T>(),
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -1088,10 +1142,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     let new_min = stat.min_opt().unwrap();
                     let new_max = stat.max_opt().unwrap();
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
+                        let basic_info = self.descr.get_basic_info();
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
-                                || compare_greater(&self.descr, last_max, new_max);
+                            let not_ascending = compare_greater(basic_info, last_min, new_min)
+                                || compare_greater(basic_info, last_max, new_max);
                             if not_ascending {
                                 self.data_page_boundary_ascending = false;
                             }
@@ -1099,8 +1154,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                         if self.data_page_boundary_descending {
                             // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = compare_greater(&self.descr, new_min, last_min)
-                                || compare_greater(&self.descr, new_max, last_max);
+                            let not_descending = compare_greater(basic_info, new_min, last_min)
+                                || compare_greater(basic_info, new_max, last_max);
                             if not_descending {
                                 self.data_page_boundary_descending = false;
                             }
@@ -1122,6 +1177,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
+                            self.get_nan_count::<E::T>(),
                         );
                     } else {
                         self.column_index_builder.append(
@@ -1129,6 +1185,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             stat.min_bytes_opt().unwrap().to_vec(),
                             stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
+                            self.get_nan_count::<E::T>(),
                         );
                     }
                 }
@@ -1157,7 +1214,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             Type::FIXED_LEN_BYTE_ARRAY
                 if !matches!(
                     self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. }) | Some(&LogicalType::Float16)
+                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
                 ) =>
             {
                 true
@@ -1297,6 +1354,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
+        if let Some(nan_count) = values_data.nan_count {
+            *self.column_metrics.num_column_nans.get_or_insert(0) += nan_count;
+            self.page_metrics.num_page_nans = Some(nan_count);
+        }
+
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
@@ -1310,7 +1372,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None,
                         Some(self.page_metrics.num_page_nulls),
                         false,
-                    ),
+                    )
+                    .with_nan_count(values_data.nan_count),
                 )
             }
             _ => None,
@@ -1487,13 +1550,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if self.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
+            let distinct_count = self
+                .distinct_count_override
+                .or(self.column_metrics.column_distinct_count);
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
                 self.column_metrics.max_column_value.clone(),
-                self.column_metrics.column_distinct_count,
+                distinct_count,
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )
+            .with_nan_count(self.column_metrics.num_column_nans)
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
@@ -1611,7 +1678,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
                 self.column_metrics.dictionary_page_offset = Some(page_spec.offset);
             }
-            _ => {}
+            PageType::INDEX_PAGE => {}
         }
     }
 
@@ -1642,80 +1709,109 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, min, |cur| compare_greater(descr, cur, val))
+    match min {
+        None => *min = Some(val.clone()),
+        Some(min) => {
+            let basic_type_info = descr.get_basic_info();
+            let is_min_nan = is_nan(basic_type_info, min);
+            let is_val_nan = is_nan(basic_type_info, val);
+            match (is_min_nan, is_val_nan) {
+                // current min is not NaN, but incoming is NaN: skip
+                (false, true) => {}
+                // current min is NaN, but incoming is not: assign val to min
+                (true, false) => *min = val.clone(),
+                // both NaN or non-NaN, safe to call update_stat()
+                _ => {
+                    update_stat::<T, _>(val, min, |cur| compare_greater(basic_type_info, cur, val))
+                }
+            }
+        }
+    }
 }
 
 fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
+    match max {
+        None => *max = Some(val.clone()),
+        Some(max) => {
+            let basic_type_info = descr.get_basic_info();
+            let is_max_nan = is_nan(basic_type_info, max);
+            let is_val_nan = is_nan(basic_type_info, val);
+            match (is_max_nan, is_val_nan) {
+                // current max is not NaN, but incoming is NaN: skip
+                (false, true) => {}
+                // current max is NaN, but incoming is not: assign val to max
+                (true, false) => *max = val.clone(),
+                // both NaN or non-NaN, safe to call update_stat()
+                _ => {
+                    update_stat::<T, _>(val, max, |cur| compare_greater(basic_type_info, val, cur))
+                }
+            }
+        }
+    }
 }
 
 #[inline]
-#[allow(clippy::eq_op)]
-fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
+#[expect(clippy::eq_op)]
+fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
+        {
+            // taken from f16 impl, but skips creating f16. just compare the bits as u16.
             let val = val.as_bytes();
-            let val = f16::from_le_bytes([val[0], val[1]]);
-            val.is_nan()
+            // Float16 is stored little endian
+            let uval = ((val[1] as u16) << 8) | val[0] as u16;
+            uval & 0x7FFFu16 > 0x7C00u16
         }
         _ => false,
     }
 }
 
-/// Perform a conditional update of `cur`, skipping any NaN values
+/// Perform a conditional update of `cur`
 ///
-/// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
-/// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
-fn update_stat<T: ParquetValueType, F>(
-    descr: &ColumnDescriptor,
-    val: &T,
-    cur: &mut Option<T>,
-    should_update: F,
-) where
+/// Calls `should_update` with the value of `cur`, and updates `cur` to `Some(val)` if it
+/// returns `true`. `cur` must not be `None` or this will panic.
+fn update_stat<T: ParquetValueType, F>(val: &T, cur: &mut T, should_update: F)
+where
     F: Fn(&T) -> bool,
 {
-    if is_nan(descr, val) {
-        return;
-    }
-
-    if cur.as_ref().is_none_or(should_update) {
-        *cur = Some(val.clone());
+    if should_update(cur) {
+        *cur = val.clone();
     }
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, b: &T) -> bool {
     match T::PHYSICAL_TYPE {
-        Type::INT32 | Type::INT64 => {
-            if let Some(LogicalType::Integer(IntType {
-                is_signed: false, ..
-            })) = descr.logical_type_ref()
-            {
-                // need to compare unsigned
-                return compare_greater_unsigned_int(a, b);
-            }
-
-            match descr.converted_type() {
-                ConvertedType::UINT_8
-                | ConvertedType::UINT_16
-                | ConvertedType::UINT_32
-                | ConvertedType::UINT_64 => {
-                    return compare_greater_unsigned_int(a, b);
-                }
-                _ => {}
-            };
+        Type::FLOAT => {
+            let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal(_)) = descr.logical_type_ref() {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            if let ConvertedType::DECIMAL = descr.converted_type() {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            if let Some(LogicalType::Float16) = descr.logical_type_ref() {
-                return compare_greater_f16(a.as_bytes(), b.as_bytes());
-            }
+        Type::DOUBLE => {
+            let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
+        Type::INT32 | Type::INT64
+            if matches!(basic_type_info.sort_order(), SortOrder::UNSIGNED) =>
+        {
+            return compare_greater_unsigned_int(a, b);
+        }
+        Type::FIXED_LEN_BYTE_ARRAY
+            if matches!(basic_type_info.sort_order(), SortOrder::TOTAL_ORDER) =>
+        {
+            return compare_greater_f16(a.as_bytes(), b.as_bytes());
+        }
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
+            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
+                || matches!(
+                    basic_type_info.logical_type_ref(),
+                    Some(LogicalType::Decimal(_))
+                ) =>
+        {
+            return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
         _ => {}
@@ -1764,7 +1860,7 @@ fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
 fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     let a = f16::from_le_bytes(a.try_into().unwrap());
     let b = f16::from_le_bytes(b.try_into().unwrap());
-    a > b
+    a.total_cmp(&b) == Ordering::Greater
 }
 
 /// Signed comparison of bytes arrays
@@ -3207,7 +3303,7 @@ mod tests {
     #[test]
     fn test_float_statistics() {
         let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -3219,7 +3315,7 @@ mod tests {
     #[test]
     fn test_double_statistics() {
         let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -3265,6 +3361,137 @@ mod tests {
     }
 
     #[test]
+    fn test_ieee754_total_order_float() {
+        // Test IEEE 754 total order for f32
+        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        let neg_nan = f32::from_bits(0xffc00000); // a NaN with the sign bit set
+        let neg_inf = f32::NEG_INFINITY;
+        let neg_one = -1.0_f32;
+        let neg_zero = -0.0_f32;
+        let pos_zero = 0.0_f32;
+        let pos_one = 1.0_f32;
+        let pos_inf = f32::INFINITY;
+        let pos_nan = f32::from_bits(0x7fc00000); // a NaN with the sign bit unset
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be -NaN, max should be +NaN
+            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2)); // neg_nan and pos_nan
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_float_only_nan() {
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
+        let neg_nan1 = f32::from_bits(0xffc00000); // sign bit set, significand x400000
+        let neg_nan2 = f32::from_bits(0xffc00001); // sign bit set, significand x400001
+        let neg_nan3 = f32::from_bits(0xffc00002); // sign bit set, significand x400002
+        let pos_nan1 = f32::from_bits(0x7fc00000); // sign bit unset, significand x400000
+        let pos_nan2 = f32::from_bits(0x7fc00001); // sign bit unset, significand x400001
+        let pos_nan3 = f32::from_bits(0x7fc00002); // sign bit unset, significand x400002
+
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double() {
+        // Test IEEE 754 total order for f64
+        let neg_nan = f64::from_bits(0xfff8000000000000);
+        let neg_inf = f64::NEG_INFINITY;
+        let neg_one = -1.0_f64;
+        let neg_zero = -0.0_f64;
+        let pos_zero = 0.0_f64;
+        let pos_one = 1.0_f64;
+        let pos_inf = f64::INFINITY;
+        let pos_nan = f64::from_bits(0x7ff8000000000000);
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, and NaN filtering
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2));
+        } else {
+            panic!("Expected double statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double_only_nan() {
+        // Test IEEE 754 total order for various NaN representations
+        // They should be ordered by the significand
+        let neg_nan1 = f64::from_bits(0xfff8000000000000);
+        let neg_nan2 = f64::from_bits(0xfff8000000000001);
+        let neg_nan3 = f64::from_bits(0xfff8000000000002);
+        let pos_nan1 = f64::from_bits(0x7ff8000000000000);
+        let pos_nan2 = f64::from_bits(0x7ff8000000000001);
+        let pos_nan3 = f64::from_bits(0x7ff8000000000002);
+
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, min should be `neg_nan3`, max `pos_nan3`
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_zeros() {
+        // Test that -0.0 and +0.0 are handled correctly
+        let values = vec![-0.0_f32, 0.0_f32, -0.0_f32, 0.0_f32];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, -0.0 < +0.0
+            assert_eq!(stats.min_opt().unwrap().to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(stats.max_opt().unwrap().to_bits(), 0.0_f32.to_bits());
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -3277,7 +3504,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(
             stats.min_opt().unwrap(),
             &ByteArray::from(-f16::from_f32(2.0))
@@ -3296,12 +3523,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -3312,12 +3540,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -3328,12 +3557,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -3344,35 +3574,40 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(
+            stats.min_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
+        assert_eq!(
+            stats.max_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
     fn test_float16_statistics_zero_only() {
-        let input = [f16::ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
     #[test]
     fn test_float16_statistics_neg_zero_only() {
-        let input = [f16::NEG_ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::NEG_ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
@@ -3383,8 +3618,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
     }
 
@@ -3396,18 +3631,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -3416,10 +3652,11 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -3428,19 +3665,20 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
+        assert!(!stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
 
     #[test]
     fn test_float_statistics_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -3451,12 +3689,12 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -3465,10 +3703,10 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_min() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -3478,11 +3716,11 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -3491,10 +3729,11 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -3503,10 +3742,11 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -3515,19 +3755,20 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
+        assert_eq!(stats.min_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
         assert!(matches!(stats, Statistics::Double(_)));
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
     }
 
     #[test]
     fn test_double_statistics_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -3538,12 +3779,12 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -3552,10 +3793,10 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_min() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -3565,11 +3806,11 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -3608,9 +3849,8 @@ mod tests {
         let r = writer.close().unwrap();
         assert!(r.column_index.is_some());
         let col_idx = r.column_index.unwrap();
-        let col_idx = match col_idx {
-            ColumnIndexMetaData::INT32(col_idx) => col_idx,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(col_idx) = col_idx else {
+            panic!("wrong stats type")
         };
         // null_pages should be true for page 0
         assert!(col_idx.is_null_page(0));
@@ -3647,9 +3887,8 @@ mod tests {
         assert_eq!(8, r.rows_written);
 
         // column index
-        let column_index = match column_index {
-            ColumnIndexMetaData::INT32(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         assert_eq!(2, column_index.num_pages());
         assert_eq!(2, offset_index.page_locations.len());
@@ -3707,9 +3946,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(3, r.rows_written);
@@ -3778,9 +4016,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(1, r.rows_written);
@@ -3802,8 +4039,8 @@ mod tests {
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value);
-                assert_eq!("C".as_bytes(), column_index_max_value);
+                assert_eq!(b"B", column_index_min_value);
+                assert_eq!(b"C", column_index_max_value);
 
                 assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
                 assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
@@ -3833,9 +4070,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -3876,9 +4112,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -3977,8 +4212,8 @@ mod tests {
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
 
-            assert_eq!("B".as_bytes(), min_value.as_bytes());
-            assert_eq!("C".as_bytes(), max_value.as_bytes());
+            assert_eq!(b"B", min_value.as_bytes());
+            assert_eq!(b"C", max_value.as_bytes());
         } else {
             panic!("expecting Statistics::ByteArray");
         }
@@ -4187,7 +4422,7 @@ mod tests {
         // Test truncate and increment for max bounds on UTF-8 statistics
         // 7-bit (i.e. ASCII)
         let r = truncate_and_increment_utf8("yyyyyyyyy", 8).unwrap();
-        assert_eq!(&r, "yyyyyyyz".as_bytes());
+        assert_eq!(&r, b"yyyyyyyz");
 
         // 2-byte without overflow
         let r = truncate_and_increment_utf8("ééééé", 7).unwrap();
@@ -4559,7 +4794,7 @@ mod tests {
             let values = page.iter().filter_map(Clone::clone).collect::<Vec<_>>();
             let def_levels = page
                 .iter()
-                .map(|maybe_value| if maybe_value.is_some() { 1 } else { 0 })
+                .map(|maybe_value| i16::from(maybe_value.is_some()))
                 .collect::<Vec<_>>();
             writer.write_batch(&values, Some(&def_levels), None)?;
             writer.flush_data_pages()?;
@@ -4835,7 +5070,7 @@ mod tests {
                 PageType::DICTIONARY_PAGE => {
                     collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
                 }
-                _ => {}
+                PageType::INDEX_PAGE => {}
             }
         }
         collected

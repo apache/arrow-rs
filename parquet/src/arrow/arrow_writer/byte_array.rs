@@ -30,6 +30,7 @@ use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
+use crate::util::prefix::common_prefix_length;
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
@@ -201,15 +202,8 @@ impl FallbackEncoder {
                 for idx in indices {
                     let value = values.value(idx);
                     let value = value.as_ref();
-                    let mut prefix_length = 0;
 
-                    while prefix_length < last_value.len()
-                        && prefix_length < value.len()
-                        && last_value[prefix_length] == value[prefix_length]
-                    {
-                        prefix_length += 1;
-                    }
-
+                    let prefix_length = common_prefix_length(last_value, value);
                     let suffix_length = value.len() - prefix_length;
 
                     last_value.clear();
@@ -293,6 +287,7 @@ impl FallbackEncoder {
             encoding,
             min_value,
             max_value,
+            nan_count: None,
             variable_length_bytes,
         })
     }
@@ -328,7 +323,6 @@ impl Storage for ByteArrayStorage {
         key as u64
     }
 
-    #[allow(dead_code)] // not used in parquet_derive, so is dead there
     fn estimated_memory_size(&self) -> usize {
         self.page.capacity() * std::mem::size_of::<u8>()
             + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
@@ -415,6 +409,7 @@ impl DictEncoder {
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
+            nan_count: None,
             variable_length_bytes,
         }
     }
@@ -650,12 +645,18 @@ where
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
         } else if let Some((min, max)) = compute_min_max(values, indices.clone()) {
-            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
-                encoder.min_value = Some(min);
+            // Compare before copying: `write_gather` runs once per
+            // mini-batch, and a byte-budgeted mini-batch of large values can
+            // hold a single value, so an unconditional copy here would
+            // duplicate every value once for `min` and once for `max`.
+            let min = min.as_ref();
+            if encoder.min_value.as_ref().is_none_or(|m| m.data() > min) {
+                encoder.min_value = Some(min.to_vec().into());
             }
 
-            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
-                encoder.max_value = Some(max);
+            let max = max.as_ref();
+            if encoder.max_value.as_ref().is_none_or(|m| m.data() < max) {
+                encoder.max_value = Some(max.to_vec().into());
             }
         }
     }
@@ -778,7 +779,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
 fn compute_min_max<T>(
     array: T,
     mut valid: impl Iterator<Item = usize>,
-) -> Option<(ByteArray, ByteArray)>
+) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -793,7 +794,7 @@ where
         min = min.min(val);
         max = max.max(val);
     }
-    Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+    Some((min, max))
 }
 
 /// Updates geospatial statistics for the provided array and indices

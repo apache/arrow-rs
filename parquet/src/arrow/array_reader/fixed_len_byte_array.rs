@@ -462,15 +462,13 @@ impl ColumnValueDecoder for ValueDecoder {
             Some(x) => assert_eq!(x, self.byte_length),
             None => {
                 out.byte_length = Some(self.byte_length);
-                // TODO: collapse to a let-chain once MSRV ≥ 1.88
-                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
-                if out.buffer.is_empty() {
-                    if let Some(values_capacity) = out.values_capacity.take() {
-                        // now that the byte length per output element is known,
-                        // allocate the actual needed space.
-                        let byte_capacity = values_capacity.saturating_mul(self.byte_length);
-                        out.buffer = Vec::with_capacity(byte_capacity);
-                    }
+                if out.buffer.is_empty()
+                    && let Some(values_capacity) = out.values_capacity.take()
+                {
+                    // now that the byte length per output element is known,
+                    // allocate the actual needed space.
+                    let byte_capacity = values_capacity.saturating_mul(self.byte_length);
+                    out.buffer = Vec::with_capacity(byte_capacity);
                 }
             }
         }
@@ -560,7 +558,7 @@ impl ColumnValueDecoder for ValueDecoder {
 // `offset`. Values will be appended to `dst`.
 fn read_byte_stream_split(
     dst: &mut Vec<u8>,
-    src: &mut Bytes,
+    src: &Bytes,
     offset: usize,
     num_values: usize,
     data_width: usize,

@@ -255,7 +255,7 @@ impl BooleanBuffer {
                 let suffix = read_u64(suffix);
                 let result_u64s: Vec<u64> = aligned_u64s
                     .iter()
-                    .cloned()
+                    .copied()
                     .chain(std::iter::once(suffix))
                     .map(&mut op)
                     .collect();
@@ -375,11 +375,11 @@ impl BooleanBuffer {
                 ([], left_suf, [], right_suf) => {
                     let left_iter = left_u64s
                         .iter()
-                        .cloned()
+                        .copied()
                         .chain((!left_suf.is_empty()).then(|| read_u64(left_suf)));
                     let right_iter = right_u64s
                         .iter()
-                        .cloned()
+                        .copied()
                         .chain((!right_suf.is_empty()).then(|| read_u64(right_suf)));
                     let result_u64s: Vec<u64> =
                         left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect();
@@ -512,6 +512,10 @@ impl BooleanBuffer {
     }
 
     /// Slices this [`BooleanBuffer`] by the provided `offset` and `length`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.bit_len,
@@ -1035,7 +1039,7 @@ mod tests {
             .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
             .collect::<Vec<_>>();
         let base = bytes.as_ptr() as usize;
-        let shift = (0..8).find(|s| (base + s) % 8 != 0).unwrap();
+        let shift = (0..8).find(|s| !(base + s).is_multiple_of(8)).unwrap();
         let misaligned = &bytes[shift..];
 
         // Case 1: fallback path with `remainder.is_empty() == true`
@@ -1244,7 +1248,7 @@ mod tests {
         assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
         let finished = builder.finish();
         for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 

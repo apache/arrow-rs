@@ -22,9 +22,14 @@ use std::collections::HashMap;
 
 /// Generate a JSON representation of the `Schema`.
 pub fn schema_to_json(schema: &Schema) -> serde_json::Value {
+    let metadata: serde_json::Map<String, serde_json::Value> = schema
+        .metadata()
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
     serde_json::json!({
         "fields": schema.fields().iter().map(|f| field_to_json(f.as_ref())).collect::<Vec<_>>(),
-        "metadata": serde_json::to_value(schema.metadata()).unwrap()
+        "metadata": metadata
     })
 }
 
@@ -78,7 +83,7 @@ fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
             .iter()
             .map(|(k, v)| {
                 if let Value::String(v) = v {
-                    Ok((k.to_string(), v.to_string()))
+                    Ok((k.clone(), v.clone()))
                 } else {
                     Err(ArrowError::ParseError(
                         "metadata `value` field must be a string".to_string(),
@@ -108,10 +113,7 @@ mod tests {
     #[test]
     fn schema_json() {
         // Add some custom metadata
-        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata = HashMap::from([("Key".to_string(), "Value".to_string())]);
 
         let schema = Schema::new_with_metadata(
             vec![
@@ -189,7 +191,7 @@ mod tests {
                 Field::new("c30", DataType::Duration(TimeUnit::Millisecond), false),
                 Field::new("c31", DataType::Duration(TimeUnit::Microsecond), false),
                 Field::new("c32", DataType::Duration(TimeUnit::Nanosecond), false),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "c33",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

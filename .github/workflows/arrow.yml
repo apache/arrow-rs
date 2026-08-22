@@ -35,6 +35,7 @@ on:
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-cmp/**
       - arrow-csv/**
       - arrow-data/**
       - arrow-integration-test/**
@@ -48,8 +49,10 @@ on:
       - arrow-string/**
       - arrow/**
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   # test the crate
   linux-test:
     name: Test
@@ -57,7 +60,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -73,6 +76,8 @@ jobs:
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
           cargo test -p arrow-array --features=ffi
+      - name: Test arrow-cmp
+        run: cargo test -p arrow-cmp --all-features
       - name: Test arrow-select
         run: cargo test -p arrow-select --all-features
       - name: Test arrow-cast
@@ -117,7 +122,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -153,7 +158,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -181,7 +186,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -201,7 +206,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
@@ -233,6 +238,14 @@ jobs:
       - name: Clippy arrow-array
         run: |
           mod=arrow-array
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
+      - name: Clippy arrow-cmp
+        run: |
+          mod=arrow-cmp
           cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
           # Dependency checks excluding tests & benches.
           cargo clippy -p "$mod" -- -D unused_crate_dependencies

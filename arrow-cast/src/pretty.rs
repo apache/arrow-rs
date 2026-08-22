@@ -206,7 +206,7 @@ fn create_table(
     }
 
     for batch in results {
-        let schema = schema_opt.as_ref().unwrap_or(batch.schema_ref());
+        let schema = schema_opt.as_ref().unwrap_or_else(|| batch.schema_ref());
 
         // Could be a custom schema that was provided.
         if batch.columns().len() != schema.fields().len() {
@@ -1028,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float16_display() {
         let values = vec![
             Some(f16::from_f32(f32::NAN)),
@@ -1290,7 +1291,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+    impl DisplayIndex for MyMoneyFormatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} €", self.array.value(idx))?,
@@ -1307,7 +1308,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyInt32Formatter<'a> {
+    impl DisplayIndex for MyInt32Formatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} (32-Bit)", self.array.value(idx))?,
