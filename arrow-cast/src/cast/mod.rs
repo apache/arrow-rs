@@ -65,7 +65,7 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -875,7 +875,8 @@ pub fn cast_with_options(
                 ));
             }
             let array = array.as_fixed_size_list();
-            let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
+            let values = mask_fixed_size_list_values(array);
+            let values = cast_with_options(&values, list_to.data_type(), cast_options)?;
             Ok(Arc::new(FixedSizeListArray::try_new(
                 list_to.clone(),
                 *size_from,
@@ -2354,6 +2355,22 @@ fn cast_struct_to_struct(
     Ok(Arc::new(array) as ArrayRef)
 }
 
+fn mask_struct_column(array: &StructArray, column: &ArrayRef) -> ArrayRef {
+    if array.null_count() == 0 {
+        return Arc::clone(column);
+    }
+    let combined = NullBuffer::union(array.nulls(), column.nulls());
+    if combined.as_ref() != column.nulls() {
+        let data = column.to_data().into_builder().nulls(combined).build();
+        match data {
+            Ok(d) => make_array(d),
+            Err(_) => Arc::clone(column),
+        }
+    } else {
+        Arc::clone(column)
+    }
+}
+
 fn cast_struct_fields_by_name(
     array: &StructArray,
     from_fields: Fields,
@@ -2368,7 +2385,12 @@ fn cast_struct_fields_by_name(
                 .position(|from_field| from_field.name() == to_field.name())
                 .unwrap(); // safe because we checked above
             let column = array.column(from_field_idx);
-            cast_with_options(column, to_field.data_type(), cast_options)
+            let column = if to_field.is_nullable() {
+                mask_struct_column(array, column)
+            } else {
+                Arc::clone(column)
+            };
+            cast_with_options(&column, to_field.data_type(), cast_options)
         })
         .collect::<Result<Vec<ArrayRef>, ArrowError>>()
 }
@@ -2382,7 +2404,14 @@ fn cast_struct_fields_in_order(
         .columns()
         .iter()
         .zip(to_fields.iter())
-        .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
+        .map(|(l, field)| {
+            let column = if field.is_nullable() {
+                mask_struct_column(array, l)
+            } else {
+                Arc::clone(l)
+            };
+            cast_with_options(&column, field.data_type(), cast_options)
+        })
         .collect::<Result<Vec<ArrayRef>, ArrowError>>()
 }
 
@@ -14273,5 +14302,249 @@ mod tests {
         let actual = run_array.into_iter().flatten().collect::<Vec<_>>();
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_binary_to_string_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // [0xFF, 0xFF] is invalid UTF-8, but masked by null
+        let mut buffer = arrow_buffer::MutableBuffer::new(4);
+        buffer.extend_from_slice(&[b'a', b'b', 0xFF, 0xFF]);
+        let array = BinaryArray::new(
+            OffsetBuffer::from_lengths([2, 2]),
+            buffer.into(),
+            Some(vec![true, false].into()),
+        );
+
+        let casted = cast_with_options(&array, &DataType::Utf8, &unsafe_opts).unwrap();
+        let expected = StringArray::from(vec![Some("ab"), None]);
+        assert_eq!(casted.as_ref(), &expected);
+
+        // LargeBinary to LargeUtf8 with masked invalid UTF-8
+        let mut buffer = arrow_buffer::MutableBuffer::new(4);
+        buffer.extend_from_slice(&[b'h', b'i', 0xFF, 0xFF]);
+        let large_array = LargeBinaryArray::new(
+            OffsetBuffer::from_lengths([2, 2]),
+            buffer.into(),
+            Some(vec![true, false].into()),
+        );
+        let casted = cast_with_options(&large_array, &DataType::LargeUtf8, &unsafe_opts).unwrap();
+        let expected = LargeStringArray::from(vec![Some("hi"), None]);
+        assert_eq!(casted.as_ref(), &expected);
+
+        // Unmasked invalid UTF-8 must still fail
+        let mut buffer = arrow_buffer::MutableBuffer::new(4);
+        buffer.extend_from_slice(&[b'a', b'b', 0xFF, 0xFF]);
+        let unmasked_array = BinaryArray::new(
+            OffsetBuffer::from_lengths([2, 2]),
+            buffer.into(),
+            Some(vec![true, true].into()),
+        );
+        assert!(cast_with_options(&unmasked_array, &DataType::Utf8, &unsafe_opts).is_err());
+    }
+
+    #[test]
+    fn test_binary_view_to_string_view_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // BinaryView with invalid UTF-8 in a null slot
+        let mut builder = BinaryViewBuilder::new();
+        builder.append_value(b"valid_string");
+        builder.append_null();
+        let array = builder.finish();
+
+        // Mutate the raw view/buffer data of the null slot to contain invalid utf-8 bytes
+        let mut views = array.views().to_vec();
+        // Insert view pointing to invalid bytes
+        let invalid_bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        let mut buffers = array.data_buffers().to_vec();
+        buffers.push(arrow_buffer::Buffer::from(invalid_bytes));
+        let buf_idx = (buffers.len() - 1) as u32;
+        views[1] = ByteView {
+            length: 4,
+            prefix: 0xFFFFFFFF,
+            buffer_index: buf_idx,
+            offset: 0,
+        }
+        .as_u128();
+
+        let raw_array = unsafe {
+            BinaryViewArray::new_unchecked(views.into(), buffers, Some(vec![true, false].into()))
+        };
+
+        let casted = cast_with_options(&raw_array, &DataType::Utf8View, &unsafe_opts).unwrap();
+        let expected = StringViewArray::from(vec![Some("valid_string"), None]);
+        assert_eq!(casted.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_fixed_size_list_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // 2nd element is masked by null in parent FixedSizeList, child has invalid "notnumber"
+        let child = StringArray::from(vec!["42", "notnumber"]);
+        let array = FixedSizeListArray::new(
+            Field::new("item", DataType::Utf8, false).into(),
+            1,
+            Arc::new(child),
+            Some(vec![true, false].into()),
+        );
+
+        let target_type =
+            DataType::FixedSizeList(Field::new("item", DataType::Int32, false).into(), 1);
+        let casted = cast_with_options(&array, &target_type, &unsafe_opts).unwrap();
+
+        let expected_child = Int32Array::from(vec![Some(42), None]);
+        let expected = FixedSizeListArray::new(
+            Field::new("item", DataType::Int32, false).into(),
+            1,
+            Arc::new(expected_child),
+            Some(vec![true, false].into()),
+        );
+        assert_eq!(casted.as_ref(), &expected);
+
+        // Unmasked invalid element must still fail
+        let child_unmasked = StringArray::from(vec!["42", "notnumber"]);
+        let array_unmasked = FixedSizeListArray::new(
+            Field::new("item", DataType::Utf8, false).into(),
+            1,
+            Arc::new(child_unmasked),
+            Some(vec![true, true].into()),
+        );
+        assert!(cast_with_options(&array_unmasked, &target_type, &unsafe_opts).is_err());
+    }
+
+    #[test]
+    fn test_list_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // ListArray with 2nd list element masked as null, containing invalid child "notnumber"
+        let child = StringArray::from(vec!["10", "20", "notnumber", "bad"]);
+        let offsets = OffsetBuffer::from_lengths([2, 2]);
+        let array = ListArray::new(
+            Field::new("item", DataType::Utf8, true).into(),
+            offsets,
+            Arc::new(child),
+            Some(vec![true, false].into()),
+        );
+
+        let target_type = DataType::List(Field::new("item", DataType::Int32, true).into());
+        let casted = cast_with_options(&array, &target_type, &unsafe_opts).unwrap();
+
+        let expected_child = Int32Array::from(vec![Some(10), Some(20), None, None]);
+        let expected_offsets = OffsetBuffer::from_lengths([2, 2]);
+        let expected = ListArray::new(
+            Field::new("item", DataType::Int32, true).into(),
+            expected_offsets,
+            Arc::new(expected_child),
+            Some(vec![true, false].into()),
+        );
+        assert_eq!(casted.as_ref(), &expected);
+
+        // LargeList to List
+        let large_target = DataType::LargeList(Field::new("item", DataType::Int32, true).into());
+        let casted_large = cast_with_options(&array, &large_target, &unsafe_opts).unwrap();
+        assert_eq!(casted_large.data_type(), &large_target);
+        assert!(casted_large.is_null(1));
+    }
+
+    #[test]
+    fn test_list_view_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        let child = StringArray::from(vec!["100", "notnumber"]);
+        let array = ListViewArray::new(
+            Field::new("item", DataType::Utf8, true).into(),
+            vec![0, 1].into(),
+            vec![1, 1].into(),
+            Arc::new(child),
+            Some(vec![true, false].into()),
+        );
+
+        let target_type = DataType::ListView(Field::new("item", DataType::Int32, true).into());
+        let casted = cast_with_options(&array, &target_type, &unsafe_opts).unwrap();
+        assert_eq!(casted.data_type(), &target_type);
+        assert!(casted.is_null(1));
+    }
+
+    #[test]
+    fn test_struct_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // StructArray where 2nd struct is null, child has invalid "invalid_int"
+        let child = Arc::new(StringArray::from(vec!["123", "invalid_int"])) as ArrayRef;
+        let fields = Fields::from(vec![Field::new("a", DataType::Utf8, true)]);
+        let array = StructArray::new(fields, vec![child], Some(vec![true, false].into()));
+
+        let target_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
+        let casted = cast_with_options(&array, &target_type, &unsafe_opts).unwrap();
+        assert_eq!(casted.data_type(), &target_type);
+        assert!(casted.is_null(1));
+    }
+
+    #[test]
+    fn test_map_unsafe_masked_nulls() {
+        let unsafe_opts = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+
+        // Map with 2 entries: row 0 is valid, row 1 is null but contains invalid value "invalid"
+        let keys = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let values = Arc::new(StringArray::from(vec!["100", "invalid"])) as ArrayRef;
+        let entry_fields = Fields::from(vec![
+            Field::new("keys", DataType::Int32, false),
+            Field::new("values", DataType::Utf8, true),
+        ]);
+        let entries = StructArray::new(entry_fields, vec![keys, values], None);
+        let offsets = OffsetBuffer::from_lengths([1, 1]);
+        let map_field = Arc::new(Field::new_struct(
+            "entries",
+            vec![
+                Field::new("keys", DataType::Int32, false),
+                Field::new("values", DataType::Utf8, true),
+            ],
+            false,
+        ));
+        let array = MapArray::new(
+            map_field,
+            offsets,
+            entries,
+            Some(vec![true, false].into()),
+            false,
+        );
+
+        let target_field = Arc::new(Field::new_struct(
+            "entries",
+            vec![
+                Field::new("keys", DataType::Int32, false),
+                Field::new("values", DataType::Int32, true),
+            ],
+            false,
+        ));
+        let target_type = DataType::Map(target_field, false);
+        let casted = cast_with_options(&array, &target_type, &unsafe_opts).unwrap();
+        assert_eq!(casted.data_type(), &target_type);
+        assert!(casted.is_null(1));
     }
 }
