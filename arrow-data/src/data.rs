@@ -1031,7 +1031,7 @@ impl ArrayData {
     /// For an empty array, the `buffer` can also be empty.
     fn typed_offsets<T: ArrowNativeType + num_traits::Num>(&self) -> Result<&[T], ArrowError> {
         // An empty list-like array can have 0 offsets
-        if self.len == 0 && self.buffers[0].is_empty() {
+        if self.len == 0 && self.buffer_at(0)?.is_empty() {
             return Ok(&[]);
         }
 
@@ -1046,7 +1046,7 @@ impl ArrayData {
         idx: usize,
         len: usize,
     ) -> Result<&[T], ArrowError> {
-        let buffer = &self.buffers[idx];
+        let buffer = self.buffer_at(idx)?;
 
         let required_elements = checked_len_plus_offset(&self.data_type, len, self.offset)?;
         let byte_width = mem::size_of::<T>();
@@ -1317,6 +1317,36 @@ impl ArrayData {
         self.get_valid_child_data(0, expected_type)
     }
 
+    /// Returns `buffers[idx]`, or an error if there is no such buffer.
+    ///
+    /// [`Self::validate_values`] can be called on its own, without the buffer counts
+    /// having been checked by [`Self::validate`] first, so the index may be missing.
+    fn buffer_at(&self, idx: usize) -> Result<&Buffer, ArrowError> {
+        self.buffers.get(idx).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "{} should contain at least {} buffer(s), had {}",
+                self.data_type,
+                idx + 1,
+                self.buffers.len()
+            ))
+        })
+    }
+
+    /// Returns `child_data[idx]`, or an error if there is no such child.
+    ///
+    /// [`Self::validate_values`] can be called on its own, without the child counts
+    /// having been checked by [`Self::validate`] first, so the index may be missing.
+    fn child_at(&self, idx: usize) -> Result<&ArrayData, ArrowError> {
+        self.child_data.get(idx).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "{} should contain at least {} child data array(s), had {}",
+                self.data_type,
+                idx + 1,
+                self.child_data.len()
+            ))
+        })
+    }
+
     /// Returns `Err` if self.child_data does not have exactly `expected_len` elements
     fn validate_num_child_data(&self, expected_len: usize) -> Result<(), ArrowError> {
         if self.child_data.len() != expected_len {
@@ -1493,8 +1523,8 @@ impl ArrayData {
         match &self.data_type {
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
-            DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
-            DataType::LargeBinary => self.validate_offsets_full::<i64>(self.buffers[1].len()),
+            DataType::Binary => self.validate_offsets_full::<i32>(self.buffer_at(1)?.len()),
+            DataType::LargeBinary => self.validate_offsets_full::<i64>(self.buffer_at(1)?.len()),
             DataType::BinaryView => {
                 let views = self.typed_buffer::<u128>(0, self.len)?;
                 validate_binary_view(views, &self.buffers[1..])
@@ -1504,11 +1534,11 @@ impl ArrayData {
                 validate_string_view(views, &self.buffers[1..])
             }
             DataType::List(_) | DataType::Map(_, _) => {
-                let child = &self.child_data[0];
+                let child = self.child_at(0)?;
                 self.validate_offsets_full::<i32>(child.len)
             }
             DataType::LargeList(_) => {
-                let child = &self.child_data[0];
+                let child = self.child_at(0)?;
                 self.validate_offsets_full::<i64>(child.len)
             }
             DataType::Union(_, _) => {
@@ -1520,7 +1550,12 @@ impl ArrayData {
                 Ok(())
             }
             DataType::Dictionary(key_type, _value_type) => {
-                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
+                let dictionary_length = self.child_at(0)?.len;
+                let dictionary_length = i64::try_from(dictionary_length).map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Dictionary of {dictionary_length} values is too long for an i64"
+                    ))
+                })?;
                 let max_value = dictionary_length - 1;
                 match key_type.as_ref() {
                     DataType::UInt8 => self.check_bounds::<u8>(max_value),
@@ -1531,16 +1566,20 @@ impl ArrayData {
                     DataType::Int16 => self.check_bounds::<i16>(max_value),
                     DataType::Int32 => self.check_bounds::<i32>(max_value),
                     DataType::Int64 => self.check_bounds::<i64>(max_value),
-                    _ => unreachable!(),
+                    _ => Err(ArrowError::InvalidArgumentError(format!(
+                        "Dictionary key type must be an integer, got {key_type}"
+                    ))),
                 }
             }
             DataType::RunEndEncoded(run_ends, _values) => {
-                let run_ends_data = self.child_data()[0].clone();
+                let run_ends_data = self.child_at(0)?;
                 match run_ends.data_type() {
                     DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
                     DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
                     DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
-                    _ => unreachable!(),
+                    data_type => Err(ArrowError::InvalidArgumentError(format!(
+                        "Run end type must be Int16, Int32 or Int64, got {data_type}"
+                    ))),
                 }
             }
             _ => {
@@ -1611,7 +1650,7 @@ impl ArrayData {
     where
         T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
-        let values_buffer = &self.buffers[1].as_slice();
+        let values_buffer = &self.buffer_at(1)?.as_slice();
         if let Ok(values_str) = std::str::from_utf8(values_buffer) {
             // Validate Offsets are correct
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
@@ -1656,15 +1695,9 @@ impl ArrayData {
     where
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
-        let required_len = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-        let buffer = &self.buffers[0];
-
-        // This should have been checked as part of `validate()` prior
-        // to calling `validate_full()` but double check to be sure
-        assert!(buffer.len() / mem::size_of::<T>() >= required_len);
-
-        // Justification: buffer size was validated above
-        let indexes: &[T] = &buffer.typed_data::<T>()[self.offset..required_len];
+        // `validate()` checks the buffer size too, but `validate_values()` can be called
+        // on its own, so do not assume it has run.
+        let indexes: &[T] = self.typed_buffer::<T>(0, self.len)?;
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)
@@ -2896,6 +2929,131 @@ mod tests {
         assert_eq!(
             res.to_string(),
             format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
+        );
+    }
+
+    /// Without `force_validate`, `build_unchecked` skips validation, so these can
+    /// reach `validate_values` with a data type that has an invalid child type.
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_a_non_integer_dictionary_key() {
+        let values = valid_non_nullable_int32_array_data(2);
+        let data_type = DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+        let dictionary = unsafe {
+            ArrayData::builder(data_type)
+                .len(1)
+                .add_child_data(values)
+                .build_unchecked()
+        };
+
+        let err = dictionary.validate_values().expect_err("should get error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Dictionary key type must be an integer, got Utf8"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_a_non_integer_run_end() {
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let run_end_encoded = unsafe {
+            ArrayData::builder(data_type)
+                .len(1)
+                .add_child_data(valid_non_nullable_int32_array_data(1))
+                .add_child_data(valid_non_nullable_int32_array_data(1))
+                .build_unchecked()
+        };
+
+        let err = run_end_encoded
+            .validate_values()
+            .expect_err("should get error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Run end type must be Int16, Int32 or Int64, got Utf8"
+        );
+    }
+
+    /// `validate_values` must report missing children rather than index out of bounds.
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_missing_child_data() {
+        let int32 = Box::new(DataType::Int32);
+        let field = || Arc::new(Field::new("f", DataType::Int32, true));
+        let data_types = [
+            DataType::Dictionary(int32.clone(), int32.clone()),
+            DataType::List(field()),
+            DataType::LargeList(field()),
+            DataType::RunEndEncoded(field(), field()),
+        ];
+
+        for data_type in data_types {
+            let data = unsafe {
+                ArrayData::builder(data_type.clone())
+                    .len(1)
+                    .build_unchecked()
+            };
+            let err = data.validate_values().expect_err("should get error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: {data_type} should contain at least 1 child data array(s), had 0"
+                )
+            );
+        }
+    }
+
+    /// `validate_values` must report missing buffers rather than index out of bounds.
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_missing_buffers() {
+        // (data type, index of the first missing buffer)
+        let cases = [
+            (DataType::Utf8, 1),
+            (DataType::LargeUtf8, 1),
+            (DataType::Binary, 1),
+            (DataType::LargeBinary, 1),
+            (DataType::BinaryView, 0),
+            (DataType::Utf8View, 0),
+        ];
+
+        for (data_type, missing) in cases {
+            let data = unsafe {
+                ArrayData::builder(data_type.clone())
+                    .len(1)
+                    .build_unchecked()
+            };
+            let err = data.validate_values().expect_err("should get error");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: {data_type} should contain at least {} buffer(s), had 0",
+                    missing + 1
+                )
+            );
+        }
+    }
+
+    /// A dictionary whose keys buffer is too small must be reported, not asserted on.
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_validate_values_rejects_a_short_dictionary_keys_buffer() {
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let dictionary = unsafe {
+            ArrayData::builder(data_type)
+                .len(4)
+                .add_buffer(Buffer::from_slice_ref([1_i32, 0]))
+                .add_child_data(valid_non_nullable_int32_array_data(2))
+                .build_unchecked()
+        };
+
+        let err = dictionary.validate_values().expect_err("should get error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Buffer 0 of Dictionary(Int32, Int32) isn't large enough. Expected 16 bytes got 8"
         );
     }
 

@@ -102,12 +102,7 @@ impl RecordBatchDecoder<'_> {
                 self.create_primitive_array(field_node, data_type, &buffers)
             }
             BinaryView | Utf8View => {
-                let count = variadic_counts
-                    .pop_front()
-                    .ok_or(ArrowError::IpcError(format!(
-                        "Missing variadic count for {data_type} column"
-                    )))?;
-                let count = count + 2; // view and null buffer.
+                let count = self.next_variadic_buffer_count(variadic_counts, data_type)?;
                 let buffers = (0..count)
                     .map(|_| self.next_buffer())
                     .collect::<Result<Vec<_>, _>>()?;
@@ -546,6 +541,11 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     /// Read the record batch, consuming the reader
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message does not describe a batch matching the schema,
+    /// for example if it declares more variadic buffer counts than the schema uses.
     pub fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
@@ -594,7 +594,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, columns, &options)
             }
         } else {
@@ -615,7 +615,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, children, &options)
             }
         }
@@ -633,8 +633,11 @@ impl<'a> RecordBatchDecoder<'a> {
         )
     }
 
-    fn skip_buffer(&mut self) {
-        self.buffers.next().unwrap();
+    fn skip_buffer(&mut self) -> Result<(), ArrowError> {
+        self.buffers.next().ok_or_else(|| {
+            ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
+        })?;
+        Ok(())
     }
 
     fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
@@ -655,42 +658,36 @@ impl<'a> RecordBatchDecoder<'a> {
         match field.data_type() {
             Utf8 | Binary | LargeBinary | LargeUtf8 => {
                 for _ in 0..3 {
-                    self.skip_buffer()
+                    self.skip_buffer()?;
                 }
             }
             Utf8View | BinaryView => {
-                let count = variadic_count
-                    .pop_front()
-                    .ok_or(ArrowError::IpcError(format!(
-                        "Missing variadic count for {} column",
-                        field.data_type()
-                    )))?;
-                let count = count + 2; // view and null buffer.
-                for _i in 0..count {
-                    self.skip_buffer()
+                let count = self.next_variadic_buffer_count(variadic_count, field.data_type())?;
+                for _ in 0..count {
+                    self.skip_buffer()?;
                 }
             }
             FixedSizeBinary(_) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
             }
             List(list_field) | LargeList(list_field) | Map(list_field, _) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
                 self.skip_field(list_field, variadic_count)?;
             }
             ListView(list_field) | LargeListView(list_field) => {
-                self.skip_buffer(); // Null buffer
-                self.skip_buffer(); // Offsets
-                self.skip_buffer(); // Sizes
+                self.skip_buffer()?; // Null buffer
+                self.skip_buffer()?; // Offsets
+                self.skip_buffer()?; // Sizes
                 self.skip_field(list_field, variadic_count)?;
             }
             FixedSizeList(list_field, _) => {
-                self.skip_buffer();
+                self.skip_buffer()?;
                 self.skip_field(list_field, variadic_count)?;
             }
             Struct(struct_fields) => {
-                self.skip_buffer();
+                self.skip_buffer()?;
 
                 // skip for each field
                 for struct_field in struct_fields {
@@ -702,17 +699,17 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_field(values_field, variadic_count)?;
             }
             Dictionary(_, _) => {
-                self.skip_buffer(); // Nulls
-                self.skip_buffer(); // Indices
+                self.skip_buffer()?; // Nulls
+                self.skip_buffer()?; // Indices
             }
             Union(fields, mode) => {
                 if self.version < MetadataVersion::V5 {
-                    self.skip_buffer(); // Null buffer
+                    self.skip_buffer()?; // Null buffer
                 }
-                self.skip_buffer(); // Type ids
+                self.skip_buffer()?; // Type ids
 
                 match mode {
-                    UnionMode::Dense => self.skip_buffer(), // Offsets
+                    UnionMode::Dense => self.skip_buffer()?, // Offsets
                     UnionMode::Sparse => {}
                 }
 
@@ -747,11 +744,42 @@ impl<'a> RecordBatchDecoder<'a> {
             | Decimal64(_, _)
             | Decimal128(_, _)
             | Decimal256(_, _) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
             }
         }
         Ok(())
+    }
+}
+
+impl RecordBatchDecoder<'_> {
+    /// Takes the number of variadic buffers declared for one `BinaryView` or `Utf8View`
+    /// column, and returns the total number of buffers to read for it.
+    ///
+    /// The count comes from the IPC message, so it may be missing, negative, or larger
+    /// than the number of buffers the message actually has.
+    fn next_variadic_buffer_count(
+        &self,
+        variadic_counts: &mut VecDeque<i64>,
+        data_type: &DataType,
+    ) -> Result<usize, ArrowError> {
+        let count = variadic_counts.pop_front().ok_or_else(|| {
+            ArrowError::IpcError(format!("Missing variadic count for {data_type} column"))
+        })?;
+
+        let remaining = self.buffers.len();
+
+        // The view buffer and the null buffer are not counted as variadic.
+        usize::try_from(count)
+            .ok()
+            .and_then(|count| count.checked_add(2))
+            .filter(|total| *total <= remaining)
+            .ok_or_else(|| {
+                ArrowError::IpcError(format!(
+                    "Invalid variadic count {count} for {data_type} column, \
+                     with {remaining} buffer(s) left in the message"
+                ))
+            })
     }
 }
 
@@ -924,6 +952,22 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
     Ok(buf.into())
+}
+
+/// One variadic buffer count is consumed per `BinaryView` or `Utf8View` column in
+/// the schema, so any count left over means the message and the schema disagree.
+///
+/// The opposite case, too few counts, is reported by [`RecordBatchDecoder::create_array`].
+fn check_variadic_counts_consumed(variadic_counts: &VecDeque<i64>) -> Result<(), ArrowError> {
+    if variadic_counts.is_empty() {
+        Ok(())
+    } else {
+        Err(ArrowError::IpcError(format!(
+            "Mismatch between schema and data: the IPC message declares {} more variadic \
+             buffer count(s) than the schema has BinaryView or Utf8View columns",
+            variadic_counts.len()
+        )))
+    }
 }
 
 /// Parse an encapsulated message
@@ -1269,10 +1313,12 @@ impl FileReaderBuilder {
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
             for kv in fb_custom_metadata {
-                custom_metadata.insert(
-                    kv.key().unwrap().to_string(),
-                    kv.value().unwrap().to_string(),
-                );
+                let (Some(key), Some(value)) = (kv.key(), kv.value()) else {
+                    return Err(ArrowError::ParseError(
+                        "Custom metadata in the IPC footer is missing a key or a value".to_string(),
+                    ));
+                };
+                custom_metadata.insert(key.to_string(), value.to_string());
             }
         }
 
@@ -2194,6 +2240,80 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    /// A `Utf8View` batch whose variadic buffer count is `count`, with two buffers
+    /// in the message. Returns the error from reading it with the given projection.
+    fn read_batch_with_variadic_count(count: i64, projection: Option<&[usize]>) -> ArrowError {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(1, 0)]);
+        let buffers = fbb.create_vector(&[crate::Buffer::new(0, 8), crate::Buffer::new(8, 8)]);
+        let variadic_buffer_counts = fbb.create_vector(&[count]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 1,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: Some(variadic_buffer_counts),
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 16]);
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+
+        RecordBatchDecoder::try_new(
+            &data_buffer,
+            batch,
+            schema,
+            &dictionaries,
+            &MetadataVersion::V5,
+        )
+        .unwrap()
+        .with_projection(projection)
+        .read_record_batch()
+        .expect_err("should get error")
+    }
+
+    /// A variadic count the message cannot honour used to panic while slicing the
+    /// buffers it did not read, both when reading the column and when skipping it.
+    #[test]
+    fn test_invalid_variadic_buffer_count_error() {
+        // -2 leaves no buffers at all, -1 leaves too few, and 1 asks for more than the
+        // message has. The projection selects nothing, so the column is skipped instead.
+        for count in [-2, -1, 1, i64::MAX] {
+            for projection in [None, Some([].as_slice())] {
+                let err = read_batch_with_variadic_count(count, projection);
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "Ipc error: Invalid variadic count {count} for Utf8View column, \
+                         with 2 buffer(s) left in the message"
+                    ),
+                    "count {count}, projection {projection:?}"
+                );
+            }
+        }
+    }
+
+    /// The valid count for a message with two buffers is zero.
+    #[test]
+    fn test_valid_variadic_buffer_count_is_accepted() {
+        let err = read_batch_with_variadic_count(0, None);
+        assert!(!err.to_string().contains("Invalid variadic count"), "{err}");
     }
 
     #[test]
