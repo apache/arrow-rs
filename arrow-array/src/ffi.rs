@@ -253,14 +253,8 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -278,14 +272,8 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 #[derive(Debug)]
@@ -322,18 +310,24 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Should FFI be checking validity?
-        Ok(unsafe {
-            ArrayData::new_unchecked(
-                self.data_type,
-                len,
-                null_count,
-                null_bit_buffer,
-                offset,
-                buffers,
-                child_data,
-            )
-        })
+        // Align before validating, so C Data Interface buffers with only the
+        // spec's recommended 8-byte alignment (e.g. Decimal128 from a JVM
+        // producer) are realigned, not rejected. Matches the IPC reader, and
+        // stays correct under `force_validate`, which validates regardless of
+        // `skip_validation`. See https://github.com/apache/arrow-rs/issues/10034.
+        let mut builder = ArrayData::builder(self.data_type)
+            .len(len)
+            .offset(offset)
+            .null_bit_buffer(null_bit_buffer)
+            .buffers(buffers)
+            .child_data(child_data)
+            .align_buffers(true);
+        // Only set the count if the producer reported one; else `build` recomputes.
+        if let Some(null_count) = null_count {
+            builder = builder.null_count(null_count);
+        }
+        // SAFETY: the caller guarantees the data agrees with the C Data Interface.
+        unsafe { builder.skip_validation(true) }.build()
     }
 
     fn consume_children(&self) -> Result<Vec<ArrayData>> {
@@ -651,6 +645,11 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
+    // Gated out under `force_validate`: the misaligned fixture is built with
+    // `build_unchecked`, which itself validates under `force_validate`, so the
+    // input can't be constructed to hand to `from_ffi`. The realignment this
+    // guards lives in `consume`, which is correct under `force_validate` too;
+    // see #10034.
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal128_under_aligned_round_trip() -> Result<()> {
