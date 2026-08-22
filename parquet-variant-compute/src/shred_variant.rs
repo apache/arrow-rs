@@ -17,13 +17,13 @@
 
 //! Module for shredding VariantArray with a given schema.
 
-use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+use crate::variant_array::ShreddedVariantFieldArray;
 use crate::variant_to_arrow::{
     ArrayVariantToArrowRowBuilder, PrimitiveVariantToArrowRowBuilder,
     make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArrayBuilder};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
