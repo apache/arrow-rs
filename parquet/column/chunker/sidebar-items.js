@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["cdc","cdc_generated"],"struct":["CdcChunk"]};

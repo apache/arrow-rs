@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"static":["GET_XDBC_INFO_SCHEMA"],"struct":["GetXdbcTypeInfoBuilder","XdbcTypeInfo","XdbcTypeInfoData","XdbcTypeInfoDataBuilder"]};

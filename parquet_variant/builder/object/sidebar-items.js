@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["append_packed_u32","object_header"],"struct":["ObjectBuilder","ObjectFieldBuilder","ObjectHeaderWriter","ObjectState"]};

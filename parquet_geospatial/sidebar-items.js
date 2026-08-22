@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["WkbEdges","WkbTypeHint"],"mod":["bounding","interval","testing","types"],"struct":["WkbMetadata","WkbType"]};

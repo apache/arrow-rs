@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["ascii_bounds","binary_view_substring","byte_substring","fixed_size_binary_substring","string_view_substring","substring","substring_by_char","substring_by_char_impl","utf8_bounds","view_substring_range"]};

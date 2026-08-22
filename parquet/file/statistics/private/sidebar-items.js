@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":[["gen_make_statistics",1]],"trait":["MakeStatistics"]};

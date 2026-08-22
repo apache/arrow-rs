@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_db_schemas_schema"],"static":["GET_DB_SCHEMAS_SCHEMA"],"struct":["GetDbSchemasBuilder"]};

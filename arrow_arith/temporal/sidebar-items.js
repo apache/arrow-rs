@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DatePart"],"fn":["date_part","get_date_time_part_extract_fn","get_tz"],"macro":[["return_compute_error_with",1]],"trait":["ChronoDateExt","ExtractDatePartExt"]};
