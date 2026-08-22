@@ -132,17 +132,26 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 }
 
 impl FFI_ArrowSchema {
-    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
-    /// [`DataType`] is not supported.
+    /// create a new [`FFI_ArrowSchema`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `format` contains an interior nul byte
+    /// Errors if the fields' [`DataType`] is not supported,
+    /// or if `format` contains an interior nul byte.
     pub fn try_new(
         format: &str,
         children: Vec<FFI_ArrowSchema>,
         dictionary: Option<FFI_ArrowSchema>,
     ) -> Result<Self, ArrowError> {
+        // Convert the format before leaking any of the children,
+        // so that an error here does not leak memory.
+        let format = CString::new(format).map_err(|err| {
+            ArrowError::CDataInterface(format!(
+                "Null byte at position {} not allowed in format",
+                err.nul_position()
+            ))
+        })?;
+
         let mut this = Self::empty();
 
         let children_ptr = children
@@ -151,7 +160,7 @@ impl FFI_ArrowSchema {
             .map(Box::into_raw)
             .collect::<Box<_>>();
 
-        this.format = CString::new(format).unwrap().into_raw();
+        this.format = format.into_raw();
         this.release = Some(release_schema);
         this.n_children = children_ptr.len() as i64;
 
@@ -941,6 +950,15 @@ mod tests {
         let c_schema = FFI_ArrowSchema::try_from(&schema).unwrap();
         let restored = Schema::try_from(&c_schema).unwrap();
         assert_eq!(restored, schema);
+    }
+
+    #[test]
+    fn test_try_new_with_interior_nul_byte() {
+        let err = FFI_ArrowSchema::try_new("i\0nt", vec![], None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "C Data interface error: Null byte at position 1 not allowed in format"
+        );
     }
 
     #[test]

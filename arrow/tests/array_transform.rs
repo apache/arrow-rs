@@ -1029,11 +1029,14 @@ fn test_extend_nulls() {
 }
 
 #[test]
-#[should_panic(expected = "MutableArrayData not nullable")]
-fn test_extend_nulls_panic() {
+fn test_extend_nulls_not_nullable() {
     let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
     let mut mutable = MutableArrayData::new(vec![&int], false, 4);
-    mutable.try_extend_nulls(2).unwrap();
+    let err = mutable.try_extend_nulls(2).unwrap_err();
+    assert!(
+        err.to_string().contains("cannot be extended with nulls"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
