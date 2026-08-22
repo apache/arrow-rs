@@ -77,7 +77,7 @@ fn infer_scalar(scalar: ScalarTy, expected: InferTy) -> Result<InferTy, ArrowErr
         })),
         // Coerce scalars to arrays
         InferTy::Array(expect) => infer_array([scalar], (*expect).clone()),
-        _ => Err(ArrowError::JsonError(format!(
+        InferTy::Object(_) => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found {scalar}"
         )))?,
     }
@@ -94,7 +94,7 @@ where
         // Coerce scalars to arrays
         InferTy::Scalar(_) => expected.to_arc(),
         InferTy::Array(inner) => inner.clone(),
-        _ => Err(ArrowError::JsonError(format!(
+        InferTy::Object(_) => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an array"
         )))?,
     };
@@ -151,7 +151,7 @@ where
                 let ty = infer_json_type(value, InferTy::Any)?;
                 substs.insert(field_idx, (key.into(), ty));
             }
-        };
+        }
     }
 
     if substs.is_empty() {
@@ -260,7 +260,7 @@ impl Display for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Any => write!(f, "any value"),
-            InferTy::Scalar(s) => write!(f, "{}", s),
+            InferTy::Scalar(s) => write!(f, "{s}"),
             InferTy::Array(_) => write!(f, "an array"),
             InferTy::Object(_) => write!(f, "an object"),
         }
