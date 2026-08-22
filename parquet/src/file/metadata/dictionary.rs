@@ -175,7 +175,7 @@ fn dictionary_page_crypto_context(
 fn is_utf8(column_descriptor: &ColumnDescriptor) -> bool {
     matches!(
         column_descriptor.logical_type_ref(),
-        Some(LogicalType::String) | Some(LogicalType::Json)
+        Some(LogicalType::String | LogicalType::Json)
     ) || matches!(
         column_descriptor.converted_type(),
         ConvertedType::UTF8 | ConvertedType::JSON
