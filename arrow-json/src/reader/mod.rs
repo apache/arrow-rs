@@ -330,6 +330,10 @@ impl ReaderBuilder {
     ///
     /// By default, this would be parsed as two rows, each an array containing three elements.
     /// With this option set to `true`, however, this would be parsed as six rows.
+    ///
+    /// Note that even with this option set to `true`, top-level objects are still permitted
+    /// and will be parsed as individual rows in the exact same manner as when this option is
+    /// set to `false`. It is even possible to mix top-level arrays with top-level objects.
     pub fn with_flatten(self, flatten_top_level_arrays: bool) -> Self {
         Self {
             flatten_top_level_arrays,

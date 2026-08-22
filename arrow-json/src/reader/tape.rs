@@ -249,7 +249,7 @@ enum DecoderState {
 impl DecoderState {
     fn as_str(&self) -> &'static str {
         match self {
-            DecoderState::TopLevelList => "list",
+            DecoderState::TopLevelList => "top-level list",
             DecoderState::Object(_) => "object",
             DecoderState::List(_) => "list",
             DecoderState::String => "string",
@@ -415,7 +415,6 @@ impl TapeDecoder {
                             // Consume the `]` without writing it
                             iter.next();
                             self.stack.pop();
-                            continue;
                         }
                         Some(_) => {
                             // Start of row
@@ -1129,8 +1128,6 @@ mod tests {
         // Check that decoding with `flatten_top_level_arrays` yields rows correctly,
         // and respects the configured batch size
         for batch_size in [1, 2, 3, 4, 8] {
-            dbg!(batch_size);
-
             let mut decoder = TapeDecoder::new(TapeDecoderOptions {
                 batch_size,
                 num_fields: 2,
