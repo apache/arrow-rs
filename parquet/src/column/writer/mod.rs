@@ -473,6 +473,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     def_levels_encoder: LevelEncoder,
     rep_levels_encoder: LevelEncoder,
     data_pages: VecDeque<CompressedPage>,
+    /// Whether any dictionary-encoded data page has been produced for this
+    /// column chunk. Once set, a dictionary fallback can no longer skip
+    /// writing the dictionary page, as the flushed pages reference it.
+    has_dictionary_encoded_data_pages: bool,
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: Option<OffsetIndexBuilder>,
@@ -539,6 +543,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             compressor,
             encoder,
             data_pages: VecDeque::new(),
+            has_dictionary_encoded_data_pages: false,
             page_metrics,
             column_metrics,
             distinct_count_override: None,
@@ -1079,14 +1084,34 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Performs dictionary fallback.
-    /// Prepares and writes dictionary and all data pages into page writer.
+    ///
+    /// The values buffered for the in-progress data page are dictionary ids;
+    /// they are re-encoded through the fallback encoder (together with the
+    /// dictionary they resolve to) rather than flushed as one more
+    /// dictionary-encoded page, and remain buffered. This matches
+    /// parquet-java's `FallbackValuesWriter`.
+    ///
+    /// If dictionary-encoded data pages have already been produced for this
+    /// chunk they reference the dictionary, so the dictionary page must still
+    /// be written, ahead of any data pages buffered while awaiting it.
+    /// Otherwise no dictionary page is written at all and the whole chunk uses
+    /// the fallback encoding.
     fn dict_fallback(&mut self) -> Result<()> {
         // At this point we know that we need to fall back.
-        if self.page_metrics.num_buffered_values > 0 {
+        let retain_dictionary = self.has_dictionary_encoded_data_pages;
+        self.encoder.fall_back_from_dictionary(retain_dictionary)?;
+        if retain_dictionary {
+            self.write_dictionary_page()?;
+            while let Some(page) = self.data_pages.pop_front() {
+                self.write_data_page(page)?;
+            }
+        }
+        // The dictionary ids held only a fraction of the page size budget; the
+        // same values re-encoded with the fallback encoding may already exceed
+        // it.
+        if self.should_add_data_page() {
             self.add_data_page()?;
         }
-        self.write_dictionary_page()?;
-        self.flush_data_pages()?;
         Ok(())
     }
 
@@ -1499,8 +1524,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // that defers final layout (the Arrow path) instead orders pages itself
         // at flush, so we stream the data pages straight through and never let
         // them accumulate in memory.
-        if self.encoder.has_dictionary() && !self.page_writer.defers_dictionary_ordering() {
-            self.data_pages.push_back(compressed_page);
+        if self.encoder.has_dictionary() {
+            self.has_dictionary_encoded_data_pages = true;
+            if self.page_writer.defers_dictionary_ordering() {
+                self.write_data_page(compressed_page)?;
+            } else {
+                self.data_pages.push_back(compressed_page);
+            }
         } else {
             self.write_data_page(compressed_page)?;
         }
@@ -2760,6 +2790,121 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_dict_fallback_before_first_data_page() {
+        // All values distinct: the dictionary overflows its size limit long
+        // before the first data page is flushed, so the buffered values are
+        // re-encoded with the fallback encoding and the dictionary is
+        // discarded entirely: no dictionary page and no dictionary-encoded
+        // data page.
+        let values: Vec<i32> = (0..2048).collect();
+        let props = || {
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_page_size_limit(512)
+                .build()
+        };
+
+        let meta = column_write_and_get_metadata::<Int32Type>(props(), &values);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::PLAIN, Encoding::RLE]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)]
+        );
+        // The whole chunk is plain encoded: no dictionary page and no
+        // dictionary-encoded prefix duplicating the values it references.
+        assert!(
+            meta.compressed_size() <= (values.len() * 4 + 128) as i64,
+            "unexpected chunk size {}",
+            meta.compressed_size()
+        );
+
+        // Values on both sides of the fallback point roundtrip.
+        column_roundtrip::<Int32Type>(props(), &values, None, None);
+    }
+
+    #[test]
+    fn test_column_writer_dict_fallback_before_first_data_page_v2() {
+        // As `test_column_writer_dict_fallback_before_first_data_page`, with
+        // the V2 fallback encoding: a sorted column re-encoded with
+        // DELTA_BINARY_PACKED ends up considerably smaller than the plain
+        // values, let alone than an oversized dictionary page plus a
+        // dictionary-encoded prefix.
+        let values: Vec<i32> = (0..2048).collect();
+        let props = || {
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_page_size_limit(512)
+                .build()
+        };
+
+        let meta = column_write_and_get_metadata::<Int32Type>(props(), &values);
+        assert_eq!(meta.dictionary_page_offset(), None);
+        assert_eq!(
+            meta.encodings().collect::<Vec<_>>(),
+            &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED]
+        );
+        assert_eq!(
+            meta.page_encoding_stats().unwrap(),
+            &[encoding_stats(
+                PageType::DATA_PAGE_V2,
+                Encoding::DELTA_BINARY_PACKED,
+                1
+            )]
+        );
+        assert!(
+            meta.compressed_size() < (values.len() * 4 / 2) as i64,
+            "unexpected chunk size {}",
+            meta.compressed_size()
+        );
+
+        column_roundtrip::<Int32Type>(props(), &values, None, None);
+    }
+
+    #[test]
+    fn test_column_writer_dict_fallback_after_data_page_keeps_dictionary() {
+        // Flush dictionary-encoded data pages every 32 rows, so that when the
+        // dictionary overflows its size limit part-way through the chunk,
+        // pages referencing it have already been written. The dictionary page
+        // must then still be written, but the values buffered at the fallback
+        // point are re-encoded with the fallback encoding rather than flushed
+        // as one more dictionary-encoded page.
+        let values: Vec<i32> = (0..2048).collect();
+        let props = || {
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_page_size_limit(512)
+                .set_data_page_row_count_limit(32)
+                .set_write_batch_size(32)
+                .build()
+        };
+
+        let meta = column_write_and_get_metadata::<Int32Type>(props(), &values);
+        assert!(meta.dictionary_page_offset().is_some());
+        let stats = meta.page_encoding_stats().unwrap();
+        let data_pages_with = |encoding| {
+            stats
+                .iter()
+                .filter(|s| s.page_type == PageType::DATA_PAGE && s.encoding == encoding)
+                .map(|s| s.count)
+                .sum::<i32>()
+        };
+        assert!(
+            data_pages_with(Encoding::RLE_DICTIONARY) > 0,
+            "expected dictionary-encoded pages before the fallback: {stats:?}"
+        );
+        assert!(
+            data_pages_with(Encoding::PLAIN) > 0,
+            "expected plain pages after the fallback: {stats:?}"
+        );
+
+        column_roundtrip::<Int32Type>(props(), &values, None, None);
+    }
+
+    #[test]
     fn test_column_writer_small_write_batch_size() {
         for i in &[1usize, 2, 5, 10, 11, 1023] {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
@@ -3173,6 +3318,11 @@ mod tests {
             .set_writer_version(WriterVersion::PARQUET_1_0)
             .set_dictionary_enabled(true)
             .set_dictionary_page_size_limit(dict_page_limit)
+            // Flush dictionary-encoded data pages before the dictionary
+            // spills: a fallback with no dictionary-encoded data pages
+            // discards the dictionary entirely, and this test needs a
+            // dictionary page in the output to measure.
+            .set_data_page_row_count_limit(4)
             .build();
 
         let data: Vec<_> = (0..num_rows)
