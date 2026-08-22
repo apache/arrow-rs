@@ -37,14 +37,14 @@
 //! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
 //!   string representation, reader schema, etc.) and produces either:
 //!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
-//!   * a low-level `Decoder` for **single‑object encoded** Avro bytes and Confluent
-//!     **Schema Registry** framed messages.
+//!   * a low-level `Decoder` for **unframed Avro datums**, **single‑object encoded** Avro
+//!     bytes, and Confluent **Schema Registry** framed messages.
 //! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
-//!   `RecordBatch` values when batches fill. This is suitable for integrating with async
-//!   byte streams, network protocols, or other custom data sources.
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes unframed or
+//!   framed Avro bytes and yields ready `RecordBatch` values when batches fill. This is suitable
+//!   for integrating with async byte streams, network protocols, or other custom data sources.
 //!
 //! ## Encodings and when to use which type
 //!
@@ -52,6 +52,12 @@
 //!   the writer schema, optional compression codec, and a sync marker, followed by one or
 //!   more data blocks. Use `Reader` for this format. See the Avro 1.11.1 specification
 //!   (“Object Container Files”). <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
+//! * **Unframed binary datums**: Bare Avro records without an OCF header, schema fingerprint,
+//!   or schema-registry prefix. Register the known writer schema in a `SchemaStore`, select it
+//!   with [`ReaderBuilder::with_active_fingerprint`], configure
+//!   [`DecoderMode::UnframedDatum`] with [`ReaderBuilder::with_decoder_mode`], and call
+//!   [`Decoder::decode`] once per record. This supports bare Kafka messages and consecutive
+//!   records in one buffer.
 //! * **Single‑Object Encoding**: A stream‑friendly framing that prefixes each record body with
 //!   the 2‑byte marker `0xC3 0x01` followed by the **8‑byte little‑endian CRC‑64‑AVRO Rabin
 //!   fingerprint** of the writer schema, then the Avro binary body. Use `Decoder` with a
@@ -517,18 +523,29 @@ fn is_incomplete_data(err: &AvroError) -> bool {
     )
 }
 
+/// The wire format consumed by a streaming [`Decoder`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecoderMode {
+    /// Decode single-object or schema-registry-framed Avro records.
+    #[default]
+    Framed,
+    /// Decode exactly one unframed Avro datum per call using the active writer schema.
+    UnframedDatum,
+}
+
 /// A low‑level, push‑based decoder from Avro bytes to Arrow `RecordBatch`.
 ///
 /// `Decoder` is designed for **streaming** scenarios:
 ///
-/// * You *feed* freshly received bytes using `Self::decode`, potentially multiple times,
-///   until at least one row is complete.
+/// * You *feed* bytes using [`Self::decode`], potentially multiple times, until at least one row
+///   is complete. [`ReaderBuilder::with_decoder_mode`] selects the input wire format.
 /// * You then *drain* completed rows with `Self::flush`, which yields a `RecordBatch`
 ///   if any rows were finished since the last flush.
 ///
 /// Unlike `Reader`, which is specialized for Avro **Object Container Files**, `Decoder`
-/// understands **framed single‑object** inputs and **Confluent Schema Registry** messages,
-/// switching schemas mid‑stream when the framing indicates a new fingerprint.
+/// understands **unframed Avro datums**, **framed single‑object** inputs, and **Confluent
+/// Schema Registry** messages, switching schemas mid‑stream when framing indicates a new
+/// fingerprint. Unframed datums use the writer schema already selected on the decoder.
 ///
 /// ### Supported prefixes
 ///
@@ -649,6 +666,7 @@ pub struct Decoder {
     fingerprint_algorithm: FingerprintAlgorithm,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
     awaiting_body: bool,
+    mode: DecoderMode,
 }
 
 impl Decoder {
@@ -668,6 +686,7 @@ impl Decoder {
             fingerprint_algorithm,
             pending_schema: None,
             awaiting_body: false,
+            mode: DecoderMode::Framed,
         }
     }
 
@@ -688,7 +707,7 @@ impl Decoder {
     ///
     /// This will:
     ///
-    /// * Decode at most `Self::batch_size` rows;
+    /// * Decode at most `Self::batch_size` framed rows, or exactly one unframed datum;
     /// * Return the number of input bytes **consumed** from `data` (which may be 0 if more
     ///   bytes are required, or less than `data.len()` if a prefix/body straddles the
     ///   chunk boundary);
@@ -703,8 +722,17 @@ impl Decoder {
     /// * The input indicates an unknown fingerprint (not present in the provided
     ///   `SchemaStore`;
     /// * The Avro body is malformed;
-    /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
+    /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`);
+    /// * An unframed datum is supplied when the batch is already full
+    ///   ([`AvroError::BatchFull`]).
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, AvroError> {
+        match self.mode {
+            DecoderMode::Framed => self.decode_framed(data),
+            DecoderMode::UnframedDatum => self.decode_unframed(data),
+        }
+    }
+
+    fn decode_framed(&mut self, data: &[u8]) -> Result<usize, AvroError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
             if self.awaiting_body {
@@ -734,6 +762,15 @@ impl Decoder {
             }
         }
         Ok(total_consumed)
+    }
+
+    fn decode_unframed(&mut self, data: &[u8]) -> Result<usize, AvroError> {
+        if self.remaining_capacity == 0 {
+            return Err(AvroError::BatchFull);
+        }
+        let consumed = self.active_decoder.decode(data, 1)?;
+        self.remaining_capacity -= 1;
+        Ok(consumed)
     }
 
     // Attempt to handle a prefix at the current position.
@@ -930,10 +967,11 @@ impl Decoder {
 ///     schema is derived **per writer schema** in the `SchemaStore`.
 ///
 ///   See `Self::with_projection`.
-/// * **`writer_schema_store`**: Required for building a `Decoder` for single‑object or
-///   Confluent framing. Maps fingerprints to Avro schemas. See `Self::with_writer_schema_store`.
-/// * **`active_fingerprint`**: Optional starting fingerprint for streaming decode when the
-///   first frame omits one (rare). See `Self::with_active_fingerprint`.
+/// * **`writer_schema_store`**: Required for building a `Decoder` for unframed datums,
+///   single‑object encoding, or Confluent framing. Maps fingerprints to Avro schemas. See
+///   `Self::with_writer_schema_store`.
+/// * **`active_fingerprint`**: Selects the writer schema for unframed datums or provides an
+///   optional starting fingerprint for framed streaming decode. See `Self::with_active_fingerprint`.
 ///
 /// ### Examples
 ///
@@ -975,6 +1013,7 @@ pub struct ReaderBuilder {
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
     active_fingerprint: Option<Fingerprint>,
+    decoder_mode: DecoderMode,
 }
 
 impl Default for ReaderBuilder {
@@ -988,6 +1027,7 @@ impl Default for ReaderBuilder {
             projection: None,
             writer_schema_store: None,
             active_fingerprint: None,
+            decoder_mode: DecoderMode::default(),
         }
     }
 }
@@ -1003,6 +1043,7 @@ impl ReaderBuilder {
     /// * `projection = None`
     /// * `writer_schema_store = None`
     /// * `active_fingerprint = None`
+    /// * `decoder_mode = DecoderMode::Framed`
     pub fn new() -> Self {
         Self::default()
     }
@@ -1134,13 +1175,15 @@ impl ReaderBuilder {
                 "Initial fingerprint {start_fingerprint:?} not found in schema store"
             ))
         })?;
-        Ok(Decoder::from_parts(
+        let mut decoder = Decoder::from_parts(
             self.batch_size,
             active_decoder,
             Some(start_fingerprint),
             cache,
             store.fingerprint_algorithm(),
-        ))
+        );
+        decoder.mode = self.decoder_mode;
+        Ok(decoder)
     }
 
     /// Sets the **row‑based batch size**.
@@ -1150,6 +1193,15 @@ impl ReaderBuilder {
     /// reduce peak memory usage and latency.
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    /// Selects the wire format consumed by a streaming [`Decoder`].
+    ///
+    /// Framed decoding is the default. Use [`DecoderMode::UnframedDatum`] to decode exactly one
+    /// bare Avro record with the active writer schema on each call to [`Decoder::decode`].
+    pub fn with_decoder_mode(mut self, mode: DecoderMode) -> Self {
+        self.decoder_mode = mode;
         self
     }
 
@@ -1260,9 +1312,9 @@ impl ReaderBuilder {
 
     /// Sets the `SchemaStore` used to resolve writer schemas by fingerprint.
     ///
-    /// This is required when building a `Decoder` for **single‑object encoding** or the
-    /// **Confluent** wire format. The store maps a fingerprint (Rabin / MD5 / SHA‑256 /
-    /// ID) to a full Avro schema.
+    /// This is required when building a `Decoder` for **unframed Avro datums**,
+    /// **single‑object encoding**, or the **Confluent** wire format. The store maps a
+    /// fingerprint (Rabin / MD5 / SHA‑256 / ID) to a full Avro schema.
     ///
     /// Defaults to `None`.
     pub fn with_writer_schema_store(mut self, store: SchemaStore) -> Self {
@@ -1272,8 +1324,9 @@ impl ReaderBuilder {
 
     /// Sets the initial schema fingerprint for stream decoding.
     ///
-    /// This can be useful for streams that **do not include** a fingerprint before the first
-    /// record body (uncommon). If not set, the first observed fingerprint is used.
+    /// Select this explicitly when decoding **unframed Avro datums** with
+    /// [`DecoderMode::UnframedDatum`]. For framed streams, the first observed fingerprint is used
+    /// when no initial fingerprint is set.
     pub fn with_active_fingerprint(mut self, fp: Fingerprint) -> Self {
         self.active_fingerprint = Some(fp);
         self
@@ -1418,9 +1471,10 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 #[cfg(test)]
 mod test {
     use crate::codec::{AvroFieldBuilder, Tz};
+    use crate::errors::AvroError;
     use crate::reader::header::HeaderDecoder;
     use crate::reader::record::RecordDecoder;
-    use crate::reader::{Decoder, Reader, ReaderBuilder};
+    use crate::reader::{Decoder, DecoderMode, Reader, ReaderBuilder};
     use crate::schema::{
         AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY,
         AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, PrimitiveType,
@@ -2663,6 +2717,209 @@ mod test {
             .unwrap();
         assert_eq!(col.value(0), 42);
         assert_eq!(col.value(1), 11);
+    }
+
+    #[test]
+    fn test_unframed_decode_consumes_one_record() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let framed = make_message(fp, 42);
+        let mut datum = framed[SINGLE_OBJECT_MAGIC.len() + size_of::<u64>()..].to_vec();
+        datum.extend_from_slice(&[0xde, 0xad]);
+
+        let mut decoder = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .with_decoder_mode(DecoderMode::UnframedDatum)
+            .build_decoder()
+            .unwrap();
+        let consumed = decoder.decode(&datum).unwrap();
+        assert_eq!(consumed, datum.len() - 2);
+
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 1);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 42);
+    }
+
+    #[test]
+    fn test_unframed_decode_concatenated_records_across_batch_boundaries() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(2)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .with_decoder_mode(DecoderMode::UnframedDatum)
+            .build_decoder()
+            .unwrap();
+        let input = [encode_zigzag(42), encode_zigzag(300), encode_zigzag(-7)].concat();
+        let mut remaining = input.as_slice();
+
+        let consumed = decoder.decode(remaining).unwrap();
+        assert_eq!(consumed, encode_zigzag(42).len());
+        remaining = &remaining[consumed..];
+        let consumed = decoder.decode(remaining).unwrap();
+        assert_eq!(consumed, encode_zigzag(300).len());
+        remaining = &remaining[consumed..];
+        assert!(decoder.batch_is_full());
+        assert!(matches!(
+            decoder.decode(remaining),
+            Err(AvroError::BatchFull)
+        ));
+
+        let first = decoder.flush().unwrap().expect("first batch");
+        let values = first.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[42, 300]);
+
+        assert_eq!(decoder.decode(remaining).unwrap(), remaining.len());
+        let second = decoder.flush().unwrap().expect("second batch");
+        let values = second.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[-7]);
+        assert!(decoder.flush().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_unframed_decode_incomplete_input_preserves_capacity() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .with_decoder_mode(DecoderMode::UnframedDatum)
+            .build_decoder()
+            .unwrap();
+
+        assert!(decoder.decode(&[0x80]).is_err());
+        assert_eq!(decoder.capacity(), decoder.batch_size());
+        assert!(decoder.flush().unwrap().is_none());
+
+        let datum = encode_zigzag(42);
+        assert_eq!(decoder.decode(&datum).unwrap(), datum.len());
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.column(0).as_primitive::<Int32Type>().value(0), 42);
+    }
+
+    #[test]
+    fn test_unframed_decode_zero_width_datum_distinguishes_full_batch() {
+        for schema in [
+            r#"{"type":"record","name":"Empty","fields":[]}"#,
+            r#"{"type":"record","name":"OnlyNull","fields":[{"name":"value","type":"null"}]}"#,
+        ] {
+            let writer_schema = AvroSchema::new(schema.to_string());
+            let mut store = SchemaStore::new();
+            let fp = store.register(writer_schema).unwrap();
+            let mut decoder = ReaderBuilder::new()
+                .with_batch_size(1)
+                .with_writer_schema_store(store)
+                .with_active_fingerprint(fp)
+                .with_decoder_mode(DecoderMode::UnframedDatum)
+                .build_decoder()
+                .unwrap();
+
+            assert_eq!(decoder.decode(&[]).unwrap(), 0);
+            assert!(decoder.batch_is_full());
+            assert!(matches!(decoder.decode(&[]), Err(AvroError::BatchFull)));
+
+            let batch = decoder.flush().unwrap().expect("batch");
+            assert_eq!(batch.num_rows(), 1);
+
+            assert_eq!(decoder.decode(&[]).unwrap(), 0);
+            assert_eq!(decoder.flush().unwrap().unwrap().num_rows(), 1);
+        }
+    }
+
+    #[test]
+    fn test_unframed_decode_nested_nullable_runs_across_flushes() {
+        let writer_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[{"name":"event","type":["null",{"type":"record","name":"Event","fields":[{"name":"id","type":"int"},{"name":"name","type":"string"},{"name":"details","type":["null",{"type":"record","name":"Details","fields":[{"name":"score","type":"long"}]}]}]}]}]}"#
+                .to_string(),
+        );
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .with_decoder_mode(DecoderMode::UnframedDatum)
+            .build_decoder()
+            .unwrap();
+
+        let null = vec![0];
+        let event = |id, name: &str, score: Option<i64>| {
+            let mut datum = vec![2];
+            datum.extend(encode_zigzag(id));
+            datum.extend(encode_zigzag(name.len() as i64));
+            datum.extend(name.as_bytes());
+            match score {
+                Some(score) => {
+                    datum.push(2);
+                    datum.extend(encode_zigzag(score));
+                }
+                None => datum.push(0),
+            }
+            datum
+        };
+
+        for datum in [
+            null.clone(),
+            null.clone(),
+            event(7, "one", None),
+            null.clone(),
+            event(8, "two", Some(9)),
+            null.clone(),
+        ] {
+            assert_eq!(decoder.decode(&datum).unwrap(), datum.len());
+        }
+
+        let batch = decoder.flush().unwrap().expect("mixed batch");
+        let events = batch.column(0).as_struct();
+        assert_eq!(events.len(), 6);
+        assert!(events.is_null(0));
+        assert!(events.is_null(1));
+        assert!(events.is_valid(2));
+        assert!(events.is_null(3));
+        assert!(events.is_valid(4));
+        assert!(events.is_null(5));
+        assert_eq!(events.column(0).as_primitive::<Int32Type>().value(2), 7);
+        assert_eq!(events.column(0).as_primitive::<Int32Type>().value(4), 8);
+        assert_eq!(events.column(1).as_string::<i32>().value(2), "one");
+        assert_eq!(events.column(1).as_string::<i32>().value(4), "two");
+        let details = events.column(2).as_struct();
+        assert!(details.is_null(2));
+        assert!(details.is_valid(4));
+        let scores = details
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(scores.value(4), 9);
+
+        decoder.decode(&null).unwrap();
+        decoder.decode(&null).unwrap();
+        let all_null = decoder.flush().unwrap().expect("all-null batch");
+        let events = all_null.column(0).as_struct();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events.null_count(), 2);
+        assert_eq!(events.column(2).as_struct().len(), 2);
+
+        let datum = event(10, "three", Some(11));
+        decoder.decode(&datum).unwrap();
+        let final_batch = decoder.flush().unwrap().expect("batch after null runs");
+        let event = final_batch.column(0).as_struct();
+        assert_eq!(event.column(0).as_primitive::<Int32Type>().value(0), 10);
+        assert_eq!(event.column(1).as_string::<i32>().value(0), "three");
     }
 
     #[test]
