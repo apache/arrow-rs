@@ -23,7 +23,7 @@
 //! the selection itself stays immutable.
 
 use super::boolean::boolean_mask_from_selectors;
-use super::{RowSelection, RowSelector};
+use super::{DEFAULT_ROW_SELECTION_THRESHOLD, RowSelection, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
 use arrow_buffer::BooleanBuffer;
@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 /// Policy for picking a strategy to materialize [`RowSelection`] during execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RowSelectionPolicy {
     /// Use a queue of [`RowSelector`] values
     Selectors,
@@ -43,11 +44,23 @@ pub enum RowSelectionPolicy {
         /// Average selector length below which masks are preferred
         threshold: usize,
     },
+    /// Choose the execution strategy independently for each top-level
+    /// projected Arrow field in each row group. Nested children use their
+    /// top-level field's strategy.
+    ///
+    /// If no column-specific rule applies, that field independently falls
+    /// back to the same selector-density rule as the default policy (threshold
+    /// `32`). A fallback on one field does not force the other fields to use
+    /// the same strategy. If every decision is identical, execution collapses
+    /// to the corresponding existing global path.
+    AutoPerColumn,
 }
 
 impl Default for RowSelectionPolicy {
     fn default() -> Self {
-        Self::Auto { threshold: 32 }
+        Self::Auto {
+            threshold: DEFAULT_ROW_SELECTION_THRESHOLD,
+        }
     }
 }
 
@@ -61,6 +74,15 @@ pub(crate) enum RowSelectionStrategy {
     Selectors,
     /// Use a boolean mask to materialize the selection
     Mask,
+}
+
+impl RowSelectionStrategy {
+    pub(crate) fn into_policy(self) -> RowSelectionPolicy {
+        match self {
+            Self::Selectors => RowSelectionPolicy::Selectors,
+            Self::Mask => RowSelectionPolicy::Mask,
+        }
+    }
 }
 
 /// Cursor for iterating a [`RowSelection`] during execution within a
@@ -367,7 +389,6 @@ impl LoadedRowRanges {
             .map(|range| range.end)
     }
 
-    #[cfg(test)]
     pub(crate) fn ranges(&self) -> &[Range<usize>] {
         &self.0
     }

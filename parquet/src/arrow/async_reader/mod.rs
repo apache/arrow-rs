@@ -935,6 +935,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::RowSelectionPolicy;
+    use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
@@ -1256,6 +1258,97 @@ mod tests {
             .unwrap();
 
         assert_eq!(async_batches, sync_batches);
+    }
+
+    #[tokio::test]
+    async fn test_async_auto_per_column_mask_plan_with_sparse_pages() {
+        let input = RecordBatch::try_from_iter([
+            (
+                "left",
+                Arc::new(Int32Array::from_iter_values(0..7300)) as ArrayRef,
+            ),
+            (
+                "right",
+                Arc::new(Int32Array::from_iter_values(10_000..17_300)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(32)
+            .set_write_batch_size(32)
+            .set_write_page_header_statistics(true)
+            .build();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, input.schema(), Some(props)).unwrap();
+        writer.write(&input).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(data);
+
+        // Enough short runs for the Int32 model to select Mask, plus a large
+        // middle gap whose pages are not fetched.
+        let mut selectors = Vec::new();
+        for _ in 0..399 {
+            selectors.push(RowSelector::select(1));
+            selectors.push(RowSelector::skip(1));
+        }
+        selectors.push(RowSelector::select(1));
+        selectors.push(RowSelector::skip(6500));
+        selectors.push(RowSelector::select(1));
+        let selection = RowSelection::from(selectors);
+
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            options,
+        )
+        .await
+        .unwrap();
+        let projection = ProjectionMask::leaves(builder.parquet_schema(), [0, 1]);
+        let predicate_projection = ProjectionMask::leaves(builder.parquet_schema(), [0]);
+        let build_filter = || {
+            let predicate =
+                ArrowPredicateFn::new(predicate_projection.clone(), |batch: RecordBatch| {
+                    let values = batch.column(0).as_primitive::<Int32Type>();
+                    Ok(BooleanArray::from(
+                        values
+                            .values()
+                            .iter()
+                            .map(|value| value % 3 == 0)
+                            .collect::<Vec<_>>(),
+                    ))
+                });
+            RowFilter::new(vec![Box::new(predicate)])
+        };
+        let metrics = ArrowReaderMetrics::enabled();
+        let actual = builder
+            .with_projection(projection.clone())
+            .with_batch_size(64)
+            .with_metrics(metrics.clone())
+            .with_row_selection(selection.clone())
+            .with_row_filter(build_filter())
+            .with_row_selection_policy(RowSelectionPolicy::AutoPerColumn)
+            .build()
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let expected = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_projection(projection)
+            .with_batch_size(64)
+            .with_row_selection(selection)
+            .with_row_filter(build_filter())
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(metrics.row_selection_mask_decisions(), Some(1));
+        assert_eq!(metrics.row_selection_selector_decisions(), Some(2));
+        assert_eq!(metrics.row_selection_fallback_decisions(), Some(0));
     }
 
     #[tokio::test]

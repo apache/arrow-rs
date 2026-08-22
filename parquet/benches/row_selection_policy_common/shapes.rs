@@ -32,6 +32,11 @@ pub(crate) const CLUSTERED_50_RUN128: &[SelectionRun] =
 pub(crate) const REGULAR_50_RUN32: &[SelectionRun] =
     &[SelectionRun::skip(32), SelectionRun::select(32)];
 
+/// Refinement boundary where cheap and wide column decoders choose different
+/// row-selection strategies.
+pub(crate) const REGULAR_50_RUN8: &[SelectionRun] =
+    &[SelectionRun::skip(8), SelectionRun::select(8)];
+
 pub(crate) const DENSE_98_44_SKIP1_SELECT63: &[SelectionRun] =
     &[SelectionRun::skip(1), SelectionRun::select(63)];
 

@@ -17,8 +17,9 @@
 
 //! [ArrowReaderMetrics] for collecting metrics about the Arrow reader
 
+use super::selection::RowSelectionStrategy;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// This enum represents the state of Arrow reader metrics collection.
 ///
@@ -90,6 +91,35 @@ impl ArrowReaderMetrics {
         }
     }
 
+    /// Number of row-selection decisions using mask execution.
+    ///
+    /// One decision is recorded per row group and projected top-level Arrow
+    /// field, for both predicate projections and the final output projection.
+    ///
+    /// Returns `None` if metrics are disabled.
+    pub fn row_selection_mask_decisions(&self) -> Option<usize> {
+        self.load(|inner| &inner.row_selection_mask_decisions)
+    }
+
+    /// Number of row-selection decisions using selector execution.
+    ///
+    /// One decision is recorded per row group and projected top-level Arrow
+    /// field, for both predicate projections and the final output projection.
+    ///
+    /// Returns `None` if metrics are disabled.
+    pub fn row_selection_selector_decisions(&self) -> Option<usize> {
+        self.load(|inner| &inner.row_selection_selector_decisions)
+    }
+
+    /// Number of decisions made by the compatibility fallback.
+    ///
+    /// This is a subset of the mask and selector decision counters.
+    ///
+    /// Returns `None` if metrics are disabled.
+    pub fn row_selection_fallback_decisions(&self) -> Option<usize> {
+        self.load(|inner| &inner.row_selection_fallback_decisions)
+    }
+
     /// Increments the count of records read from the inner reader
     pub(crate) fn increment_inner_reads(&self, count: usize) {
         let Self::Enabled(inner) = self else {
@@ -110,6 +140,49 @@ impl ArrowReaderMetrics {
             .records_read_from_cache
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Records `count` identical decisions at once, for the case where every
+    /// projected column shares a threshold and the per-column loop is skipped.
+    pub(crate) fn record_shared_row_selection_decision(
+        &self,
+        strategy: RowSelectionStrategy,
+        fallback: bool,
+        count: usize,
+    ) {
+        for _ in 0..count {
+            self.record_row_selection_decision(strategy, fallback);
+        }
+    }
+
+    pub(crate) fn record_row_selection_decision(
+        &self,
+        strategy: RowSelectionStrategy,
+        fallback: bool,
+    ) {
+        let Self::Enabled(inner) = self else {
+            return;
+        };
+        let counter = match strategy {
+            RowSelectionStrategy::Mask => &inner.row_selection_mask_decisions,
+            RowSelectionStrategy::Selectors => &inner.row_selection_selector_decisions,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        if fallback {
+            inner
+                .row_selection_fallback_decisions
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn load(
+        &self,
+        counter: impl FnOnce(&ArrowReaderMetricsInner) -> &AtomicUsize,
+    ) -> Option<usize> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(inner) => Some(counter(inner).load(Ordering::Relaxed)),
+        }
+    }
 }
 
 /// Holds the actual metrics for the Arrow reader.
@@ -122,6 +195,12 @@ pub struct ArrowReaderMetricsInner {
     records_read_from_inner: AtomicUsize,
     /// Total number of records read from previously cached pages
     records_read_from_cache: AtomicUsize,
+    /// Per-column row-selection decisions using masks.
+    row_selection_mask_decisions: AtomicUsize,
+    /// Per-column row-selection decisions using selectors.
+    row_selection_selector_decisions: AtomicUsize,
+    /// Decisions made by the compatibility fallback.
+    row_selection_fallback_decisions: AtomicUsize,
 }
 
 impl ArrowReaderMetricsInner {
@@ -130,6 +209,9 @@ impl ArrowReaderMetricsInner {
         Self {
             records_read_from_inner: AtomicUsize::new(0),
             records_read_from_cache: AtomicUsize::new(0),
+            row_selection_mask_decisions: AtomicUsize::new(0),
+            row_selection_selector_decisions: AtomicUsize::new(0),
+            row_selection_fallback_decisions: AtomicUsize::new(0),
         }
     }
 }

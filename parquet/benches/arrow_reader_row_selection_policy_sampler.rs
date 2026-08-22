@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This support module is shared by benchmark binaries with intentionally
-// disjoint case and fixture registrations.
-#![allow(dead_code)]
+//! Offline paired sampler for the per-column row-selection cost model.
+//!
+//! This is intentionally separate from Criterion benchmarks: it emits raw,
+//! resumable observations for offline analysis instead of producing a single
+//! benchmark summary.
 
-pub(crate) mod assertions;
-pub(crate) mod cases;
-pub(crate) mod fixture;
-pub(crate) mod model;
-pub(crate) mod register;
-pub(crate) mod runner;
-pub(crate) mod shapes;
+mod row_selection_policy_common;
+mod row_selection_policy_sampler;
+
+fn main() {
+    if let Err(error) = row_selection_policy_sampler::run() {
+        eprintln!("row-selection sampler failed: {error}");
+        std::process::exit(1);
+    }
+}

@@ -20,7 +20,8 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
+    DEFAULT_ROW_SELECTION_THRESHOLD, LoadedRowRanges, RowSelectionInner, RowSelectionPolicy,
+    RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -167,6 +168,14 @@ impl ReadPlanBuilder {
 
                 selection.auto_selection_strategy(threshold)
             }
+            // Per-column planning intercepts this policy before a global
+            // ReadPlan is built. Unsupported projections retain the legacy
+            // Auto-32 behavior as a compatibility fallback.
+            RowSelectionPolicy::AutoPerColumn => self
+                .selection
+                .as_ref()
+                .map(|selection| selection.auto_selection_strategy(DEFAULT_ROW_SELECTION_THRESHOLD))
+                .unwrap_or(RowSelectionStrategy::Selectors),
         }
     }
 
@@ -193,7 +202,7 @@ impl ReadPlanBuilder {
     /// Like [`Self::with_predicate`], but allows additional options such as a
     /// match-count limit for early termination (see
     /// [`PredicateOptions::with_limit`]).
-    pub fn with_predicate_options(mut self, options: PredicateOptions<'_>) -> Result<Self> {
+    pub fn with_predicate_options(self, options: PredicateOptions<'_>) -> Result<Self> {
         let PredicateOptions {
             array_reader,
             predicate,
@@ -201,6 +210,40 @@ impl ReadPlanBuilder {
             total_rows,
         } = options;
 
+        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        self.apply_predicate(reader, predicate, limit, total_rows)
+    }
+
+    /// Evaluates a predicate using a pre-planned record batch reader.
+    ///
+    /// This is the internal entry point used by per-column row-selection
+    /// planning. Predicate evaluation and selection composition remain shared
+    /// with the existing single-reader path.
+    pub(crate) fn with_predicate_reader(
+        self,
+        reader: ParquetRecordBatchReader,
+        predicate: &mut dyn ArrowPredicate,
+    ) -> Result<Self> {
+        self.apply_predicate(reader, predicate, None, 0)
+    }
+
+    pub(crate) fn with_predicate_reader_options(
+        self,
+        reader: ParquetRecordBatchReader,
+        predicate: &mut dyn ArrowPredicate,
+        limit: Option<usize>,
+        total_rows: usize,
+    ) -> Result<Self> {
+        self.apply_predicate(reader, predicate, limit, total_rows)
+    }
+
+    fn apply_predicate(
+        mut self,
+        reader: ParquetRecordBatchReader,
+        predicate: &mut dyn ArrowPredicate,
+        limit: Option<usize>,
+        total_rows: usize,
+    ) -> Result<Self> {
         // Target length for the concatenated filter output:
         // - Prior selection ⇒ the reader yields that many rows; `and_then`
         //   below requires the filter output to match.
@@ -212,7 +255,6 @@ impl ReadPlanBuilder {
             None => limit.map(|_| total_rows),
         };
 
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
         let mut processed_rows: usize = 0;
         let mut matched_rows: usize = 0;
@@ -742,6 +784,53 @@ mod tests {
             true, false, false, true, false, false,
         ]));
         assert_eq!(selection, &expected);
+    }
+
+    #[test]
+    fn auto_per_column_predicate_output_matches_the_default_policy() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        // Per-column planning may decline after the predicate has run, so its
+        // predicate output must cost no more than the default policy's. It also
+        // does not benefit from mask backing: compiling the execution windows
+        // always consumes selectors, while the mask is built lazily and only
+        // when some column actually picks that strategy.
+        let selection_for = |policy| {
+            let data: Vec<i32> = (0..6).collect();
+            let levels = vec![0; data.len()];
+            let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+            let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+                "c0",
+                ArrowType::Int32,
+                false,
+            )]));
+            let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+            let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |_| {
+                Ok(BooleanArray::from(vec![
+                    true, false, true, false, true, false,
+                ]))
+            });
+            ReadPlanBuilder::new(16)
+                .with_row_selection_policy(policy)
+                .with_predicate_options(PredicateOptions::new(
+                    Box::new(struct_reader),
+                    &mut predicate,
+                ))
+                .unwrap()
+                .selection()
+                .cloned()
+                .unwrap()
+        };
+
+        let per_column = selection_for(RowSelectionPolicy::AutoPerColumn);
+        let default = selection_for(RowSelectionPolicy::default());
+        assert_eq!(per_column.row_count(), 3);
+        assert_eq!(per_column, default);
+        assert_eq!(per_column.as_mask().is_some(), default.as_mask().is_some());
     }
 
     #[test]
