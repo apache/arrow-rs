@@ -934,7 +934,7 @@ fn filter_byte_view<T: ByteViewType>(
 ) -> GenericByteViewArray<T> {
     let new_view_buffer = filter_native(array.views(), predicate);
     let views = ScalarBuffer::new(new_view_buffer, 0, predicate.count);
-    let buffers = array.data_buffers().to_vec();
+    let buffers = Arc::clone(array.data_buffers());
     let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: each view is copied unchanged from `array.views()` and `buffers`
@@ -1297,6 +1297,9 @@ mod tests {
             let actual = filter(&array, &predicate).unwrap();
 
             assert_eq!(actual.len(), 3);
+            let actual_buffers = actual.as_byte_view::<T>().data_buffers();
+            let input_buffers = array.data_buffers();
+            assert!(Arc::ptr_eq(actual_buffers, input_buffers));
 
             let expected = {
                 // ["hello", null, "large payload over 12 bytes"]
