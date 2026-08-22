@@ -17,6 +17,10 @@
 
 //! Contains declarations to bind to the [C Stream Interface](https://arrow.apache.org/docs/format/CStreamInterface.html).
 //!
+//! [`FFI_ArrowDeviceArrayStream`] and [`ArrowDeviceArrayStreamReader`] are the same pair for
+//! the [Device Stream Interface](https://arrow.apache.org/docs/format/CDeviceDataInterface.html#device-stream-interface),
+//! which carries the device each array is resident on.
+//!
 //! This module has two main interfaces:
 //! One interface maps C ABI to native Rust types, i.e. convert c-pointers, c_char, to native rust.
 //! This is handled by [FFI_ArrowArrayStream].
@@ -63,13 +67,13 @@ use std::{
     sync::Arc,
 };
 
-use arrow_data::ffi::FFI_ArrowArray;
+use arrow_data::ffi::{ArrowDeviceType, FFI_ArrowArray, FFI_ArrowDeviceArray};
 use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
 use crate::RecordBatchOptions;
 use crate::array::Array;
 use crate::array::StructArray;
-use crate::ffi::from_ffi_and_data_type;
+use crate::ffi::{from_device_ffi_and_data_type, from_ffi_and_data_type};
 use crate::record_batch::{RecordBatch, RecordBatchReader};
 
 type Result<T> = std::result::Result<T, ArrowError>;
@@ -436,6 +440,392 @@ impl RecordBatchReader for ArrowArrayStreamReader {
     }
 }
 
+/// ABI-compatible struct for `ArrowDeviceArrayStream` from the [C Device Data Interface]
+///
+/// See <https://arrow.apache.org/docs/format/CDeviceDataInterface.html#structure-definitions>
+///
+/// A stream produces data on a single device: `device_type` applies to every array it yields.
+/// A producer with data on several devices exposes one stream per device.
+///
+/// [C Device Data Interface]: https://arrow.apache.org/docs/format/CDeviceDataInterface.html
+#[repr(C)]
+#[derive(Debug)]
+pub struct FFI_ArrowDeviceArrayStream {
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
+    /// The device that this stream produces data on
+    device_type: ArrowDeviceType,
+    /// C function to get the schema of the stream, which is always CPU-accessible
+    get_schema: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
+    /// C function to get the next device array from the stream
+    get_next:
+        Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowDeviceArray) -> c_int>,
+    /// C function to get the error from last operation on the stream
+    get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+    /// C function to release the stream
+    release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    /// Private data used by the stream, owned by the release callback.
+    private_data: *mut c_void,
+}
+
+unsafe impl Send for FFI_ArrowDeviceArrayStream {}
+
+// callback used to drop [FFI_ArrowDeviceArrayStream] when it is exported.
+unsafe extern "C" fn release_device_stream(stream: *mut FFI_ArrowDeviceArrayStream) {
+    if stream.is_null() {
+        return;
+    }
+    let stream = unsafe { &mut *stream };
+
+    stream.get_schema = None;
+    stream.get_next = None;
+    stream.get_last_error = None;
+
+    let private_data =
+        unsafe { Box::from_raw(stream.private_data.cast::<DeviceStreamPrivateData>()) };
+    drop(private_data);
+
+    stream.release = None;
+}
+
+struct DeviceStreamPrivateData {
+    batch_reader: Box<dyn RecordBatchReader + Send>,
+    last_error: Option<CString>,
+}
+
+// The callback used to get the stream schema
+unsafe extern "C" fn device_stream_get_schema(
+    stream: *mut FFI_ArrowDeviceArrayStream,
+    schema: *mut FFI_ArrowSchema,
+) -> c_int {
+    ExportedDeviceArrayStream { stream }.get_schema(schema)
+}
+
+// The callback used to get the next device array
+unsafe extern "C" fn device_stream_get_next(
+    stream: *mut FFI_ArrowDeviceArrayStream,
+    array: *mut FFI_ArrowDeviceArray,
+) -> c_int {
+    ExportedDeviceArrayStream { stream }.get_next(array)
+}
+
+// The callback used to get the error from the last operation on the stream
+unsafe extern "C" fn device_stream_get_last_error(
+    stream: *mut FFI_ArrowDeviceArrayStream,
+) -> *const c_char {
+    let mut ffi_stream = ExportedDeviceArrayStream { stream };
+    // The consumer should not take ownership of this string, we should return
+    // a const pointer to it.
+    match ffi_stream.get_last_error() {
+        Some(err_string) => err_string.as_ptr(),
+        None => std::ptr::null(),
+    }
+}
+
+impl Drop for FFI_ArrowDeviceArrayStream {
+    fn drop(&mut self) {
+        match self.release {
+            None => (),
+            Some(release) => unsafe { release(self) },
+        }
+    }
+}
+
+impl FFI_ArrowDeviceArrayStream {
+    /// Creates a new [`FFI_ArrowDeviceArrayStream`] from a [`RecordBatchReader`].
+    ///
+    /// The stream declares [`ArrowDeviceType::CPU`], since a [`RecordBatchReader`] yields
+    /// host-resident batches. Exporting a stream of arrays that live on another device means
+    /// supplying the callbacks directly with [`FFI_ArrowDeviceArrayStream::new_unchecked`].
+    pub fn new(batch_reader: Box<dyn RecordBatchReader + Send>) -> Self {
+        let private_data = Box::new(DeviceStreamPrivateData {
+            batch_reader,
+            last_error: None,
+        });
+
+        Self {
+            device_type: ArrowDeviceType::CPU,
+            get_schema: Some(device_stream_get_schema),
+            get_next: Some(device_stream_get_next),
+            get_last_error: Some(device_stream_get_last_error),
+            release: Some(release_device_stream),
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
+        }
+    }
+
+    /// Creates a new [`FFI_ArrowDeviceArrayStream`] from callbacks a producer supplies itself.
+    ///
+    /// This is the entry point for a crate that produces arrays on a device arrow-rs cannot
+    /// read: it owns the memory and the synchronisation, and only borrows the struct layout so
+    /// that consumers do not have to guess at an incompatible one.
+    ///
+    /// # Safety
+    ///
+    /// The callbacks and `private_data` must together satisfy the [C Device Data Interface]
+    /// contract:
+    ///
+    /// * every array `get_next` writes must be resident on `device_type` and `device_id`, and
+    ///   individually releasable by the consumer
+    /// * the schema `get_schema` writes must be CPU-accessible and releasable independently of
+    ///   the stream
+    /// * `get_last_error` must return a pointer valid until the next operation on the stream
+    /// * `release` must free everything owned by `private_data` and must be idempotent
+    ///
+    /// [C Device Data Interface]: https://arrow.apache.org/docs/format/CDeviceDataInterface.html
+    pub unsafe fn new_unchecked(
+        device_type: ArrowDeviceType,
+        get_schema: unsafe extern "C" fn(*mut Self, *mut FFI_ArrowSchema) -> c_int,
+        get_next: unsafe extern "C" fn(*mut Self, *mut FFI_ArrowDeviceArray) -> c_int,
+        get_last_error: unsafe extern "C" fn(*mut Self) -> *const c_char,
+        release: unsafe extern "C" fn(*mut Self),
+        private_data: *mut c_void,
+    ) -> Self {
+        Self {
+            device_type,
+            get_schema: Some(get_schema),
+            get_next: Some(get_next),
+            get_last_error: Some(get_last_error),
+            release: Some(release),
+            private_data,
+        }
+    }
+
+    /// Takes ownership of the pointed to [`FFI_ArrowDeviceArrayStream`]
+    ///
+    /// This acts to [move] the data out of `raw_stream`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `raw_stream` must be [valid] for reads and writes
+    /// * `raw_stream` must be properly aligned
+    /// * `raw_stream` must point to a properly initialized value of
+    ///   [`FFI_ArrowDeviceArrayStream`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowDeviceArrayStream) -> Self {
+        unsafe { std::ptr::replace(raw_stream, Self::empty()) }
+    }
+
+    /// Creates a new empty [`FFI_ArrowDeviceArrayStream`]. Used to import from the C Device
+    /// Data Interface.
+    pub fn empty() -> Self {
+        Self {
+            // An empty stream names no device until a producer has filled it in.
+            device_type: ArrowDeviceType::new(0),
+            get_schema: None,
+            get_next: None,
+            get_last_error: None,
+            release: None,
+            private_data: std::ptr::null_mut(),
+        }
+    }
+
+    /// The device that every array in this stream is resident on
+    #[inline]
+    pub fn device_type(&self) -> ArrowDeviceType {
+        self.device_type
+    }
+
+    /// Returns the producer-provided release callback, if any.
+    pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
+        self.release
+    }
+
+    /// Returns the opaque producer-provided private data pointer.
+    pub fn private_data(&self) -> *mut c_void {
+        self.private_data
+    }
+}
+
+struct ExportedDeviceArrayStream {
+    stream: *mut FFI_ArrowDeviceArrayStream,
+}
+
+impl ExportedDeviceArrayStream {
+    fn get_private_data(&mut self) -> &mut DeviceStreamPrivateData {
+        unsafe {
+            &mut *(*self.stream)
+                .private_data
+                .cast::<DeviceStreamPrivateData>()
+        }
+    }
+
+    fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
+        let private_data = self.get_private_data();
+        let reader = &private_data.batch_reader;
+
+        match FFI_ArrowSchema::try_from(reader.schema().as_ref()) {
+            Ok(schema) => {
+                unsafe { std::ptr::copy(addr_of!(schema), out, 1) };
+                std::mem::forget(schema);
+                0
+            }
+            Err(ref err) => {
+                private_data.last_error = Some(
+                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                );
+                get_error_code(err)
+            }
+        }
+    }
+
+    fn get_next(&mut self, out: *mut FFI_ArrowDeviceArray) -> i32 {
+        let private_data = self.get_private_data();
+        let reader = &mut private_data.batch_reader;
+
+        match reader.next() {
+            None => {
+                // An empty device array marks the end of the stream.
+                unsafe { std::ptr::write(out, FFI_ArrowDeviceArray::empty()) }
+                0
+            }
+            Some(Ok(batch)) => {
+                let struct_array = StructArray::from(batch);
+                let array = FFI_ArrowDeviceArray::new_cpu(&struct_array.to_data());
+
+                unsafe { std::ptr::write_unaligned(out, array) };
+                0
+            }
+            Some(Err(err)) => {
+                private_data.last_error = Some(
+                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                );
+                get_error_code(&err)
+            }
+        }
+    }
+
+    fn get_last_error(&mut self) -> Option<&CString> {
+        self.get_private_data().last_error.as_ref()
+    }
+}
+
+/// A [`RecordBatchReader`] which imports arrays from an [`FFI_ArrowDeviceArrayStream`].
+///
+/// Only a stream declaring [`ArrowDeviceType::CPU`] can be imported: arrow-rs has no way to
+/// read a buffer that lives on another device, so a stream that declares one is refused at
+/// construction rather than read as host memory.
+#[derive(Debug)]
+pub struct ArrowDeviceArrayStreamReader {
+    stream: FFI_ArrowDeviceArrayStream,
+    schema: SchemaRef,
+}
+
+/// Gets the schema from a raw pointer of `FFI_ArrowDeviceArrayStream`, to cache it when
+/// constructing an `ArrowDeviceArrayStreamReader`.
+fn get_device_stream_schema(stream_ptr: *mut FFI_ArrowDeviceArrayStream) -> Result<SchemaRef> {
+    let mut schema = FFI_ArrowSchema::empty();
+
+    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &mut schema) };
+
+    if ret_code == 0 {
+        let schema = Schema::try_from(&schema)?;
+        Ok(Arc::new(schema))
+    } else {
+        Err(ArrowError::CDataInterface(format!(
+            "Cannot get schema from input stream. Error code: {ret_code:?}"
+        )))
+    }
+}
+
+impl ArrowDeviceArrayStreamReader {
+    /// Creates a new `ArrowDeviceArrayStreamReader` from an [`FFI_ArrowDeviceArrayStream`].
+    /// This is used to import from the C Device Data Interface.
+    ///
+    /// Returns an error if the stream has already been released, or if it declares a
+    /// `device_type` other than [`ArrowDeviceType::CPU`].
+    pub fn try_new(mut stream: FFI_ArrowDeviceArrayStream) -> Result<Self> {
+        if stream.release.is_none() {
+            return Err(ArrowError::CDataInterface(
+                "input stream is already released".to_string(),
+            ));
+        }
+
+        let device_type = stream.device_type();
+        if device_type != ArrowDeviceType::CPU {
+            return Err(ArrowError::CDataInterface(format!(
+                "Cannot import an ArrowDeviceArrayStream with device_type {device_type}: \
+                 arrow-rs can only read buffers resident on ARROW_DEVICE_CPU (1)"
+            )));
+        }
+
+        let schema = get_device_stream_schema(&mut stream)?;
+
+        Ok(Self { stream, schema })
+    }
+
+    /// Creates a new `ArrowDeviceArrayStreamReader` from a raw pointer to an
+    /// [`FFI_ArrowDeviceArrayStream`].
+    ///
+    /// Assumes that the pointer represents a valid C Device Data Interface stream.
+    /// This function copies the content from the raw pointer and cleans it up to prevent
+    /// double-dropping. The caller is responsible for freeing up the memory allocated for
+    /// the pointer.
+    ///
+    /// # Safety
+    ///
+    /// See [`FFI_ArrowDeviceArrayStream::from_raw`]
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowDeviceArrayStream) -> Result<Self> {
+        Self::try_new(unsafe { FFI_ArrowDeviceArrayStream::from_raw(raw_stream) })
+    }
+
+    /// Get the last error from the stream
+    fn get_stream_last_error(&mut self) -> Option<String> {
+        let get_last_error = self.stream.get_last_error?;
+
+        let error_str = unsafe { get_last_error(&mut self.stream) };
+        if error_str.is_null() {
+            return None;
+        }
+
+        let error_str = unsafe { CStr::from_ptr(error_str) };
+        Some(error_str.to_string_lossy().to_string())
+    }
+}
+
+impl Iterator for ArrowDeviceArrayStreamReader {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut array = FFI_ArrowDeviceArray::empty();
+
+        let ret_code = unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
+
+        if ret_code == 0 {
+            // The end of stream has been reached
+            if array.array().is_released() {
+                return None;
+            }
+
+            let result = unsafe {
+                from_device_ffi_and_data_type(
+                    array,
+                    DataType::Struct(self.schema().fields().clone()),
+                )
+            };
+            Some(result.and_then(|data| {
+                let len = data.len();
+                RecordBatch::try_new_with_options(
+                    self.schema.clone(),
+                    StructArray::from(data).into_parts().1,
+                    &RecordBatchOptions::new().with_row_count(Some(len)),
+                )
+            }))
+        } else {
+            let last_error = self.get_stream_last_error();
+            let err = ArrowError::CDataInterface(last_error.unwrap());
+            Some(Err(err))
+        }
+    }
+}
+
+impl RecordBatchReader for ArrowDeviceArrayStreamReader {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,5 +1037,94 @@ mod tests {
 
         drop(stream); // runs wrapping_release, which chains to the original
         assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));
+    }
+
+    /// Field offsets and size of [`FFI_ArrowDeviceArrayStream`] against
+    /// `struct ArrowDeviceArrayStream` in `apache/arrow` `cpp/src/arrow/c/abi.h`.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn device_array_stream_layout_matches_c_abi() {
+        use std::mem::offset_of;
+
+        assert_eq!(size_of::<FFI_ArrowDeviceArrayStream>(), 48);
+        assert_eq!(align_of::<FFI_ArrowDeviceArrayStream>(), 8);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, device_type), 0);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, get_schema), 8);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, get_next), 16);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, get_last_error), 24);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, release), 32);
+        assert_eq!(offset_of!(FFI_ArrowDeviceArrayStream, private_data), 40);
+    }
+
+    #[test]
+    fn cpu_record_batches_round_trip_through_the_device_stream() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
+        )
+        .unwrap();
+        let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
+
+        let stream = FFI_ArrowDeviceArrayStream::new(reader);
+        assert_eq!(stream.device_type(), ArrowDeviceType::CPU);
+
+        let mut imported = ArrowDeviceArrayStreamReader::try_new(stream).unwrap();
+        assert_eq!(imported.schema(), schema);
+
+        let produced = imported.by_ref().collect::<Result<Vec<_>>>().unwrap();
+
+        assert_eq!(produced, vec![batch.clone(), batch]);
+    }
+
+    // A producer streaming CUDA-resident arrays. Neither data callback may be called: import
+    // has to refuse on `device_type` alone, and must still release the stream it refused.
+    static REJECTED_STREAM_RELEASED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    unsafe extern "C" fn cuda_get_schema(
+        _: *mut FFI_ArrowDeviceArrayStream,
+        _: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        unreachable!("a non-CPU stream must be rejected before its schema is requested")
+    }
+
+    unsafe extern "C" fn cuda_get_next(
+        _: *mut FFI_ArrowDeviceArrayStream,
+        _: *mut FFI_ArrowDeviceArray,
+    ) -> c_int {
+        unreachable!("a non-CPU stream must be rejected before it is read")
+    }
+
+    unsafe extern "C" fn cuda_get_last_error(_: *mut FFI_ArrowDeviceArrayStream) -> *const c_char {
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn cuda_release(_: *mut FFI_ArrowDeviceArrayStream) {
+        REJECTED_STREAM_RELEASED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_non_cpu_device_stream_is_rejected_on_import() {
+        let stream = unsafe {
+            FFI_ArrowDeviceArrayStream::new_unchecked(
+                ArrowDeviceType::CUDA,
+                cuda_get_schema,
+                cuda_get_next,
+                cuda_get_last_error,
+                cuda_release,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(stream.device_type(), ArrowDeviceType::CUDA);
+
+        let err = ArrowDeviceArrayStreamReader::try_new(stream).unwrap_err();
+
+        assert!(err.to_string().contains("CUDA"), "{err}");
+        assert!(
+            REJECTED_STREAM_RELEASED.load(std::sync::atomic::Ordering::SeqCst),
+            "the refused stream was leaked instead of released"
+        );
     }
 }

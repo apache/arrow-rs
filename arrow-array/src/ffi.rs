@@ -104,7 +104,7 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
 use arrow_buffer::{Buffer, MutableBuffer, bit_util};
-pub use arrow_data::ffi::FFI_ArrowArray;
+pub use arrow_data::ffi::{ArrowDeviceType, FFI_ArrowArray, FFI_ArrowDeviceArray};
 use arrow_data::{ArrayData, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
@@ -240,6 +240,54 @@ pub fn to_ffi(data: &ArrayData) -> Result<(FFI_ArrowArray, FFI_ArrowSchema)> {
     Ok((array, schema))
 }
 
+/// Export to the [C Device Data Interface] as CPU-resident data
+///
+/// The exported array declares [`ArrowDeviceType::CPU`], so any consumer of the device
+/// interface can read it. Exporting buffers that live on another device is the business of the
+/// crate that allocated them: build the [`FFI_ArrowArray`] and wrap it with
+/// [`FFI_ArrowDeviceArray::new`].
+///
+/// ```
+/// # use arrow_array::{Array, Int32Array};
+/// # use arrow_array::ffi::{ArrowDeviceType, from_device_ffi, to_device_ffi};
+/// # use arrow_schema::ArrowError;
+/// # fn main() -> Result<(), ArrowError> {
+/// let array = Int32Array::from(vec![Some(1), None, Some(3)]);
+///
+/// // export it over the device interface
+/// let (device_array, schema) = to_device_ffi(&array.to_data())?;
+/// assert_eq!(device_array.device_type(), ArrowDeviceType::CPU);
+///
+/// // import it back
+/// let data = unsafe { from_device_ffi(device_array, &schema) }?;
+///
+/// assert_eq!(Int32Array::from(data), array);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [C Device Data Interface]: https://arrow.apache.org/docs/format/CDeviceDataInterface.html
+pub fn to_device_ffi(data: &ArrayData) -> Result<(FFI_ArrowDeviceArray, FFI_ArrowSchema)> {
+    let array = FFI_ArrowDeviceArray::new_cpu(data);
+    let schema = FFI_ArrowSchema::try_from(data.data_type())?;
+    Ok((array, schema))
+}
+
+/// Import [ArrayData] from the [C Device Data Interface]
+///
+/// # Safety
+///
+/// This function assumes that the incoming data agrees with the C device data interface.
+///
+/// [C Device Data Interface]: https://arrow.apache.org/docs/format/CDeviceDataInterface.html
+pub unsafe fn from_device_ffi(
+    array: FFI_ArrowDeviceArray,
+    schema: &FFI_ArrowSchema,
+) -> Result<ArrayData> {
+    let array = require_cpu_resident(array)?;
+    unsafe { from_ffi(array, schema) }
+}
+
 /// Import [ArrayData] from the C Data Interface
 ///
 /// # Safety
@@ -286,6 +334,36 @@ pub unsafe fn from_ffi_and_data_type(
     // https://github.com/apache/arrow-rs/issues/10028 for context.
     data.align_buffers();
     Ok(data)
+}
+
+/// Import [ArrayData] from the [C Device Data Interface], with the type supplied by the caller
+///
+/// Like [`from_device_ffi`], this rejects any array not resident on
+/// [`ArrowDeviceType::CPU`].
+///
+/// # Safety
+///
+/// This function assumes that the incoming data agrees with the C device data interface.
+///
+/// [C Device Data Interface]: https://arrow.apache.org/docs/format/CDeviceDataInterface.html
+pub unsafe fn from_device_ffi_and_data_type(
+    array: FFI_ArrowDeviceArray,
+    data_type: DataType,
+) -> Result<ArrayData> {
+    let array = require_cpu_resident(array)?;
+    unsafe { from_ffi_and_data_type(array, data_type) }
+}
+
+/// Unwraps a device array arrow-rs can read the buffers of, or explains why it cannot
+fn require_cpu_resident(array: FFI_ArrowDeviceArray) -> Result<FFI_ArrowArray> {
+    let device_type = array.device_type();
+    if device_type != ArrowDeviceType::CPU {
+        return Err(ArrowError::CDataInterface(format!(
+            "Cannot import an ArrowDeviceArray with device_type {device_type}: arrow-rs can \
+             only read buffers resident on ARROW_DEVICE_CPU (1)"
+        )));
+    }
+    Ok(array.into_array())
 }
 
 #[derive(Debug)]
@@ -1897,5 +1975,134 @@ mod tests_from_ffi {
 
         test_case::<StringViewType>();
         test_case::<BinaryViewType>();
+    }
+}
+
+#[cfg(test)]
+mod tests_device_ffi {
+    use super::*;
+    use crate::{Array, Int32Array};
+
+    #[test]
+    fn cpu_array_round_trips_through_device_interface() {
+        let data = Int32Array::from(vec![Some(1), None, Some(3)]).into_data();
+
+        let (device_array, schema) = to_device_ffi(&data).unwrap();
+        assert_eq!(device_array.device_type(), ArrowDeviceType::CPU);
+
+        let imported = unsafe { from_device_ffi(device_array, &schema) }.unwrap();
+
+        assert_eq!(
+            Int32Array::from(imported),
+            Int32Array::from(vec![Some(1), None, Some(3)])
+        );
+    }
+
+    #[test]
+    fn non_cpu_device_array_is_rejected_on_import() {
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+
+        // Claim CUDA residency over host buffers. A correct import rejects on `device_type`
+        // alone, so the buffers are never dereferenced and this stays sound.
+        let device_array = unsafe {
+            FFI_ArrowDeviceArray::new(
+                FFI_ArrowArray::new(&data),
+                ArrowDeviceType::CUDA,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+
+        let err = unsafe { from_device_ffi(device_array, &schema) }.unwrap_err();
+        assert!(matches!(err, ArrowError::CDataInterface(_)), "{err}");
+        assert!(err.to_string().contains("CUDA"), "{err}");
+    }
+
+    #[test]
+    fn cpu_import_accepts_both_device_id_conventions() {
+        // The spec recommends -1 for a device type with no notion of a device identifier
+        // (apache/arrow#40801, resolved by apache/arrow#41101), which is what Arrow C++
+        // exports; nanoarrow and dlpack use 0. Neither is meaningful for CPU data, so both
+        // must import.
+        for device_id in [-1, 0] {
+            let data = Int32Array::from(vec![1, 2, 3]).into_data();
+            let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+            let device_array = unsafe {
+                FFI_ArrowDeviceArray::new(
+                    FFI_ArrowArray::new(&data),
+                    ArrowDeviceType::CPU,
+                    device_id,
+                    std::ptr::null_mut(),
+                )
+            };
+
+            let imported = unsafe { from_device_ffi(device_array, &schema) }.unwrap();
+
+            assert_eq!(Int32Array::from(imported), Int32Array::from(vec![1, 2, 3]));
+        }
+    }
+
+    #[test]
+    fn cpu_export_uses_the_recommended_device_id() {
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+
+        let (device_array, _schema) = to_device_ffi(&data).unwrap();
+
+        assert_eq!(device_array.device_id(), -1);
+    }
+
+    #[test]
+    fn device_metadata_is_carried_verbatim() {
+        // What a crate that does own device memory needs: wrap an exported array with its own
+        // device metadata and read it back unchanged. `sync_event` is opaque to arrow-rs,
+        // which never dereferences it, so a dangling value is safe here.
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+        let sync_event = std::ptr::without_provenance_mut::<std::ffi::c_void>(0xdead_beef);
+
+        let device_array = unsafe {
+            FFI_ArrowDeviceArray::new(
+                FFI_ArrowArray::new(&data),
+                ArrowDeviceType::CUDA,
+                3,
+                sync_event,
+            )
+        };
+
+        assert_eq!(device_array.device_type(), ArrowDeviceType::CUDA);
+        assert_eq!(device_array.device_id(), 3);
+        assert_eq!(device_array.sync_event(), sync_event);
+    }
+
+    #[test]
+    fn cpu_export_has_no_sync_event() {
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+
+        let (device_array, _schema) = to_device_ffi(&data).unwrap();
+
+        assert!(device_array.sync_event().is_null());
+    }
+
+    #[test]
+    fn an_unknown_device_type_is_preserved_and_rejected() {
+        // The device type list is kept in sync with dlpack upstream, so a producer may name a
+        // device this version of arrow-rs has never heard of. It must round-trip through the
+        // struct and be refused by name rather than silently treated as CPU.
+        let data = Int32Array::from(vec![1, 2, 3]).into_data();
+        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
+        let future_device = ArrowDeviceType::new(99);
+
+        let device_array = unsafe {
+            FFI_ArrowDeviceArray::new(
+                FFI_ArrowArray::new(&data),
+                future_device,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(device_array.device_type(), future_device);
+
+        let err = unsafe { from_device_ffi(device_array, &schema) }.unwrap_err();
+        assert!(err.to_string().contains("99"), "{err}");
     }
 }
