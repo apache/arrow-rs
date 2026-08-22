@@ -424,6 +424,18 @@ where
         .filter(|x| !x.run_ends().is_empty())
         .collect();
 
+    if run_arrays.is_empty() {
+        // Every input was itself a logically-empty run array (e.g. a
+        // zero-length slice of a nested RunEndEncoded field). There is
+        // nothing to concatenate, but the result is still a valid
+        // zero-length array of the same type, not an error: falling
+        // through to `concat(&values_slices)` below would call `concat`
+        // with zero arrays, which cannot be answered because a type-erased
+        // `&[&dyn Array]` with no elements carries no `DataType` to build
+        // the result from.
+        return Ok(new_empty_array(arrays[0].data_type()));
+    }
+
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
     let needed_run_end_adjustments = std::iter::once(R::default_value())
         .chain(
@@ -1903,6 +1915,29 @@ mod tests {
         let expected = vec![20, 20, 40, 40, 40];
         let actual = result.into_iter().flatten().collect::<Vec<_>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_concat_run_array_all_empty() {
+        // Two run arrays that are both logically empty (e.g. zero-length
+        // slices of a nested RunEndEncoded field). `run_arrays` inside
+        // `concat_run_arrays` filters both out, and previously fell through
+        // to `concat(&[])`, which errors because a type-erased empty slice
+        // carries no `DataType` to build a result from.
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+        let array1 = array1.slice(0, 0);
+
+        let run_ends2 = Int32Array::from(vec![1, 4]);
+        let values2 = Int32Array::from(vec![30, 40]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+        let array2 = array2.slice(0, 0);
+
+        let result = concat(&[&array1, &array2]).unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
+        assert_eq!(result_run_array.len(), 0);
+        assert_eq!(result_run_array.data_type(), array1.data_type());
     }
 
     #[test]
