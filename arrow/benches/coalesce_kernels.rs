@@ -405,7 +405,100 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_all_filter_benchmarks, add_all_take_benchmarks);
+/// a large RecordBatch is sliced into smaller chunks and pushed into the
+/// coalescer one at a time. All slices share the same underlying buffers.
+fn add_all_slice_benchmarks(c: &mut Criterion) {
+    let large_batch_rows = 65_536;
+    let chunk_rows = 4_096;
+
+    let primitive_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new(
+            "timestamp_val",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        ),
+    ]));
+
+    let single_utf8view_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Utf8View,
+        true,
+    )]));
+
+    let single_binaryview_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::BinaryView,
+        true,
+    )]));
+
+    let single_utf8_schema =
+        SchemaRef::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+
+    let single_binary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Binary,
+        true,
+    )]));
+
+    let mixed_utf8view_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("utf8view_val", DataType::Utf8View, true),
+    ]));
+
+    let mixed_utf8_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("utf8_val", DataType::Utf8, true),
+    ]));
+
+    let mixed_dict_schema = SchemaRef::new(Schema::new(vec![
+        Field::new(
+            "string_dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("float_val1", DataType::Float64, true),
+        Field::new("float_val2", DataType::Float64, true),
+    ]));
+
+    for null_density in [0.0, 0.1] {
+        for (name, schema, max_string_len) in [
+            ("primitive", &primitive_schema, 30_usize),
+            ("single_utf8view (len=12)", &single_utf8view_schema, 12),
+            ("single_utf8view (len=30)", &single_utf8view_schema, 30),
+            ("single_binaryview (len=12)", &single_binaryview_schema, 12),
+            ("single_binaryview (len=30)", &single_binaryview_schema, 30),
+            ("single_utf8 (len=12)", &single_utf8_schema, 12),
+            ("single_utf8 (len=30)", &single_utf8_schema, 30),
+            ("single_binary (len=12)", &single_binary_schema, 12),
+            ("single_binary (len=30)", &single_binary_schema, 30),
+            ("mixed_utf8view (len=20)", &mixed_utf8view_schema, 20),
+            ("mixed_utf8 (len=20)", &mixed_utf8_schema, 20),
+            ("mixed_dict", &mixed_dict_schema, 30),
+        ] {
+            SliceBenchmarkBuilder {
+                c,
+                name,
+                large_batch_rows,
+                chunk_rows,
+                null_density,
+                max_string_len,
+                schema,
+            }
+            .build();
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    add_all_filter_benchmarks,
+    add_all_take_benchmarks,
+    add_all_slice_benchmarks
+);
 criterion_main!(benches);
 
 /// Run the filters with a batch_size, null_density, selectivity, and schema
@@ -643,6 +736,78 @@ fn take_streams(
             num_output_batches -= 1;
         }
     }
+}
+
+struct SliceBenchmarkBuilder<'a> {
+    c: &'a mut Criterion,
+    name: &'a str,
+    large_batch_rows: usize,
+    chunk_rows: usize,
+    null_density: f32,
+    max_string_len: usize,
+    schema: &'a SchemaRef,
+}
+
+impl SliceBenchmarkBuilder<'_> {
+    fn build(self) {
+        let Self {
+            c,
+            name,
+            large_batch_rows,
+            chunk_rows,
+            null_density,
+            max_string_len,
+            schema,
+        } = self;
+
+        let source_batches: Arc<[RecordBatch]> = (0..10_u64)
+            .map(|seed| {
+                let columns = schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        DataStreamBuilder::new(Arc::clone(schema))
+                            .with_batch_size(large_batch_rows)
+                            .with_null_density(null_density)
+                            .with_max_string_len(max_string_len)
+                            .create_input_array(field, seed)
+                    })
+                    .collect::<Vec<_>>();
+                RecordBatch::try_new(Arc::clone(schema), columns).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        let id = format!(
+            "slice: {name}, source: {large_batch_rows}, chunk: {chunk_rows}, nulls: {null_density}"
+        );
+        c.bench_function(&id, |b| {
+            b.iter(|| {
+                push_slices(Arc::clone(&source_batches), chunk_rows, Arc::clone(schema));
+            })
+        });
+    }
+}
+
+/// Push slices of the source batches through a `BatchCoalescer`.
+fn push_slices(source_batches: Arc<[RecordBatch]>, chunk_rows: usize, schema: SchemaRef) {
+    let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), chunk_rows);
+
+    for source in source_batches.iter() {
+        let total_rows = source.num_rows();
+        let mut offset = 0;
+
+        while offset < total_rows {
+            let len = (chunk_rows).min(total_rows - offset);
+            let slice = source.slice(offset, len);
+            coalescer.push_batch(slice).unwrap();
+            while coalescer.next_completed_batch().is_some() {}
+            offset += len;
+        }
+    }
+    // flush any remainder
+    coalescer.finish_buffered_batch().unwrap();
+    while coalescer.next_completed_batch().is_some() {}
 }
 
 /// Stream of filters to apply to a sequence of input RecordBatches
@@ -927,6 +1092,16 @@ impl DataStreamBuilder {
                 self.batch_size,
                 self.null_density,
             )), // TODO seed
+            DataType::Binary => Arc::new(create_binary_array_with_len_range_and_prefix_and_seed::<
+                i32,
+            >(
+                self.batch_size,
+                self.null_density,
+                0,
+                self.max_string_len,
+                b"",
+                seed,
+            )),
             DataType::Utf8View => {
                 Arc::new(create_string_view_array_with_max_len(
                     self.batch_size,
