@@ -20,7 +20,7 @@ use crate::DecodeResult;
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
-use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
+use crate::file::metadata::parser::{MetadataParser, parse_page_index};
 use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
@@ -426,8 +426,13 @@ impl ParquetMetaDataPushDecoder {
 
                     let buffer = self.get_bytes(&page_index_range)?;
                     let offset = page_index_range.start;
-                    parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
-                    parse_offset_index(&mut metadata, self.offset_index_policy, &buffer, offset)?;
+                    parse_page_index(
+                        &mut metadata,
+                        self.column_index_policy,
+                        self.offset_index_policy,
+                        &buffer,
+                        offset,
+                    )?;
                     self.state = DecodeState::Finished;
                     return Ok(DecodeResult::Data(*metadata));
                 }
@@ -503,6 +508,7 @@ pub fn range_for_page_index(
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::file::metadata::PageIndex;
     use crate::file::properties::WriterProperties;
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
     use bytes::Bytes;
@@ -524,8 +530,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
@@ -544,8 +549,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     /// It is possible to pre-fetch some, but not all, of the necessary data
@@ -572,8 +576,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     #[test]
@@ -619,8 +622,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     /// Decode the metadata incrementally, but without reading the page indexes
@@ -647,8 +649,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.column_index().is_none()); // of course, we did not read the column index
-        assert!(metadata.offset_index().is_none()); // or the offset index
+        assert!(metadata.page_index().is_none()); // of course, we did not read the page index
     }
 
     static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
