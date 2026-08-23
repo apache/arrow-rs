@@ -22,7 +22,10 @@ use crate::type_conversion::{
     generic_conversion_single_value, generic_conversion_single_value_with_result,
     primitive_conversion_single_value,
 };
-use arrow::array::{Array, ArrayRef, AsArray, StructArray, new_null_array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, StructArray, downcast_dictionary_array, downcast_run_array,
+    new_null_array,
+};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
@@ -41,12 +44,33 @@ use parquet_variant::{
 use std::borrow::Cow;
 use std::sync::Arc;
 
-/// Returns the raw bytes at the given index from a binary-like array, return `None` if the array isn't binary-like.
+/// Returns the logical bytes at the given index from a binary-like array, resolving dictionary
+/// and run-end encodings. Returns `None` for nulls or if the logical values aren't binary-like.
 pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8]> {
     match array.data_type() {
-        DataType::Binary => Some(array.as_binary::<i32>().value(index)),
-        DataType::LargeBinary => Some(array.as_binary::<i64>().value(index)),
-        DataType::BinaryView => Some(array.as_binary_view().value(index)),
+        DataType::Binary => array
+            .is_valid(index)
+            .then(|| array.as_binary::<i32>().value(index)),
+        DataType::LargeBinary => array
+            .is_valid(index)
+            .then(|| array.as_binary::<i64>().value(index)),
+        DataType::BinaryView => array
+            .is_valid(index)
+            .then(|| array.as_binary_view().value(index)),
+        DataType::Dictionary(..) => downcast_dictionary_array! {
+            array => {
+                let index = array.key(index)?;
+                binary_array_value(array.values().as_ref(), index)
+            },
+            _ => unreachable!(),
+        },
+        DataType::RunEndEncoded(..) => downcast_run_array! {
+            array => {
+                let index = array.get_physical_index(index);
+                binary_array_value(array.values().as_ref(), index)
+            },
+            _ => unreachable!(),
+        },
         _ => None,
     }
 }
@@ -78,6 +102,25 @@ pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Resu
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "VariantArray '{field_name}' field must be Binary, LargeBinary, or BinaryView, got {}",
+            array.data_type()
+        ))),
+    }
+}
+
+/// Validates that a metadata array has binary-like logical values.
+fn validate_metadata_array(array: &dyn Array) -> Result<()> {
+    let is_binary = |data_type: &DataType| {
+        matches!(
+            data_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
+    };
+    match array.data_type() {
+        data_type if is_binary(data_type) => Ok(()),
+        DataType::Dictionary(_, values) if is_binary(values) => Ok(()),
+        DataType::RunEndEncoded(_, values) if is_binary(values.data_type()) => Ok(()),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got {}",
             array.data_type()
         ))),
     }
@@ -263,7 +306,7 @@ pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
 
-    /// The metadata column of this variant (Binary, LargeBinary, or BinaryView)
+    /// The metadata column of this variant (Binary, LargeBinary, or BinaryView), possibly encoded
     metadata: ArrayRef,
 
     /// how is this variant array shredded?
@@ -285,17 +328,13 @@ impl VariantArray {
     /// # Requirements of the `StructArray`
     ///
     /// 1. A required field named `metadata` which is binary, large_binary, or
-    ///    binary_view
+    ///    binary_view, optionally dictionary- or run-end-encoded
     ///
     /// 2. A required field named `value` that is binary, large_binary, or
     ///    binary_view
     ///
     /// 3. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, list_view or struct
-    ///
-    /// NOTE: It is also permissible for the metadata field to be
-    /// Dictionary-Encoded, preferably (but not required) with an index type of
-    /// int8.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
@@ -309,13 +348,13 @@ impl VariantArray {
 
         // Note the specification allows for any order so we must search by name
 
-        // Ensure the StructArray has a metadata field that is a binary type
+        // Ensure the StructArray has a metadata field with binary-like logical values
         let Some(metadata_col) = inner.column_by_name("metadata") else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
         };
-        validate_binary_array(metadata_col.as_ref(), "metadata")?;
+        validate_metadata_array(metadata_col.as_ref())?;
 
         let shredding_state = ShreddingState::try_from(inner)?;
 
@@ -1187,7 +1226,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
 /// Canonicalize shredded typed_value fields (e.g. decimal narrowing) and
 /// verify that all data types in the struct are legal for a variant array.
 fn canonicalize_shredded_types(array: &dyn Array) -> Result<ArrayRef> {
-    let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    let new_type = canonicalize_and_verify_data_type_impl(array.data_type(), true)?;
     if let Cow::Borrowed(_) = new_type
         && let Some(array) = array.as_struct_opt()
     {
@@ -1200,6 +1239,13 @@ fn canonicalize_shredded_types(array: &dyn Array) -> Result<ArrayRef> {
 /// appear in a (possibly shredded) variant array. It also narrows decimal types to the smallest
 /// valid precision (e.g. Decimal128 -> Decimal32 when the precision fits).
 fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, DataType>> {
+    canonicalize_and_verify_data_type_impl(data_type, false)
+}
+
+fn canonicalize_and_verify_data_type_impl(
+    data_type: &DataType,
+    skip_top_level_metadata: bool,
+) -> Result<Cow<'_, DataType>> {
     use DataType::*;
 
     // helper macros
@@ -1279,6 +1325,9 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
             // of the data type. Even if some fields change, the others are shallow arc clones.
             let mut new_fields = std::collections::HashMap::new();
             for (i, field) in fields.iter().enumerate() {
+                if skip_top_level_metadata && field.name() == "metadata" {
+                    continue;
+                }
                 if let Cow::Owned(new_field) = canonicalize_and_verify_field(field)? {
                     new_fields.insert(i, new_field);
                 }
@@ -1346,14 +1395,15 @@ impl ShreddedVariantFieldArray {
 
 #[cfg(test)]
 mod test {
-    use crate::VariantArrayBuilder;
+    use crate::{GetOptions, VariantArrayBuilder, json_to_variant, variant_get, variant_to_json};
     use std::str::FromStr;
 
     use super::*;
     use arrow::array::{
         BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        FixedSizeBinaryArray, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
-        LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
+        DictionaryArray, FixedSizeBinaryArray, Int8Array, Int16Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray, RunArray,
+        StringArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1429,8 +1479,70 @@ mod test {
         let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray 'metadata' field must be Binary, LargeBinary, or BinaryView, got Int32"
+            "Invalid argument error: VariantArray 'metadata' field must be Binary, LargeBinary, BinaryView, or a Dictionary or RunEndEncoded array of one of those types, got Int32"
         );
+    }
+
+    #[test]
+    fn encoded_metadata_supports_nulls_slices_and_variant_get() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a":0}"#),
+            Some(r#"{"a":1}"#),
+            None,
+            Some(r#"{"b":3}"#),
+            Some(r#"{"b":4}"#),
+        ]));
+        let baseline = json_to_variant(&json).unwrap();
+        let metadata = baseline.metadata_column().as_binary_view();
+        let metadata_a = metadata.value(0);
+        let metadata_b = metadata.value(3);
+
+        let dictionary_values: ArrayRef = Arc::new(BinaryArray::from(vec![metadata_a, metadata_b]));
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![Some(0), Some(0), None, Some(1), Some(1)]),
+                dictionary_values,
+            )
+            .unwrap(),
+        );
+
+        let run_ends = Int16Array::from(vec![2, 3, 5]);
+        let run_values = BinaryArray::from(vec![Some(metadata_a), None, Some(metadata_b)]);
+        let run_end_encoded: ArrayRef =
+            Arc::new(RunArray::<Int16Type>::try_new(&run_ends, &run_values).unwrap());
+
+        for metadata in [dictionary, run_end_encoded] {
+            assert_eq!(binary_array_value(metadata.as_ref(), 2), None);
+            let fields = Fields::from(vec![
+                Field::new("metadata", metadata.data_type().clone(), false),
+                Field::new("value", baseline.value_column().data_type().clone(), false),
+            ]);
+            let input = StructArray::try_new(
+                fields,
+                vec![metadata, baseline.value_column().clone()],
+                baseline.nulls().cloned(),
+            )
+            .unwrap()
+            .slice(1, 3);
+
+            let variant = VariantArray::try_new(&input).unwrap();
+            assert_eq!(variant.value(0), baseline.value(1));
+            assert!(variant.is_null(1));
+            assert_eq!(variant.value(2), baseline.value(3));
+
+            let input: ArrayRef = Arc::new(input);
+            let options = GetOptions::new_with_path("b".try_into().unwrap())
+                .with_as_type(Some(Arc::new(Field::new("b", DataType::Int8, true))));
+            let result = variant_get(&input, options).unwrap();
+            assert_eq!(
+                result.as_primitive::<Int8Type>(),
+                &Int8Array::from(vec![None, None, Some(3)])
+            );
+            assert_eq!(
+                variant_to_json(&input).unwrap(),
+                StringArray::from(vec![Some(r#"{"a":1}"#), None, Some(r#"{"b":3}"#)])
+            );
+        }
     }
 
     #[test]
