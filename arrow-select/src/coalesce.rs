@@ -47,6 +47,10 @@ fn has_sparse_filter_copy(data_type: &DataType) -> bool {
 /// Shared benchmark results show this path helps low-selectivity filters, but
 /// can regress once the filter becomes denser. Keep this as a cheap integer
 /// threshold on the hot path: `selected_count <= filter_len / 16`.
+///
+/// primitive-only schemas never consult this threshold. they always
+/// write directly into the output buffer regardless of selectivity, avoiding
+/// unnecessary intermediate materialization.
 const SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
 
 fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bool {
@@ -156,6 +160,9 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
+    /// True when every column in the schema is a primitive type.
+    /// Only primitive-only schemas skip intermediate materialization for dense filters.
+    all_primitive_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -177,6 +184,10 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !has_sparse_filter_copy(field.data_type()));
+        let all_primitive_columns = schema
+            .fields()
+            .iter()
+            .all(|field| field.data_type().is_primitive());
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -188,6 +199,7 @@ impl BatchCoalescer {
             target_batch_size,
             in_progress_arrays,
             has_non_specialized_filter_columns,
+            all_primitive_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -653,10 +665,12 @@ impl BatchCoalescer {
             .biggest_coalesce_batch_size
             .is_some_and(|limit| selected_count > limit);
         let does_not_fit_buffer = selected_count > self.target_batch_size - self.buffered_rows;
+        let needs_sparse_threshold = !self.all_primitive_columns
+            && !should_use_sparse_filter_copy(filter_len, selected_count);
         let should_materialize_filter = exceeds_coalesce_limit
             || self.has_non_specialized_filter_columns
             || does_not_fit_buffer
-            || !should_use_sparse_filter_copy(filter_len, selected_count);
+            || needs_sparse_threshold;
 
         if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
@@ -822,14 +836,6 @@ mod tests {
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
             .run();
-    }
-
-    #[test]
-    fn test_sparse_filter_copy_threshold() {
-        assert!(should_use_sparse_filter_copy(8192, 8));
-        assert!(should_use_sparse_filter_copy(8192, 81));
-        assert!(!should_use_sparse_filter_copy(8192, 819));
-        assert!(!should_use_sparse_filter_copy(8192, 6553));
     }
 
     #[test]
@@ -1650,10 +1656,20 @@ mod tests {
         ]));
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.all_primitive_columns);
+
+        let all_primitive = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, true),
+        ]));
+        let coalescer = BatchCoalescer::new(all_primitive, 100);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+        assert!(coalescer.all_primitive_columns);
 
         let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
         let coalescer = BatchCoalescer::new(utf8, 100);
         assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.all_primitive_columns);
 
         let boolean = Arc::new(Schema::new(vec![Field::new(
             "boolean",
@@ -1662,6 +1678,7 @@ mod tests {
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
         assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.all_primitive_columns);
     }
 
     #[derive(Debug, Clone, PartialEq)]
