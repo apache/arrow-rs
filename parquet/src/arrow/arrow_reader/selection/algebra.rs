@@ -583,6 +583,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_and_fuzz() {
         let mut rand = rng();
         for _ in 0..100 {

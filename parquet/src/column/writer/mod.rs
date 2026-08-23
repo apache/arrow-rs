@@ -2760,6 +2760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_column_writer_small_write_batch_size() {
         for i in &[1usize, 2, 5, 10, 11, 1023] {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
@@ -3492,6 +3493,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -3516,6 +3518,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3533,6 +3536,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3550,6 +3554,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_start() {
         let input = [f16::NAN, f16::ONE, f16::ONE + f16::ONE]
             .into_iter()

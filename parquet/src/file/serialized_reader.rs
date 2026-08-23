@@ -1555,6 +1555,7 @@ mod tests {
         assert_eq!(page_count, 2);
     }
 
+    #[cfg_attr(miri, ignore)] // calls native Zstd code unsupported by Miri
     #[test]
     fn test_file_reader_empty_compressed_datapage_v2() {
         // this file has a compressed datapage that un-compresses to 0 bytes
@@ -2055,6 +2056,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_reader_filter_row_groups_and_range() -> Result<()> {
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
         let origin_reader = SerializedFileReader::new(test_file)?;
@@ -2185,6 +2187,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_page_index_reader_all_type() {
         let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
         let builder = ReadOptionsBuilder::new();
@@ -2496,6 +2499,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skip_next_page_with_dictionary_page() {
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
         let builder = ReadOptionsBuilder::new();
@@ -2542,6 +2546,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skip_page_with_offset_index() {
         let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
         let builder = ReadOptionsBuilder::new();
@@ -2602,6 +2607,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_peek_page_with_dictionary_page() {
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
         let builder = ReadOptionsBuilder::new();
@@ -2754,6 +2760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_byte_stream_split_extended() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",

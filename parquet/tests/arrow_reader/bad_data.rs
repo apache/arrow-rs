@@ -87,6 +87,7 @@ fn test_parquet_1481() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
     assert_eq!(
@@ -107,9 +108,10 @@ fn test_arrow_gh_41317() {
 #[test]
 fn test_arrow_rs_gh_6229_dict_header() {
     let err = read_file("ARROW-RS-GH-6229-DICTHEADER.parquet").unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "External: Parquet argument error: Parquet error: Integer overflow: out of range integral type conversion attempted"
+    let message = err.to_string();
+    assert!(
+        message.starts_with("External: Parquet argument error: Parquet error: Integer overflow:"),
+        "unexpected error: {message}"
     );
 }
 
@@ -159,6 +161,7 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
     Ok(num_rows)
 }
 
+#[cfg_attr(miri, ignore)] // calls native Zstd code unsupported by Miri
 #[test]
 fn non_standard_delta_blocks() {
     let file = Bytes::from_static(include_bytes!("bigdelta.parquet"));

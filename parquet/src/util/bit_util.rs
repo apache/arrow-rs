@@ -1302,6 +1302,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_get_batch() {
         const SIZE: &[usize] = &[1, 31, 32, 33, 128, 129];
         for s in SIZE {

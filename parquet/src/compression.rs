@@ -916,12 +916,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_snappy() {
         test_codec_with_size(CodecType::SNAPPY);
         test_codec_without_size(CodecType::SNAPPY);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_gzip() {
         for level in GzipLevel::MINIMUM_LEVEL..=GzipLevel::MAXIMUM_LEVEL {
             let level = GzipLevel::try_new(level).unwrap();
@@ -931,6 +933,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_brotli() {
         for level in BrotliLevel::MINIMUM_LEVEL..=BrotliLevel::MAXIMUM_LEVEL {
             let level = BrotliLevel::try_new(level).unwrap();
@@ -940,11 +943,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4() {
         test_codec_with_size(CodecType::LZ4);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Zstd calls native C functions unsupported by Miri
     fn test_codec_zstd() {
         // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
         for level in
@@ -957,6 +962,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4_raw() {
         test_codec_with_size(CodecType::LZ4_RAW);
     }

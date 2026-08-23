@@ -979,6 +979,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_values() {
         for width in 1..MAX_WIDTH + 1 {
             test_rle_values(width, 1, -1);
@@ -1179,6 +1180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_random() {
         let seed_len = 32;
         let niters = 50;

@@ -48,6 +48,7 @@ on:
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**
+      - parquet/**
 
 permissions:
   contents: read

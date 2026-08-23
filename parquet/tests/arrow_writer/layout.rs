@@ -182,6 +182,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_primitive() {
     let array = Arc::new(Int32Array::from_iter_values(0..2000)) as _;
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
@@ -359,6 +360,7 @@ fn test_primitive() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_string() {
     let array = Arc::new(StringArray::from_iter_values(
         (0..2000).map(|x| format!("{x:04}")),

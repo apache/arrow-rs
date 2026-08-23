@@ -254,6 +254,7 @@ fn test_ieee754_interop() {
 // This test replicates the data produced by the parquet-java code that generated
 // parquet-testing/data/floating_orders_nan_count.parquet
 #[test]
+#[cfg_attr(miri, ignore)] // inline assembly is not supported
 fn test_ieee754_interop2() {
     // define schema
     let schema = Schema::new(vec![
