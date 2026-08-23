@@ -134,36 +134,285 @@ use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
 
-/// Page level statistics for each column chunk of each row group.
+/// Encapsulates the Parquet [Page Index] for efficient page-level data skipping
 ///
-/// This structure is an in-memory representation of multiple [`ColumnIndex`]
-/// structures in a parquet file footer, as described in the Parquet [PageIndex
-/// documentation]. Each [`ColumnIndex`] holds statistics about all the pages in a
-/// particular column chunk.
+/// The Page Index is optional metadata that enables query engines to skip irrelevant
+/// data pages during scans, significantly improving I/O efficiency. It consists of two
+/// complementary structures:
 ///
-/// `column_index[row_group_number][column_number]` holds the
-/// [`ColumnIndex`] corresponding to column `column_number` of row group
-/// `row_group_number`.
+/// * **[`ColumnIndex`]**: Per-page min/max value boundaries that enable predicate-based
+///   page filtering. Allows determining which pages might contain rows matching a query
+///   predicate without reading the actual data pages.
 ///
-/// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
-/// column in the third row group of the parquet file.
+/// * **[`OffsetIndex`]**: Physical locations and sizes of data pages, plus the first row
+///   index of each page. Used to locate and read only the pages identified as relevant
+///   by the ColumnIndex.
 ///
-/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// Together, these indexes enable:
+/// - Single-row lookups reading only one data page per column (on sorted columns)
+/// - Range scans reading only pages containing values in the query range
+/// - Efficient cross-column filtering by skipping corresponding row ranges
+///
+/// # Structure
+///
+/// Within a Parquet file, both indexes are organized as a two-level structure, with
+/// indexes arranged first by row group, and then column. The [`ColumnChunkMetaData`]
+/// contains pointers to the indexes for a given column chunk, so they may be
+/// populated piecemeal. This struct allows access either by row group index
+/// ([Self::column_indexes_for_rowgroup], [Self::offset_indexes_for_rowgroup]) or
+/// individual access by row group index and column number ([Self::column_index],
+/// [Self::offset_index]).
+///
+/// Each entry is `Option<T>` because:
+/// - The entire page index might be absent (old files, disabled during write)
+/// - Individual columns might lack indexes (unsupported types, statistics disabled)
+///
+/// # Example: Checking if Page Index is Available
+///
+/// ```
+/// use parquet::file::metadata::ParquetMetaData;
+/// # use parquet::errors::Result;
+///
+/// fn check_page_index_availability(metadata: &ParquetMetaData) -> Result<()> {
+///     if let Some(page_index) = metadata.page_index() {
+///         println!("Page index present:");
+///         println!("  Has offset indexes: {}", page_index.has_offset_indexes());
+///         println!("  Has column indexes: {}", page_index.has_column_indexes());
+///
+///         // Check availability for first row group, first column
+///         if let Some(col_idx) = page_index.column_index(0, 0) {
+///             println!("  Column index found for row group 0, column 0");
+///             println!("    Number of pages: {}", col_idx.num_pages());
+///         }
+///
+///         if let Some(offset_idx) = page_index.offset_index(0, 0) {
+///             println!("  Offset index found for row group 0, column 0");
+///             println!("    Number of pages: {}", offset_idx.page_locations().len());
+///         }
+///     } else {
+///         println!("No page index available");
+///     }
+///     Ok(())
+/// }
+/// ```
+///
+/// # Example: Using Page Index for Predicate Pushdown
+///
+/// ```
+/// use parquet::file::metadata::ParquetMetaData;
+/// use parquet::file::page_index::column_index::ColumnIndexMetaData;
+/// # use parquet::errors::Result;
+///
+/// /// Identifies which pages in a column might contain values >= min_value
+/// fn find_relevant_pages(
+///     metadata: &ParquetMetaData,
+///     row_group_idx: usize,
+///     column_idx: usize,
+///     min_value: i32,
+/// ) -> Vec<usize> {
+///     let mut relevant_pages = Vec::new();
+///
+///     let Some(page_index) = metadata.page_index() else {
+///         // No page index - must read all pages
+///         return relevant_pages;
+///     };
+///
+///     let Some(column_index) = page_index.column_index(row_group_idx, column_idx) else {
+///         // No column index - must read all pages
+///         return relevant_pages;
+///     };
+///
+///     // Check each page's statistics
+///     match column_index {
+///         ColumnIndexMetaData::INT32(index) => {
+///             for (page_num, max_value) in index.max_values_iter().enumerate() {
+///                 // Page might contain matching rows if its max >= our min
+///                 if let Some(max) = max_value {
+///                     if *max >= min_value {
+///                         relevant_pages.push(page_num);
+///                     }
+///                 }
+///             }
+///         }
+///         _ => {
+///             // Wrong column type - read all pages
+///         }
+///     }
+///
+///     relevant_pages
+/// }
+/// ```
+///
+/// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
+/// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageIndex {
+    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
+    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+}
 
-/// [`OffsetIndexMetaData`] for each data page of each row group of each column
-///
-/// This structure is the parsed representation of the [`OffsetIndex`] from the
-/// Parquet file footer, as described in the Parquet [PageIndex documentation].
-///
-/// `offset_index[row_group_number][column_number]` holds
-/// the [`OffsetIndexMetaData`] corresponding to column
-/// `column_number`of row group `row_group_number`.
-///
-/// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
+impl PageIndex {
+    pub(crate) fn new(
+        column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
+        offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    ) -> Self {
+        Self {
+            column_indexes,
+            offset_indexes,
+        }
+    }
+
+    /// Returns `true` if offset index structures are present
+    ///
+    /// This indicates whether [`OffsetIndexMetaData`] structures were loaded or created.
+    /// Returns `true` even if some individual columns lack offset indexes.
+    ///
+    /// To check if a specific column has an offset index, use [`Self::offset_index`].
+    pub fn has_offset_indexes(&self) -> bool {
+        self.offset_indexes.is_some()
+    }
+
+    /// Returns `true` if column index structures are present
+    ///
+    /// This indicates whether [`ColumnIndexMetaData`] structures were loaded or created.
+    /// Returns `true` even if some individual columns lack column indexes.
+    ///
+    /// To check if a specific column has a column index, use [`Self::column_index`].
+    pub fn has_column_indexes(&self) -> bool {
+        self.column_indexes.is_some()
+    }
+
+    /// Returns `true` if both the offset and column index structures are present
+    ///
+    /// This is equivalent to both [`Self::has_offset_indexes`] and [`Self::has_column_indexes`]
+    /// returning `true`.
+    pub fn is_complete(&self) -> bool {
+        self.has_column_indexes() && self.has_offset_indexes()
+    }
+
+    /// Returns column indexes for all columns in the specified row group
+    ///
+    /// Returns `None` if:
+    /// - Column indexes were not loaded or are not available
+    /// - The row group index is out of bounds
+    ///
+    /// Returns `Some(&[Option<ColumnIndexMetaData>])` where:
+    /// - The slice length equals the number of columns in the row group
+    /// - Each element is `Some` if that column has statistics, `None` otherwise
+    pub fn column_indexes_for_rowgroup(
+        &self,
+        row_group_idx: usize,
+    ) -> Option<&[Option<ColumnIndexMetaData>]> {
+        match self.column_indexes.as_ref() {
+            None => None,
+            Some(indexes) => indexes.get(row_group_idx).map(|ci| ci.as_slice()),
+        }
+    }
+
+    /// Returns the column index for a specific row group and column
+    ///
+    /// This is the primary method for accessing page-level min/max statistics
+    /// used in predicate pushdown and page skipping optimizations.
+    ///
+    /// Returns:
+    /// * `Some(&ColumnIndexMetaData)` - Column index is available with statistics
+    /// * `None` - Index unavailable (not loaded, row group/column out of bounds, or no statistics)
+    pub fn column_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&ColumnIndexMetaData> {
+        if let Some(column_indexes) = self.column_indexes.as_ref() {
+            let rg = column_indexes.get(row_group_idx)?;
+            rg.get(column_idx)?.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Returns offset indexes for all columns in the specified row group
+    ///
+    /// Returns `None` if:
+    /// - Offset indexes were not loaded or are not available
+    /// - The row group index is out of bounds
+    ///
+    /// Returns `Some(&[Option<OffsetIndexMetaData>])` where:
+    /// - The slice length equals the number of columns in the row group
+    /// - Each element is `Some` if that column has location metadata, `None` otherwise
+    pub fn offset_indexes_for_rowgroup(
+        &self,
+        row_group_idx: usize,
+    ) -> Option<&[Option<OffsetIndexMetaData>]> {
+        match self.offset_indexes.as_ref() {
+            None => None,
+            Some(indexes) => indexes.get(row_group_idx).map(|oi| oi.as_slice()),
+        }
+    }
+
+    /// Returns the offset index for a specific row group and column
+    ///
+    /// This provides physical locations and sizes of data pages, enabling:
+    /// - Direct seeking to specific pages identified by column index filtering
+    /// - Reading only relevant pages without scanning entire column chunks
+    /// - Efficient cross-column row-based filtering
+    ///
+    /// Returns:
+    /// * `Some(&OffsetIndexMetaData)` - Offset index is available
+    /// * `None` - Index unavailable (not loaded, row group/column out of bounds)
+    pub fn offset_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&OffsetIndexMetaData> {
+        if let Some(offset_indexes) = self.offset_indexes.as_ref() {
+            let rg = offset_indexes.get(row_group_idx)?;
+            rg.get(column_idx)?.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Returns the expected number of data pages for a specific column chunk
+    ///
+    /// This count includes only data pages, not dictionary pages or other metadata pages.
+    ///
+    /// Returns:
+    /// * `Some(usize)` - Number of data pages if any index is available
+    /// * `None` - No index information available for this column
+    pub fn num_data_pages(&self, row_group_idx: usize, column_idx: usize) -> Option<usize> {
+        match self.offset_index(row_group_idx, column_idx) {
+            Some(offset_index) => Some(offset_index.page_locations.len()),
+            None => Some(self.column_index(row_group_idx, column_idx)?.num_pages() as usize),
+        }
+    }
+
+    /// Returns the physical locations of all data pages in a column chunk
+    ///
+    /// Each [`PageLocation`] contains:
+    /// - File offset where the page begins
+    /// - Compressed size of the page
+    /// - First row index within the row group
+    ///
+    /// This enables direct I/O to specific pages without reading the entire column chunk.
+    ///
+    /// Returns:
+    /// * `Some(&Vec<PageLocation>)` - Vector of page locations if offset index exists
+    /// * `None` - Offset index not available
+    pub fn page_locations(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&Vec<PageLocation>> {
+        if let Some(offset_indexes) = self.offset_indexes.as_ref() {
+            let rg = offset_indexes.get(row_group_idx)?;
+            let off_idx = rg.get(column_idx)?.as_ref()?;
+            Some(off_idx.page_locations())
+        } else {
+            None
+        }
+    }
+}
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -174,7 +423,7 @@ pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 /// The fields of this structure are:
 /// * [`FileMetaData`]: Information about the overall file (such as the schema) (See [`Self::file_metadata`])
 /// * [`RowGroupMetaData`]: Information about each Row Group (see [`Self::row_groups`])
-/// * [`ParquetColumnIndex`] and [`ParquetOffsetIndex`]: Optional "Page Index" structures (see [`Self::column_index`] and [`Self::offset_index`])
+/// * [`PageIndex`]: Optional "Page Index" structures (see [`Self::page_index`])
 ///
 /// This structure is read by the various readers in this crate or can be read
 /// directly from a file using the [`ParquetMetaDataReader`] struct.
@@ -189,9 +438,7 @@ pub struct ParquetMetaData {
     /// Row group metadata
     row_groups: Vec<RowGroupMetaData>,
     /// Page level index for each page in each column chunk
-    column_index: Option<ParquetColumnIndex>,
-    /// Offset index for each page in each column chunk
-    offset_index: Option<ParquetOffsetIndex>,
+    page_index: Option<PageIndex>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
     file_decryptor: Option<Box<FileDecryptor>>,
@@ -204,8 +451,7 @@ impl ParquetMetaData {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            column_index: None,
-            offset_index: None,
+            page_index: None,
             #[cfg(feature = "encryption")]
             file_decryptor: None,
         }
@@ -268,24 +514,14 @@ impl ParquetMetaData {
             .map_err(|e| ParquetError::General(format!("Row count overflow: {e}")))
     }
 
-    /// Returns the column index for this file if loaded
+    /// Returns the page index for this file if loaded
     ///
-    /// Returns `None` if the parquet file does not have a `ColumnIndex` or
+    /// Returns `None` if the parquet file lacks page indexes or
     /// [ArrowReaderOptions::with_page_index] was set to false.
     ///
     /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
-    pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
-        self.column_index.as_ref()
-    }
-
-    /// Returns offset indexes in this file, if loaded
-    ///
-    /// Returns `None` if the parquet file does not have a `OffsetIndex` or
-    /// [ArrowReaderOptions::with_page_index] was set to false.
-    ///
-    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
-    pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
-        self.offset_index.as_ref()
+    pub fn page_index(&self) -> Option<&PageIndex> {
+        self.page_index.as_ref()
     }
 
     /// Estimate of the bytes allocated to store `ParquetMetadata`
@@ -311,19 +547,13 @@ impl ParquetMetaData {
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
             + self.row_groups.heap_size()
-            + self.column_index.heap_size()
-            + self.offset_index.heap_size()
+            + self.page_index.heap_size()
             + encryption_size
     }
 
-    /// Override the column index
-    pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
-        self.column_index = index;
-    }
-
-    /// Override the offset index
-    pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
-        self.offset_index = index;
+    /// Override the page index
+    pub(crate) fn set_page_index(&mut self, index: Option<PageIndex>) {
+        self.page_index = index;
     }
 }
 
@@ -404,35 +634,19 @@ impl ParquetMetaDataBuilder {
     }
 
     /// Sets the column index
-    pub fn set_column_index(mut self, column_index: Option<ParquetColumnIndex>) -> Self {
-        self.0.column_index = column_index;
+    pub fn set_page_index(mut self, page_index: Option<PageIndex>) -> Self {
+        self.0.page_index = page_index;
         self
     }
 
     /// Returns the current column index from the builder, replacing it with `None`
-    pub fn take_column_index(&mut self) -> Option<ParquetColumnIndex> {
-        std::mem::take(&mut self.0.column_index)
+    pub fn take_page_index(&mut self) -> Option<PageIndex> {
+        std::mem::take(&mut self.0.page_index)
     }
 
     /// Return a reference to the current column index, if any
-    pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
-        self.0.column_index.as_ref()
-    }
-
-    /// Sets the offset index
-    pub fn set_offset_index(mut self, offset_index: Option<ParquetOffsetIndex>) -> Self {
-        self.0.offset_index = offset_index;
-        self
-    }
-
-    /// Returns the current offset index from the builder, replacing it with `None`
-    pub fn take_offset_index(&mut self) -> Option<ParquetOffsetIndex> {
-        std::mem::take(&mut self.0.offset_index)
-    }
-
-    /// Return a reference to the current offset index, if any
-    pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
-        self.0.offset_index.as_ref()
+    pub fn page_index(&self) -> Option<&PageIndex> {
+        self.0.page_index.as_ref()
     }
 
     /// Sets the file decryptor needed to decrypt this metadata.
@@ -2138,12 +2352,16 @@ mod tests {
         offset_index.append_row_count(1);
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
-        let offset_index = offset_index.build();
+        let offset_index = Some(offset_index.build());
+
+        let page_index = PageIndex::new(
+            Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(native_index))]]),
+            Some(vec![vec![offset_index]]),
+        );
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
-            .set_offset_index(Some(vec![vec![offset_index]]))
+            .set_page_index(Some(page_index))
             .build();
 
         #[cfg(not(feature = "encryption"))]

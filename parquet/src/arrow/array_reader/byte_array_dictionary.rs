@@ -19,7 +19,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
@@ -31,7 +31,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
-use crate::encodings::rle::RleDecoder;
+use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBitpacked;
@@ -128,6 +128,8 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
+    /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
+    hash_scratch: MutableBuffer,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -146,6 +148,7 @@ where
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
+            hash_scratch: MutableBuffer::new(0),
         }
     }
 }
@@ -181,7 +184,7 @@ where
 
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
-        let array = buffer.into_array(null_buffer, &self.data_type)?;
+        let array = buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?;
         self.record_reader.reset();
 
         Ok(array)
@@ -298,7 +301,14 @@ where
     ) -> Result<()> {
         let decoder = match encoding {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-                let bit_width = data[0];
+                let bit_width = *data
+                    .first()
+                    .ok_or_else(|| general_err!("dictionary index page is empty"))?;
+                if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
+                    return Err(general_err!(
+                        "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
+                    ));
+                }
                 let mut decoder = RleDecoder::new(bit_width);
                 decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
@@ -452,7 +462,9 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type).unwrap();
+        let array = output
+            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -523,7 +535,9 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        let array = output.into_array(Some(valid_buffer), &data_type).unwrap();
+        let array = output
+            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -558,7 +572,9 @@ mod tests {
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
-        let array = output.into_array(None, &data_type).unwrap();
+        let array = output
+            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -602,7 +618,9 @@ mod tests {
             decoder.skip_values(2).expect("skipping two values");
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
-        let array = output.into_array(None, &data_type).unwrap();
+        let array = output
+            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
         let array = cast(&array, &ArrowType::Utf8).unwrap();
@@ -665,7 +683,11 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type)
+                .into_array(
+                    Some(Buffer::from(&[0])),
+                    &data_type,
+                    &mut MutableBuffer::new(0),
+                )
                 .unwrap();
 
             assert_eq!(array.len(), 8);
@@ -680,12 +702,43 @@ mod tests {
 
             output.pad_nulls(0, 0, 8, &[0]).unwrap();
             let array = output
-                .into_array(Some(Buffer::from(&[0])), &data_type)
+                .into_array(
+                    Some(Buffer::from(&[0])),
+                    &data_type,
+                    &mut MutableBuffer::new(0),
+                )
                 .unwrap();
 
             assert_eq!(array.len(), 8);
             assert_eq!(array.null_count(), 8);
             assert_eq!(array.logical_null_count(), 8);
         }
+    }
+
+    #[test]
+    fn test_dictionary_decoder_empty_data() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, Bytes::new(), 0, None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: dictionary index page is empty"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_decoder_invalid_bit_width() {
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+        let data = Bytes::from_static(&[33, 0, 0, 0]);
+        let err = decoder
+            .set_data(Encoding::RLE_DICTIONARY, data, 1, None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE bit width 33. Max allowed is 32"
+        );
     }
 }
