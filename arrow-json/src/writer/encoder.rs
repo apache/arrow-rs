@@ -139,10 +139,15 @@ impl EncoderOptions {
     }
 }
 
-/// A trait to create custom encoders for specific data types.
+/// Creates custom encoders for specific data types when writing JSON data.
 ///
-/// This allows overriding the default encoders for specific data types,
-/// or adding new encoders for custom data types.
+/// This trait allows customizing JSON encoding for specific data types,
+/// or adding new encoders for unsupported or custom data types.
+///
+/// You can register an implementation of this trait using
+/// [`WriterBuilder::with_encoder_factory`].
+///
+/// [`WriterBuilder::with_encoder_factory`]: crate::writer::WriterBuilder::with_encoder_factory
 ///
 /// # Examples
 ///

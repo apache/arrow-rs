@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, UInt32Builder};
+use arrow_array::builder::UInt32Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -830,7 +830,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         size_usize: usize,
     ) -> Buffer {
         let values_buffer = values.values().as_slice();
-        let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+        let mut output = Vec::with_capacity(indices.len() * size_usize);
 
         if indices.null_count() == 0 {
             let array_iter = indices.values().iter().map(|idx| {
@@ -838,7 +838,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
                 &values_buffer[offset..offset + size_usize]
             });
             for slice in array_iter {
-                values_buffer_builder.append_slice(slice);
+                output.extend_from_slice(slice);
             }
         } else {
             // The indices nullability cannot be ignored here because the values buffer may contain
@@ -851,13 +851,13 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
             });
             for slice in array_iter {
                 match slice {
-                    None => values_buffer_builder.append_n(size_usize, 0),
-                    Some(slice) => values_buffer_builder.append_slice(slice),
+                    None => output.resize(output.len() + size_usize, 0),
+                    Some(slice) => output.extend_from_slice(slice),
                 }
             }
         }
 
-        values_buffer_builder.finish()
+        output.into()
     }
 }
 
@@ -952,11 +952,11 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
-    // Run encode the physical indices into new_run_ends_builder
+    // Run encode the physical indices into new_run_ends
     // Keep track of the physical indices to take in take_value_indices
     // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
-    let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
-    let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
+    let mut new_run_ends = Vec::with_capacity(1);
+    let mut take_value_indices = Vec::with_capacity(1);
 
     let values_cmp = make_comparator(
         run_array.values().as_ref(),
@@ -969,25 +969,20 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
         let cur_idx = physical_indices[ix];
         let is_new_run = cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne();
         if is_new_run {
-            take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
-            new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
+            take_value_indices.push(I::Native::from_usize(prev_idx).unwrap());
+            new_run_ends.push(T::Native::from_usize(ix).unwrap());
         }
     }
     take_value_indices
-        .append(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
-    new_run_ends_builder.append(T::Native::from_usize(physical_indices.len()).unwrap());
+        .push(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
+    new_run_ends.push(T::Native::from_usize(physical_indices.len()).unwrap());
 
     // SAFETY: run-ends are strictly increasing with last value == logical length.
     let run_ends = unsafe {
-        RunEndBuffer::new_unchecked(
-            ScalarBuffer::from(new_run_ends_builder.finish()),
-            0,
-            physical_indices.len(),
-        )
+        RunEndBuffer::new_unchecked(ScalarBuffer::from(new_run_ends), 0, physical_indices.len())
     };
 
-    let take_value_indices =
-        PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices.finish()), None);
+    let take_value_indices = PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices), None);
 
     let new_values = take(run_array.values(), &take_value_indices, None)?;
 

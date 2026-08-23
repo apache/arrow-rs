@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use apache_avro::Schema as ApacheSchema;
 use apache_avro::types::Value;
-use apache_avro::{Schema as ApacheSchema, to_avro_datum};
+use apache_avro::writer::datum::GenericDatumWriter;
 use arrow_avro::reader::{Decoder, ReaderBuilder};
 use arrow_avro::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC, SchemaStore,
@@ -49,9 +50,10 @@ fn encode_records_with_prefix(
     rows: impl Iterator<Item = Value>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    let writer = GenericDatumWriter::builder(schema).build().unwrap();
     for v in rows {
         out.extend_from_slice(prefix);
-        out.extend_from_slice(&to_avro_datum(schema, v).expect("encode datum failed"));
+        out.extend(writer.write_value_to_vec(v).unwrap());
     }
     out
 }

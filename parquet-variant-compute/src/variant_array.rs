@@ -409,11 +409,13 @@ impl VariantArray {
     /// Use `try_value` if you need to handle conversion errors gracefully.
     ///
     /// # Panics
-    /// * if the index is out of bounds
-    /// * if the array value is null
-    /// * if `try_value` returns an error.
+    /// Panics if
+    /// * the index is out of bounds,
+    /// * the `metadata`/`value` bytes of the row are invalid, which includes reading a null row, or
+    /// * both `value` and `typed_value` are non-null for a non-struct `typed_value`.
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
-        self.try_value(index).unwrap()
+        self.try_value(index)
+            .unwrap_or_else(|err| panic!("VariantArray::value({index}) failed: {err}"))
     }
 
     /// Return the [`Variant`] instance stored at the given row
@@ -421,16 +423,17 @@ impl VariantArray {
     /// Note: This method does not check for nulls and the value is arbitrary
     /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
-    /// # Panics
-    ///
-    /// Panics if
-    /// * the index is out of bounds
-    /// * the array value is null
-    ///
     /// # Errors
     ///
     /// Errors if
+    /// - the index is out of bounds
     /// - the data in `typed_value` cannot be interpreted as a valid `Variant`
+    /// - both `value` and `typed_value` are non-null for a non-struct `typed_value`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the unshredded `metadata`/`value` bytes fail basic validation, since those are
+    /// read with [`Variant::new`]. This includes reading a row that is null.
     ///
     /// If this is a shredded variant but has no value at the shredded location, it
     /// will return [`Variant::Null`].
@@ -444,13 +447,22 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
+        if self.len() <= index {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {index} out of bounds for VariantArray of length {}",
+                self.len()
+            )));
+        }
+
         let value = self.value_column();
         match self.typed_value_column() {
             // Always prefer typed_value, if available
             Some(typed_value) if typed_value.is_valid(index) => {
                 if !matches!(typed_value.data_type(), DataType::Struct(_)) && value.is_valid(index) {
                     // Only a partially shredded struct is allowed to have values for both columns
-                    panic!("Invalid variant, conflicting value and typed_value");
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Invalid variant, conflicting value and typed_value".to_owned(),
+                    ));
                 }
                 typed_value_to_variant(typed_value, index)
             }
@@ -1593,6 +1605,23 @@ mod test {
                 typed_value.data_type(),
             );
         }
+    }
+
+    #[test]
+    fn test_try_value_out_of_bounds() {
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        let v = b.build();
+
+        assert_eq!(v.try_value(0).unwrap(), Variant::Int8(1));
+        assert_eq!(v.try_value(1).unwrap(), Variant::Null);
+
+        let err = v.try_value(2).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Index 2 out of bounds for VariantArray of length 2"
+        );
     }
 
     #[test]
