@@ -405,7 +405,6 @@ impl Sbbf {
             .chunks_exact(4 * 8)
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                // `as_chunks` gives `[u8; 4]` words, so the conversion cannot fail
                 let (words, _remainder) = chunk.as_chunks::<4>();
                 for (i, word) in words.iter().enumerate() {
                     block[i] = u32::from_le_bytes(*word);

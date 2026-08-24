@@ -350,14 +350,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             ArrowError::InvalidArgumentError(format!("String length {} exceeds u32::MAX", v.len()))
         })?;
 
-        if length <= MAX_INLINE_VIEW_LEN {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
-            view_buffer[4..4 + v.len()].copy_from_slice(v);
-            self.views_buffer.push(u128::from_le_bytes(view_buffer));
-            self.null_buffer_builder.append_non_null();
-            return Ok(());
-        }
+        // Anything at most `MAX_INLINE_VIEW_LEN` bytes long is inlined; everything else
+        // needs a four byte prefix, which `first_chunk` gives us without any indexing.
+        let prefix = match v.first_chunk::<4>() {
+            Some(prefix) if length > MAX_INLINE_VIEW_LEN => u32::from_le_bytes(*prefix),
+            _ => {
+                let mut view_buffer = [0; 16];
+                view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+                view_buffer[4..4 + v.len()].copy_from_slice(v);
+                self.views_buffer.push(u128::from_le_bytes(view_buffer));
+                self.null_buffer_builder.append_non_null();
+                return Ok(());
+            }
+        };
 
         // Deduplication if:
         // (1) deduplication is enabled.
@@ -416,8 +421,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
         let view = ByteView {
             length,
-            // `v` is longer than `MAX_INLINE_VIEW_LEN`, so it has at least four bytes
-            prefix: u32::from_le_bytes([v[0], v[1], v[2], v[3]]),
+            prefix,
             buffer_index,
             offset,
         };

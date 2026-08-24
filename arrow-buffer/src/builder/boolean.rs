@@ -161,10 +161,11 @@ impl BooleanBufferBuilder {
         self.len = len;
 
         let remainder = self.len % 8;
-        if remainder != 0 {
-            // A non-zero remainder means `new_len_bytes` is at least one
+        if remainder != 0
+            && let Some(last) = self.buffer.as_mut().last_mut()
+        {
             let mask = (1_u8 << remainder).wrapping_sub(1);
-            self.buffer.as_mut()[new_len_bytes - 1] &= mask;
+            *last &= mask;
         }
     }
 
@@ -249,17 +250,18 @@ impl BooleanBufferBuilder {
                 let cur_remainder = self.len % 8;
                 let new_remainder = new_len % 8;
 
-                if cur_remainder != 0 {
-                    // Pad last byte with 1s.
-                    // A non-zero remainder means there already is a last byte.
-                    let cur_len_bytes = bit_util::ceil(self.len, 8);
-                    self.buffer.as_slice_mut()[cur_len_bytes - 1] |= !((1 << cur_remainder) - 1);
+                if cur_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
+                    // Pad last byte with 1s
+                    *last |= !((1 << cur_remainder) - 1);
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
-                if new_remainder != 0 {
-                    // Clear remaining bits.
-                    // A non-zero remainder means `new_len_bytes` is at least one.
-                    self.buffer.as_slice_mut()[new_len_bytes - 1] &= (1 << new_remainder) - 1;
+                if new_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
+                    // Clear remaining bits
+                    *last &= (1 << new_remainder) - 1;
                 }
                 self.len = new_len;
             }
