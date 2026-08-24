@@ -260,6 +260,16 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_row_selection_policy_heterogeneous"
+required-features = ["arrow", "async"]
+harness = false
+
+[[bench]]
+name = "arrow_reader_row_selection_policy_sampler"
+required-features = ["arrow", "async"]
+harness = false
+
+[[bench]]
 name = "arrow_reader_clickbench"
 required-features = ["arrow", "async"]
 harness = false

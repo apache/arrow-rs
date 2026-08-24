@@ -18,7 +18,7 @@
 use super::model::{CaseSpec, RowGroupPattern};
 use super::shapes::{
     BURSTY_50_SAME_SUMMARY, CLUSTERED_50_RUN128, DENSE_98_44_SKIP1_SELECT63, FRAGMENTED_50_RUN1,
-    MODERATE_12_5_RUN32, REGULAR_50_RUN32, SPARSE_1_56_RUN32,
+    MODERATE_12_5_RUN32, REGULAR_50_RUN8, REGULAR_50_RUN32, SPARSE_1_56_RUN32,
 };
 
 const FOUR_SPARSE: &[RowGroupPattern] = &[RowGroupPattern::Cycle(SPARSE_1_56_RUN32); 4];
@@ -30,6 +30,8 @@ const FOUR_FRAGMENTED: &[RowGroupPattern] = &[RowGroupPattern::Cycle(FRAGMENTED_
 const FOUR_CLUSTERED: &[RowGroupPattern] = &[RowGroupPattern::Cycle(CLUSTERED_50_RUN128); 4];
 
 const FOUR_REGULAR: &[RowGroupPattern] = &[RowGroupPattern::Cycle(REGULAR_50_RUN32); 4];
+
+const FOUR_BOUNDARY: &[RowGroupPattern] = &[RowGroupPattern::Cycle(REGULAR_50_RUN8); 4];
 
 const FOUR_BURSTY: &[RowGroupPattern] = &[RowGroupPattern::Cycle(BURSTY_50_SAME_SUMMARY); 4];
 
@@ -117,5 +119,28 @@ pub(crate) const SCALE_CASES: &[CaseSpec] = &[
     CaseSpec {
         name: "fragmented_50_run1/rg08",
         row_groups: EIGHT_FRAGMENTED,
+    },
+];
+
+pub(crate) const HETEROGENEOUS_CASES: &[CaseSpec] = &[
+    CaseSpec {
+        name: "boundary_50_run8",
+        row_groups: FOUR_BOUNDARY,
+    },
+    CaseSpec {
+        name: "sparse_1_56_run32",
+        row_groups: FOUR_SPARSE,
+    },
+    CaseSpec {
+        name: "fragmented_50_run1",
+        row_groups: FOUR_FRAGMENTED,
+    },
+    CaseSpec {
+        name: "clustered_50_run128",
+        row_groups: FOUR_CLUSTERED,
+    },
+    CaseSpec {
+        name: "sparse2_then_fragmented2",
+        row_groups: SPARSE_TO_FRAGMENTED,
     },
 ];

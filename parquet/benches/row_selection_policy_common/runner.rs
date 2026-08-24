@@ -32,7 +32,7 @@ pub(crate) struct RunResult {
     pub(crate) payload0: Vec<i32>,
 }
 
-async fn run_with_consumer<F>(
+pub(crate) async fn run_with_consumer<F>(
     fixture: &CaseFixture,
     policy: RowSelectionPolicy,
     mut consume: F,
