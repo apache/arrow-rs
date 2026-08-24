@@ -340,7 +340,7 @@ fn interleave_views<T: ByteViewType>(
         .collect();
 
     let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
 }
