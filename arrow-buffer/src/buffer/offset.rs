@@ -189,8 +189,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// ```
     #[inline]
     pub fn first(&self) -> O {
-        // An `OffsetBuffer` is never empty
-        self.0.first().copied().unwrap_or_default()
+        self.0
+            .first()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
     }
 
     /// The last offset, i.e. the end of the last range.
@@ -205,8 +207,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// ```
     #[inline]
     pub fn last(&self) -> O {
-        // An `OffsetBuffer` is never empty
-        self.0.last().copied().unwrap_or_default()
+        self.0
+            .last()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
     }
 
     /// Get an Iterator over the lengths of this [`OffsetBuffer`]
