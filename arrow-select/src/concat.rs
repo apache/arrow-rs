@@ -425,14 +425,8 @@ where
         .collect();
 
     if run_arrays.is_empty() {
-        // Every input was itself a logically-empty run array (e.g. a
-        // zero-length slice of a nested RunEndEncoded field). There is
-        // nothing to concatenate, but the result is still a valid
-        // zero-length array of the same type, not an error: falling
-        // through to `concat(&values_slices)` below would call `concat`
-        // with zero arrays, which cannot be answered because a type-erased
-        // `&[&dyn Array]` with no elements carries no `DataType` to build
-        // the result from.
+        // If all input arrays are empty then handle here otherwise we
+        // lose the type below
         return Ok(new_empty_array(arrays[0].data_type()));
     }
 
