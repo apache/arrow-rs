@@ -586,6 +586,9 @@ pub struct SerializedPageReader<R: ChunkReader> {
     /// Column chunk type.
     physical_type: Type,
 
+    /// Total uncompressed size declared by the containing column chunk.
+    column_uncompressed_size: i64,
+
     state: SerializedPageReaderState,
 
     context: SerializedPageReaderContext,
@@ -690,6 +693,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             decompressor,
             state,
             physical_type: meta.column_type(),
+            column_uncompressed_size: meta.uncompressed_size(),
             context,
         })
     }
@@ -915,11 +919,22 @@ fn verify_page_size(
     compressed_size: i32,
     uncompressed_size: i32,
     remaining_bytes: u64,
+    column_uncompressed_size: i64,
 ) -> Result<()> {
     // The page's compressed size should not exceed the remaining bytes that are
     // available to read. The page's uncompressed size is the expected size
     // after decompression, which can never be negative.
-    if compressed_size < 0 || compressed_size as u64 > remaining_bytes || uncompressed_size < 0 {
+    if compressed_size < 0 || compressed_size as u64 > remaining_bytes {
+        return Err(eof_err!("Invalid page header"));
+    }
+    verify_page_uncompressed_size(uncompressed_size, column_uncompressed_size)
+}
+
+fn verify_page_uncompressed_size(
+    uncompressed_size: i32,
+    column_uncompressed_size: i64,
+) -> Result<()> {
+    if uncompressed_size < 0 || i64::from(uncompressed_size) > column_uncompressed_size {
         return Err(eof_err!("Invalid page header"));
     }
     Ok(())
@@ -959,6 +974,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         header.compressed_page_size,
                         header.uncompressed_page_size,
                         *remaining,
+                        self.column_uncompressed_size,
                     )?;
                     let data_len = header.compressed_page_size as usize;
                     let data_start = *offset;
@@ -1010,6 +1026,10 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         buffer.as_ref(),
                         *page_index,
                         is_dictionary_page,
+                    )?;
+                    verify_page_uncompressed_size(
+                        header.uncompressed_page_size,
+                        self.column_uncompressed_size,
                     )?;
                     let bytes = buffer.slice(offset..);
                     let bytes =
@@ -1119,6 +1139,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         buffered_header.compressed_page_size,
                         buffered_header.uncompressed_page_size,
                         *remaining_bytes,
+                        self.column_uncompressed_size,
                     )?;
                     // The next page header has already been peeked, so just advance the offset
                     *offset += buffered_header.compressed_page_size as u64;
@@ -1136,6 +1157,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         header.compressed_page_size,
                         header.uncompressed_page_size,
                         *remaining_bytes,
+                        self.column_uncompressed_size,
                     )?;
                     let data_page_size = header.compressed_page_size as u64;
                     *offset += header_len as u64 + data_page_size;
@@ -1197,10 +1219,12 @@ mod tests {
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
-    use crate::file::metadata::thrift::DataPageHeaderV2;
+    use crate::file::metadata::thrift::{DataPageHeader, DataPageHeaderV2};
     use crate::file::writer::SerializedFileWriter;
+    use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
+    use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
 
     use super::*;
@@ -1233,6 +1257,64 @@ mod tests {
             err.to_string()
                 .contains("DataPage v2 header contains implausible values")
         );
+    }
+
+    #[test]
+    fn test_page_uncompressed_size_exceeds_column_chunk() {
+        let page_header = PageHeader {
+            r#type: PageType::DATA_PAGE,
+            uncompressed_page_size: 1024,
+            compressed_page_size: 1,
+            data_page_header: Some(DataPageHeader {
+                num_values: 0,
+                encoding: Encoding::PLAIN,
+                definition_level_encoding: Encoding::RLE,
+                repetition_level_encoding: Encoding::RLE,
+                statistics: None,
+            }),
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: None,
+        };
+
+        let mut data = Vec::new();
+        page_header
+            .write_thrift(&mut ThriftCompactOutputProtocol::new(&mut data))
+            .unwrap();
+        data.push(0);
+
+        let schema =
+            Arc::new(parse_message_type("message schema { REQUIRED INT32 value; }").unwrap());
+        let schema = SchemaDescriptor::new(schema);
+        let metadata = ColumnChunkMetaData::builder(schema.column(0))
+            // An invalid Snappy payload ensures this test only observes the expected error if
+            // the page size is rejected before allocating a decompression buffer.
+            .set_compression(basic::Compression::SNAPPY)
+            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
+            .set_num_values(0)
+            .set_total_compressed_size(data.len() as i64)
+            .set_total_uncompressed_size(data.len() as i64)
+            .set_data_page_offset(0)
+            .build()
+            .unwrap();
+
+        let page_location = PageLocation {
+            offset: 0,
+            compressed_page_size: data.len() as i32,
+            first_row_index: 0,
+        };
+        for page_locations in [None, Some(vec![page_location])] {
+            let mut reader = SerializedPageReader::new(
+                Arc::new(Bytes::from(data.clone())),
+                &metadata,
+                0,
+                page_locations,
+            )
+            .unwrap();
+            let error = reader.get_next_page().unwrap_err();
+            assert!(error.to_string().contains("Invalid page header"));
+        }
     }
 
     #[test]
