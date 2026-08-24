@@ -474,7 +474,7 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 
     // SAFETY: `make_view` constructs every view from an in-bounds slice of buffer 0, and there
     // are no nulls. The buffer length check above guarantees every offset fits in a `u32`.
-    unsafe { BinaryViewArray::new_unchecked(views.into(), vec![buffer], None) }
+    unsafe { BinaryViewArray::new_unchecked(views.into(), vec![buffer].into(), None) }
 }
 
 #[cfg(test)]
