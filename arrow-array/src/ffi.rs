@@ -1814,7 +1814,7 @@ mod tests_from_ffi {
     #[cfg(not(feature = "force_validate"))]
     fn test_utf8_view_ffi_from_dangling_pointer() {
         let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
-        let buffers = empty.data_buffers().to_vec();
+        let buffers = Arc::clone(empty.data_buffers());
         let nulls = empty.nulls().cloned();
 
         // Create a dangling pointer to a view buffer with zero length.

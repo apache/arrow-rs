@@ -633,10 +633,9 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
+    let buffers = Arc::clone(array.data_buffers());
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
-    Ok(unsafe {
-        GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
-    })
+    Ok(unsafe { GenericByteViewArray::new_unchecked(new_views, buffers, new_nulls) })
 }
 
 /// `take` implementation for list arrays
@@ -1798,6 +1797,9 @@ mod tests {
         let actual = take(&array, &index, None).unwrap();
 
         assert_eq!(actual.len(), index.len());
+        let actual_buffers = actual.as_byte_view::<T>().data_buffers();
+        let input_buffers = array.data_buffers();
+        assert!(Arc::ptr_eq(actual_buffers, input_buffers));
 
         let expected = {
             // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]

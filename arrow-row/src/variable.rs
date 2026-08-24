@@ -375,7 +375,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()], nulls) }
+    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) }
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
