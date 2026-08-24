@@ -1160,6 +1160,7 @@ impl IpcDataGenerator {
     /// logical length recorded in the `RecordBatch` header. The caller is responsible
     /// for wrapping the returned [`EncodedRecordBatchMeta::fb_offset`] in a `Message`
     /// and calling [`FlatBufferBuilder::finish`].
+    #[inline]
     fn encode_record_batch_data(
         &self,
         columns: impl IntoIterator<Item = ArrayData>,
