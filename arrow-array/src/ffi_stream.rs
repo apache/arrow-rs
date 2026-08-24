@@ -337,6 +337,32 @@ pub struct ArrowArrayStreamReader {
     schema: SchemaRef,
 }
 
+/// Returns the producer's message for the last failed call on a `FFI_ArrowArrayStream`.
+///
+/// Returns `None` when the producer supplies no message, either because it installs no
+/// `get_last_error` callback or because that callback returns NULL: the C Stream Interface
+/// lets `get_last_error` return NULL when no detailed description is available.
+///
+/// # Safety
+///
+/// `stream_ptr` must point to a valid, not yet released [`FFI_ArrowArrayStream`], and the last
+/// operation on it must have returned an error: the C Stream Interface forbids calling
+/// `get_last_error` in any other case.
+unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String> {
+    let get_last_error = unsafe { (*stream_ptr).get_last_error }?;
+
+    let error_str = unsafe { get_last_error(stream_ptr) };
+    if error_str.is_null() {
+        return None;
+    }
+
+    Some(
+        unsafe { CStr::from_ptr(error_str) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
 /// `ArrowArrayStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
@@ -348,9 +374,12 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
         let schema = Schema::try_from(&schema)?;
         Ok(Arc::new(schema))
     } else {
-        Err(ArrowError::CDataInterface(format!(
-            "Cannot get schema from input stream. Error code: {ret_code:?}"
-        )))
+        let message = format!("Cannot get schema from input stream. Error code: {ret_code}");
+        let message = match unsafe { producer_error(stream_ptr) } {
+            Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
+            None => message,
+        };
+        Err(ArrowError::CDataInterface(message))
     }
 }
 
@@ -382,19 +411,6 @@ impl ArrowArrayStreamReader {
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
         Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
     }
-
-    /// Get the last error from `ArrowArrayStreamReader`
-    fn get_stream_last_error(&mut self) -> Option<String> {
-        let get_last_error = self.stream.get_last_error?;
-
-        let error_str = unsafe { get_last_error(&mut self.stream) };
-        if error_str.is_null() {
-            return None;
-        }
-
-        let error_str = unsafe { CStr::from_ptr(error_str) };
-        Some(error_str.to_string_lossy().to_string())
-    }
 }
 
 impl Iterator for ArrowArrayStreamReader {
@@ -423,9 +439,13 @@ impl Iterator for ArrowArrayStreamReader {
                 )
             }))
         } else {
-            let last_error = self.get_stream_last_error();
-            let err = ArrowError::CDataInterface(last_error.unwrap());
-            Some(Err(err))
+            let message =
+                format!("Cannot get next batch from input stream. Error code: {ret_code}");
+            let message = match unsafe { producer_error(&mut self.stream) } {
+                Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
+                None => message,
+            };
+            Some(Err(ArrowError::CDataInterface(message)))
         }
     }
 }
@@ -582,7 +602,8 @@ mod tests {
     fn test_error_import() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let iter = Box::new(vec![Err(ArrowError::MemoryError(String::new()))].into_iter());
+        let iter =
+            Box::new(vec![Err(ArrowError::MemoryError("out of memory".to_string()))].into_iter());
 
         let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
@@ -600,9 +621,119 @@ mod tests {
 
         // The results should outlive the lifetime of the stream itself.
         assert_eq!(produced_batches.len(), 1);
-        assert!(produced_batches[0].is_err());
+        assert_eq!(
+            produced_batches[0].as_ref().unwrap_err().to_string(),
+            format!(
+                "C Data interface error: Cannot get next batch from input stream. \
+                 Error code: {ENOMEM}. Producer error: Memory error: out of memory"
+            )
+        );
 
         Ok(())
+    }
+
+    unsafe extern "C" fn failing_get_schema(
+        _stream: *mut FFI_ArrowArrayStream,
+        _out: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        EIO
+    }
+
+    unsafe extern "C" fn working_get_schema(
+        _stream: *mut FFI_ArrowArrayStream,
+        out: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        unsafe { std::ptr::write(out, FFI_ArrowSchema::try_from(&schema).unwrap()) };
+        0
+    }
+
+    unsafe extern "C" fn failing_get_next(
+        _stream: *mut FFI_ArrowArrayStream,
+        _out: *mut FFI_ArrowArray,
+    ) -> c_int {
+        EIO
+    }
+
+    unsafe extern "C" fn producer_last_error(_stream: *mut FFI_ArrowArrayStream) -> *const c_char {
+        c"the producer failed".as_ptr()
+    }
+
+    unsafe extern "C" fn null_last_error(_stream: *mut FFI_ArrowArrayStream) -> *const c_char {
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn mark_released(stream: *mut FFI_ArrowArrayStream) {
+        unsafe { (*stream).release = None };
+    }
+
+    fn failing_stream(
+        get_last_error: Option<unsafe extern "C" fn(*mut FFI_ArrowArrayStream) -> *const c_char>,
+    ) -> FFI_ArrowArrayStream {
+        let mut stream = FFI_ArrowArrayStream::empty();
+        stream.get_schema = Some(failing_get_schema);
+        stream.get_next = Some(failing_get_next);
+        stream.get_last_error = get_last_error;
+        stream.release = Some(mark_released);
+        stream
+    }
+
+    #[test]
+    fn test_import_schema_error_reports_producer_message() {
+        let err =
+            ArrowArrayStreamReader::try_new(failing_stream(Some(producer_last_error))).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. \
+                 Error code: {EIO}. Producer error: the producer failed"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_schema_error_without_producer_message() {
+        // A producer need not supply a message: `get_last_error` may return NULL when no
+        // detailed description is available.
+        let err =
+            ArrowArrayStreamReader::try_new(failing_stream(Some(null_last_error))).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. Error code: {EIO}"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_schema_error_without_error_callback() {
+        let err = ArrowArrayStreamReader::try_new(failing_stream(None)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. Error code: {EIO}"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_next_error_without_producer_message() {
+        // Previously panicked: the message was unwrapped without checking that the producer
+        // supplied one.
+        let mut stream = failing_stream(Some(null_last_error));
+        stream.get_schema = Some(working_get_schema);
+
+        let err = ArrowArrayStreamReader::try_new(stream)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get next batch from input stream. Error code: {EIO}"
+            )
+        );
     }
 
     // A consumer wraps the release callback with its own, then chains back to
