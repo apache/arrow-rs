@@ -2397,6 +2397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_non_null() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -2407,6 +2408,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2442,6 +2444,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_non_null() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2476,6 +2479,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2500,6 +2504,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_non_null() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2524,6 +2529,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_out_of_order() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2548,6 +2554,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_large_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2572,6 +2579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_with_struct() {
         // Test ListView containing Struct: ListView<Struct<Int32, Utf8>>
         let struct_fields = Fields::from(vec![
@@ -2612,6 +2620,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary() {
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
         let raw_binary_values = [
@@ -2635,6 +2644,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view() {
         let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
         let raw_binary_values = vec![
@@ -5872,6 +5882,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     // A row limit far smaller than the batch splits it many times over; the split must not
     // consume stack proportional to the number of row groups.
     fn test_row_group_limit_rows_only_many_splits() {
@@ -6313,6 +6324,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_number_distinct_values_exact_count() {
         // 50 distinct Int32 values repeated across 100k rows, with every 7th row null.
         // Nulls must not be counted as a distinct value.

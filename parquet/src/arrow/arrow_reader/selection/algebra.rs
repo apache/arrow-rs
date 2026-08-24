@@ -881,6 +881,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_algebra_with_offsets() {
         // Offsets and lengths that are not byte (or word) aligned on either side,
         // so the common prefix can start and end mid byte. Covers both the equal
@@ -929,6 +930,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_algebra_does_not_retain_backing_buffer() {
         // A short slice of a long mask must not keep the long allocation alive,
         // including when the other operand is empty and contributes nothing.
@@ -952,6 +954,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_algebra_fuzz() {
         let mut rng = rng();
         for _ in 0..200 {

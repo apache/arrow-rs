@@ -618,6 +618,7 @@ fn test_per_column_data_page_size_limit() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_fixed_size_binary() {
     // FixedSizeBinary values larger than the data page byte limit.
     let value_size = 1024usize;
