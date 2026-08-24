@@ -253,7 +253,77 @@ pub struct PageIndex {
 }
 
 impl PageIndex {
-    pub(crate) fn new(
+    /// Creates a new `PageIndex` from column and offset indexes
+    ///
+    /// The outer `Vec` of each argument is indexed by row group, and the inner
+    /// `Vec` by column, as described in [Structure](Self#structure). An inner
+    /// entry is `None` if that column chunk has no index, and an entire
+    /// argument can be `None` if that kind of index is absent altogether.
+    ///
+    /// # Example: Constructing a synthetic `PageIndex`
+    ///
+    /// This example builds a [`ParquetMetaData`] for a file with a single row
+    /// group containing a single `BYTE_ARRAY` column with one data page, and
+    /// attaches a matching `PageIndex`, as might be done in tests that
+    /// exercise page-level statistics handling.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use parquet::basic::{BoundaryOrder, Type as PhysicalType};
+    /// # use parquet::file::metadata::{
+    /// #     ColumnChunkMetaData, ColumnIndexBuilder, FileMetaData, OffsetIndexBuilder,
+    /// #     PageIndex, ParquetMetaData, RowGroupMetaData,
+    /// # };
+    /// # use parquet::schema::types::{SchemaDescriptor, Type};
+    /// // Create metadata for a file with a single row group containing a
+    /// // single BYTE_ARRAY column "s" with three values
+    /// let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+    ///     Type::group_type_builder("schema")
+    ///         .with_fields(vec![Arc::new(
+    ///             Type::primitive_type_builder("s", PhysicalType::BYTE_ARRAY)
+    ///                 .build()
+    ///                 .unwrap(),
+    ///         )])
+    ///         .build()
+    ///         .unwrap(),
+    /// )));
+    /// let column = ColumnChunkMetaData::builder(schema.column(0))
+    ///     .set_num_values(3)
+    ///     .build()
+    ///     .unwrap();
+    /// let row_group = RowGroupMetaData::builder(Arc::clone(&schema))
+    ///     .set_num_rows(3)
+    ///     .set_column_metadata(vec![column])
+    ///     .build()
+    ///     .unwrap();
+    /// let file_metadata = FileMetaData::new(1, 3, None, None, schema, None);
+    /// let metadata = ParquetMetaData::new(file_metadata, vec![row_group]);
+    ///
+    /// // Build a column index with min/max statistics for the single page
+    /// let mut column_index = ColumnIndexBuilder::new(PhysicalType::BYTE_ARRAY);
+    /// column_index.append(false, b"az".to_vec(), b"b".to_vec(), 0, None);
+    /// column_index.set_boundary_order(BoundaryOrder::ASCENDING);
+    /// let column_index = column_index.build().unwrap();
+    ///
+    /// // Build an offset index recording the location of the single page
+    /// let mut offset_index = OffsetIndexBuilder::new();
+    /// offset_index.append_row_count(3);
+    /// offset_index.append_offset_and_size(4, 100);
+    /// let offset_index = offset_index.build();
+    ///
+    /// // Assemble the PageIndex (one entry per row group, each with one
+    /// // entry per column) and attach it to the metadata
+    /// let page_index = PageIndex::new(
+    ///     Some(vec![vec![Some(column_index)]]),
+    ///     Some(vec![vec![Some(offset_index)]]),
+    /// );
+    /// let metadata = metadata
+    ///     .into_builder()
+    ///     .set_page_index(Some(page_index))
+    ///     .build();
+    /// assert!(metadata.page_index().unwrap().is_complete());
+    /// ```
+    pub fn new(
         column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
         offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
     ) -> Self {
