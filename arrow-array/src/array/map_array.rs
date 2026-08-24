@@ -70,7 +70,7 @@ impl MapArray {
         ordered: bool,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
-        let end_offset = offsets.last().unwrap().as_usize();
+        let end_offset = offsets.last().as_usize();
         // don't need to check other values of `offsets` because they are checked
         // during construction of `OffsetBuffer`
         if end_offset > entries.len() {

@@ -177,6 +177,38 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(ScalarBuffer::from(offsets))
     }
 
+    /// The first offset, i.e. the start of the first range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.first(), 0);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().first(), 0);
+    /// ```
+    #[inline]
+    pub fn first(&self) -> O {
+        // An `OffsetBuffer` is never empty
+        self.0.first().copied().unwrap_or_default()
+    }
+
+    /// The last offset, i.e. the end of the last range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.last(), 9);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().last(), 0);
+    /// ```
+    #[inline]
+    pub fn last(&self) -> O {
+        // An `OffsetBuffer` is never empty
+        self.0.last().copied().unwrap_or_default()
+    }
+
     /// Get an Iterator over the lengths of this [`OffsetBuffer`]
     ///
     /// ```

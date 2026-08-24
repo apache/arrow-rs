@@ -159,7 +159,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
             list_has_slices |= l.offsets()[0] > OffsetSize::zero()
-                || l.offsets().last().unwrap().as_usize() < l.values().len();
+                || l.offsets().last().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
 
@@ -184,7 +184,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             // we concatenate them below only the relevant values are included
             let offsets = l.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
         }
         sliced_values.iter().map(|a| a.as_ref()).collect()
@@ -224,7 +224,7 @@ fn concat_maps(
             output_len += m.len();
             map_has_nulls |= m.null_count() != 0;
             map_has_slices |=
-                m.offsets()[0] > 0 || m.offsets().last().unwrap().as_usize() < m.entries().len();
+                m.offsets()[0] > 0 || m.offsets().last().as_usize() < m.entries().len();
         })
         .collect::<Vec<_>>();
 
@@ -247,7 +247,7 @@ fn concat_maps(
         for m in &maps {
             let offsets = m.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             let entries_arr: &dyn Array = m.entries();
             sliced_entries.push(entries_arr.slice(start_offset, end_offset - start_offset));
         }
@@ -1036,7 +1036,7 @@ mod tests {
         // verify that this test covers the case when the first offset is zero, but the
         // last offset doesn't cover the entire array
         assert_eq!(list1_array.offsets()[0].as_usize(), 0);
-        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        assert!(list1_array.offsets().last().as_usize() < list1_array.values().len());
         let array_result = concat(&[&list1_array, &list2_array]).unwrap();
 
         let expected = list1_values.chain(list2);

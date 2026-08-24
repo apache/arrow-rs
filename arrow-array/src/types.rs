@@ -1745,7 +1745,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
 
     fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // offsets are guaranteed to be monotonically increasing and non-empty
-        let max_offset = offsets.last().unwrap().as_usize();
+        let max_offset = offsets.last().as_usize();
         if values.len() < max_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Maximum offset of {max_offset} is larger than values of length {}",
