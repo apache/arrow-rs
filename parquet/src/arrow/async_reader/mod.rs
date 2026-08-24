@@ -935,9 +935,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelectionPolicy, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
@@ -945,7 +947,7 @@ mod tests {
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::metadata::{PageIndex, PageIndexPolicy};
     use crate::file::properties::WriterProperties;
-    use arrow::compute::kernels::cmp::eq;
+    use arrow::compute::{concat_batches, kernels::cmp::eq};
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
@@ -956,7 +958,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;
@@ -1260,59 +1262,146 @@ mod tests {
 
     #[tokio::test]
     async fn test_fuzz_async_reader_selection() {
+        const ROW_COUNT: usize = 7_300;
+        const CONSTRAINED_CACHE_SIZE: usize = 1024;
+        const AMPLE_CACHE_SIZE: usize = 1024 * 1024;
+        const CACHE_SIZES: [usize; 3] = [0, CONSTRAINED_CACHE_SIZE, AMPLE_CACHE_SIZE];
+        const BATCH_SIZES: [usize; 5] = [1, 7, 32, 128, 1024];
+        const POLICIES: [RowSelectionPolicy; 3] = [
+            RowSelectionPolicy::Selectors,
+            RowSelectionPolicy::Mask,
+            RowSelectionPolicy::Auto { threshold: 32 },
+        ];
+        const ITERATIONS: usize = CACHE_SIZES.len() * POLICIES.len() * 2;
+
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .parse_and_finish(&data)
+            .unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
+        assert_eq!(metadata.metadata().num_row_groups(), 1);
+        assert_eq!(
+            metadata.metadata().file_metadata().num_rows(),
+            ROW_COUNT as i64
+        );
 
-        let mut rand = rng();
+        let mut rand = StdRng::seed_from_u64(42);
 
-        for _ in 0..100 {
-            let mut expected_rows = 0;
+        for iteration in 0..ITERATIONS {
+            let batch_size = BATCH_SIZES[iteration % BATCH_SIZES.len()];
+            let sparse = iteration % 2 == 0;
+
             let mut total_rows = 0;
-            let mut skip = false;
+            let mut skip = rand.random_bool(0.5);
             let mut selectors = vec![];
 
-            while total_rows < 7300 {
-                let row_count: usize = rand.random_range(1..100);
-
-                let row_count = row_count.min(7300 - total_rows);
+            while total_rows < ROW_COUNT {
+                let max_run = match (sparse, skip) {
+                    (true, false) => 3,
+                    (true, true) => 63,
+                    (false, _) => 99,
+                };
+                let row_count = rand.random_range(1..=max_run).min(ROW_COUNT - total_rows);
 
                 selectors.push(RowSelector { row_count, skip });
-
                 total_rows += row_count;
-                if !skip {
-                    expected_rows += row_count;
-                }
-
                 skip = !skip;
             }
 
             let selection = RowSelection::from(selectors);
+            let predicate_modulus = 2 + iteration as i32 % 7;
+            let predicate_remainder = iteration as i32 % predicate_modulus;
+            let output_column = rand.random_range(0..13);
+            let projection_columns = if output_column == 0 {
+                vec![0]
+            } else {
+                vec![0, output_column]
+            };
 
-            let async_reader = TestReader::new(data.clone());
+            let build_stream = |policy, cache_size, metrics| {
+                let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                    TestReader::new(data.clone()),
+                    metadata.clone(),
+                );
+                let filter_projection = ProjectionMask::leaves(builder.parquet_schema(), [0]);
+                let predicate =
+                    ArrowPredicateFn::new(filter_projection, move |batch: RecordBatch| {
+                        let ids = batch.column(0).as_primitive::<Int32Type>();
+                        Ok(BooleanArray::from_iter(ids.values().iter().map(|value| {
+                            Some(value.rem_euclid(predicate_modulus) == predicate_remainder)
+                        })))
+                    });
+                let output_projection =
+                    ProjectionMask::leaves(builder.parquet_schema(), projection_columns.clone());
 
-            let options =
-                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
-            let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
-                .await
-                .unwrap();
+                builder
+                    .with_projection(output_projection)
+                    .with_batch_size(batch_size)
+                    .with_row_selection(selection.clone())
+                    .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+                    .with_row_selection_policy(policy)
+                    .with_max_predicate_cache_size(cache_size)
+                    .with_metrics(metrics)
+                    .build()
+                    .unwrap()
+            };
 
-            assert_eq!(builder.metadata().num_row_groups(), 1);
+            let reference = build_stream(
+                RowSelectionPolicy::Selectors,
+                0,
+                ArrowReaderMetrics::disabled(),
+            );
+            let schema = reference.schema().clone();
+            let expected: Vec<_> = reference.try_collect().await.unwrap_or_else(|error| {
+                panic!(
+                    "reference failed: iteration={iteration}, output_column={output_column}, \
+                     batch_size={batch_size}: {error}"
+                )
+            });
+            let expected = concat_batches(&schema, &expected).unwrap();
 
-            let col_idx: usize = rand.random_range(0..13);
-            let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
+            for (policy_idx, policy) in POLICIES.iter().copied().enumerate() {
+                let cache_size = CACHE_SIZES[(iteration + policy_idx) % CACHE_SIZES.len()];
+                if policy == RowSelectionPolicy::Selectors && cache_size == 0 {
+                    continue;
+                }
 
-            let stream = builder
-                .with_projection(mask.clone())
-                .with_row_selection(selection.clone())
-                .build()
-                .expect("building stream");
+                let metrics = ArrowReaderMetrics::enabled();
+                let stream = build_stream(policy, cache_size, metrics.clone());
+                let actual: Vec<_> = stream.try_collect().await.unwrap_or_else(|error| {
+                    panic!(
+                        "candidate failed: iteration={iteration}, output_column={output_column}, \
+                         policy={policy:?}, cache_size={cache_size}, batch_size={batch_size}: {error}"
+                    )
+                });
+                let records_read_from_cache = metrics
+                    .records_read_from_cache()
+                    .expect("metrics are enabled");
+                if cache_size == 0 {
+                    assert_eq!(
+                        records_read_from_cache, 0,
+                        "cache disabled but records were read from it: iteration={iteration}, \
+                         policy={policy:?}, batch_size={batch_size}"
+                    );
+                } else if cache_size == AMPLE_CACHE_SIZE {
+                    assert!(
+                        records_read_from_cache > 0,
+                        "predicate cache was not exercised: iteration={iteration}, \
+                         policy={policy:?}, batch_size={batch_size}"
+                    );
+                }
 
-            let async_batches: Vec<_> = stream.try_collect().await.unwrap();
-
-            let actual_rows: usize = async_batches.into_iter().map(|b| b.num_rows()).sum();
-
-            assert_eq!(actual_rows, expected_rows);
+                let actual = concat_batches(&schema, &actual).unwrap();
+                assert_eq!(
+                    actual, expected,
+                    "iteration={iteration}, output_column={output_column}, policy={policy:?}, \
+                     cache_size={cache_size}, batch_size={batch_size}"
+                );
+            }
         }
     }
 
