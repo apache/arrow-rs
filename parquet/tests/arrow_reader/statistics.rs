@@ -257,20 +257,15 @@ impl Test<'_> {
         let row_groups = reader.metadata().row_groups();
 
         if check.data_page() {
-            let column_page_index = reader
+            let page_index = reader
                 .metadata()
-                .column_index()
-                .expect("File should have column page indices");
-
-            let column_offset_index = reader
-                .metadata()
-                .offset_index()
-                .expect("File should have column offset indices");
+                .page_index()
+                .expect("File should have page indices");
 
             let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
             let min = converter
-                .data_page_mins(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_mins(page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &min, &expected_min,
@@ -278,7 +273,7 @@ impl Test<'_> {
             );
 
             let max = converter
-                .data_page_maxes(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_maxes(page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &max, &expected_max,
@@ -286,7 +281,7 @@ impl Test<'_> {
             );
 
             let null_counts = converter
-                .data_page_null_counts(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_null_counts(page_index, &row_group_indices)
                 .unwrap();
 
             assert_eq!(
@@ -296,7 +291,7 @@ impl Test<'_> {
             );
 
             let row_counts = converter
-                .data_page_row_counts(column_offset_index, row_groups, &row_group_indices)
+                .data_page_row_counts(page_index, row_groups, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 row_counts, expected_row_counts,
@@ -2946,12 +2941,9 @@ mod test {
         let parquet_schema = reader.parquet_schema();
         let row_groups = metadata.row_groups();
         let row_group_indices = [0];
-        let column_page_index = metadata
-            .column_index()
-            .expect("file should have column page indices");
-        let column_offset_index = metadata
-            .offset_index()
-            .expect("file should have column offset indices");
+        let page_index = metadata
+            .page_index()
+            .expect("file should have page indices");
 
         let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
             unreachable!("c1 must be a struct field")
@@ -2984,34 +2976,22 @@ mod test {
         assert_eq!(leaf_row_counts, Some(UInt64Array::from(vec![6])));
 
         let leaf_page_mins = leaf_converter
-            .data_page_mins(
-                column_page_index,
-                column_offset_index,
-                row_group_indices.iter(),
-            )
+            .data_page_mins(page_index, row_group_indices.iter())
             .unwrap();
         assert_eq!(&leaf_page_mins, &i32_array([Some(1), Some(4)]));
 
         let leaf_page_maxes = leaf_converter
-            .data_page_maxes(
-                column_page_index,
-                column_offset_index,
-                row_group_indices.iter(),
-            )
+            .data_page_maxes(page_index, row_group_indices.iter())
             .unwrap();
         assert_eq!(&leaf_page_maxes, &i32_array([Some(3), Some(9)]));
 
         let leaf_page_null_counts = leaf_converter
-            .data_page_null_counts(
-                column_page_index,
-                column_offset_index,
-                row_group_indices.iter(),
-            )
+            .data_page_null_counts(page_index, row_group_indices.iter())
             .unwrap();
         assert_eq!(leaf_page_null_counts, UInt64Array::from(vec![1, 0]));
 
         let leaf_page_row_counts = leaf_converter
-            .data_page_row_counts(column_offset_index, row_groups, row_group_indices.iter())
+            .data_page_row_counts(page_index, row_groups, row_group_indices.iter())
             .unwrap();
         assert_eq!(leaf_page_row_counts, Some(UInt64Array::from(vec![3, 3])));
 
@@ -3031,11 +3011,7 @@ mod test {
         );
 
         let amount_page_mins = amount_converter
-            .data_page_mins(
-                column_page_index,
-                column_offset_index,
-                row_group_indices.iter(),
-            )
+            .data_page_mins(page_index, row_group_indices.iter())
             .unwrap();
         assert_eq!(
             &amount_page_mins,
@@ -3043,11 +3019,7 @@ mod test {
         );
 
         let amount_page_maxes = amount_converter
-            .data_page_maxes(
-                column_page_index,
-                column_offset_index,
-                row_group_indices.iter(),
-            )
+            .data_page_maxes(page_index, row_group_indices.iter())
             .unwrap();
         assert_eq!(
             &amount_page_maxes,

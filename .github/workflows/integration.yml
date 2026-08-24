@@ -30,19 +30,22 @@ on:
     paths:
       - .github/**
       - rust-toolchain.toml
+      - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-cmp/**
       - arrow-csv/**
       - arrow-data/**
+      - arrow-flight/**
       - arrow-integration-test/**
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
-      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-pyarrow/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**
@@ -235,6 +238,16 @@ jobs:
           cargo test -p arrow-pyarrow --all-features
           cd arrow-pyarrow-testing
           cargo test
+      - name: Clippy arrow-pyarrow
+        run: |
+          source venv/bin/activate
+          # Here rather than in arrow.yml's clippy job: that one runs in a
+          # container with no interpreter for pyo3 to link against.
+          cargo clippy -p arrow-pyarrow --all-targets --all-features -- -D warnings
+          # Dependency check excluding tests & benches. The crate declares no
+          # default features, so the --no-default-features variant arrow.yml
+          # also runs would be this same command.
+          cargo clippy -p arrow-pyarrow --all-features -- -D unused_crate_dependencies
       - name: Run Python tests
         run: |
           source venv/bin/activate
