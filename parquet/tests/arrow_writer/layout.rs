@@ -215,6 +215,11 @@ fn test_primitive() {
     });
 
     // Test spill dictionary
+    //
+    // The dictionary overflows its size limit before the first data page is
+    // flushed, so the buffered values are re-encoded with the fallback
+    // encoding and the dictionary is discarded: the chunk contains no
+    // dictionary page and only PLAIN data pages.
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
         .set_dictionary_page_size_limit(1000)
@@ -229,29 +234,14 @@ fn test_primitive() {
         layout: Layout {
             row_groups: vec![RowGroup {
                 columns: vec![ColumnChunk {
-                    pages: vec![
-                        Page {
-                            rows: 250,
-                            page_header_size: 38,
-                            compressed_size: 258,
-                            encoding: Encoding::RLE_DICTIONARY,
-                            page_type: PageType::DATA_PAGE,
-                        },
-                        Page {
-                            rows: 1750,
-                            page_header_size: 38,
-                            compressed_size: 7000,
-                            encoding: Encoding::PLAIN,
-                            page_type: PageType::DATA_PAGE,
-                        },
-                    ],
-                    dictionary_page: Some(Page {
-                        rows: 250,
+                    pages: vec![Page {
+                        rows: 2000,
                         page_header_size: 38,
-                        compressed_size: 1000,
+                        compressed_size: 8000,
                         encoding: Encoding::PLAIN,
-                        page_type: PageType::DICTIONARY_PAGE,
-                    }),
+                        page_type: PageType::DATA_PAGE,
+                    }],
+                    dictionary_page: None,
                 }],
             }],
         },
@@ -415,42 +405,29 @@ fn test_string() {
         layout: Layout {
             row_groups: vec![RowGroup {
                 columns: vec![ColumnChunk {
+                    // The dictionary overflows its size limit at 126 rows,
+                    // before the first data page is flushed, so those rows are
+                    // re-encoded with the fallback encoding and the dictionary
+                    // is discarded: no dictionary page, PLAIN pages only, with
+                    // the first page boundary determined by the data page size
+                    // limit rather than by the fallback.
                     pages: vec![
                         Page {
-                            rows: 126,
-                            page_header_size: 38,
-                            compressed_size: 114,
-                            encoding: Encoding::RLE_DICTIONARY,
-                            page_type: PageType::DATA_PAGE,
-                        },
-                        Page {
-                            rows: 1254,
+                            rows: 1250,
                             page_header_size: 40,
-                            compressed_size: 10032,
+                            compressed_size: 10000,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
                         },
                         Page {
-                            rows: 620,
+                            rows: 750,
                             page_header_size: 38,
-                            compressed_size: 4960,
+                            compressed_size: 6000,
                             encoding: Encoding::PLAIN,
                             page_type: PageType::DATA_PAGE,
                         },
                     ],
-                    // The byte-budget chunker sub-batches the dictionary
-                    // phase. The mini-batch deliberately includes the value
-                    // that crosses the 1000-byte limit so the spill triggers
-                    // on this chunk rather than carrying a sliver into the
-                    // next page, giving a 126-row dictionary page at 1008
-                    // bytes.
-                    dictionary_page: Some(Page {
-                        rows: 126,
-                        page_header_size: 38,
-                        compressed_size: 1008,
-                        encoding: Encoding::PLAIN,
-                        page_type: PageType::DICTIONARY_PAGE,
-                    }),
+                    dictionary_page: None,
                 }],
             }],
         },
@@ -898,10 +875,10 @@ fn test_nullable_large_values() {
 fn test_dictionary_spill_large_values() {
     // Dictionary encoding is enabled, but each value is large (64 KiB) and
     // unique, so the dictionary spills almost immediately (1 KiB dict page
-    // limit). After the spill, plain encoding takes over and the byte-budget
-    // sub-batch bounds each page to a single value. The first value is
-    // interned into the dictionary page (one RLE_DICTIONARY data page
-    // referencing it); the remaining 31 fall back to PLAIN, one per page.
+    // limit). The first value is interned before the spill; the fallback
+    // re-encodes it as PLAIN and discards the dictionary, so no dictionary
+    // page (which would have been 64x the configured limit) is written and
+    // the byte-budget sub-batch bounds each page to a single PLAIN value.
     // Mirrors `test_column_writer_dict_enabled_large_values_post_spill`,
     // exercising the same dict→plain transition via the arrow path.
     let value_size = 64 * 1024;
@@ -926,30 +903,18 @@ fn test_dictionary_spill_large_values() {
         layout: Layout {
             row_groups: vec![RowGroup {
                 columns: vec![ColumnChunk {
-                    pages: std::iter::once(Page {
-                        // The single value interned before the dict spilled.
-                        rows: 1,
-                        page_header_size: 17,
-                        compressed_size: 2,
-                        encoding: Encoding::RLE_DICTIONARY,
-                        page_type: PageType::DATA_PAGE,
-                    })
-                    .chain((0..31).map(|_| Page {
-                        // Post-spill plain-encoded values, one per page.
-                        rows: 1,
-                        page_header_size: 21,
-                        compressed_size: 65540,
-                        encoding: Encoding::PLAIN,
-                        page_type: PageType::DATA_PAGE,
-                    }))
-                    .collect(),
-                    dictionary_page: Some(Page {
-                        rows: 1,
-                        page_header_size: 21,
-                        compressed_size: 65540,
-                        encoding: Encoding::PLAIN,
-                        page_type: PageType::DICTIONARY_PAGE,
-                    }),
+                    pages: (0..32)
+                        .map(|_| Page {
+                            // Plain-encoded values, one per page; the first
+                            // was re-encoded from the dictionary on fallback.
+                            rows: 1,
+                            page_header_size: 21,
+                            compressed_size: 65540,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
                 }],
             }],
         },

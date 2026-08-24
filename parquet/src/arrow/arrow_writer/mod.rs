@@ -2094,15 +2094,16 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer, i256};
     use arrow_schema::Fields;
+    use arrow_select::concat::concat_batches;
     use half::f16;
     use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
-    use crate::basic::Encoding;
+    use crate::basic::{Encoding, PageType};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, DictionaryFallback, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -4230,6 +4231,75 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_dict_fallback_before_first_data_page() {
+        // All values distinct: the dictionary overflows its 1 KiB size limit
+        // long before the first data page is flushed. The buffered values are
+        // re-encoded with the fallback encoding and the dictionary discarded:
+        // no dictionary page is written and no data page is dictionary
+        // encoded, and in particular no dictionary page exceeding the
+        // configured limit reaches the reader.
+        let values: Vec<String> = (0..1024).map(|i| format!("value-{i:04}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_page_size_limit(1024)
+            .build();
+
+        // Validates the values roundtrip, across the fallback point included.
+        let file = roundtrip_opts(&batch, props);
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert_eq!(column.dictionary_page_offset(), None);
+        let encodings: Vec<_> = column.encodings().collect();
+        assert!(
+            !encodings.contains(&Encoding::RLE_DICTIONARY),
+            "unexpected dictionary encoding: {encodings:?}"
+        );
+        let mask = column.page_encoding_stats_mask().unwrap();
+        assert!(
+            mask.is_only(Encoding::PLAIN),
+            "expected only plain-encoded data pages: {mask:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_writer_dict_fallback_after_data_page_keeps_dictionary() {
+        // Flush dictionary-encoded data pages every 32 rows, so that when the
+        // dictionary overflows its size limit part-way through the chunk,
+        // pages referencing it have already been written: the dictionary page
+        // must then still be written, while the remainder of the chunk uses
+        // the fallback encoding.
+        let values: Vec<String> = (0..1024).map(|i| format!("value-{i:04}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_page_size_limit(4096)
+            .set_data_page_row_count_limit(32)
+            .set_write_batch_size(32)
+            .build();
+
+        let file = roundtrip_opts(&batch, props);
+
+        let reader = SerializedFileReader::new(file).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_some());
+        let mask = column.page_encoding_stats_mask().unwrap();
+        assert!(
+            mask.is_set(Encoding::RLE_DICTIONARY),
+            "expected dictionary-encoded pages before the fallback: {mask:?}"
+        );
+        assert!(
+            mask.is_set(Encoding::PLAIN),
+            "expected plain pages after the fallback: {mask:?}"
+        );
+    }
+
+    #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -5602,6 +5672,557 @@ mod tests {
 
         assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    }
+
+    /// A single-column batch of `pool_size * repeats` strings, each of the
+    /// `pool_size` distinct `value_len` byte values repeated `repeats` times
+    /// consecutively. The consecutive runs keep the ratio of distinct to total
+    /// values seen so far at `1 / repeats`, independent of how the writer
+    /// slices the batch internally
+    fn repetitive_string_batch(pool_size: usize, value_len: usize, repeats: usize) -> RecordBatch {
+        let pool: Vec<String> = (0..pool_size)
+            .map(|i| {
+                let mut v = format!("value-{i:06}-").repeat(value_len / 8 + 1);
+                v.truncate(value_len);
+                v
+            })
+            .collect();
+        let array =
+            StringArray::from_iter_values((0..pool_size * repeats).map(|i| &pool[i / repeats]));
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Writes `batch` with `props`, returning the encoded bytes and the metadata
+    fn write_batch_with_props(
+        batch: &RecordBatch,
+        props: WriterProperties,
+    ) -> (Bytes, ParquetMetaData) {
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let reader = SerializedFileReader::new_with_options(data.clone(), options).unwrap();
+        let metadata = reader.metadata().clone();
+        (data, metadata)
+    }
+
+    /// Returns the number of data pages in the first column chunk of the first
+    /// row group encoded with the dictionary, and the number encoded otherwise
+    /// (i.e. with the fallback encoding)
+    fn count_dict_and_fallback_pages(metadata: &ParquetMetaData) -> (i32, i32) {
+        let stats = metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats()
+            .unwrap();
+        let mut num_dict = 0;
+        let mut num_fallback = 0;
+        for s in stats {
+            if s.page_type == PageType::DATA_PAGE || s.page_type == PageType::DATA_PAGE_V2 {
+                match s.encoding {
+                    Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => num_dict += s.count,
+                    _ => num_fallback += s.count,
+                }
+            }
+        }
+        (num_dict, num_fallback)
+    }
+
+    #[test]
+    fn test_dictionary_fallback_explicit_default_policy_unchanged() {
+        // Explicitly configuring `DictionaryFallback::OnPageSizeLimit` must be
+        // byte-identical to the default properties, on data that does overflow
+        // the dictionary page size limit and trigger the fallback
+        let batch = repetitive_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let explicit_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::OnPageSizeLimit)
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (explicit_data, _) = write_batch_with_props(&batch, explicit_props);
+
+        assert_eq!(default_data, explicit_data);
+
+        // the dictionary overflowed the 64 KiB limit, so the writer fell
+        // back; no data page had been flushed at that point, so the buffered
+        // values were re-encoded and the dictionary was discarded entirely
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert_eq!(num_dict, 0, "expected no dictionary encoded pages");
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        let column = default_metadata.row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_keeps_dictionary() {
+        // 64 distinct 2 KiB values (~131 KiB dictionary) overflow a 64 KiB
+        // dictionary page size limit, but each value recurs 32 times: the
+        // dictionary is profitable, so `WhenProfitable` must keep it while
+        // `OnPageSizeLimit` falls back
+        let batch = repetitive_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let profitable_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.1,
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, _) = write_batch_with_props(&batch, default_props);
+        let (profitable_data, profitable_metadata) =
+            write_batch_with_props(&batch, profitable_props);
+
+        // no fallback: all data pages are dictionary encoded and the
+        // dictionary page is present
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&profitable_metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        let column = profitable_metadata.row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_some());
+
+        // deduplicating the repeated values must beat writing them out in full
+        assert!(
+            profitable_data.len() < default_data.len() / 2,
+            "expected dictionary encoded file to be much smaller, got {} vs {}",
+            profitable_data.len(),
+            default_data.len()
+        );
+
+        // roundtrip: the data must read back identically
+        let read = ParquetRecordBatchReader::try_new(profitable_data, 2048)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_hard_cap() {
+        // 80 distinct 2 KiB values (~164 KiB dictionary) are profitable at a
+        // worth_ratio of 0.5, but the 128 KiB `max_dictionary_page_size` cap
+        // must force the fallback regardless
+        let batch = repetitive_string_batch(80, 2048, 16);
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.5,
+                max_dictionary_page_size: 128 * 1024,
+            })
+            .build();
+
+        let (_, metadata) = write_batch_with_props(&batch, props);
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_high_cardinality_matches_default() {
+        // On a column of unique values the dictionary is never profitable: the
+        // profitability test fails right at the dictionary page size limit, so
+        // `WhenProfitable` must produce output byte-identical to the default
+        // policy. This uses an Int64 column to also exercise the non-byte-array
+        // dictionary encoder
+        let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let default_props = WriterProperties::builder().build();
+        let profitable_props = WriterProperties::builder()
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.1,
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (profitable_data, _) = write_batch_with_props(&batch, profitable_props);
+
+        // both fall back at the dictionary page size limit
+        let (_, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        assert_eq!(default_data, profitable_data);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_int64_keeps_dictionary() {
+        // Exercise the non-byte-array dictionary encoder's profitability
+        // accounting: 16 Ki distinct Int64 values (128 KiB dictionary), each
+        // repeated 16 times, against a 64 KiB dictionary page size limit
+        let array = Arc::new(Int64Array::from_iter(
+            (0..16 * 1024i64).flat_map(|i| std::iter::repeat_n(i, 16)),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::WhenProfitable {
+                    worth_ratio: 0.1,
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                },
+            )
+            .build();
+
+        let (data, metadata) = write_batch_with_props(&batch, props);
+
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        assert!(
+            metadata
+                .row_group(0)
+                .column(0)
+                .dictionary_page_offset()
+                .is_some()
+        );
+
+        let read = ParquetRecordBatchReader::try_new(data, 8192)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    /// Roundtrips `data` and asserts it equals `batch`
+    fn assert_roundtrip_equal(data: Bytes, batch: &RecordBatch) {
+        let read = ParquetRecordBatchReader::try_new(data, 8192)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(&read, batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_sorted_keys_fall_back_like_stock() {
+        // A sorted key column where each value repeats a few times: the
+        // dictionary looks nominally profitable (a quarter of the PLAIN
+        // size), but DELTA_BINARY_PACKED encodes the sorted values far
+        // smaller than dictionary page + indices. `Adaptive` measures the
+        // fallback and must fall back exactly like the default policy —
+        // byte-identical output — where `WhenProfitable` at a 0.5 ratio
+        // keeps the dictionary and produces a much larger file
+        let array = Arc::new(Int64Array::from_iter(
+            (0..32 * 1024i64).flat_map(|i| std::iter::repeat_n(i, 4)),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let base = || {
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_page_size_limit(64 * 1024)
+        };
+        let (stock_data, stock_metadata) = write_batch_with_props(&batch, base().build());
+        let (adaptive_data, _) = write_batch_with_props(
+            &batch,
+            base()
+                .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                })
+                .build(),
+        );
+        let (profitable_data, profitable_metadata) = write_batch_with_props(
+            &batch,
+            base()
+                .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                    worth_ratio: 0.5,
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                })
+                .build(),
+        );
+
+        // stock fell back at the dictionary page size limit; the measured
+        // comparison reaches the same decision at the same point
+        let (_, num_fallback) = count_dict_and_fallback_pages(&stock_metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        assert_eq!(adaptive_data, stock_data);
+
+        // ... while the PLAIN-bound ratio heuristic keeps the dictionary and
+        // pays for it
+        let (_, num_fallback) = count_dict_and_fallback_pages(&profitable_metadata);
+        assert_eq!(num_fallback, 0, "expected WhenProfitable to keep the dict");
+        assert!(
+            profitable_data.len() > 2 * stock_data.len(),
+            "expected the kept dictionary to lose to the delta fallback, got {} vs {}",
+            profitable_data.len(),
+            stock_data.len()
+        );
+
+        assert_roundtrip_equal(adaptive_data, &batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_keeps_repetitive_dictionary() {
+        // 64 distinct 2 KiB values (~131 KiB dictionary) overflow a 64 KiB
+        // dictionary page size limit, but each value recurs 32 times: the
+        // measured comparison keeps the dictionary, with no ratio to tune
+        let batch = repetitive_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let adaptive_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, _) = write_batch_with_props(&batch, default_props);
+        let (adaptive_data, adaptive_metadata) = write_batch_with_props(&batch, adaptive_props);
+
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&adaptive_metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        let column = adaptive_metadata.row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_some());
+
+        assert!(
+            adaptive_data.len() < default_data.len() / 2,
+            "expected dictionary encoded file to be much smaller, got {} vs {}",
+            adaptive_data.len(),
+            default_data.len()
+        );
+
+        assert_roundtrip_equal(adaptive_data, &batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_shuffled_pool_keeps_dictionary() {
+        // A bounded pool of 300 distinct 1 KiB values sampled in uniformly
+        // shuffled order: when the dictionary crosses the 64 KiB grace floor
+        // (~64 distinct values seen) only a handful of repeats are visible,
+        // so any up-front decision falls back — both `OnPageSizeLimit` and
+        // the `WhenProfitable` ratio heuristic write every repeat out in
+        // full. The measured near-tie plus visible repeats defers the
+        // decision; by later checkpoints the accumulated repeats have the
+        // dictionary measurably winning, and the pool exhausts well below the
+        // hard cap
+        let pool: Vec<String> = (0..300)
+            .map(|i| {
+                let mut v = format!("value-{i:06}-").repeat(1024 / 8 + 1);
+                v.truncate(1024);
+                v
+            })
+            .collect();
+        // Deterministic uniform sampling (LCG), so repeats occur by the
+        // birthday bound rather than by construction
+        let mut lcg: u64 = 42;
+        let array = StringArray::from_iter_values((0..8192).map(|_| {
+            lcg = lcg
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            &pool[(lcg >> 33) as usize % 300]
+        }));
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let adaptive_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (adaptive_data, adaptive_metadata) = write_batch_with_props(&batch, adaptive_props);
+
+        // stock gives up on the shuffled pool ...
+        let (_, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert!(num_fallback > 0, "expected stock to fall back");
+
+        // ... the measured deferral captures it
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&adaptive_metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        assert!(
+            adaptive_metadata
+                .row_group(0)
+                .column(0)
+                .dictionary_page_offset()
+                .is_some()
+        );
+        assert!(
+            adaptive_data.len() < default_data.len() / 2,
+            "expected dictionary encoded file to be much smaller, got {} vs {}",
+            adaptive_data.len(),
+            default_data.len()
+        );
+
+        assert_roundtrip_equal(adaptive_data, &batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_unique_values_match_stock() {
+        // On a column of unique values no repeat is ever seen: the measured
+        // comparison fails right at the grace floor with nothing to defer
+        // for, so `Adaptive` must produce output byte-identical to the
+        // default policy
+        let batch = repetitive_string_batch(2048, 256, 1);
+
+        let base = || WriterProperties::builder().set_dictionary_page_size_limit(64 * 1024);
+        let (stock_data, stock_metadata) = write_batch_with_props(&batch, base().build());
+        let (adaptive_data, _) = write_batch_with_props(
+            &batch,
+            base()
+                .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                })
+                .build(),
+        );
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&stock_metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        assert_eq!(adaptive_data, stock_data);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_unbounded_cardinality_bounded_deferral() {
+        // Effectively unbounded cardinality with a trickle of repeats (one
+        // value in ~83 repeats, just above the minimum repeat fraction): at
+        // the first checkpoint the comparison is a near-tie (the dictionary
+        // is behind by only the indices overhead), so the decision is
+        // deferred; by the second checkpoint the hit rate is flat and low, so
+        // the writer falls back — with a dictionary bounded to twice the
+        // grace floor, not the cap — and the chunk stays about the size stock
+        // produces
+        let pool: Vec<String> = (0..8192)
+            .map(|i| {
+                let mut v = format!("value-{i:06}-").repeat(64 / 8 + 1);
+                v.truncate(64);
+                v
+            })
+            .collect();
+        let array = StringArray::from_iter_values(
+            (0..8192).map(|i| &pool[if i % 83 == 1 { i - 1 } else { i }]),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+        let base = || WriterProperties::builder().set_dictionary_page_size_limit(64 * 1024);
+        let (stock_data, _) = write_batch_with_props(&batch, base().build());
+        let (adaptive_data, adaptive_metadata) = write_batch_with_props(
+            &batch,
+            base()
+                .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                })
+                .build(),
+        );
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&adaptive_metadata);
+        assert!(
+            num_fallback > 0,
+            "expected the deferred decision to fall back"
+        );
+
+        // the brief deferral must not cost more than a few percent vs stock
+        let (stock_len, adaptive_len) = (stock_data.len() as f64, adaptive_data.len() as f64);
+        assert!(
+            (adaptive_len - stock_len).abs() / stock_len < 0.1,
+            "expected chunk size close to stock, got {} vs {}",
+            adaptive_data.len(),
+            stock_data.len()
+        );
+
+        assert_roundtrip_equal(adaptive_data, &batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_hard_cap() {
+        // 80 distinct 2 KiB values (~164 KiB dictionary), each repeated 16
+        // times, measure as clearly worth keeping — but the 128 KiB
+        // `max_dictionary_page_size` cap must force the fallback regardless
+        let batch = repetitive_string_batch(80, 2048, 16);
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::Adaptive {
+                max_dictionary_page_size: 128 * 1024,
+            })
+            .build();
+
+        let (data, metadata) = write_batch_with_props(&batch, props);
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+
+        assert_roundtrip_equal(data, &batch);
+    }
+
+    #[test]
+    fn test_dictionary_fallback_adaptive_int64_keeps_dictionary() {
+        // Exercise the non-byte-array dictionary encoder's measurement path:
+        // 16 Ki distinct Int64 values (128 KiB dictionary), each repeated 16
+        // times, against a 64 KiB dictionary page size limit
+        let array = Arc::new(Int64Array::from_iter(
+            (0..16 * 1024i64).flat_map(|i| std::iter::repeat_n(i, 16)),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::Adaptive {
+                    max_dictionary_page_size: 64 * 1024 * 1024,
+                },
+            )
+            .build();
+
+        let (data, metadata) = write_batch_with_props(&batch, props);
+
+        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&metadata);
+        assert!(num_dict > 0, "expected dictionary encoded pages");
+        assert_eq!(num_fallback, 0, "expected no fallback encoded pages");
+        assert!(
+            metadata
+                .row_group(0)
+                .column(0)
+                .dictionary_page_offset()
+                .is_some()
+        );
+
+        assert_roundtrip_equal(data, &batch);
     }
 
     #[test]
