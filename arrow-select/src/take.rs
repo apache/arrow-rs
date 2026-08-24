@@ -652,76 +652,129 @@ where
     OffsetType::Native: OffsetSizeTrait,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
-    let list_offsets = values.value_offsets();
+    let src_offsets = values.value_offsets();
     let child_data = values.values().to_data();
     let nulls = take_nulls::<_, CHECKED>(values.nulls(), indices);
 
-    let mut new_offsets = Vec::with_capacity(indices.len() + 1);
-    new_offsets.push(OffsetType::Native::zero());
+    let mut dst_offsets = Vec::with_capacity(indices.len() + 1);
+    dst_offsets.push(OffsetType::Native::zero());
 
-    let use_nulls = child_data.null_count() > 0;
+    let field = match values.data_type() {
+        DataType::List(f) | DataType::LargeList(f) => f.clone(),
+        d => unreachable!("take_list called with non-list data type {d}"),
+    };
+
+    let is_primitive_child = child_data.null_count() == 0
+        && child_data.buffers().len() == 1
+        && child_data.child_data().is_empty();
+
+    if is_primitive_child {
+        let values_buf = &child_data.buffers()[0];
+        let bytes_per_value = if !child_data.is_empty() {
+            values_buf.len() / child_data.len()
+        } else {
+            0
+        };
+        let child_buf_offset = child_data.offset() * bytes_per_value;
+
+        let avg_row_len = child_data
+            .len()
+            .checked_div(values.len().max(1))
+            .unwrap_or(0);
+        let mut dst_buf = MutableBuffer::new(
+            avg_row_len
+                .saturating_mul(indices.len())
+                .saturating_mul(bytes_per_value),
+        );
+
+        let mut child_len = OffsetType::Native::zero();
+
+        match nulls.as_ref().filter(|n| n.null_count() > 0) {
+            None => {
+                for &idx in indices.values() {
+                    let row = idx.as_usize();
+                    let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
+                    let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
+                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    child_len += src_offsets[row + 1] - src_offsets[row];
+                    dst_offsets.push(child_len);
+                }
+            }
+            Some(valid) => {
+                let mut last = 0;
+                for i in valid.valid_indices() {
+                    if last < i {
+                        dst_offsets.extend(std::iter::repeat_n(child_len, i - last));
+                    }
+                    let row = unsafe { indices.value_unchecked(i) }.as_usize();
+                    let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
+                    let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
+                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    child_len += src_offsets[row + 1] - src_offsets[row];
+                    dst_offsets.push(child_len);
+                    last = i + 1;
+                }
+                dst_offsets.extend(std::iter::repeat_n(child_len, indices.len() - last));
+            }
+        }
+
+        assert_eq!(dst_offsets.len(), indices.len() + 1);
+
+        let child = make_array(
+            ArrayData::builder(child_data.data_type().clone())
+                .len(child_len.as_usize())
+                .add_buffer(dst_buf.into())
+                .build()?,
+        );
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
+        return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
+    }
 
     let capacity = child_data
         .len()
         .checked_div(values.len())
         .map(|v| v * indices.len())
         .unwrap_or_default();
-
-    let mut array_data = MutableArrayData::new(vec![&child_data], use_nulls, capacity);
+    let mut mutable =
+        MutableArrayData::new(vec![&child_data], child_data.null_count() > 0, capacity);
 
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         None => {
-            for index in indices.values() {
-                let ix = index.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
-                array_data.try_extend(0, start, end)?;
-                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
+            for idx in indices.values() {
+                let row = idx.as_usize();
+                mutable.try_extend(
+                    0,
+                    src_offsets[row].as_usize(),
+                    src_offsets[row + 1].as_usize(),
+                )?;
+                dst_offsets.push(OffsetType::Native::from_usize(mutable.len()).unwrap());
             }
         }
-        Some(output_nulls) => {
-            assert_eq!(output_nulls.len(), indices.len());
-
-            let mut last_filled = 0;
-            for i in output_nulls.valid_indices() {
-                let current = OffsetType::Native::from_usize(array_data.len()).unwrap();
-                // Filling offsets for the null values between the two valid indices
-                if last_filled < i {
-                    new_offsets.extend(std::iter::repeat_n(current, i - last_filled));
+        Some(valid) => {
+            let mut last = 0;
+            for i in valid.valid_indices() {
+                let current = OffsetType::Native::from_usize(mutable.len()).unwrap();
+                if last < i {
+                    dst_offsets.extend(std::iter::repeat_n(current, i - last));
                 }
-
-                // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
-                let ix = unsafe { indices.value_unchecked(i) }.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
-                array_data.try_extend(0, start, end)?;
-                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
-                last_filled = i + 1;
+                let row = unsafe { indices.value_unchecked(i) }.as_usize();
+                mutable.try_extend(
+                    0,
+                    src_offsets[row].as_usize(),
+                    src_offsets[row + 1].as_usize(),
+                )?;
+                dst_offsets.push(OffsetType::Native::from_usize(mutable.len()).unwrap());
+                last = i + 1;
             }
-
-            // Filling offsets for null values at the end
-            let final_offset = OffsetType::Native::from_usize(array_data.len()).unwrap();
-            new_offsets.extend(std::iter::repeat_n(
-                final_offset,
-                indices.len() - last_filled,
-            ));
+            let final_offset = OffsetType::Native::from_usize(mutable.len()).unwrap();
+            dst_offsets.extend(std::iter::repeat_n(final_offset, indices.len() - last));
         }
     }
 
-    assert_eq!(
-        new_offsets.len(),
-        indices.len() + 1,
-        "New offsets was filled under/over the expected capacity"
-    );
+    assert_eq!(dst_offsets.len(), indices.len() + 1);
 
-    let field = match values.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field.clone(),
-        d => unreachable!("take_list called with non-list data type {d}"),
-    };
-    // SAFETY: `new_offsets` is constructed to be monotonically increasing above
-    let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(new_offsets)) };
-    let child = make_array(array_data.freeze());
-
+    let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
+    let child = make_array(mutable.freeze());
     GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls)
 }
 
