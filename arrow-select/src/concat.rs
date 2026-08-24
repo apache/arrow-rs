@@ -1913,11 +1913,6 @@ mod tests {
 
     #[test]
     fn test_concat_run_array_all_empty() {
-        // Two run arrays that are both logically empty (e.g. zero-length
-        // slices of a nested RunEndEncoded field). `run_arrays` inside
-        // `concat_run_arrays` filters both out, and previously fell through
-        // to `concat(&[])`, which errors because a type-erased empty slice
-        // carries no `DataType` to build a result from.
         let run_ends1 = Int32Array::from(vec![2, 4]);
         let values1 = Int32Array::from(vec![10, 20]);
         let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
