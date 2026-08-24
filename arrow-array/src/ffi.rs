@@ -216,7 +216,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// returns a new buffer corresponding to the index `i` of the FFI array. It may not exist (null pointer).
 /// `bits` is the number of bits that the native type of this buffer has.
 /// The size of the buffer will be `ceil(self.length * bits, 8)`.
-/// # Panic
+/// # Panics
 /// This function panics if `i` is larger or equal to `n_buffers`.
 /// # Safety
 /// This function assumes that `ceil(self.length * bits, 8)` is the size of the buffer
@@ -480,8 +480,8 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = self.array.buffer(1) as *const i32;
+                #[expect(clippy::cast_ptr_alignment)]
+                let offset_buffer = self.array.buffer(1).cast::<i32>();
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
@@ -494,8 +494,8 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(1, variadic_buffer_lengths, dt)?;
                 // first buffer is the null buffer => add(1)
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
-                #[allow(clippy::cast_ptr_alignment)]
-                let offset_buffer = self.array.buffer(1) as *const i64;
+                #[expect(clippy::cast_ptr_alignment)]
+                let offset_buffer = self.array.buffer(1).cast::<i64>();
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
@@ -589,8 +589,8 @@ mod tests_to_then_from_ffi {
         let schema = Box::new(ManuallyDrop::new(schema));
         let array = Box::new(ManuallyDrop::new(array));
 
-        let schema_ptr = &**schema as *const _;
-        let array_ptr = &**array as *const _;
+        let schema_ptr = std::ptr::from_ref(&**schema);
+        let array_ptr = std::ptr::from_ref(&**array);
 
         // We can read them back to memory
         // SAFETY:
@@ -1815,7 +1815,7 @@ mod tests_from_ffi {
     #[cfg(not(feature = "force_validate"))]
     fn test_utf8_view_ffi_from_dangling_pointer() {
         let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
-        let buffers = empty.data_buffers().to_vec();
+        let buffers = Arc::clone(empty.data_buffers());
         let nulls = empty.nulls().cloned();
 
         // Create a dangling pointer to a view buffer with zero length.
@@ -1872,8 +1872,7 @@ mod tests_from_ffi {
             let mixed_one_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id =
-                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id = builder.append_block(Buffer::from(b"non-inlined-string-buffer"));
                 builder.try_append_view(block_id, 0, 25).unwrap();
                 builder.finish()
             };
@@ -1884,8 +1883,7 @@ mod tests_from_ffi {
             let mixed_two_variadic = {
                 let mut builder = GenericByteViewBuilder::<T>::new();
                 builder.append_value(T::Native::from_str("inlined"));
-                let block_id =
-                    builder.append_block(Buffer::from("non-inlined-string-buffer".as_bytes()));
+                let block_id = builder.append_block(Buffer::from(b"non-inlined-string-buffer"));
                 builder.try_append_view(block_id, 0, 25).unwrap();
 
                 let block_id = builder

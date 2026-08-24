@@ -25,11 +25,11 @@ use arrow::datatypes::{Int16Type, IntervalMonthDayNanoType};
 use arrow_array::StringViewArray;
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
-use arrow_data::transform::MutableArrayData;
+use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{DataType, Field, Fields, UnionFields};
 use std::sync::Arc;
 
-#[allow(unused)]
+#[cfg_attr(feature = "force_validate", expect(dead_code))]
 fn create_decimal_array(array: Vec<Option<i128>>, precision: u8, scale: i8) -> Decimal128Array {
     array
         .into_iter()
@@ -449,14 +449,6 @@ fn test_struct_many() {
     let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
         .unwrap()
         .into_data();
-    let arrays = vec![&array, &array];
-    let mut mutable = MutableArrayData::new(arrays, false, 0);
-
-    mutable.try_extend(0, 1, 3).unwrap();
-    mutable.try_extend(1, 0, 2).unwrap();
-    let data = mutable.freeze();
-    let array = StructArray::from(data);
-
     let expected_string =
         Arc::new(StringArray::from(vec![None, None, Some("joe"), None])) as ArrayRef;
     let expected_int =
@@ -464,7 +456,24 @@ fn test_struct_many() {
 
     let expected =
         StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)]).unwrap();
-    assert_eq!(array, expected)
+
+    // exact capacities must produce the same result as letting the buffers grow
+    for capacities in [
+        Capacities::Array(0),
+        Capacities::Struct(
+            4,
+            // 4 slots per field, and "joe" is the only string kept
+            Some(vec![Capacities::Binary(4, Some(3)), Capacities::Array(4)]),
+        ),
+    ] {
+        let mut mutable =
+            MutableArrayData::with_capacities(vec![&array, &array], false, capacities);
+
+        mutable.try_extend(0, 1, 3).unwrap();
+        mutable.try_extend(1, 0, 2).unwrap();
+
+        assert_eq!(StructArray::from(mutable.freeze()), expected);
+    }
 }
 
 #[test]
@@ -732,14 +741,6 @@ fn test_map_nulls_append() {
     let c = b.slice(1, 2);
     let d = b.slice(2, 2);
 
-    let mut mutable = MutableArrayData::new(vec![&a, &b, &c, &d], false, 10);
-
-    mutable.try_extend(0, 0, a.len()).unwrap();
-    mutable.try_extend(1, 0, b.len()).unwrap();
-    mutable.try_extend(2, 0, c.len()).unwrap();
-    mutable.try_extend(3, 0, d.len()).unwrap();
-    let result = mutable.freeze();
-
     let expected_key_array = Int64Array::from(vec![
         Some(1),
         Some(2),
@@ -836,7 +837,28 @@ fn test_map_nulls_append() {
         vec![expected_entry_array.into_data()],
     )
     .unwrap();
-    assert_eq!(result, expected_list_data);
+
+    // exact capacities must produce the same result as letting the buffers grow
+    for capacities in [
+        Capacities::Array(10),
+        Capacities::List(
+            12,
+            Some(Box::new(Capacities::Struct(
+                23,
+                Some(vec![Capacities::Array(23), Capacities::Array(23)]),
+            ))),
+        ),
+    ] {
+        let mut mutable =
+            MutableArrayData::with_capacities(vec![&a, &b, &c, &d], false, capacities);
+
+        mutable.try_extend(0, 0, a.len()).unwrap();
+        mutable.try_extend(1, 0, b.len()).unwrap();
+        mutable.try_extend(2, 0, c.len()).unwrap();
+        mutable.try_extend(3, 0, d.len()).unwrap();
+
+        assert_eq!(mutable.freeze(), expected_list_data);
+    }
 }
 
 #[test]
@@ -1029,11 +1051,14 @@ fn test_extend_nulls() {
 }
 
 #[test]
-#[should_panic(expected = "MutableArrayData not nullable")]
-fn test_extend_nulls_panic() {
+fn test_extend_nulls_not_nullable() {
     let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
     let mut mutable = MutableArrayData::new(vec![&int], false, 4);
-    mutable.try_extend_nulls(2).unwrap();
+    let err = mutable.try_extend_nulls(2).unwrap_err();
+    assert!(
+        err.to_string().contains("cannot be extended with nulls"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

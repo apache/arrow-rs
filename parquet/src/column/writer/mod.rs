@@ -114,6 +114,14 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.add_data_page())
     }
 
+    /// Sets a pre-computed distinct count on this column writer.
+    ///
+    /// See [`GenericColumnWriter::set_distinct_count_override`] for details.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        downcast_writer!(self, typed, typed.set_distinct_count_override(count))
+    }
+
     /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
@@ -156,6 +164,8 @@ pub fn get_column_writer<'a>(
 
 /// Gets a typed column writer for the specific type `T`, by "up-casting" `col_writer` of
 /// non-generic type to a generic column writer type `ColumnWriterImpl`.
+///
+/// # Panics
 ///
 /// Panics if actual enum value for `col_writer` does not match the type `T`.
 pub fn get_typed_column_writer<T: DataType>(col_writer: ColumnWriter) -> ColumnWriterImpl<T> {
@@ -231,7 +241,7 @@ impl ColumnCloseResult {
                 .build()?;
             if let Some(offset_index) = self.offset_index.as_mut() {
                 let mut offset = dictionary_len as i64;
-                for location in offset_index.page_locations.iter_mut() {
+                for location in &mut offset_index.page_locations {
                     location.offset = offset;
                     offset += location.compressed_page_size as i64;
                 }
@@ -325,7 +335,7 @@ impl<T: Default> ColumnMetrics<T> {
     /// Sum `page_histogram` into `chunk_histogram`
     fn update_histogram(
         chunk_histogram: &mut Option<LevelHistogram>,
-        page_histogram: &Option<LevelHistogram>,
+        page_histogram: Option<&LevelHistogram>,
     ) {
         if let (Some(page_hist), Some(chunk_hist)) = (page_histogram, chunk_histogram) {
             chunk_hist.add(page_hist);
@@ -337,11 +347,11 @@ impl<T: Default> ColumnMetrics<T> {
     fn update_from_page_metrics(&mut self, page_metrics: &PageMetrics) {
         ColumnMetrics::<T>::update_histogram(
             &mut self.definition_level_histogram,
-            &page_metrics.definition_level_histogram,
+            page_metrics.definition_level_histogram.as_ref(),
         );
         ColumnMetrics::<T>::update_histogram(
             &mut self.repetition_level_histogram,
-            &page_metrics.repetition_level_histogram,
+            page_metrics.repetition_level_histogram.as_ref(),
         );
     }
 
@@ -379,7 +389,7 @@ impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
     }
 }
 
-impl<'a> LevelDataRef<'a> {
+impl LevelDataRef<'_> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Absent => 0,
@@ -450,6 +460,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     page_metrics: PageMetrics,
     // Metrics per column writer
     column_metrics: ColumnMetrics<E::T>,
+
+    /// Pre-computed distinct count to write into column chunk statistics.
+    /// When set, takes precedence over `column_metrics.column_distinct_count`.
+    distinct_count_override: Option<u64>,
 
     /// The order of encodings within the generated metadata does not impact its meaning,
     /// but we use a BTreeSet so that the output is deterministic
@@ -527,6 +541,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_pages: VecDeque::new(),
             page_metrics,
             column_metrics,
+            distinct_count_override: None,
             column_index_builder,
             offset_index_builder,
             encodings,
@@ -537,7 +552,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Sets a pre-computed distinct count to write into column chunk statistics.
+    ///
+    /// When set, this value is written as `distinct_count` in the row group statistics
+    /// footer. It takes precedence over any `distinct_count` passed through
+    /// [`Self::write_batch_with_statistics`].
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_distinct_count_override(&mut self, count: u64) {
+        self.distinct_count_override = Some(count);
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
@@ -570,7 +595,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or(values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -593,6 +618,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             && !matches!(rep_levels, LevelDataRef::Materialized(_));
         let has_levels = !matches!(def_levels, LevelDataRef::Absent)
             || !matches!(rep_levels, LevelDataRef::Absent);
+
         // When both level vectors are compact (Uniform or Absent), there is no
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
@@ -601,6 +627,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         } else {
             self.props.write_batch_size()
         };
+        debug_assert!(base_batch_size > 0);
+
         let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
@@ -825,7 +853,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// `#[inline(never)]` keeps this slow path — only reached for
     /// variable-width columns whose values need page splitting — out of
     /// the hot `write_batch_internal` loop.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline(never)]
     fn write_granular_chunk(
         &mut self,
@@ -933,7 +961,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             })
                         }
                         None => encoder.put_n_with_observer(value, count, |_, _| {}),
-                    };
+                    }
                     let values_to_write = count * (value == max_def) as usize;
                     self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
                     values_to_write
@@ -987,7 +1015,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None => encoder.put_n_with_observer(value, count, |level, run_len| {
                             new_rows += (run_len as u32) * (level == 0) as u32;
                         }),
-                    };
+                    }
                 }
             }
             self.page_metrics.num_buffered_rows += new_rows;
@@ -1522,10 +1550,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if self.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
+            let distinct_count = self
+                .distinct_count_override
+                .or(self.column_metrics.column_distinct_count);
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
                 self.column_metrics.max_column_value.clone(),
-                self.column_metrics.column_distinct_count,
+                distinct_count,
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )
@@ -1647,7 +1678,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
                 self.column_metrics.dictionary_page_offset = Some(page_spec.offset);
             }
-            _ => {}
+            PageType::INDEX_PAGE => {}
         }
     }
 
@@ -1720,7 +1751,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 }
 
 #[inline]
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn is_nan<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
@@ -3557,8 +3588,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_zero_only() {
-        let input = [f16::ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -3570,8 +3600,7 @@ mod tests {
 
     #[test]
     fn test_float16_statistics_neg_zero_only() {
-        let input = [f16::NEG_ZERO]
-            .into_iter()
+        let input = std::iter::once(f16::NEG_ZERO)
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
@@ -3820,9 +3849,8 @@ mod tests {
         let r = writer.close().unwrap();
         assert!(r.column_index.is_some());
         let col_idx = r.column_index.unwrap();
-        let col_idx = match col_idx {
-            ColumnIndexMetaData::INT32(col_idx) => col_idx,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(col_idx) = col_idx else {
+            panic!("wrong stats type")
         };
         // null_pages should be true for page 0
         assert!(col_idx.is_null_page(0));
@@ -3859,9 +3887,8 @@ mod tests {
         assert_eq!(8, r.rows_written);
 
         // column index
-        let column_index = match column_index {
-            ColumnIndexMetaData::INT32(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::INT32(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         assert_eq!(2, column_index.num_pages());
         assert_eq!(2, offset_index.page_locations.len());
@@ -3919,9 +3946,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(3, r.rows_written);
@@ -3990,9 +4016,8 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
 
         assert_eq!(1, r.rows_written);
@@ -4014,8 +4039,8 @@ mod tests {
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value);
-                assert_eq!("C".as_bytes(), column_index_max_value);
+                assert_eq!(b"B", column_index_min_value);
+                assert_eq!(b"C", column_index_max_value);
 
                 assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
                 assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
@@ -4045,9 +4070,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -4088,9 +4112,8 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index = match column_index {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
-            _ => panic!("wrong stats type"),
+        let ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) = column_index else {
+            panic!("wrong stats type")
         };
         let column_index_min_bytes = column_index.min_value(0).unwrap();
         let column_index_max_bytes = column_index.max_value(0).unwrap();
@@ -4189,8 +4212,8 @@ mod tests {
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
 
-            assert_eq!("B".as_bytes(), min_value.as_bytes());
-            assert_eq!("C".as_bytes(), max_value.as_bytes());
+            assert_eq!(b"B", min_value.as_bytes());
+            assert_eq!(b"C", max_value.as_bytes());
         } else {
             panic!("expecting Statistics::ByteArray");
         }
@@ -4399,7 +4422,7 @@ mod tests {
         // Test truncate and increment for max bounds on UTF-8 statistics
         // 7-bit (i.e. ASCII)
         let r = truncate_and_increment_utf8("yyyyyyyyy", 8).unwrap();
-        assert_eq!(&r, "yyyyyyyz".as_bytes());
+        assert_eq!(&r, b"yyyyyyyz");
 
         // 2-byte without overflow
         let r = truncate_and_increment_utf8("ééééé", 7).unwrap();
@@ -5047,7 +5070,7 @@ mod tests {
                 PageType::DICTIONARY_PAGE => {
                     collected.dict_page_size = collected.dict_page_size.max(page.buffer().len());
                 }
-                _ => {}
+                PageType::INDEX_PAGE => {}
             }
         }
         collected

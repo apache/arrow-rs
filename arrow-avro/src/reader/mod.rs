@@ -504,7 +504,7 @@ pub mod async_reader;
 
 pub use header::{HeaderInfo, read_header_info};
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
@@ -1100,13 +1100,10 @@ impl ReaderBuilder {
         let mut cache = IndexMap::with_capacity(fingerprints.len().saturating_sub(1));
         let mut active_decoder: Option<RecordDecoder> = None;
         for fingerprint in store.fingerprints() {
-            let avro_schema = match store.lookup(&fingerprint) {
-                Some(schema) => schema,
-                None => {
-                    return Err(AvroError::General(format!(
-                        "Fingerprint {fingerprint:?} not found in schema store",
-                    )));
-                }
+            let Some(avro_schema) = store.lookup(&fingerprint) else {
+                return Err(AvroError::General(format!(
+                    "Fingerprint {fingerprint:?} not found in schema store",
+                )));
             };
             let writer_schema = avro_schema.schema()?;
             let record_decoder = match projection {
@@ -4454,7 +4451,7 @@ mod test {
             let offs = vec![0, 0, 0, 1];
             let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
                 DataType::FixedSizeBinary(8) => {
-                    let it = [Some(fx8_a)].into_iter();
+                    let it = std::iter::once(Some(fx8_a));
                     Some(Arc::new(
                         FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 8).unwrap(),
                     ) as ArrayRef)
@@ -5380,12 +5377,12 @@ mod test {
             ),
         ];
         for (file, expected_dt, mut metadata) in files {
-            let (precision, scale) = match expected_dt {
-                DataType::Decimal32(p, s)
-                | DataType::Decimal64(p, s)
-                | DataType::Decimal128(p, s)
-                | DataType::Decimal256(p, s) => (p, s),
-                _ => unreachable!("Unexpected decimal type in test inputs"),
+            let (DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale)) = expected_dt
+            else {
+                unreachable!("Unexpected decimal type in test inputs")
             };
             assert!(scale >= 0, "test data uses non-negative scales only");
             let scale_u32 = scale as u32;
@@ -5397,7 +5394,7 @@ mod test {
                     .to_string_lossy()
                     .into_owned()
             };
-            let pow10: i128 = 10i128.pow(scale_u32);
+            let pow10 = 10i128.pow(scale_u32);
             let values_i128: Vec<i128> = (1..=24).map(|n| (n as i128) * pow10).collect();
             let build_expected = |dt: &DataType, values: &[i128]| -> ArrayRef {
                 match *dt {
@@ -6587,7 +6584,7 @@ mod test {
             .expect("id column should be an Int64Array");
         let expected_ids = [1, 2, 3, 4, 5, 6, 7];
         for (i, &expected_id) in expected_ids.iter().enumerate() {
-            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}",);
+            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}");
         }
         let int_array = batch
             .column(1)
@@ -7945,7 +7942,7 @@ mod test {
             let mut tid_array: Option<i8> = None;
             let mut tid_map: Option<i8> = None;
             let mut map_entry_field: Option<FieldRef> = None;
-            let mut map_sorted: bool = false;
+            let mut map_sorted = false;
             for (tid, f) in uf.iter() {
                 match f.data_type() {
                     DataType::Dictionary(_, _) => tid_enum = Some(tid),
@@ -8458,22 +8455,20 @@ mod test {
             .field_with_name("union_uuid_or_fixed10")
             .ok()
             .and_then(|f| match f.data_type() {
-                DataType::Union(uf, _) => uf
-                    .iter()
-                    .find(|(_, child)| child.name() == "uuid")
-                    .and_then(|(_, child)| {
-                        let md = child.metadata();
-                        let has_ext = md.get(UUID_EXT_KEY).is_some();
-                        let is_uuid_logical = md
-                            .get(UUID_LOGICAL_KEY)
-                            .map(|v| v.trim_matches('"') == "uuid")
-                            .unwrap_or(false);
-                        if has_ext || is_uuid_logical {
-                            Some(md.clone())
-                        } else {
-                            None
-                        }
-                    }),
+                DataType::Union(uf, _) => {
+                    let (_, child) = uf.iter().find(|(_, child)| child.name() == "uuid")?;
+                    let md = child.metadata();
+                    let has_ext = md.get(UUID_EXT_KEY).is_some();
+                    let is_uuid_logical = md
+                        .get(UUID_LOGICAL_KEY)
+                        .map(|v| v.trim_matches('"') == "uuid")
+                        .unwrap_or(false);
+                    if has_ext || is_uuid_logical {
+                        Some(md.clone())
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             });
 
@@ -9621,7 +9616,7 @@ mod test {
         let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
         let mut out = Vec::new();
         {
-            let mut writer = ApacheWriter::new(&schema, &mut out);
+            let mut writer = ApacheWriter::new(&schema, &mut out).unwrap();
             let ts_val = |s: i64, n: i32| {
                 Value::Record(vec![
                     ("seconds".into(), Value::Long(s)),
@@ -9758,7 +9753,7 @@ mod test {
         let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
         let mut bytes = Vec::new();
         {
-            let mut writer = ApacheWriter::new(&schema, &mut bytes);
+            let mut writer = ApacheWriter::new(&schema, &mut bytes).unwrap();
             // One row: ts={100, 5}, events=[{time={200, 1}}]
             let ts_val = |s: i64, n: i32| {
                 Value::Record(vec![

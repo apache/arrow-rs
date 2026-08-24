@@ -150,6 +150,9 @@ impl BooleanArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             values: self.values.slice(offset, length),
@@ -604,10 +607,35 @@ impl BooleanArray {
             return self;
         };
 
-        let mut builder = BooleanBufferBuilder::new(len);
-        builder.append_buffer(&self.values.slice(0, end));
-        builder.append_n(len - end, false);
-        BooleanArray::new(builder.finish(), self.nulls)
+        let bit_offset = self.values.offset();
+        let inner_buf = self.values.into_inner();
+
+        match inner_buf.into_mutable() {
+            Ok(mut mutable_buffer) => {
+                // Unique ownership: zero trailing bits in place.
+                let actual_end = bit_offset + end;
+                let raw_bytes = mutable_buffer.as_slice_mut();
+                let byte_idx = actual_end / 8;
+                let bits_to_keep = actual_end % 8;
+                if bits_to_keep == 0 {
+                    raw_bytes[byte_idx..].fill(0);
+                } else {
+                    raw_bytes[byte_idx] &= (1_u8 << bits_to_keep) - 1;
+                    raw_bytes[byte_idx + 1..].fill(0);
+                }
+                BooleanArray::new(
+                    BooleanBuffer::new(mutable_buffer.into(), bit_offset, len),
+                    self.nulls,
+                )
+            }
+            Err(buf) => {
+                // Shared buffer: copy the retained prefix then pad with false.
+                let mut builder = BooleanBufferBuilder::new(len);
+                builder.append_buffer(&BooleanBuffer::new(buf, bit_offset, end));
+                builder.append_n(len - end, false);
+                BooleanArray::new(builder.finish(), self.nulls)
+            }
+        }
     }
 
     /// Deconstruct this array into its constituent parts
@@ -840,7 +868,7 @@ impl BooleanArray {
     ///
     /// Panics if the iterator does not report an upper bound on `size_hint()`.
     #[inline]
-    #[allow(
+    #[expect(
         private_bounds,
         reason = "We will expose BooleanAdapter if there is a need"
     )]
@@ -1711,5 +1739,15 @@ mod tests {
         let r = a.take_n_true(5);
         assert_eq!(r.len(), 0);
         assert_eq!(r.true_count(), 0);
+    }
+
+    #[test]
+    fn test_take_n_true_unique_buffer() {
+        // unique buffer ownership -> mutable in-place path.
+        let arr = BooleanArray::from(vec![true, false, true, true, false, true, true]);
+        let result = arr.take_n_true(3);
+        assert_eq!(result.true_count(), 3);
+        let values: Vec<bool> = (0..result.len()).map(|i| result.value(i)).collect();
+        assert_eq!(values, vec![true, false, true, true, false, false, false]);
     }
 }

@@ -68,9 +68,8 @@ pub(super) fn split_off_selectors(
         total_count > row_count
     });
 
-    let split_idx = match find {
-        Some(idx) => idx,
-        None => return (selectors, Vec::new()),
+    let Some(split_idx) = find else {
+        return (selectors, Vec::new());
     };
 
     // `selectors` keeps the head, `tail` takes the rest. The selector straddling
@@ -109,12 +108,9 @@ pub(super) fn offset_selectors(mut selectors: Vec<RowSelector>, offset: usize) -
         }
     });
 
-    let split_idx = match find {
-        Some(idx) => idx,
-        None => {
-            selectors.clear();
-            return selectors;
-        }
+    let Some(split_idx) = find else {
+        selectors.clear();
+        return selectors;
     };
 
     let mut new_selectors = Vec::with_capacity(selectors.len() - split_idx + 1);

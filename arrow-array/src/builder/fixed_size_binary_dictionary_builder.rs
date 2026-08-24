@@ -631,9 +631,9 @@ mod tests {
         assert_eq!(
             values,
             vec![
-                Some("aaa".as_bytes()),
-                Some("bbb".as_bytes()),
-                Some("ccc".as_bytes())
+                Some(b"aaa".as_slice()),
+                Some(b"bbb".as_slice()),
+                Some(b"ccc".as_slice())
             ]
         );
 
@@ -650,7 +650,7 @@ mod tests {
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
-        assert_eq!(values, [Some("ddd".as_bytes()), Some("eee".as_bytes())]);
+        assert_eq!(values, [Some(b"ddd".as_slice()), Some(b"eee".as_slice())]);
 
         // Check that we have all of the expected values
         let all_values = dict2
@@ -663,11 +663,11 @@ mod tests {
         assert_eq!(
             all_values,
             [
-                Some("aaa".as_bytes()),
-                Some("bbb".as_bytes()),
-                Some("ccc".as_bytes()),
-                Some("ddd".as_bytes()),
-                Some("eee".as_bytes())
+                Some(b"aaa".as_slice()),
+                Some(b"bbb".as_slice()),
+                Some(b"ccc".as_slice()),
+                Some(b"ddd".as_slice()),
+                Some(b"eee".as_slice())
             ]
         );
     }

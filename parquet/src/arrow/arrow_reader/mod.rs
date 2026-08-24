@@ -1228,7 +1228,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            for predicate in filter.predicates.iter_mut() {
+            for predicate in &mut filter.predicates {
                 // break early if we have ruled out all rows
                 if !plan_builder.selects_any() {
                     break;
@@ -1310,15 +1310,14 @@ struct ReaderPageIterator<T: ChunkReader> {
 
 impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     /// Return the next SerializedPageReader
-    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
+    fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
-        let offset_index = self.metadata.offset_index();
-        // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
-        let page_locations = offset_index
-            .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
+        let page_locations = self
+            .metadata
+            .page_index()
+            .map(|i| i.page_locations(rg_idx, self.column_idx).cloned())
+            .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -1366,12 +1365,12 @@ pub struct ParquetRecordBatchReader {
 ///
 /// The first chunk keeps its [`BooleanBuffer`] without copying. A second chunk
 /// promotes the accumulator to a [`BooleanBufferBuilder`], and later chunks are
-/// appended to it. For example, chunks `1000` and `1` become `10001`:
+/// appended to it. For example, chunks `1001` and `1` become `10011`:
 ///
 /// ```text
-///           append(1000)             append(1)
+///           append(1001)             append(1)
 ///   Empty ───────────────▶ Single ───────────────▶ Combined
-///                          1000                    10001
+///                          1001                    10011
 ///                          (zero copy)             (promoted to builder)
 /// ```
 ///
@@ -1381,8 +1380,8 @@ pub struct ParquetRecordBatchReader {
 ///
 /// ```text
 ///   decoded rows:   0 1 2 3   11   <-- buffered by the array reader
-///   chunk masks:   [1 0 0 0] [1]
-///   finish():       1 0 0 0   1    <-- filters the whole batch in one pass
+///   chunk masks:   [1 0 0 1] [1]
+///   finish():       1 0 0 1   1    <-- filters the whole batch in one pass
 /// ```
 #[derive(Default)]
 enum FilterMaskAccumulator {
@@ -1568,7 +1567,7 @@ impl ParquetRecordBatchReader {
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
                         rec => read_records += rec,
-                    };
+                    }
                 }
             }
             RowSelectionCursor::All => {
@@ -1939,14 +1938,14 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(BooleanArray::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int32Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1958,7 +1957,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int64Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1970,7 +1969,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Float32Array::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
         );
     }
@@ -4686,7 +4685,19 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            let page_index = builder
+                .metadata()
+                .page_index()
+                .expect("page index should be present");
+            let num_columns = builder.metadata().row_group(0).num_columns();
+            let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(offset_indexes.is_some_and(|ois| ois.len() == num_columns));
+            let column_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
+            assert!(page_index.offset_index(0, 0).is_some());
+            assert!(page_index.column_index(0, 0).is_some());
+            assert!(page_index.page_locations(0, 0).is_some());
+            assert_eq!(page_index.num_data_pages(0, 0), Some(325));
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
@@ -4703,7 +4714,7 @@ pub(crate) mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            assert!(builder.metadata().offset_index().is_none());
+            assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);
@@ -5819,7 +5830,7 @@ pub(crate) mod tests {
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
         let seed: u64 = random();
-        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
         use tempfile::TempDir;

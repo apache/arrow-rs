@@ -232,7 +232,7 @@ impl MutableBuffer {
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {
             Deallocation::Standard(layout) => *layout,
-            _ => return Err(bytes),
+            Deallocation::Custom(..) => return Err(bytes),
         };
 
         let len = bytes.len();
@@ -657,7 +657,7 @@ impl MutableBuffer {
             // this assumes that `[ToByteSlice]` can be copied directly
             // without calling `to_byte_slice` for each element,
             // which is correct for all ArrowNativeType implementations.
-            let src = items.as_ptr() as *const u8;
+            let src = items.as_ptr().cast::<u8>();
             let dst = self.data.as_ptr().add(self.len);
             std::ptr::copy_nonoverlapping(src, dst, additional);
         }
@@ -802,7 +802,10 @@ impl MutableBuffer {
     /// for the same reasons as [`MutableBuffer::reserve`].
     ///
     /// # Safety
-    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`
+    /// and that `I::next()` does not panic, or `set_len` will leave the buffer
+    /// in an inconsistent state, exposing uninitialized/stale bytes as though
+    /// they were valid.
     #[inline]
     pub unsafe fn extend_bool_trusted_len<I: Iterator<Item = bool>>(
         &mut self,
@@ -1102,7 +1105,14 @@ impl MutableBuffer {
     /// if any of the items of the iterator is an error.
     /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
     ///
+    /// # Errors
+    ///
+    /// Returns the first error yielded by the iterator.
+    ///
     /// # Panics
+    ///
+    /// Note that unlike the [`Err`] cases, these panics are violations of the safety contract
+    /// below, and are only checks that happen to be cheap enough to keep:
     ///
     /// Panics if the iterator does not report an upper bound via `size_hint`, or if the
     /// reported length does not match the number of items produced before an error-free finish,
@@ -1182,7 +1192,7 @@ impl Drop for MutableBuffer {
     fn drop(&mut self) {
         if self.layout.size() != 0 {
             // Safety: data was allocated with standard allocator with given layout
-            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+            unsafe { std::alloc::dealloc(self.data.as_ptr().cast(), self.layout) };
         }
     }
 }

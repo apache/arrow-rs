@@ -249,7 +249,7 @@ fn compare_list<O: OffsetSizeTrait>(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -280,7 +280,7 @@ fn compare_fixed_list(
         let r_end = r_start + r_size;
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -316,7 +316,7 @@ fn compare_list_view<O: OffsetSizeTrait>(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -347,7 +347,7 @@ fn compare_map(
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -379,7 +379,7 @@ fn compare_struct(
     let f = compare(left, right, opts, move |i, j| {
         for cmp in &comparators {
             match cmp(i, j) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -396,13 +396,11 @@ fn compare_union(
     let left = left.as_union();
     let right = right.as_union();
 
-    let (left_fields, left_mode) = match left.data_type() {
-        DataType::Union(fields, mode) => (fields, mode),
-        _ => unreachable!(),
+    let DataType::Union(left_fields, left_mode) = left.data_type() else {
+        unreachable!()
     };
-    let (right_fields, right_mode) = match right.data_type() {
-        DataType::Union(fields, mode) => (fields, mode),
-        _ => unreachable!(),
+    let DataType::Union(right_fields, right_mode) = right.data_type() else {
+        unreachable!()
     };
 
     if left_fields != right_fields {

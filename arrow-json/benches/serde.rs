@@ -24,7 +24,6 @@ use std::sync::Arc;
 
 const ROWS: usize = 1 << 18;
 
-#[allow(deprecated)]
 fn do_bench<R: Serialize>(c: &mut Criterion, name: &str, rows: &[R], schema: &Schema) {
     let schema = Arc::new(schema.clone());
     c.bench_function(name, |b| {

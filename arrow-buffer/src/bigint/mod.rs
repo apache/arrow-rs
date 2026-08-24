@@ -57,7 +57,6 @@ enum DivRemError {
 }
 
 /// A signed 256-bit integer
-#[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Default, Eq, PartialEq, Hash)]
 #[repr(C)]
 pub struct i256 {
@@ -241,10 +240,8 @@ impl i256 {
     /// Create an optional i256 from the provided `f64`. Returning `None`
     /// if overflow occurred
     pub fn from_f64(v: f64) -> Option<Self> {
-        BigInt::from_f64(v).and_then(|i| {
-            let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow { None } else { Some(integer) }
-        })
+        let (integer, overflow) = i256::from_bigint_with_overflow(BigInt::from_f64(v)?);
+        if overflow { None } else { Some(integer) }
     }
 
     /// Create an i256 from the provided low u128 and high i128
@@ -519,6 +516,10 @@ impl i256 {
     }
 
     /// Performs wrapping division
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_div(self, other: Self) -> Self {
         match self.div_rem(other) {
@@ -535,6 +536,10 @@ impl i256 {
     }
 
     /// Performs wrapping remainder
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_rem(self, other: Self) -> Self {
         match self.div_rem(other) {
@@ -690,7 +695,10 @@ impl i256 {
     }
 
     /// Computes the `base` logarithm of the number `self`
-    /// Panic if `self` is less than or equal to zero, or if `base` is less than 2.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is less than or equal to zero, or if `base` is less than 2.
     #[inline]
     pub fn ilog(self, base: i256) -> u32 {
         self.checked_ilog(base)
@@ -733,6 +741,9 @@ impl i256 {
     }
 
     /// Computes the decimal logarithm of the number `self`
+    ///
+    /// # Panics
+    ///
     /// Panics if `self` is less than or equal to zero.
     #[inline]
     pub fn ilog10(self) -> u32 {
@@ -748,6 +759,10 @@ impl i256 {
     }
 
     /// Computes the base 2 logarithm of the number, rounded down.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is less than or equal to zero
     #[inline]
     pub fn ilog2(self) -> u32 {
         self.checked_ilog2()
@@ -1752,7 +1767,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::op_ref)]
+    #[expect(clippy::op_ref)]
     fn test_reference_op(il: i256, ir: i256) {
         let r1 = il + ir;
         let r2 = &il + ir;

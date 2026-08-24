@@ -53,7 +53,7 @@ use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, 
 use crate::schema::types::Type;
 
 /// Prints Parquet metadata [`ParquetMetaData`] information.
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaData) {
     print_file_metadata(out, metadata.file_metadata());
     writeln!(out);
@@ -69,7 +69,7 @@ pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaDat
 }
 
 /// Prints file metadata [`FileMetaData`] information.
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData) {
     writeln!(out, "version: {}", file_metadata.version());
     writeln!(out, "num of rows: {}", file_metadata.num_rows());
@@ -78,7 +78,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     }
     if let Some(metadata) = file_metadata.key_value_metadata() {
         writeln!(out, "metadata:");
-        for kv in metadata.iter() {
+        for kv in metadata {
             writeln!(
                 out,
                 "  {}: {}",
@@ -143,7 +143,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
 ///   }
 /// }
 /// ```
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     // TODO: better if we can pass fmt::Write to Printer.
     // But how can we make it to accept both io::Write & fmt::Write?
@@ -155,7 +155,7 @@ pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     writeln!(out, "{s}");
 }
 
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaData) {
     writeln!(out, "total byte size: {}", rg_metadata.total_byte_size());
     writeln!(out, "num of rows: {}", rg_metadata.num_rows());
@@ -170,7 +170,7 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
     }
 }
 
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChunkMetaData) {
     writeln!(out, "column type: {}", cc_metadata.column_type());
     writeln!(out, "column path: {}", cc_metadata.column_path());
@@ -240,7 +240,7 @@ fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChun
     writeln!(out);
 }
 
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 fn print_dashes(out: &mut dyn io::Write, num: i32) {
     for _ in 0..num {
         write!(out, "-");
@@ -256,7 +256,7 @@ struct Printer<'a> {
     indent: i32,
 }
 
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 impl<'a> Printer<'a> {
     fn new(output: &'a mut dyn fmt::Write) -> Self {
         Printer { output, indent: 0 }
@@ -365,7 +365,7 @@ fn print_logical_and_converted(
     }
 }
 
-#[allow(unused_must_use)]
+#[expect(unused_must_use)]
 impl Printer<'_> {
     pub fn print(&mut self, tp: &Type) {
         self.print_indent();

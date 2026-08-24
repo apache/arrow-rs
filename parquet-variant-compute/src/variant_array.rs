@@ -409,11 +409,13 @@ impl VariantArray {
     /// Use `try_value` if you need to handle conversion errors gracefully.
     ///
     /// # Panics
-    /// * if the index is out of bounds
-    /// * if the array value is null
-    /// * if `try_value` returns an error.
+    /// Panics if
+    /// * the index is out of bounds,
+    /// * the `metadata`/`value` bytes of the row are invalid, which includes reading a null row, or
+    /// * both `value` and `typed_value` are non-null for a non-struct `typed_value`.
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
-        self.try_value(index).unwrap()
+        self.try_value(index)
+            .unwrap_or_else(|err| panic!("VariantArray::value({index}) failed: {err}"))
     }
 
     /// Return the [`Variant`] instance stored at the given row
@@ -421,16 +423,17 @@ impl VariantArray {
     /// Note: This method does not check for nulls and the value is arbitrary
     /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
-    /// # Panics
-    ///
-    /// Panics if
-    /// * the index is out of bounds
-    /// * the array value is null
-    ///
     /// # Errors
     ///
     /// Errors if
+    /// - the index is out of bounds
     /// - the data in `typed_value` cannot be interpreted as a valid `Variant`
+    /// - both `value` and `typed_value` are non-null for a non-struct `typed_value`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the unshredded `metadata`/`value` bytes fail basic validation, since those are
+    /// read with [`Variant::new`]. This includes reading a row that is null.
     ///
     /// If this is a shredded variant but has no value at the shredded location, it
     /// will return [`Variant::Null`].
@@ -444,13 +447,22 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
+        if self.len() <= index {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {index} out of bounds for VariantArray of length {}",
+                self.len()
+            )));
+        }
+
         let value = self.value_column();
         match self.typed_value_column() {
             // Always prefer typed_value, if available
             Some(typed_value) if typed_value.is_valid(index) => {
                 if !matches!(typed_value.data_type(), DataType::Struct(_)) && value.is_valid(index) {
                     // Only a partially shredded struct is allowed to have values for both columns
-                    panic!("Invalid variant, conflicting value and typed_value");
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Invalid variant, conflicting value and typed_value".to_owned(),
+                    ));
                 }
                 typed_value_to_variant(typed_value, index)
             }
@@ -535,6 +547,15 @@ impl VariantArray {
 
     /// Returns an iterator over the values in this array
     pub fn iter(&self) -> VariantArrayIter<'_> {
+        VariantArrayIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a VariantArray {
+    type Item = Option<Variant<'a, 'a>>;
+    type IntoIter = VariantArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         VariantArrayIter::new(self)
     }
 }
@@ -642,7 +663,7 @@ impl<'a> Iterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+impl DoubleEndedIterator for VariantArrayIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.head_i == self.tail_i {
             return None;
@@ -654,7 +675,7 @@ impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
+impl ExactSizeIterator for VariantArrayIter<'_> {}
 
 /// One shredded field of a partially or perfectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
@@ -697,7 +718,6 @@ pub struct ShreddedVariantFieldArray {
     shredding_state: ShreddingState,
 }
 
-#[allow(unused)]
 impl ShreddedVariantFieldArray {
     /// Creates a new `ShreddedVariantFieldArray` from a [`StructArray`].
     ///
@@ -1109,7 +1129,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
                     (v / 1_000_000) as u32,
                     (v % 1_000_000) as u32 * 1000
                 )
-                .ok_or_else(|| format!("Invalid microsecond from midnight: {}", v)),
+                .ok_or_else(|| format!("Invalid microsecond from midnight: {v}")),
                 typed_value,
                 index
             )
@@ -1152,17 +1172,15 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
-        _ => {
-            // We shouldn't panic in production code, but this is a
-            // placeholder until we implement more types
-            // https://github.com/apache/arrow-rs/issues/8091
-            debug_assert!(
-                false,
-                "Unsupported typed_value type: {}",
-                typed_value.data_type()
-            );
-            Ok(Variant::Null)
-        }
+        //
+        // Composite shredded values may require combining `value` and
+        // `typed_value` and allocating new encoded bytes. `try_value` returns
+        // borrowed Variant, so callers must unshred the array first.
+        _ => Err(ArrowError::NotYetImplemented(format!(
+            "VariantArray::try_value cannot materialize typed_value of type {} \
+             as a borrowed Variant; call unshred_variant first",
+            typed_value.data_type()
+        ))),
     }
 }
 
@@ -1590,6 +1608,23 @@ mod test {
     }
 
     #[test]
+    fn test_try_value_out_of_bounds() {
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        let v = b.build();
+
+        assert_eq!(v.try_value(0).unwrap(), Variant::Int8(1));
+        assert_eq!(v.try_value(1).unwrap(), Variant::Null);
+
+        let err = v.try_value(2).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Index 2 out of bounds for VariantArray of length 2"
+        );
+    }
+
+    #[test]
     fn test_variant_array_iterable() {
         let mut b = VariantArrayBuilder::new(6);
 
@@ -1815,4 +1850,24 @@ mod test {
         ),]),
         "Cast error: Cast failed at index 0 (array type: Decimal128(38, 10)): Invalid argument error: 123456789012345678901234567890123456789 is wider than max precision 38"
     );
+    #[test]
+    fn try_value_errors_on_unimplemented_typed_value_type() {
+        use crate::{json_to_variant, shred_variant};
+        use arrow::array::StringArray;
+
+        let json: ArrayRef = Arc::new(StringArray::from(vec![r#"{"qty": 3}"#]));
+        let variant = json_to_variant(&json).unwrap();
+        let shred_type = DataType::Struct(vec![Field::new("qty", DataType::Int64, true)].into());
+        let shredded = shred_variant(&variant, &shred_type).unwrap();
+        // Object-shredded typed_value is not yet implemented: reading it must
+        // error, never silently return Variant::Null
+        // TODO: https://github.com/apache/arrow-rs/issues/10620
+        let err = shredded.try_value(0).unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Not yet implemented: VariantArray::try_value cannot materialize typed_value"
+            ),
+            "unexpected error: {err}"
+        );
+    }
 }
