@@ -198,6 +198,7 @@ fn main() -> Result<()> {
     let file_len = file_bytes.len() as u64;
     let mut decoder = ParquetMetaDataPushDecoder::try_new(file_len)?
         .with_page_index_policy(PageIndexPolicy::Required);
+    #[expect(clippy::single_range_in_vec_init)]
     decoder.push_ranges(vec![0..file_len], vec![file_bytes.clone()])?;
     let metadata = match decoder.try_decode() {
         Ok(DecodeResult::Data(metadata)) => metadata, // decode successful
@@ -221,7 +222,8 @@ fn main() -> Result<()> {
     // Example 2: Read metadata and then add custom PageIndexProvider
     decoder = ParquetMetaDataPushDecoder::try_new(file_len)?
         .with_page_index_policy(PageIndexPolicy::Skip);
-    decoder.push_ranges(vec![0..file_len], vec![file_bytes.into()])?;
+    #[expect(lint)(clippy::single_range_in_vec_init)]
+    decoder.push_ranges(vec![0..file_len], vec![file_bytes])?;
     let metadata = match decoder.try_decode() {
         Ok(DecodeResult::Data(metadata)) => metadata, // decode successful
         other => {
