@@ -2706,7 +2706,7 @@ mod tests {
             .set_row_groups(row_group_meta_with_stats)
             .build();
 
-        // Base size without page index (Arc<dyn PageIndexProvider> is smaller than Option<PageIndex>)
+        // Base size without page index
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2766;
         #[cfg(feature = "encryption")]
