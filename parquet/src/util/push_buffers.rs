@@ -158,11 +158,7 @@ impl PushBuffers {
         buffer: Bytes,
     ) -> Result<BufferId, ParquetError> {
         if range.start > range.end {
-            return Err(general_err!(
-                "Invalid range {}..{}",
-                range.start,
-                range.end
-            ));
+            return Err(general_err!("Invalid range {}..{}", range.start, range.end));
         }
         let expected = range.end - range.start;
         if expected != buffer.len() as u64 {
@@ -205,11 +201,14 @@ impl PushBuffers {
             self.overlapping.insert(insertion_id);
         }
 
-        self.entries.entry(range.start).or_default().push(BufferValue {
-            end: range.end,
-            data: buffer,
-            insertion_id,
-        });
+        self.entries
+            .entry(range.start)
+            .or_default()
+            .push(BufferValue {
+                end: range.end,
+                data: buffer,
+                insertion_id,
+            });
         self.insertion_order
             .insert(insertion_id, (range.start, range.end));
         Ok(insertion_id)
@@ -231,8 +230,7 @@ impl PushBuffers {
                 return true;
             }
             if values.iter().any(|value| {
-                value.end > entry_start
-                    && !self.overlapping.contains(&value.insertion_id)
+                value.end > entry_start && !self.overlapping.contains(&value.insertion_id)
             }) {
                 return false;
             }
@@ -244,12 +242,11 @@ impl PushBuffers {
         for (&insertion_id, &(start, end)) in &self.insertion_order {
             if start <= range.start
                 && end >= range.end
-                && let Some(value) = self
-                    .entries
-                    .get(&start)
-                    .and_then(|values| values.iter().find(|value| {
-                        value.insertion_id == insertion_id
-                    }))
+                && let Some(value) = self.entries.get(&start).and_then(|values| {
+                    values
+                        .iter()
+                        .find(|value| value.insertion_id == insertion_id)
+                })
             {
                 return Some((start, value));
             }
@@ -271,9 +268,7 @@ impl PushBuffers {
                 return Some((start, value));
             }
 
-            return self
-                .find_first_matching(range)
-                .or(Some((start, value)));
+            return self.find_first_matching(range).or(Some((start, value)));
         }
 
         if values
@@ -316,9 +311,10 @@ impl PushBuffers {
                 continue;
             };
 
-            let single_entry = self.entries.get(&start).is_some_and(|values| {
-                values.len() == 1 && values[0].insertion_id == id
-            });
+            let single_entry = self
+                .entries
+                .get(&start)
+                .is_some_and(|values| values.len() == 1 && values[0].insertion_id == id);
             if single_entry {
                 self.entries.remove(&start);
             } else {
@@ -355,20 +351,14 @@ impl PushBuffers {
     #[cfg(feature = "arrow")]
     pub(crate) fn into_ranges(self) -> (u64, Vec<(Range<u64>, Bytes)>) {
         let Self {
-            file_len,
-            entries,
-            ..
+            file_len, entries, ..
         } = self;
         let mut ranges = entries
             .into_iter()
             .flat_map(|(start, values)| {
-                values.into_iter().map(move |value| {
-                    (
-                        value.insertion_id,
-                        start..value.end,
-                        value.data,
-                    )
-                })
+                values
+                    .into_iter()
+                    .map(move |value| (value.insertion_id, start..value.end, value.data))
             })
             .collect::<Vec<_>>();
         ranges.sort_unstable_by_key(|(insertion_id, _, _)| *insertion_id);
@@ -468,9 +458,7 @@ mod tests {
         let mut buffers = PushBuffers::new(100);
         let start = 20;
         let end = 10;
-        let err = buffers
-            .push_range(start..end, Bytes::new())
-            .unwrap_err();
+        let err = buffers.push_range(start..end, Bytes::new()).unwrap_err();
         assert_eq!(err.to_string(), "Parquet error: Invalid range 20..10");
     }
 
@@ -673,5 +661,4 @@ mod tests {
         buffers.remove_ids(&[first_id]);
         assert_eq!(buffers.buffered_bytes(), 0);
     }
-
 }
