@@ -238,8 +238,8 @@ fn main() -> Result<()> {
     let mut offidx = HashMap::new();
     colidx.insert(0usize, page_index.column_index(0, 0).unwrap().clone());
     offidx.insert(0usize, page_index.offset_index(0, 0).unwrap().clone());
-    offidx.insert(1usize, page_index.offset_index(0, 0).unwrap().clone());
-    offidx.insert(4usize, page_index.offset_index(0, 0).unwrap().clone());
+    offidx.insert(1usize, page_index.offset_index(0, 1).unwrap().clone());
+    offidx.insert(4usize, page_index.offset_index(0, 4).unwrap().clone());
     let mut colidxs = HashMap::new();
     colidxs.insert(0usize, colidx);
     let mut offidxs = HashMap::new();
