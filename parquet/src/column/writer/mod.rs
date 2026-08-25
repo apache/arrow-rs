@@ -245,6 +245,12 @@ impl ColumnCloseResult {
 struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
+    /// Encoded bytes that the data page byte limit does not apply to,
+    /// because they belong to the page's mandatory first value and cannot be
+    /// moved elsewhere. Zero unless that value alone exceeded the limit
+    /// *and* the encoding compresses against the preceding value; see
+    /// [`ColumnValueEncoder::compresses_against_previous_value`].
+    page_size_exemption: usize,
     num_page_nulls: u64,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
@@ -272,6 +278,7 @@ impl PageMetrics {
     fn new_page(&mut self) {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
+        self.page_size_exemption = 0;
         self.num_page_nulls = 0;
         self.repetition_level_histogram
             .as_mut()
@@ -1001,7 +1008,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
 
+        let page_was_empty = self.page_metrics.num_buffered_values == 0;
         self.page_metrics.num_buffered_values += num_levels as u32;
+
+        if page_was_empty && values_to_write == 1 {
+            self.set_page_size_exemption();
+        }
 
         if self.should_add_data_page() {
             self.add_data_page()?;
@@ -1030,6 +1042,43 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
+    /// Exempt a page's mandatory first value from the data page byte limit,
+    /// when that value alone already exceeds it.
+    ///
+    /// Parquet requires every data page to hold at least one value, so such a
+    /// value cannot be split out no matter how the limit is set. Counting it
+    /// against the limit makes the limit unsatisfiable, and
+    /// [`Self::should_add_data_page`] then cuts a page after every single
+    /// value.
+    ///
+    /// For `DELTA_BYTE_ARRAY` that costs more than the extra pages. A value is
+    /// stored as a suffix of the value before it, and a page boundary resets
+    /// what "the value before it" refers to, so one value per page means every
+    /// value is stored in full: a column of large values sharing long prefixes
+    /// writes exactly the bytes `PLAIN` would
+    /// ([#10489](https://github.com/apache/arrow-rs/issues/10489)).
+    ///
+    /// Only encodings that compress against the preceding value opt in, so
+    /// `PLAIN` and `DELTA_LENGTH_BYTE_ARRAY` keep their tighter one-value page
+    /// bound.
+    ///
+    /// Known limitation: the caller's trigger keys on a page-opening
+    /// mini-batch holding exactly one value. Nulls in a chunk make the
+    /// byte-budget chunker emit multi-level mini-batches, so on nullable
+    /// columns pages that open with a two-value mini-batch miss the
+    /// exemption and dedup is only partial; see
+    /// `test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup`.
+    #[cold]
+    fn set_page_size_exemption(&mut self) {
+        if !self.encoder.compresses_against_previous_value() {
+            return;
+        }
+        let size = self.encoder.estimated_data_page_size();
+        if size >= self.props.column_data_page_size_limit(self.descr.path()) {
+            self.page_metrics.page_size_exemption = size;
+        }
+    }
+
     /// Returns true if there is enough data for a data page, false otherwise.
     #[inline]
     fn should_add_data_page(&self) -> bool {
@@ -1042,7 +1091,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         self.page_metrics.num_buffered_rows as usize >= self.props.data_page_row_count_limit()
-            || self.encoder.estimated_data_page_size()
+            || self
+                .encoder
+                .estimated_data_page_size()
+                .saturating_sub(self.page_metrics.page_size_exemption)
                 >= self.props.column_data_page_size_limit(self.descr.path())
     }
 
@@ -2888,6 +2940,150 @@ mod tests {
                 pages.data_pages,
             );
         }
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_dedups_large_shared_prefix_values() {
+        // Regression for https://github.com/apache/arrow-rs/issues/10489.
+        // 16 identical 64 KiB values against a 16 KiB page limit: every value
+        // is over the limit on its own, and `DELTA_BYTE_ARRAY` should still
+        // dedup them down to about one value's worth of bytes in total.
+        let value_size = 64 * 1024; // 64 KiB per value, > the page limit
+        let page_byte_limit = 16 * 1024;
+        let num_rows = 16;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        // Identical values: one full value plus `num_rows - 1` zero-length
+        // suffixes is all this column should cost.
+        let data: Vec<_> = (0..num_rows)
+            .map(|_| ByteArray::from(vec![b'a'; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+
+        // Every value must still end up somewhere.
+        let total_values: u32 = pages.data_pages.iter().map(|(_, n)| n).sum();
+        assert_eq!(total_values as usize, num_rows);
+
+        // Before the fix this was `num_rows * value_size` — byte for byte
+        // what PLAIN produces, i.e. the encoding doing no work at all.
+        let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
+        assert!(
+            total_bytes < 2 * value_size,
+            "expected under 2x a single value ({}B) for {num_rows} identical \
+             values, got {total_bytes}B across pages {:?}",
+            2 * value_size,
+            pages.data_pages,
+        );
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_bounds_pages_without_shared_prefix() {
+        // Companion to the test above: same shape, but the values share no
+        // prefix, so there is nothing to dedup and pages must stay bounded
+        // by the value size. This is why the exemption covers one value
+        // rather than dropping the byte budget altogether.
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_rows = 16;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        // No two values share a prefix: they differ at the first byte.
+        let data: Vec<_> = (0..num_rows)
+            .map(|i| ByteArray::from(vec![i as u8; value_size]))
+            .collect();
+        let pages = write_and_collect_pages::<ByteArrayType>(props, 0, 0, &data, None, None);
+
+        let total_values: u32 = pages.data_pages.iter().map(|(_, n)| n).sum();
+        assert_eq!(total_values as usize, num_rows);
+
+        // Expect at most two values per page: the exempted first value plus
+        // one more that trips the budget.
+        let upper_bound = 2 * value_size + 64;
+        for (size, n_values) in &pages.data_pages {
+            assert!(
+                *size <= upper_bound,
+                "page size {size} exceeds two-value bound ({upper_bound}B); pages {:?}",
+                pages.data_pages,
+            );
+            assert!(
+                *n_values <= 2,
+                "page holds {n_values} values, expected at most 2; pages {:?}",
+                pages.data_pages,
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_writer_delta_byte_array_nullable_shared_prefix_partial_dedup() {
+        // Documents the *current* behavior of the first-value exemption on a
+        // nullable column; this pins a known limitation, not an ideal.
+        //
+        // The exemption fires when a page's first mini-batch contains exactly
+        // one value. For a non-nullable column the byte-budget chunker gives
+        // an over-limit value a one-level mini-batch, so that always holds.
+        // One null in the chunk changes the level:value ratio to 17:16, the
+        // chunker rounds up to two-level mini-batches, and a page whose first
+        // mini-batch carries two values misses the exemption: it is cut after
+        // those two values, and its first value is stored in full.
+        //
+        // The one mini-batch that pairs the null with a value has a single
+        // value, so the page it opens does get the exemption and accumulates
+        // every remaining suffix. The result for 16 identical values with a
+        // null at index 8 is four two-value pages (each storing one value in
+        // full), then one exempt page holding the rest:
+        //
+        //   values per page: [2, 2, 2, 2, 9]  (counts include the null level)
+        //   total bytes:     ~5 full values, vs ~1 ideally and 16 for PLAIN
+        //
+        // If the exemption trigger is ever keyed on values written to the
+        // page (0 -> 1) instead of mini-batch shape, this test should fail
+        // with fewer, larger pages — update it to pin the improved layout.
+        let value_size = 64 * 1024;
+        let page_byte_limit = 16 * 1024;
+        let num_values = 16;
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+            .set_data_page_size_limit(page_byte_limit)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let data: Vec<_> = (0..num_values)
+            .map(|_| ByteArray::from(vec![b'a'; value_size]))
+            .collect();
+        // 17 levels: a null at index 8, values everywhere else.
+        let def_levels: Vec<i16> = (0..num_values as i16 + 1)
+            .map(|i| i16::from(i != 8))
+            .collect();
+        let pages =
+            write_and_collect_pages::<ByteArrayType>(props, 1, 0, &data, Some(&def_levels), None);
+
+        let per_page_values: Vec<u32> = pages.data_pages.iter().map(|(_, n)| *n).collect();
+        assert_eq!(per_page_values, vec![2, 2, 2, 2, 9]);
+
+        let total_bytes: usize = pages.data_pages.iter().map(|(size, _)| size).sum();
+        assert!(
+            total_bytes > 4 * value_size && total_bytes < 6 * value_size,
+            "expected ~5 full values' worth of bytes (partial dedup), \
+             got {total_bytes}B across pages {:?}",
+            pages.data_pages,
+        );
     }
 
     #[test]
