@@ -167,6 +167,7 @@ impl BooleanBuilder {
             .add_buffer(self.values_builder.finish().into_inner())
             .nulls(null_bit_buffer);
 
+        // SAFETY: builder is constructed from valid boolean bitmap and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }
@@ -181,6 +182,7 @@ impl BooleanBuilder {
             .add_buffer(value_buffer)
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid boolean bitmap and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }

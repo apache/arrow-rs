@@ -135,6 +135,7 @@ impl FixedSizeBinaryBuilder {
             .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(self.null_buffer_builder.finish())
             .len(array_length);
+        // SAFETY: builder is constructed from fixed-size binary values and null buffer with lengths guaranteed by the builder
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
@@ -147,6 +148,7 @@ impl FixedSizeBinaryBuilder {
             .add_buffer(values_buffer)
             .nulls(self.null_buffer_builder.finish_cloned())
             .len(array_length);
+        // SAFETY: builder is constructed from fixed-size binary values and null buffer with lengths guaranteed by the builder
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
