@@ -283,7 +283,7 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.column_index_policy = page_index_policy.clone();
+        self.column_index_policy = page_index_policy;
         self.offset_index_policy = page_index_policy;
         self
     }
