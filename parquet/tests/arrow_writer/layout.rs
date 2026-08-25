@@ -26,8 +26,8 @@ use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{Encoding, PageType};
-use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{PageIndexPolicy, RowGroupPageIndex};
 use parquet::file::properties::{EnabledStatistics, ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
 use parquet::schema::types::ColumnPath;
@@ -86,38 +86,27 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     for rg_idx in 0..meta.num_row_groups() {
         let row_group = meta.row_group(rg_idx);
         let row_group_layout = &layout.row_groups[rg_idx];
-        let offset_index = meta
-            .page_index()
-            .unwrap()
-            .offset_indexes_for_rowgroup(rg_idx)
-            .unwrap();
+        let rg_page_index = RowGroupPageIndex::new(rg_idx, meta.page_index().cloned());
 
         // Check against offset index
-        assert_eq!(offset_index.len(), row_group_layout.columns.len());
-
-        for (column_index, column_layout) in offset_index.iter().zip(&row_group_layout.columns) {
+        for (col_idx, column_layout) in row_group_layout.columns.iter().enumerate() {
+            let page_locations = rg_page_index
+                .page_locations(col_idx)
+                .expect("page locations missing");
             assert_eq!(
-                column_index.as_ref().unwrap().page_locations.len(),
+                page_locations.len(),
                 column_layout.pages.len(),
                 "index page count mismatch"
             );
-            for (idx, (page, page_layout)) in column_index
-                .as_ref()
-                .unwrap()
-                .page_locations
-                .iter()
-                .zip(&column_layout.pages)
-                .enumerate()
+            for (idx, (page, page_layout)) in
+                page_locations.iter().zip(&column_layout.pages).enumerate()
             {
                 assert_eq!(
                     page.compressed_page_size as usize,
                     page_layout.compressed_size + page_layout.page_header_size,
                     "index page {idx} size mismatch"
                 );
-                let next_first_row_index = column_index
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
+                let next_first_row_index = page_locations
                     .get(idx + 1)
                     .map(|x| x.first_row_index)
                     .unwrap_or_else(|| row_group.num_rows());

@@ -31,8 +31,7 @@ use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::metadata::{ParquetMetaData, RowGroupPageIndex};
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -628,6 +627,7 @@ impl RowGroupReaderBuilder {
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
+                    self.metadata.file_metadata().schema_descr().num_columns(),
                     row_count,
                 );
 
@@ -735,6 +735,7 @@ impl RowGroupReaderBuilder {
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
+                    self.metadata.file_metadata().schema_descr().num_columns(),
                     row_count,
                 );
 
@@ -851,14 +852,17 @@ impl RowGroupReaderBuilder {
     }
 
     /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(
-        &self,
-        row_group_idx: usize,
-    ) -> Option<&[Option<OffsetIndexMetaData>]> {
-        self.metadata
+    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<RowGroupPageIndex> {
+        if self
+            .metadata
             .page_index()
-            .map(|pi| pi.offset_indexes_for_rowgroup(row_group_idx))
-            .unwrap_or(None)
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            let page_index = self.metadata.page_index().cloned();
+            Some(RowGroupPageIndex::new(row_group_idx, page_index))
+        } else {
+            None
+        }
     }
 }
 
@@ -885,7 +889,8 @@ impl RowGroupReaderBuilder {
 fn prepare_selection_for_page_skipping(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[Option<OffsetIndexMetaData>]>,
+    page_index: Option<RowGroupPageIndex>,
+    num_columns: usize,
     total_rows: usize,
 ) -> ReadPlanBuilder {
     match plan_builder.resolve_selection_strategy() {
@@ -893,7 +898,8 @@ fn prepare_selection_for_page_skipping(
             let loaded = loaded_row_ranges_for_projection(
                 plan_builder.selection(),
                 projection_mask,
-                offset_index,
+                page_index,
+                num_columns,
                 total_rows,
             );
             plan_builder
@@ -910,17 +916,17 @@ fn prepare_selection_for_page_skipping(
 fn loaded_row_ranges_for_projection(
     selection: Option<&RowSelection>,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[Option<OffsetIndexMetaData>]>,
+    page_index: Option<RowGroupPageIndex>,
+    num_columns: usize,
     total_rows: usize,
 ) -> Option<LoadedRowRanges> {
     let selection = selection?;
-    let columns = offset_index?;
+    let page_index = page_index?;
 
-    columns
-        .iter()
-        .enumerate()
-        .filter_map(|(leaf_idx, column)| {
-            let column_metadata = column.as_ref()?;
+    (0..num_columns)
+        .into_iter()
+        .filter_map(|leaf_idx| {
+            let column_metadata = page_index.offset_index(leaf_idx)?;
             let pages = column_metadata.page_locations();
             (projection_mask.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
                 RowSelection::from_consecutive_ranges(
@@ -940,7 +946,8 @@ fn loaded_row_ranges_for_projection(
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
-    use crate::file::page_index::offset_index::PageLocation;
+    use crate::file::metadata::{PageIndexBuilder, PageIndexPolicy, PageIndexProvider};
+    use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
@@ -950,21 +957,28 @@ mod tests {
 
     #[test]
     fn test_loaded_row_ranges_intersect_column_page_boundaries() {
-        let column = |first_rows: &[i64]| {
-            Some(OffsetIndexMetaData {
-                page_locations: first_rows
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, first_row_index)| PageLocation {
-                        offset: (idx * 10) as i64,
-                        compressed_page_size: 10,
-                        first_row_index: *first_row_index,
-                    })
-                    .collect(),
-                unencoded_byte_array_data_bytes: None,
-            })
+        let mut page_index = PageIndexBuilder::new_with_policy(
+            1,
+            2,
+            &PageIndexPolicy::Skip,
+            &PageIndexPolicy::Required,
+        );
+        let column = |first_rows: &[i64]| OffsetIndexMetaData {
+            page_locations: first_rows
+                .iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index: *first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
         };
-        let columns = vec![column(&[0, 4, 8]), column(&[0, 6, 10])];
+        page_index.put_offset_index(column(&[0, 4, 8]), 0, 0);
+        page_index.put_offset_index(column(&[0, 6, 10]), 0, 1);
+        let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
+        let page_index = RowGroupPageIndex::new(0, page_index);
         let selection = RowSelection::from(vec![
             RowSelector::skip(1),
             RowSelector::select(1),
@@ -975,7 +989,8 @@ mod tests {
         let loaded = loaded_row_ranges_for_projection(
             Some(&selection),
             &ProjectionMask::all(),
-            Some(&columns),
+            Some(page_index),
+            2,
             12,
         )
         .unwrap();
@@ -985,18 +1000,30 @@ mod tests {
 
     #[test]
     fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
-        let columns = vec![Some(OffsetIndexMetaData {
-            page_locations: [0, 2, 4, 6, 8, 10]
-                .into_iter()
-                .enumerate()
-                .map(|(idx, first_row_index)| PageLocation {
-                    offset: (idx * 10) as i64,
-                    compressed_page_size: 10,
-                    first_row_index,
-                })
-                .collect(),
-            unencoded_byte_array_data_bytes: None,
-        })];
+        let mut page_index = PageIndexBuilder::new_with_policy(
+            1,
+            1,
+            &PageIndexPolicy::Skip,
+            &PageIndexPolicy::Required,
+        );
+        page_index.put_offset_index(
+            OffsetIndexMetaData {
+                page_locations: [0, 2, 4, 6, 8, 10]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, first_row_index)| PageLocation {
+                        offset: (idx * 10) as i64,
+                        compressed_page_size: 10,
+                        first_row_index,
+                    })
+                    .collect(),
+                unencoded_byte_array_data_bytes: None,
+            },
+            0,
+            0,
+        );
+        let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
+        let page_index = RowGroupPageIndex::new(0, page_index);
         let selection = RowSelection::from(vec![
             RowSelector::select(1),
             RowSelector::skip(10),
@@ -1009,7 +1036,8 @@ mod tests {
         let prepared = prepare_selection_for_page_skipping(
             plan_builder,
             &ProjectionMask::all(),
-            Some(&columns),
+            Some(page_index),
+            1,
             12,
         );
 

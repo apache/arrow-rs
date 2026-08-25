@@ -21,8 +21,7 @@ use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::metadata::{ParquetMetaData, RowGroupPageIndex};
 use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -92,13 +91,25 @@ impl DataRequest {
             page_start_offsets,
         } = self;
 
+        let page_index = if parquet_metadata
+            .page_index()
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            Some(RowGroupPageIndex::new(
+                row_group_idx,
+                parquet_metadata.page_index().cloned(),
+            ))
+        } else {
+            None
+        };
+
         // Create an InMemoryRowGroup to hold the column chunks, this is a
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let mut in_memory_row_group = InMemoryRowGroup {
             row_count,
             column_chunks,
-            offset_index: get_offset_index(parquet_metadata, row_group_idx),
+            page_index,
             row_group_idx,
             metadata: parquet_metadata,
         };
@@ -196,13 +207,25 @@ impl<'a> DataRequestBuilder<'a> {
         let column_chunks =
             column_chunks.unwrap_or_else(|| vec![None; row_group_meta_data.columns().len()]);
 
+        let page_index = if parquet_metadata
+            .page_index()
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            Some(RowGroupPageIndex::new(
+                row_group_idx,
+                parquet_metadata.page_index().cloned(),
+            ))
+        } else {
+            None
+        };
+
         // Create an InMemoryRowGroup to hold the column chunks, this is a
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let row_group = InMemoryRowGroup {
             row_count,
             column_chunks,
-            offset_index: get_offset_index(parquet_metadata, row_group_idx),
+            page_index,
             row_group_idx,
             metadata: parquet_metadata,
         };
@@ -219,14 +242,4 @@ impl<'a> DataRequestBuilder<'a> {
             page_start_offsets,
         }
     }
-}
-
-fn get_offset_index(
-    parquet_metadata: &ParquetMetaData,
-    row_group_idx: usize,
-) -> Option<&[Option<OffsetIndexMetaData>]> {
-    parquet_metadata
-        .page_index()
-        .map(|pi| pi.offset_indexes_for_rowgroup(row_group_idx))
-        .unwrap_or(None)
 }

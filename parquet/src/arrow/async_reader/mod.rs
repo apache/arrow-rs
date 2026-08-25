@@ -1127,17 +1127,16 @@ mod tests {
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
         // Check offset indexes are present for all columns of all row groups
-        let page_index = metadata_with_index.page_index().unwrap();
+        let page_index = metadata_with_index
+            .page_index()
+            .expect("page index should be present");
+        assert!(page_index.is_complete());
         let num_rowgroups = metadata_with_index.num_row_groups();
         let num_columns = metadata_with_index
             .file_metadata()
             .schema_descr()
             .num_columns();
         for rgidx in 0..num_rowgroups {
-            let column_index = page_index.column_indexes_for_rowgroup(rgidx);
-            let offset_index = page_index.offset_indexes_for_rowgroup(rgidx);
-            assert!(column_index.is_some_and(|ci| ci.len() == num_columns));
-            assert!(offset_index.is_some_and(|oi| oi.len() == num_columns));
             // some column indexes are not defined, but all offset indexes should be
             for colidx in 0..num_columns {
                 assert!(page_index.offset_index(rgidx, colidx).is_some());

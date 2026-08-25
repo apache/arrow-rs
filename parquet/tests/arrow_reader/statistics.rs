@@ -260,7 +260,8 @@ impl Test<'_> {
             let page_index = reader
                 .metadata()
                 .page_index()
-                .expect("File should have page indices");
+                .expect("File should have page indices")
+                .as_ref();
 
             let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
@@ -2943,7 +2944,8 @@ mod test {
         let row_group_indices = [0];
         let page_index = metadata
             .page_index()
-            .expect("file should have page indices");
+            .expect("file should have page indices")
+            .as_ref();
 
         let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
             unreachable!("c1 must be a struct field")

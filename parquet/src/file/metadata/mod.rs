@@ -271,20 +271,6 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
         self.has_column_indexes() && self.has_offset_indexes()
     }
 
-    /// Returns column indexes for all columns in the specified row group
-    ///
-    /// Returns `None` if:
-    /// - Column indexes were not loaded or are not available
-    /// - The row group index is out of bounds
-    ///
-    /// Returns `Some(&[Option<ColumnIndexMetaData>])` where:
-    /// - The slice length equals the number of columns in the row group
-    /// - Each element is `Some` if that column has statistics, `None` otherwise
-    fn column_indexes_for_rowgroup(
-        &self,
-        row_group_idx: usize,
-    ) -> Option<&[Option<ColumnIndexMetaData>]>;
-
     /// Returns the column index for a specific row group and column
     ///
     /// This is the primary method for accessing page-level min/max statistics
@@ -295,20 +281,6 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     /// * `None` - Index unavailable (not loaded, row group/column out of bounds, or no statistics)
     fn column_index(&self, row_group_idx: usize, column_idx: usize)
     -> Option<&ColumnIndexMetaData>;
-
-    /// Returns offset indexes for all columns in the specified row group
-    ///
-    /// Returns `None` if:
-    /// - Offset indexes were not loaded or are not available
-    /// - The row group index is out of bounds
-    ///
-    /// Returns `Some(&[Option<OffsetIndexMetaData>])` where:
-    /// - The slice length equals the number of columns in the row group
-    /// - Each element is `Some` if that column has location metadata, `None` otherwise
-    fn offset_indexes_for_rowgroup(
-        &self,
-        row_group_idx: usize,
-    ) -> Option<&[Option<OffsetIndexMetaData>]>;
 
     /// Returns the offset index for a specific row group and column
     ///
@@ -364,6 +336,136 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     ///
     /// This allows downcasting to concrete types when needed (e.g., for serialization)
     fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// Provides convenient access to page index data for a specific row group
+///
+/// This struct wraps a [`PageIndexProvider`] and automatically applies the row group
+/// index, simplifying access to column and offset indexes for a single row group.
+/// It is primarily used by readers to avoid repeatedly passing the row group index
+/// when accessing page-level metadata.
+///
+/// # Example
+///
+/// ```
+/// use parquet::file::metadata::ParquetMetaData;
+/// # use parquet::errors::Result;
+///
+/// fn process_row_group_pages(metadata: &ParquetMetaData, row_group_idx: usize) -> Result<()> {
+///     if let Some(page_index) = metadata.page_index() {
+///         // Create a row-group-specific view
+///         let rg_page_index = parquet::file::metadata::RowGroupPageIndex::new(
+///             row_group_idx,
+///             metadata.page_index().cloned(),
+///         );
+///
+///         // Now access column indexes without specifying row_group_idx each time
+///         for col_idx in 0..metadata.file_metadata().schema_descr().num_columns() {
+///             if let Some(col_idx_data) = rg_page_index.column_index(col_idx) {
+///                 println!("Column {} has {} pages", col_idx, col_idx_data.num_pages());
+///             }
+///         }
+///     }
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug)]
+pub struct RowGroupPageIndex {
+    row_group_idx: usize,
+    page_index: Option<Arc<dyn PageIndexProvider>>,
+}
+
+impl RowGroupPageIndex {
+    /// Creates a new [`RowGroupPageIndex`] for the specified row group
+    ///
+    /// # Arguments
+    ///
+    /// * `row_group_idx` - The index of the row group within the file
+    /// * `page_index` - Optional page index provider containing the index data
+    pub fn new(row_group_idx: usize, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
+        Self {
+            row_group_idx,
+            page_index,
+        }
+    }
+
+    /// Returns the column index for a specific column in this row group
+    ///
+    /// This is a convenience method that wraps [`PageIndexProvider::column_index`],
+    /// automatically applying the row group index stored in this struct.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&ColumnIndexMetaData)` - Column index is available with page-level statistics
+    /// * `None` - Index unavailable (no page index, column out of bounds, or no statistics)
+    ///
+    /// # See Also
+    ///
+    /// * [`PageIndexProvider::column_index`] for more details on column indexes
+    pub fn column_index(&self, column_idx: usize) -> Option<&ColumnIndexMetaData> {
+        self.page_index
+            .as_ref()?
+            .column_index(self.row_group_idx, column_idx)
+    }
+
+    /// Returns the offset index for a specific column in this row group
+    ///
+    /// This is a convenience method that wraps [`PageIndexProvider::offset_index`],
+    /// automatically applying the row group index stored in this struct.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&OffsetIndexMetaData)` - Offset index is available with page locations
+    /// * `None` - Index unavailable (no page index, column out of bounds)
+    ///
+    /// # See Also
+    ///
+    /// * [`PageIndexProvider::offset_index`] for more details on offset indexes
+    pub fn offset_index(&self, column_idx: usize) -> Option<&OffsetIndexMetaData> {
+        self.page_index
+            .as_ref()?
+            .offset_index(self.row_group_idx, column_idx)
+    }
+
+    /// Returns the physical locations of all data pages for a specific column in this row group
+    ///
+    /// This is a convenience method that wraps [`PageIndexProvider::page_locations`],
+    /// automatically applying the row group index stored in this struct.
+    ///
+    /// This enables direct I/O to specific pages without reading the entire column chunk.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&Vec<PageLocation>)` - Vector of page locations if offset index exists
+    /// * `None` - Offset index not available for this column
+    ///
+    /// # See Also
+    ///
+    /// * [`PageIndexProvider::page_locations`] for more details on page locations
+    pub fn page_locations(&self, column_idx: usize) -> Option<&Vec<PageLocation>> {
+        Some(self.offset_index(column_idx)?.page_locations())
+    }
+
+    /// Returns the expected number of data pages for a specific column in this row group
+    ///
+    /// This count includes only data pages, not dictionary pages or other metadata pages.
+    ///
+    /// This is a convenience method that wraps [`PageIndexProvider::num_data_pages`],
+    /// automatically applying the row group index stored in this struct.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(usize)` - Number of data pages if any index is available
+    /// * `None` - No index information available for this column
+    ///
+    /// # See Also
+    ///
+    /// * [`PageIndexProvider::num_data_pages`] for more details
+    pub fn num_data_pages(&self, column_idx: usize) -> Option<usize> {
+        self.page_index
+            .as_ref()?
+            .num_data_pages(self.row_group_idx, column_idx)
+    }
 }
 
 /// Struct to encapsulate the Parquet [Page Index]
@@ -488,16 +590,6 @@ impl PageIndexProvider for PageIndex {
         self.column_indexes.is_some()
     }
 
-    fn column_indexes_for_rowgroup(
-        &self,
-        row_group_idx: usize,
-    ) -> Option<&[Option<ColumnIndexMetaData>]> {
-        match self.column_indexes.as_ref() {
-            None => None,
-            Some(indexes) => indexes.get(row_group_idx).map(|ci| ci.as_slice()),
-        }
-    }
-
     fn column_index(
         &self,
         row_group_idx: usize,
@@ -505,16 +597,6 @@ impl PageIndexProvider for PageIndex {
     ) -> Option<&ColumnIndexMetaData> {
         let rg = self.column_indexes.as_ref()?.get(row_group_idx)?;
         rg.get(column_idx)?.as_ref()
-    }
-
-    fn offset_indexes_for_rowgroup(
-        &self,
-        row_group_idx: usize,
-    ) -> Option<&[Option<OffsetIndexMetaData>]> {
-        match self.offset_indexes.as_ref() {
-            None => None,
-            Some(indexes) => indexes.get(row_group_idx).map(|oi| oi.as_slice()),
-        }
     }
 
     fn offset_index(
@@ -784,8 +866,8 @@ impl ParquetMetaData {
     /// [ArrowReaderOptions::with_page_index] was set to false.
     ///
     /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
-    pub fn page_index(&self) -> Option<&dyn PageIndexProvider> {
-        self.page_index.as_ref().map(|arc| arc.as_ref())
+    pub fn page_index(&self) -> Option<&Arc<dyn PageIndexProvider>> {
+        self.page_index.as_ref()
     }
 
     /// Estimate of the bytes allocated to store `ParquetMetadata`

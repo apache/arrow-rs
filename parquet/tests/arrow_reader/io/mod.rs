@@ -263,7 +263,8 @@ impl TestParquetFile {
 
         let page_index = parquet_metadata
             .page_index()
-            .expect("Parquet metadata should have a page index");
+            .expect("Parquet metadata should have a page index")
+            .as_ref();
 
         let row_groups = TestRowGroups::new(&parquet_metadata, page_index);
 
