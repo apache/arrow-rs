@@ -1217,14 +1217,14 @@ mod test {
                 true,
             ),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                Arc::new(Field::new("run_ends", DataType::UInt32, true)),
                 Arc::new(Field::new("values", DataType::Int32, true)),
             ),
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "nested_run_end_encoded",
+                    "run_ends",
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("run_ends", DataType::UInt32, true)),
                         Arc::new(Field::new("values", DataType::Int32, true)),
                     ),
                     true,
