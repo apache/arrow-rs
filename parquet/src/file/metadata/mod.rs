@@ -153,6 +153,96 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// - Range scans reading only pages containing values in the query range
 /// - Efficient cross-column filtering by skipping corresponding row ranges
 ///
+/// # Structure
+///
+/// Within a Parquet file, both indexes are organized as a two-level structure, with
+/// indexes arranged first by row group, and then column. The [`ColumnChunkMetaData`]
+/// contains pointers to the indexes for a given column chunk, so they may be
+/// populated piecemeal. This struct allows access either by row group index
+/// ([Self::column_indexes_for_rowgroup], [Self::offset_indexes_for_rowgroup]) or
+/// individual access by row group index and column number ([Self::column_index],
+/// [Self::offset_index]).
+///
+/// Each entry is `Option<T>` because:
+/// - The entire page index might be absent (old files, disabled during write)
+/// - Individual columns might lack indexes (unsupported types, statistics disabled)
+///
+/// # Example: Checking if Page Index is Available
+///
+/// ```
+/// use parquet::file::metadata::ParquetMetaData;
+/// # use parquet::errors::Result;
+///
+/// fn check_page_index_availability(metadata: &ParquetMetaData) -> Result<()> {
+///     if let Some(page_index) = metadata.page_index() {
+///         println!("Page index present:");
+///         println!("  Has offset indexes: {}", page_index.has_offset_indexes());
+///         println!("  Has column indexes: {}", page_index.has_column_indexes());
+///
+///         // Check availability for first row group, first column
+///         if let Some(col_idx) = page_index.column_index(0, 0) {
+///             println!("  Column index found for row group 0, column 0");
+///             println!("    Number of pages: {}", col_idx.num_pages());
+///         }
+///
+///         if let Some(offset_idx) = page_index.offset_index(0, 0) {
+///             println!("  Offset index found for row group 0, column 0");
+///             println!("    Number of pages: {}", offset_idx.page_locations().len());
+///         }
+///     } else {
+///         println!("No page index available");
+///     }
+///     Ok(())
+/// }
+/// ```
+///
+/// # Example: Using Page Index for Predicate Pushdown
+///
+/// ```
+/// use parquet::file::metadata::ParquetMetaData;
+/// use parquet::file::page_index::column_index::ColumnIndexMetaData;
+/// # use parquet::errors::Result;
+///
+/// /// Identifies which pages in a column might contain values >= min_value
+/// fn find_relevant_pages(
+///     metadata: &ParquetMetaData,
+///     row_group_idx: usize,
+///     column_idx: usize,
+///     min_value: i32,
+/// ) -> Vec<usize> {
+///     let mut relevant_pages = Vec::new();
+///
+///     let Some(page_index) = metadata.page_index() else {
+///         // No page index - must read all pages
+///         return relevant_pages;
+///     };
+///
+///     let Some(column_index) = page_index.column_index(row_group_idx, column_idx) else {
+///         // No column index - must read all pages
+///         return relevant_pages;
+///     };
+///
+///     // Check each page's statistics
+///     match column_index {
+///         ColumnIndexMetaData::INT32(index) => {
+///             for (page_num, max_value) in index.max_values_iter().enumerate() {
+///                 // Page might contain matching rows if its max >= our min
+///                 if let Some(max) = max_value {
+///                     if *max >= min_value {
+///                         relevant_pages.push(page_num);
+///                     }
+///                 }
+///             }
+///         }
+///         _ => {
+///             // Wrong column type - read all pages
+///         }
+///     }
+///
+///     relevant_pages
+/// }
+/// ```
+///
 /// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
@@ -276,114 +366,12 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// Encapsulates the Parquet [Page Index] for efficient page-level data skipping
+/// Struct to encapsulate the Parquet [Page Index]
 ///
-/// The Page Index is optional metadata that enables query engines to skip irrelevant
-/// data pages during scans, significantly improving I/O efficiency. It consists of two
-/// complementary structures:
-///
-/// * **[`ColumnIndex`]**: Per-page min/max value boundaries that enable predicate-based
-///   page filtering. Allows determining which pages might contain rows matching a query
-///   predicate without reading the actual data pages.
-///
-/// * **[`OffsetIndex`]**: Physical locations and sizes of data pages, plus the first row
-///   index of each page. Used to locate and read only the pages identified as relevant
-///   by the ColumnIndex.
-///
-/// Together, these indexes enable:
-/// - Single-row lookups reading only one data page per column (on sorted columns)
-/// - Range scans reading only pages containing values in the query range
-/// - Efficient cross-column filtering by skipping corresponding row ranges
-///
-/// # Structure
-///
-/// Within a Parquet file, both indexes are organized as a two-level structure, with
-/// indexes arranged first by row group, and then column. The [`ColumnChunkMetaData`]
-/// contains pointers to the indexes for a given column chunk, so they may be
-/// populated piecemeal. This struct allows access either by row group index
-/// ([Self::column_indexes_for_rowgroup], [Self::offset_indexes_for_rowgroup]) or
-/// individual access by row group index and column number ([Self::column_index],
-/// [Self::offset_index]).
-///
-/// Each entry is `Option<T>` because:
-/// - The entire page index might be absent (old files, disabled during write)
-/// - Individual columns might lack indexes (unsupported types, statistics disabled)
-///
-/// # Example: Checking if Page Index is Available
-///
-/// ```
-/// use parquet::file::metadata::ParquetMetaData;
-/// # use parquet::errors::Result;
-///
-/// fn check_page_index_availability(metadata: &ParquetMetaData) -> Result<()> {
-///     if let Some(page_index) = metadata.page_index() {
-///         println!("Page index present:");
-///         println!("  Has offset indexes: {}", page_index.has_offset_indexes());
-///         println!("  Has column indexes: {}", page_index.has_column_indexes());
-///
-///         // Check availability for first row group, first column
-///         if let Some(col_idx) = page_index.column_index(0, 0) {
-///             println!("  Column index found for row group 0, column 0");
-///             println!("    Number of pages: {}", col_idx.num_pages());
-///         }
-///
-///         if let Some(offset_idx) = page_index.offset_index(0, 0) {
-///             println!("  Offset index found for row group 0, column 0");
-///             println!("    Number of pages: {}", offset_idx.page_locations().len());
-///         }
-///     } else {
-///         println!("No page index available");
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// # Example: Using Page Index for Predicate Pushdown
-///
-/// ```
-/// use parquet::file::metadata::ParquetMetaData;
-/// use parquet::file::page_index::column_index::ColumnIndexMetaData;
-/// # use parquet::errors::Result;
-///
-/// /// Identifies which pages in a column might contain values >= min_value
-/// fn find_relevant_pages(
-///     metadata: &ParquetMetaData,
-///     row_group_idx: usize,
-///     column_idx: usize,
-///     min_value: i32,
-/// ) -> Vec<usize> {
-///     let mut relevant_pages = Vec::new();
-///
-///     let Some(page_index) = metadata.page_index() else {
-///         // No page index - must read all pages
-///         return relevant_pages;
-///     };
-///
-///     let Some(column_index) = page_index.column_index(row_group_idx, column_idx) else {
-///         // No column index - must read all pages
-///         return relevant_pages;
-///     };
-///
-///     // Check each page's statistics
-///     match column_index {
-///         ColumnIndexMetaData::INT32(index) => {
-///             for (page_num, max_value) in index.max_values_iter().enumerate() {
-///                 // Page might contain matching rows if its max >= our min
-///                 if let Some(max) = max_value {
-///                     if *max >= min_value {
-///                         relevant_pages.push(page_num);
-///                     }
-///                 }
-///             }
-///         }
-///         _ => {
-///             // Wrong column type - read all pages
-///         }
-///     }
-///
-///     relevant_pages
-/// }
-/// ```
+/// This struct provides a dense representation of the Page Index. It is
+/// used internally by this crate when assembling and writing the Page
+/// Index. It is also the default implmentation of the [`PageIndexProvider`]
+/// contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
@@ -717,7 +705,7 @@ impl From<PageIndex> for PageIndexBuilder {
 /// The fields of this structure are:
 /// * [`FileMetaData`]: Information about the overall file (such as the schema) (See [`Self::file_metadata`])
 /// * [`RowGroupMetaData`]: Information about each Row Group (see [`Self::row_groups`])
-/// * [`PageIndexProvider`]: Optional "Page Index" structures (see [`Self::page_index`])
+/// * [`PageIndexProvider`]: Optional Page Index (see [`Self::page_index`])
 ///
 /// This structure is read by the various readers in this crate or can be read
 /// directly from a file using the [`ParquetMetaDataReader`] struct.
