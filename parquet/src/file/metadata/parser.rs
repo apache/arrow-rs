@@ -23,7 +23,8 @@
 use crate::errors::ParquetError;
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, PageIndexBuilder, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ColumnChunkMetaData, PageIndexBuilder, PageIndexPolicy, PageIndexProvider, ParquetMetaData,
+    ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;

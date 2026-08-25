@@ -871,7 +871,6 @@ fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<Par
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::metadata::PageIndex;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
     use std::ops::Range;
@@ -921,19 +920,19 @@ mod tests {
         let bytes = bytes_for_range(0..len);
         reader.try_parse(&bytes).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // read more than enough of file
         let bytes = bytes_for_range(320000..len);
         reader.try_parse_sized(&bytes, len).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // exactly enough
         let bytes = bytes_for_range(323583..len);
         reader.try_parse_sized(&bytes, len).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // not enough for page index
         let bytes = bytes_for_range(323584..len);
@@ -944,7 +943,7 @@ mod tests {
                 let bytes = bytes_for_range(len - needed as u64..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 let metadata = reader.finish().unwrap();
-                assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+                assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
             }
             _ => panic!("unexpected error"),
         }
@@ -967,7 +966,7 @@ mod tests {
             }
         }
         let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // not enough for page index but lie about file size
         let bytes = bytes_for_range(323584..len);
@@ -1026,7 +1025,7 @@ mod tests {
         // read entire file
         reader.try_parse(&file).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         let page_index = metadata.page_index().unwrap();
         // should only have column index for column 0
@@ -1066,7 +1065,6 @@ mod async_tests {
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
-    use crate::file::metadata::PageIndex;
     use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
@@ -1333,7 +1331,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 3);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch just footer exactly
         fetch_count.store(0, Ordering::SeqCst);
@@ -1344,7 +1342,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch more than footer but not enough
         fetch_count.store(0, Ordering::SeqCst);
@@ -1355,7 +1353,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch exactly enough
         fetch_count.store(0, Ordering::SeqCst);
@@ -1367,7 +1365,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch more than enough but less than the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1379,7 +1377,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1391,7 +1389,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         // Prefetch more than the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1403,7 +1401,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     fn write_parquet_file(offset_index_disabled: bool) -> Result<NamedTempFile> {

@@ -56,7 +56,7 @@ use parquet::file::FOOTER_SIZE;
 #[cfg(feature = "async")]
 use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::file::metadata::{FooterTail, ParquetMetaData};
-use parquet::file::metadata::{PageIndex, PageIndexPolicy};
+use parquet::file::metadata::{PageIndexPolicy, PageIndexProvider};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;
@@ -342,7 +342,7 @@ struct TestRowGroups {
 }
 
 impl TestRowGroups {
-    fn new(parquet_metadata: &ParquetMetaData, page_index: &PageIndex) -> Self {
+    fn new(parquet_metadata: &ParquetMetaData, page_index: &dyn PageIndexProvider) -> Self {
         let row_groups = parquet_metadata
             .row_groups()
             .iter()

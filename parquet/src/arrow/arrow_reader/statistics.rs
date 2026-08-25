@@ -23,7 +23,7 @@ use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
 use crate::basic::Type as PhysicalType;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndex, RowGroupMetaData};
+use crate::file::metadata::{PageIndexProvider, RowGroupMetaData};
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
@@ -1891,7 +1891,7 @@ impl<'a> StatisticsConverter<'a> {
     /// * the stored statistic value can not be converted to the requested type
     pub fn data_page_mins<I>(
         &self,
-        page_index: &PageIndex,
+        page_index: &dyn PageIndexProvider,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1921,7 +1921,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_maxes<I>(
         &self,
-        page_index: &PageIndex,
+        page_index: &dyn PageIndexProvider,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1951,7 +1951,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
         &self,
-        page_index: &PageIndex,
+        page_index: &dyn PageIndexProvider,
         row_group_indices: I,
     ) -> Result<UInt64Array>
     where
@@ -1979,7 +1979,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_nan_counts<I>(
         &self,
-        page_index: &PageIndex,
+        page_index: &dyn PageIndexProvider,
         row_group_indices: I,
     ) -> Result<UInt64Array>
     where
@@ -2021,7 +2021,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_row_counts<I>(
         &self,
-        page_index: &PageIndex,
+        page_index: &dyn PageIndexProvider,
         row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
     ) -> Result<Option<UInt64Array>>

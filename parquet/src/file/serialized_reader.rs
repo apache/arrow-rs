@@ -2842,7 +2842,7 @@ mod tests {
         assert_eq!(metadata.row_group(0).ordinal(), Some(2));
 
         // check we only got the relevant page indexes
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
         let page_index = metadata.page_index().unwrap();
 
         let col_stats = metadata.row_group(0).column(0).statistics().unwrap();
@@ -2882,7 +2882,7 @@ mod tests {
         assert_eq!(metadata.row_group(1).ordinal(), Some(3));
 
         // check we only got the relevant page indexes
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         let page_index = metadata.page_index().unwrap();
 

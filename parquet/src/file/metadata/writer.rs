@@ -253,8 +253,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // unencrypted metadata before it is returned to users. This allows the metadata
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
-        let builder = ParquetMetaDataBuilder::new(file_metadata)
-            .set_page_index(Some(PageIndex::new(column_indexes, offset_indexes)));
+        let builder = ParquetMetaDataBuilder::new(file_metadata).set_page_index(Some(Arc::new(
+            PageIndex::new(column_indexes, offset_indexes),
+        )));
 
         Ok(match unencrypted_row_groups {
             Some(rg) => builder.set_row_groups(rg).build(),
@@ -442,8 +443,6 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let page_index = self.metadata.page_index().cloned();
-
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &schema_descr,
@@ -453,17 +452,18 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        if let Some(PageIndex {
-            column_indexes,
-            offset_indexes,
-        }) = page_index
+        // Downcast to PageIndex to access raw index structures for serialization
+        if let Some(page_index_arc) = self.metadata.page_index.as_ref()
+            && let Some(page_index) = page_index_arc
+                .as_any()
+                .downcast_ref::<crate::file::metadata::PageIndex>()
         {
-            if let Some(column_indexes) = column_indexes {
-                encoder = encoder.with_column_indexes(column_indexes);
+            if let Some(column_indexes) = page_index.column_indexes_raw() {
+                encoder = encoder.with_column_indexes(column_indexes.clone());
             }
 
-            if let Some(offset_indexes) = offset_indexes {
-                encoder = encoder.with_offset_indexes(offset_indexes);
+            if let Some(offset_indexes) = page_index.offset_indexes_raw() {
+                encoder = encoder.with_offset_indexes(offset_indexes.clone());
             }
         }
 

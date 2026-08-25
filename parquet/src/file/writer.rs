@@ -2476,7 +2476,7 @@ mod tests {
             reader
                 .metadata()
                 .page_index()
-                .is_some_and(PageIndex::is_complete)
+                .is_some_and(|idx| idx.is_complete())
         );
         let page_index = reader.metadata().page_index().unwrap();
 
