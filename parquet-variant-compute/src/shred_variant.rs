@@ -528,9 +528,9 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
-/// Numeric indexes represent the shared element schema of a list. The index
-/// value itself is ignored, so `items[0].id` and `items[1].name` describe fields
-/// on the same list element struct.
+/// The index `0` represents the shared element schema of a list, so
+/// `items[0].id` and `items[0].name` describe fields on the same list element
+/// struct. Non-zero indexes are rejected.
 ///
 /// # Example
 ///
@@ -557,7 +557,7 @@ impl IntoShreddingField for (DataType, bool) {
 ///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
 ///         &DataType::Float64,
 ///     )?
-///     // indexes describe the shared schema for every element of a list
+///     // index 0 describes the shared schema for every element of a list
 ///     .with_path("items[0].id", &DataType::Int64)?
 ///     .build();
 ///    Ok(())
@@ -587,6 +587,8 @@ impl ShreddedSchemaBuilder {
     /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
+    ///
+    /// List paths must use index `0`; non-zero indexes return an error.
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
     where
         P: TryInto<VariantPath<'a>>,
@@ -596,7 +598,7 @@ impl ShreddedSchemaBuilder {
         let path: VariantPath<'a> = path
             .try_into()
             .map_err(|e| ArrowError::InvalidArgumentError(format!("{:?}", e)))?;
-        self.root.insert_path(&path, field.into_shredding_field());
+        self.root.insert_path(&path, field.into_shredding_field())?;
         Ok(self)
     }
 
@@ -629,14 +631,18 @@ impl Default for VariantSchemaNode {
 
 impl VariantSchemaNode {
     /// Insert a path into this node with the given data type.
-    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) {
-        self.insert_path_elements(path, field);
+    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) -> Result<()> {
+        self.insert_path_elements(path, field)
     }
 
-    fn insert_path_elements(&mut self, segments: &[VariantPathElement<'_>], field: ShreddingField) {
+    fn insert_path_elements(
+        &mut self,
+        segments: &[VariantPathElement<'_>],
+        field: ShreddingField,
+    ) -> Result<()> {
         let Some((head, tail)) = segments.split_first() else {
             *self = Self::Leaf(field);
-            return;
+            return Ok(());
         };
 
         match head {
@@ -656,9 +662,9 @@ impl VariantSchemaNode {
                 children
                     .entry(name.to_string())
                     .or_default()
-                    .insert_path_elements(tail, field);
+                    .insert_path_elements(tail, field)
             }
-            VariantPathElement::Index { .. } => {
+            VariantPathElement::Index { index: 0 } => {
                 let element = match self {
                     Self::List(element) => element,
                     _ => {
@@ -670,8 +676,11 @@ impl VariantSchemaNode {
                     }
                 };
 
-                element.insert_path_elements(tail, field);
+                element.insert_path_elements(tail, field)
             }
+            VariantPathElement::Index { index } => Err(ArrowError::InvalidArgumentError(format!(
+                "Only list index [0] is supported, got [{index}]"
+            ))),
         }
     }
 
@@ -2915,7 +2924,7 @@ mod tests {
     fn test_variant_schema_builder_list() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("items[0].id", &DataType::Int64)?
-            .with_path("items[42].name", &DataType::Utf8)?
+            .with_path("items[0].name", &DataType::Utf8)?
             .build();
 
         assert_eq!(
@@ -2939,7 +2948,7 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_nested_lists() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("matrix[0][1]", (&DataType::Float64, false))?
+            .with_path("matrix[0][0]", (&DataType::Float64, false))?
             .build();
 
         assert_eq!(
@@ -2952,6 +2961,24 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_rejects_non_zero_list_indexes() {
+        for (path, index) in [("items[1].id", 1), ("items[42].name", 42)] {
+            let error = ShreddedSchemaBuilder::default()
+                .with_path(path, &DataType::Int64)
+                .err()
+                .unwrap();
+
+            let ArrowError::InvalidArgumentError(message) = error else {
+                panic!("expected InvalidArgumentError, got {error:?}");
+            };
+            assert_eq!(
+                message,
+                format!("Only list index [0] is supported, got [{index}]")
+            );
+        }
     }
 
     #[test]
