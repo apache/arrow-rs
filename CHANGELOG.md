@@ -20,10 +20,15 @@
 # Changelog
 
 
-## [59.3.0](https://github.com/apache/arrow-rs/tree/59.3.0) - (2026-08-24)
+## [59.3.0](https://github.com/apache/arrow-rs/tree/59.3.0) - (2026-08-25)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.2.0...59.3.0)
 
+### Security fixes
+- [59_maintenance] Backport `cargo audit` fix by updating `h2` dependency by @alamb in [#10834](https://github.com/apache/arrow-rs/pull/10834)
+
 ### Bug fixes
+- [59_maintenance] Backport fix for concat_run_arrays with all-empty run arrays by @alamb in [#10828](https://github.com/apache/arrow-rs/pull/10828)
+- [59_maintenance] Backport fix for DELTA_BYTE_ARRAY dedup with values larger than the page size limit by @alamb in [#10826](https://github.com/apache/arrow-rs/pull/10826)
 - [59_maintenance] Backport fix for cached Mask reads crossing unloaded sparse pages by @alamb in [#10766](https://github.com/apache/arrow-rs/pull/10766)
 
