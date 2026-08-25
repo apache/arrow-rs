@@ -645,39 +645,27 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
-    // Gated out under `force_validate`: the misaligned fixture is built with
-    // `build_unchecked`, which itself validates under `force_validate`, so the
-    // input can't be constructed to hand to `from_ffi`. The realignment this
-    // guards lives in `consume`, which is correct under `force_validate` too;
-    // see #10034.
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_decimal128_under_aligned_round_trip() -> Result<()> {
-        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
-        // an FFI producer that only guarantees the C Data Interface's
-        // recommended 8-byte alignment (e.g. arrow-java).
+        // 8-byte-aligned i128 buffer: legal over the C Data Interface, but
+        // under-aligned for arrow-rs. Carried as `FixedSizeBinary(16)` (1-byte
+        // alignment) so the fixture stays valid under `force_validate`, then
+        // imported as `Decimal128`, which must realign it.
         let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
         let under_aligned = aligned.slice(8);
         assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
         assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
 
-        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
-        // input is the condition under test.
-        let data = unsafe {
-            ArrayData::builder(DataType::Decimal128(10, 2))
-                .len(2)
-                .add_buffer(under_aligned)
-                .build_unchecked()
-        };
+        let data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .len(2)
+            .add_buffer(under_aligned)
+            .build()?;
 
-        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
         let array = FFI_ArrowArray::new(&data);
-
-        let imported = unsafe { from_ffi(array, &schema) }?;
+        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
         let array = Decimal128Array::from(imported);
 
-        // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
-        // yields elements `1 << 64` and `2 << 64`.
+        // [0i128, 1, 2] sliced 8 bytes in yields `1 << 64` and `2 << 64`.
         assert_eq!(array.len(), 2);
         assert_eq!(array.value(0), 1_i128 << 64);
         assert_eq!(array.value(1), 2_i128 << 64);
