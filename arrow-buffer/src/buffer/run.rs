@@ -351,11 +351,13 @@ where
 
         // Skip some physical indices based on offset.
         let skip_value = self.get_start_physical_index();
+        // Stop at the run containing the largest requested logical index.
+        let end = self.get_physical_index(largest_logical_index) + 1;
 
         let mut physical_indices = vec![0; indices_len];
 
         let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in self.values().iter().enumerate().skip(skip_value) {
+        for (physical_index, run_end) in self.values()[..end].iter().enumerate().skip(skip_value) {
             // Get the run end index (relative to offset) of current physical index
             let run_end_value = run_end.as_usize() - offset;
 
@@ -381,6 +383,17 @@ where
 #[cfg(test)]
 mod tests {
     use crate::buffer::RunEndBuffer;
+
+    #[test]
+    fn test_get_physical_indices_prefix() {
+        let buffer = RunEndBuffer::new(vec![2_i32, 4, 7, 9].into(), 0, 9);
+        assert_eq!(buffer.get_physical_indices(&[2, 0, 2]).unwrap(), [1, 0, 1]);
+
+        let sliced = buffer.slice(1, 3);
+        assert_eq!(sliced.get_physical_indices(&[2, 0, 2]).unwrap(), [1, 0, 1]);
+        assert_eq!(sliced.get_physical_indices(&[3, 0]), Err(3));
+        assert_eq!(sliced.get_physical_indices(&[-1, 0]), Err(-1));
+    }
 
     #[test]
     fn test_zero_length_slice() {
