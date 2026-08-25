@@ -212,7 +212,7 @@ fn build_preset<F: AlpFloat>(values: &[F]) -> Vec<ExponentAndFactor> {
 
     // Size estimates from different vectors are not comparable with each other,
     // so only the win counts rank the candidate set.
-    for combination in tally.iter_mut() {
+    for combination in &mut tally {
         combination.estimated_size_bits = 0;
     }
     tally.sort_by_key(|c| Reverse(rank(c)));
