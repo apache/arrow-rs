@@ -177,7 +177,9 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     ///
     /// This is equivalent to both [`Self::has_offset_indexes`] and [`Self::has_column_indexes`]
     /// returning `true`.
-    fn is_complete(&self) -> bool;
+    fn is_complete(&self) -> bool {
+        self.has_column_indexes() && self.has_offset_indexes()
+    }
 
     /// Returns column indexes for all columns in the specified row group
     ///
@@ -238,7 +240,12 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     /// Returns:
     /// * `Some(usize)` - Number of data pages if any index is available
     /// * `None` - No index information available for this column
-    fn num_data_pages(&self, row_group_idx: usize, column_idx: usize) -> Option<usize>;
+    fn num_data_pages(&self, row_group_idx: usize, column_idx: usize) -> Option<usize> {
+        match self.offset_index(row_group_idx, column_idx) {
+            Some(offset_index) => Some(offset_index.page_locations.len()),
+            None => Some(self.column_index(row_group_idx, column_idx)?.num_pages() as usize),
+        }
+    }
 
     /// Returns the physical locations of all data pages in a column chunk
     ///
@@ -252,8 +259,16 @@ pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
     /// Returns:
     /// * `Some(&Vec<PageLocation>)` - Vector of page locations if offset index exists
     /// * `None` - Offset index not available
-    fn page_locations(&self, row_group_idx: usize, column_idx: usize)
-    -> Option<&Vec<PageLocation>>;
+    fn page_locations(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&Vec<PageLocation>> {
+        Some(
+            self.offset_index(row_group_idx, column_idx)?
+                .page_locations(),
+        )
+    }
 
     /// Returns a reference to the trait object as `&dyn Any` for downcasting
     ///
@@ -485,10 +500,6 @@ impl PageIndexProvider for PageIndex {
         self.column_indexes.is_some()
     }
 
-    fn is_complete(&self) -> bool {
-        self.has_column_indexes() && self.has_offset_indexes()
-    }
-
     fn column_indexes_for_rowgroup(
         &self,
         row_group_idx: usize,
@@ -504,12 +515,8 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&ColumnIndexMetaData> {
-        if let Some(column_indexes) = self.column_indexes.as_ref() {
-            let rg = column_indexes.get(row_group_idx)?;
-            rg.get(column_idx)?.as_ref()
-        } else {
-            None
-        }
+        let rg = self.column_indexes.as_ref()?.get(row_group_idx)?;
+        rg.get(column_idx)?.as_ref()
     }
 
     fn offset_indexes_for_rowgroup(
@@ -527,33 +534,8 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&OffsetIndexMetaData> {
-        if let Some(offset_indexes) = self.offset_indexes.as_ref() {
-            let rg = offset_indexes.get(row_group_idx)?;
-            rg.get(column_idx)?.as_ref()
-        } else {
-            None
-        }
-    }
-
-    fn num_data_pages(&self, row_group_idx: usize, column_idx: usize) -> Option<usize> {
-        match self.offset_index(row_group_idx, column_idx) {
-            Some(offset_index) => Some(offset_index.page_locations.len()),
-            None => Some(self.column_index(row_group_idx, column_idx)?.num_pages() as usize),
-        }
-    }
-
-    fn page_locations(
-        &self,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Option<&Vec<PageLocation>> {
-        if let Some(offset_indexes) = self.offset_indexes.as_ref() {
-            let rg = offset_indexes.get(row_group_idx)?;
-            let off_idx = rg.get(column_idx)?.as_ref()?;
-            Some(off_idx.page_locations())
-        } else {
-            None
-        }
+        let rg = self.offset_indexes.as_ref()?.get(row_group_idx)?;
+        rg.get(column_idx)?.as_ref()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
