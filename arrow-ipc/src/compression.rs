@@ -328,8 +328,12 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let buffer_len = zstd::zstd_safe::compress_bound(input.len());
+    output.reserve(buffer_len);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, output)?;
+
     Ok(())
 }
 
