@@ -148,11 +148,14 @@ fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayR
         }
     };
 
-    let new_data = data
-        .into_builder()
-        .data_type(to_type.clone())
-        .child_data(vec![new_values.to_data()])
-        .build()?;
+    let new_data = unsafe {
+        // safety: The original ArrayData is valid, and we only replace the child dictionary
+        // values with a correctly typed array, so skip ArrayDataBuilder validation.
+        data.into_builder()
+            .data_type(to_type.clone())
+            .child_data(vec![new_values.to_data()])
+            .build_unchecked()
+    };
 
     Ok(make_array(new_data))
 }
