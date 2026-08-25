@@ -35,6 +35,7 @@ pub trait JsonValue<'a> {
 }
 
 /// The type of a JSON value
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum JsonType {
     Null,
     Bool,

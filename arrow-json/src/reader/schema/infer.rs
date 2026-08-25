@@ -241,10 +241,12 @@ impl InferTy {
     }
 
     pub fn into_schema(self) -> Result<Schema, ArrowError> {
-        let InferTy::Object(fields) = self else {
-            Err(ArrowError::JsonError(format!(
+        let fields = match self {
+            InferTy::Any => return Ok(Schema::empty()),
+            InferTy::Object(fields) => fields,
+            _ => Err(ArrowError::JsonError(format!(
                 "Expected JSON object, found {self:?}",
-            )))?
+            )))?,
         };
 
         let fields = fields

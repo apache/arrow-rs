@@ -22,7 +22,7 @@ use arrow_schema::{ArrowError, Schema};
 use serde_json::Value;
 
 use self::infer::{InferTy, infer_json_type};
-use self::json_type::TapeValue;
+use self::json_type::{JsonType, JsonValue, TapeValue};
 use super::tape::TapeDecoder;
 
 mod infer;
@@ -117,7 +117,7 @@ pub fn infer_json_schema<R: BufRead>(
         let decoded = decoder.decode(buf)?;
         reader.consume(decoded);
 
-        if decoded != read {
+        if decoded == 0 || decoder.has_read_max_records() {
             break;
         }
     }
@@ -160,8 +160,12 @@ struct SchemaDecoder {
 
 impl SchemaDecoder {
     pub fn new(max_read_records: Option<usize>) -> Self {
+        // Use a sensible batch size, capped to `max_read_records`
+        let batch_size = 1024.min(max_read_records.unwrap_or(usize::MAX));
+        println!("batch_size = {batch_size}");
+
         Self {
-            decoder: TapeDecoder::new(1024, 8),
+            decoder: TapeDecoder::new(batch_size, 8),
             max_read_records,
             record_count: 0,
             schema: InferTy::empty_object(),
@@ -174,6 +178,11 @@ impl SchemaDecoder {
             self.infer_batch()?;
         }
         Ok(read)
+    }
+
+    pub fn has_read_max_records(&self) -> bool {
+        self.max_read_records
+            .map_or(false, |max| self.record_count >= max)
     }
 
     pub fn finish(mut self) -> Result<(Schema, usize), ArrowError> {
@@ -194,6 +203,9 @@ impl SchemaDecoder {
             .take(remaining_records);
 
         for record in records {
+            if record.get() == JsonType::Null {
+                Err(ArrowError::JsonError(format!("top-level null")))?
+            }
             self.schema = infer_json_type(record, self.schema.clone())?;
             self.record_count += 1;
         }
@@ -363,27 +375,6 @@ mod tests {
         assert_eq!(small_field.data_type(), &DataType::Float64);
     }
 
-    // #[test]
-    // fn test_coercion_scalar_and_list() {
-    //     assert_eq!(
-    //         list_type_of(DataType::Float64),
-    //         coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Float64)])
-    //     );
-    //     assert_eq!(
-    //         list_type_of(DataType::Float64),
-    //         coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Int64)])
-    //     );
-    //     assert_eq!(
-    //         list_type_of(DataType::Int64),
-    //         coerce_data_type(vec![&DataType::Int64, &list_type_of(DataType::Int64)])
-    //     );
-    //     // boolean and number are incompatible, return utf8
-    //     assert_eq!(
-    //         list_type_of(DataType::Utf8),
-    //         coerce_data_type(vec![&DataType::Boolean, &list_type_of(DataType::Float64)])
-    //     );
-    // }
-
     #[test]
     fn test_invalid_json_infer_schema() {
         let re = infer_json_schema_from_seekable(Cursor::new(b"}"), None);
@@ -426,6 +417,33 @@ mod tests {
             true,
         )]);
         assert_eq!(inferred_schema, schema);
+    }
+
+    #[test]
+    fn test_read_all_rows() {
+        let mut data = "{}\n".repeat(2048);
+        data.push_str("{\"late\":true}\n");
+        let (schema, _) = infer_json_schema(Cursor::new(data), None).unwrap();
+        println!("{schema:?}");
+        assert_eq!(
+            schema.field(0),
+            &Field::new("late", DataType::Boolean, true)
+        );
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let values = std::iter::empty::<Result<Value, ArrowError>>();
+        let schema = infer_json_schema_from_iterator(values).unwrap();
+        assert_eq!(schema, Schema::empty());
+    }
+
+    #[test]
+    fn test_ignore_trailing_invalid() {
+        let data = b"{\"a\":1}\nthis is not JSON\n";
+        let (schema, record_count) = infer_json_schema(Cursor::new(data), Some(1)).unwrap();
+        assert_eq!(record_count, 1);
+        assert_eq!(schema.field(0), &Field::new("a", DataType::Int64, true));
     }
 
     /// Shorthand for building list data type of `ty`
