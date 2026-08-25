@@ -205,7 +205,7 @@ mod tests {
         builder.append_value(b"arrow").unwrap();
         builder.append_nulls(2);
         builder.append_value(b"world").unwrap();
-        let array: FixedSizeBinaryArray = builder.finish();
+        let array = builder.finish();
 
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(6, array.len());
@@ -225,7 +225,7 @@ mod tests {
         builder.append_value(b"hello").unwrap();
         builder.append_null();
         builder.append_value(b"arrow").unwrap();
-        let mut array: FixedSizeBinaryArray = builder.finish_cloned();
+        let mut array = builder.finish_cloned();
 
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
         assert_eq!(3, array.len());
@@ -256,7 +256,7 @@ mod tests {
         builder.append_value(b"").unwrap();
         assert!(!builder.is_empty());
 
-        let array: FixedSizeBinaryArray = builder.finish();
+        let array = builder.finish();
         assert_eq!(&DataType::FixedSizeBinary(0), array.data_type());
         assert_eq!(3, array.len());
         assert_eq!(1, array.null_count());

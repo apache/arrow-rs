@@ -68,6 +68,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default value for [`WriterProperties::write_row_group_number_distinct_values`]
+pub const DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES: bool = false;
 /// Default value for [`WriterProperties::data_page_v2_compression_ratio_threshold`]
 pub const DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD: f64 = 1.0;
 /// Default value for [`WriterProperties::write_path_in_schema`]
@@ -135,7 +137,7 @@ impl Default for CdcOptions {
 ///
 /// Basic constant, which is not part of the Thrift definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub enum WriterVersion {
     /// Parquet format version 1.0
     PARQUET_1_0,
@@ -254,6 +256,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    write_row_group_number_distinct_values: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
@@ -433,6 +436,14 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// Returns `true` if the writer should compute and store the distinct count
+    /// (`num_distinct_values`) in row group column chunk statistics.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_write_row_group_number_distinct_values`]
+    pub fn write_row_group_number_distinct_values(&self) -> bool {
+        self.write_row_group_number_distinct_values
+    }
+
     /// Returns `true` if the `path_in_schema` field of the `ColumnMetaData` Thrift struct
     /// should be written.
     ///
@@ -595,6 +606,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    write_row_group_number_distinct_values: bool,
     content_defined_chunking: Option<CdcOptions>,
     write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
@@ -620,6 +632,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            write_row_group_number_distinct_values: DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES,
             content_defined_chunking: None,
             write_path_in_schema: DEFAULT_WRITE_PATH_IN_SCHEMA,
             #[cfg(feature = "encryption")]
@@ -675,6 +688,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            write_row_group_number_distinct_values: self.write_row_group_number_distinct_values,
             content_defined_chunking: self.content_defined_chunking,
             write_path_in_schema: self.write_path_in_schema,
             #[cfg(feature = "encryption")]
@@ -896,6 +910,34 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Enable or disable writing the distinct value count (`num_distinct_values`) into
+    /// row group column chunk statistics (defaults to `false` via
+    /// [`DEFAULT_WRITE_ROW_GROUP_NUMBER_DISTINCT_VALUES`]).
+    ///
+    /// When enabled, the [`ArrowWriter`] scans each column's values before encoding
+    /// and stores the number of distinct non-null values in the row group statistics
+    /// footer.
+    ///
+    /// # Compatibility
+    ///
+    /// This setting only takes effect when using [`ArrowWriter`]. The row-based
+    /// [`SerializedFileWriter`] / [`SerializedRowGroupWriter`] APIs do not populate
+    /// `num_distinct_values` and will ignore this flag.
+    ///
+    /// # Performance
+    ///
+    /// Computing the distinct count requires hashing every non-null value in the column.
+    /// For large row groups or columns with many values this adds significant overhead.
+    /// Benchmark your workload before enabling this globally.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    /// [`SerializedFileWriter`]: crate::file::writer::SerializedFileWriter
+    /// [`SerializedRowGroupWriter`]: crate::file::writer::SerializedRowGroupWriter
+    pub fn set_write_row_group_number_distinct_values(mut self, value: bool) -> Self {
+        self.write_row_group_number_distinct_values = value;
+        self
+    }
+
     /// EXPERIMENTAL: Should the writer emit the `path_in_schema` element of the
     /// `ColumnMetaData` Thrift struct. Defaults to `true` via [`DEFAULT_WRITE_PATH_IN_SCHEMA`].
     ///
@@ -1089,7 +1131,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Setting this value to `true` can greatly increase the size of the resulting Parquet
     /// file while yielding very little added benefit. Most modern Parquet implementations
-    /// will use the min/max values stored in the [`ParquetColumnIndex`] rather than
+    /// will use the min/max values stored in the [`PageIndex`] rather than
     /// those in the page header.
     ///
     /// # Note
@@ -1100,7 +1142,7 @@ impl WriterPropertiesBuilder {
     /// specification. See [issue #7580] for more details.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
-    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`PageIndex`]: crate::file::metadata::PageIndex
     /// [`Page`]: EnabledStatistics::Page
     /// [issue #7580]: https://github.com/apache/arrow-rs/issues/7580
     pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
@@ -1342,6 +1384,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
+            write_row_group_number_distinct_values: props.write_row_group_number_distinct_values,
             content_defined_chunking: props.content_defined_chunking,
             write_path_in_schema: props.write_path_in_schema,
             #[cfg(feature = "encryption")]
@@ -1374,10 +1417,10 @@ pub enum EnabledStatistics {
     /// Setting this option will store one set of statistics for each relevant
     /// column for each row group. In addition, this will enable the writing
     /// of the column index (the offset index is always written regardless of
-    /// this setting). See [`ParquetColumnIndex`] for
+    /// this setting). See [`PageIndex`] for
     /// more information.
     ///
-    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`PageIndex`]: crate::file::metadata::PageIndex
     Page,
 }
 
@@ -2180,7 +2223,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_writer_properties_deprecated_bloom_filter_ndv_setters_still_work() {
         let col = ColumnPath::from("col");
         let props = WriterProperties::builder()

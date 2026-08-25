@@ -27,20 +27,17 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
     match *json {
         Value::Object(ref map) => {
             let name = match map.get("name") {
-                Some(Value::String(name)) => name.to_string(),
+                Some(Value::String(name)) => name.clone(),
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Field missing 'name' attribute".to_string(),
                     ));
                 }
             };
-            let nullable = match map.get("nullable") {
-                Some(&Value::Bool(b)) => b,
-                _ => {
-                    return Err(ArrowError::ParseError(
-                        "Field missing 'nullable' attribute".to_string(),
-                    ));
-                }
+            let Some(&Value::Bool(nullable)) = map.get("nullable") else {
+                return Err(ArrowError::ParseError(
+                    "Field missing 'nullable' attribute".to_string(),
+                ));
             };
             let data_type = match map.get("type") {
                 Some(t) => data_type_from_json(t)?,
@@ -309,7 +306,7 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
         _ => vec![],
     };
 
-    match field.data_type() {
+    let mut json = match field.data_type() {
         DataType::Dictionary(index_type, value_type) => {
             #[expect(deprecated)]
             let dict_id = field.dict_id().unwrap();
@@ -331,7 +328,17 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
             "type": data_type_to_json(field.data_type()),
             "children": children
         }),
+    };
+
+    if !field.metadata().is_empty() {
+        json["metadata"] = field
+            .metadata()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
     }
+
+    json
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@
 //! [GenericStringArray], [GenericBinaryArray], [GenericByteViewArray],
 //! [FixedSizeBinaryArray], [DictionaryArray]
 
-use arrow_array::builder::{BinaryViewBuilder, BufferBuilder, StringViewBuilder};
+use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -172,7 +172,7 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
     max_element_len: Option<usize>,
     bounds: F,
 ) -> GenericStringArray<OffsetSize> {
-    let mut vals = BufferBuilder::<u8>::new({
+    let mut vals = Vec::with_capacity({
         let offsets = array.value_offsets();
         let input_len = (offsets[array.len()] - offsets[0]).to_usize().unwrap();
         match max_element_len {
@@ -180,19 +180,19 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
             None => input_len,
         }
     });
-    let mut new_offsets = BufferBuilder::<OffsetSize>::new(array.len() + 1);
-    new_offsets.append(OffsetSize::zero());
+    let mut new_offsets = Vec::with_capacity(array.len() + 1);
+    new_offsets.push(OffsetSize::zero());
 
     array.iter().for_each(|val| {
         if let Some(val) = val {
             let (start_offset, end_offset) = bounds(val);
-            vals.append_slice(&val.as_bytes()[start_offset..end_offset]);
+            vals.extend_from_slice(&val.as_bytes()[start_offset..end_offset]);
         }
-        new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
+        new_offsets.push(OffsetSize::from_usize(vals.len()).unwrap());
     });
 
-    let offsets = OffsetBuffer::new(new_offsets.finish().into());
-    let values = vals.finish();
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    let values = vals.into();
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
@@ -521,7 +521,7 @@ mod tests {
 
     fn with_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec![
-            Some("hello".as_bytes()),
+            Some(b"hello".as_slice()),
             None,
             Some(&[0xf8, 0xf9, 0xff, 0xfa]),
         ];
@@ -562,11 +562,11 @@ mod tests {
     }
 
     fn without_nulls_generic_binary<O: OffsetSizeTrait>() {
-        let input = vec!["hello".as_bytes(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
+        let input = vec![b"hello".as_slice(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), b"", b""],
-            (2, Some(1), vec!["".as_bytes(), b"", b""])
+            vec![b"".as_slice(), b"", b""],
+            (2, Some(1), vec![b"".as_slice(), b"", b""])
         );
         let cases = gen_test_cases!(
             input,
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn with_nulls_fixed_size_binary() {
-        let input = vec![Some("cat".as_bytes()), None, Some(&[0xf8, 0xf9, 0xff])];
+        let input = vec![Some(b"cat".as_slice()), None, Some(&[0xf8, 0xf9, 0xff])];
         // all-nulls array is always identical
         let base_case =
             gen_test_cases!(vec![None, None, None], (3, Some(2), vec![None, None, None]));
@@ -690,11 +690,11 @@ mod tests {
 
     #[test]
     fn without_nulls_fixed_size_binary() {
-        let input = vec!["cat".as_bytes(), b"dog", &[0xf8, 0xf9, 0xff]];
+        let input = vec![b"cat".as_slice(), b"dog", &[0xf8, 0xf9, 0xff]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), &[], &[]],
-            (1, Some(2), vec!["".as_bytes(), &[], &[]])
+            vec![b"".as_slice(), &[], &[]],
+            (1, Some(2), vec![b"".as_slice(), &[], &[]])
         );
         let cases = gen_test_cases!(
             input,

@@ -18,7 +18,7 @@
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
@@ -33,6 +33,23 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
+const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
+
+fn variant_array_builder_build_bench(c: &mut Criterion) {
+    c.bench_function("variant_array_builder_build_262k_small_values", |b| {
+        b.iter_batched(
+            || {
+                let mut builder = VariantArrayBuilder::new(VARIANT_ARRAY_BUILD_ROWS);
+                for value in 0..VARIANT_ARRAY_BUILD_ROWS {
+                    builder.append_variant(Variant::Int8((value % 128) as i8));
+                }
+                builder
+            },
+            |builder| std::hint::black_box(builder.build()),
+            BatchSize::LargeInput,
+        )
+    });
+}
 
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
@@ -189,6 +206,7 @@ criterion_group!(
     variant_get_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
@@ -462,7 +480,7 @@ impl RandomJsonGenerator {
                     let random_string: String = (0..length)
                         .map(|_| rng.sample(Alphanumeric) as char)
                         .collect();
-                    write!(output_buffer, "\"{random_string}\"",).unwrap();
+                    write!(output_buffer, "\"{random_string}\"").unwrap();
                 } else {
                     random_value -= *string_weight;
 
@@ -471,11 +489,11 @@ impl RandomJsonGenerator {
                         if rng.random_bool(0.5) {
                             // Generate a random integer
                             let random_integer: i64 = rng.random_range(-1000..1000);
-                            write!(output_buffer, "{random_integer}",).unwrap();
+                            write!(output_buffer, "{random_integer}").unwrap();
                         } else {
                             // Generate a random float
                             let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                            write!(output_buffer, "{random_float}",).unwrap();
+                            write!(output_buffer, "{random_float}").unwrap();
                         }
                     } else {
                         random_value -= *number_weight;
@@ -483,7 +501,7 @@ impl RandomJsonGenerator {
                         if random_value <= *boolean_weight {
                             // Generate a random boolean
                             let random_boolean: bool = rng.random();
-                            write!(output_buffer, "{random_boolean}",).unwrap();
+                            write!(output_buffer, "{random_boolean}").unwrap();
                         }
                     }
                 }
@@ -539,7 +557,7 @@ impl RandomJsonGenerator {
             let random_string: String = (0..length)
                 .map(|_| rng.sample(Alphanumeric) as char)
                 .collect();
-            write!(output_buffer, "\"{random_string}\"",).unwrap();
+            write!(output_buffer, "\"{random_string}\"").unwrap();
             return;
         }
         random_value -= *string_weight;
@@ -549,11 +567,11 @@ impl RandomJsonGenerator {
             if rng.random_bool(0.5) {
                 // Generate a random integer
                 let random_integer: i64 = rng.random_range(-1000..1000);
-                write!(output_buffer, "{random_integer}",).unwrap();
+                write!(output_buffer, "{random_integer}").unwrap();
             } else {
                 // Generate a random float
                 let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                write!(output_buffer, "{random_float}",).unwrap();
+                write!(output_buffer, "{random_float}").unwrap();
             }
             return;
         }
@@ -562,7 +580,7 @@ impl RandomJsonGenerator {
         if random_value <= *boolean_weight {
             // Generate a random boolean
             let random_boolean: bool = rng.random();
-            write!(output_buffer, "{random_boolean}",).unwrap();
+            write!(output_buffer, "{random_boolean}").unwrap();
             return;
         }
         random_value -= *boolean_weight;

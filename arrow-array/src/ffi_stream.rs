@@ -123,7 +123,7 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     stream.get_next = None;
     stream.get_last_error = None;
 
-    let private_data = unsafe { Box::from_raw(stream.private_data as *mut StreamPrivateData) };
+    let private_data = unsafe { Box::from_raw(stream.private_data.cast::<StreamPrivateData>()) };
     drop(private_data);
 
     stream.release = None;
@@ -166,7 +166,7 @@ impl Drop for FFI_ArrowArrayStream {
         match self.release {
             None => (),
             Some(release) => unsafe { release(self) },
-        };
+        }
     }
 }
 
@@ -183,7 +183,7 @@ impl FFI_ArrowArrayStream {
             get_next: Some(get_next),
             get_last_error: Some(get_last_error),
             release: Some(release_stream),
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
         }
     }
 
@@ -260,7 +260,7 @@ struct ExportedArrayStream {
 
 impl ExportedArrayStream {
     fn get_private_data(&mut self) -> &mut StreamPrivateData {
-        unsafe { &mut *((*self.stream).private_data as *mut StreamPrivateData) }
+        unsafe { &mut *(*self.stream).private_data.cast::<StreamPrivateData>() }
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
@@ -619,7 +619,7 @@ mod tests {
     unsafe extern "C" fn wrapping_release(stream: *mut FFI_ArrowArrayStream) {
         use std::sync::atomic::Ordering;
         let stream = unsafe { &mut *stream };
-        let data = unsafe { Box::from_raw(stream.private_data() as *mut StreamWrapperData) };
+        let data = unsafe { Box::from_raw(stream.private_data().cast::<StreamWrapperData>()) };
         STREAM_WRAPPER_RAN.store(true, Ordering::SeqCst);
         unsafe { stream.set_release(data.original_release) };
         unsafe { stream.set_private_data(data.original_private_data) };
@@ -643,7 +643,7 @@ mod tests {
             original_private_data: stream.private_data(),
         });
         unsafe { stream.set_release(Some(wrapping_release)) };
-        unsafe { stream.set_private_data(Box::into_raw(data) as *mut c_void) };
+        unsafe { stream.set_private_data(Box::into_raw(data).cast::<c_void>()) };
 
         drop(stream); // runs wrapping_release, which chains to the original
         assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));

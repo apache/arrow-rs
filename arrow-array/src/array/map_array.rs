@@ -181,9 +181,8 @@ impl MapArray {
         Option<NullBuffer>,
         bool,
     ) {
-        let (f, ordered) = match self.data_type {
-            DataType::Map(f, ordered) => (f, ordered),
-            _ => unreachable!(),
+        let DataType::Map(f, ordered) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_offsets, self.entries, self.nulls, ordered)
     }
@@ -309,6 +308,15 @@ impl MapArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> MapArrayIter<'_> {
+        MapArrayIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a MapArray {
+    type Item = Option<StructArray>;
+    type IntoIter = MapArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         MapArrayIter::new(self)
     }
 }
@@ -618,9 +626,8 @@ impl std::fmt::Debug for MapArray {
 
 impl From<MapArray> for ListArray {
     fn from(value: MapArray) -> Self {
-        let field = match value.data_type() {
-            DataType::Map(field, _) => field,
-            _ => unreachable!("This should be a map type."),
+        let DataType::Map(field, _) = value.data_type() else {
+            unreachable!("This should be a map type.")
         };
         let data_type = DataType::List(field.clone());
         let builder = value.into_data().into_builder().data_type(data_type);

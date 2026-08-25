@@ -162,7 +162,7 @@ fn test_empty_utf8_array_with_invalid_offset() {
 
 #[test]
 fn test_empty_utf8_array_with_non_zero_offset() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     let offsets_buffer = Buffer::from_slice_ref([0i32, 2, 6, 0]);
     ArrayData::try_new(
         DataType::Utf8,
@@ -194,7 +194,7 @@ fn test_empty_large_utf8_array_with_wrong_type_offsets() {
 #[test]
 #[should_panic(expected = "Buffer 0 of Utf8 isn't large enough. Expected 12 bytes got 8")]
 fn test_validate_offsets_i32() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32]);
     ArrayData::try_new(
         DataType::Utf8,
@@ -210,7 +210,7 @@ fn test_validate_offsets_i32() {
 #[test]
 #[should_panic(expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 24 bytes got 16")]
 fn test_validate_offsets_i64() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     let offsets_buffer = Buffer::from_slice_ref([0i64, 2i64]);
     ArrayData::try_new(
         DataType::LargeUtf8,
@@ -226,7 +226,7 @@ fn test_validate_offsets_i64() {
 #[test]
 #[should_panic(expected = "Error converting offset[0] (-2) to usize for Utf8")]
 fn test_validate_offsets_negative_first_i32() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     let offsets_buffer = Buffer::from_slice_ref([-2i32, 1i32, 3i32]);
     ArrayData::try_new(
         DataType::Utf8,
@@ -242,7 +242,7 @@ fn test_validate_offsets_negative_first_i32() {
 #[test]
 #[should_panic(expected = "Error converting offset[2] (-3) to usize for Utf8")]
 fn test_validate_offsets_negative_last_i32() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32, -3i32]);
     ArrayData::try_new(
         DataType::Utf8,
@@ -258,7 +258,7 @@ fn test_validate_offsets_negative_last_i32() {
 #[test]
 #[should_panic(expected = "First offset 4 in Utf8 is smaller than last offset 3")]
 fn test_validate_offsets_range_too_small() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     // start offset is larger than end
     let offsets_buffer = Buffer::from_slice_ref([4i32, 2i32, 3i32]);
     ArrayData::try_new(
@@ -275,7 +275,7 @@ fn test_validate_offsets_range_too_small() {
 #[test]
 #[should_panic(expected = "Last offset 10 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_range_too_large() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     // 10 is off the end of the buffer
     let offsets_buffer = Buffer::from_slice_ref([0i32, 2i32, 10i32]);
     ArrayData::try_new(
@@ -292,7 +292,7 @@ fn test_validate_offsets_range_too_large() {
 #[test]
 #[should_panic(expected = "First offset 10 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_first_too_large() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     // 10 is off the end of the buffer
     let offsets_buffer = Buffer::from_slice_ref([10i32, 2i32, 10i32]);
     ArrayData::try_new(
@@ -308,7 +308,7 @@ fn test_validate_offsets_first_too_large() {
 
 #[test]
 fn test_validate_offsets_first_too_large_skipped() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     // 10 is off the end of the buffer, but offset starts at 1 so it is skipped
     let offsets_buffer = Buffer::from_slice_ref([10i32, 2i32, 3i32, 4i32]);
     let data = ArrayData::try_new(
@@ -328,7 +328,7 @@ fn test_validate_offsets_first_too_large_skipped() {
 #[test]
 #[should_panic(expected = "Last offset 8 of Utf8 is larger than values length 6")]
 fn test_validate_offsets_last_too_large() {
-    let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+    let data_buffer = Buffer::from_slice_ref(b"abcdef");
     // 10 is off the end of the buffer
     let offsets_buffer = Buffer::from_slice_ref([5i32, 7i32, 8i32]);
     ArrayData::try_new(
@@ -1027,7 +1027,7 @@ fn test_string_data_from_foreign() {
     };
     let offsets_buffer = unsafe {
         Buffer::from_custom_allocation(
-            NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
+            NonNull::new_unchecked(offsets.as_mut_ptr().cast::<u8>()),
             offsets.len() * std::mem::size_of::<i32>(),
             Arc::new(offsets),
         )

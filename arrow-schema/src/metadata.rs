@@ -128,6 +128,22 @@ impl Metadata {
         self.0 = None;
     }
 
+    /// Returns a reference to the underlying [`Arc`], or `None` if the map is empty.
+    ///
+    /// Useful for pointer-based deduplication (e.g. memory accounting) where
+    /// callers need to detect clones that share the same allocation.
+    pub fn as_arc(&self) -> Option<&Arc<BTreeMap<String, String>>> {
+        self.0.as_ref()
+    }
+
+    /// Consumes `self` and returns the underlying [`Arc`], or `None` if the map is empty.
+    ///
+    /// Useful for zero-copy conversion into wrapper types that also store an
+    /// `Arc<BTreeMap<String, String>>` internally.
+    pub fn into_arc(self) -> Option<Arc<BTreeMap<String, String>>> {
+        self.0
+    }
+
     /// Returns an iterator over the entries, sorted by key.
     pub fn iter(&self) -> MetadataIter<'_> {
         self.0
@@ -145,6 +161,23 @@ impl Metadata {
     /// Returns an iterator over the values, sorted by key.
     pub fn values(&self) -> impl Iterator<Item = &String> {
         self.iter().map(|(_, value)| value)
+    }
+
+    /// Retains only the entries for which `f(&key, &mut value)` returns `true`.
+    ///
+    /// Entries for which `f` returns `false` are removed. Retained entries
+    /// remain in their original (sorted) order.
+    ///
+    /// Clones the underlying map if (and only if) it is shared.
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&String, &mut String) -> bool,
+    {
+        let Some(map) = self.0.as_mut() else { return };
+        Arc::make_mut(map).retain(&mut f);
+        if map.is_empty() {
+            self.0 = None;
+        }
     }
 }
 
@@ -440,10 +473,79 @@ mod tests {
     }
 
     #[test]
+    fn test_as_arc_into_arc() {
+        let empty = Metadata::new();
+        assert!(empty.as_arc().is_none());
+        assert!(empty.into_arc().is_none());
+
+        // Non-empty metadata exposes the same Arc via as_arc / into_arc
+        let metadata = Metadata::from([("a", "1")]);
+        let arc_ref = metadata.as_arc().expect("non-empty");
+        assert_eq!(arc_ref.get("a").map(String::as_str), Some("1"));
+
+        let clone = metadata.clone();
+        // Clones share the same allocation
+        assert!(Arc::ptr_eq(
+            metadata.as_arc().unwrap(),
+            clone.as_arc().unwrap()
+        ));
+
+        let arc = metadata.into_arc().expect("non-empty");
+        assert_eq!(arc.get("a").map(String::as_str), Some("1"));
+        // into_arc gives back the same Arc (no copy)
+        assert!(Arc::ptr_eq(&arc, clone.as_arc().unwrap()));
+    }
+
+    #[test]
     fn test_debug() {
         let metadata = Metadata::from([("b", "2"), ("a", "1")]);
         assert_eq!(format!("{metadata:?}"), r#"{"a": "1", "b": "2"}"#);
         assert_eq!(format!("{:?}", Metadata::new()), "{}");
+    }
+
+    #[test]
+    fn test_retain() {
+        let mut metadata =
+            Metadata::from([("a", "1"), ("b", "2"), ("c", "3"), ("d", "4"), ("e", "5")]);
+
+        metadata.retain(|k, _| -> bool { k >= &String::from("c") });
+
+        let result_map = Metadata::from([("c", "3"), ("d", "4"), ("e", "5")]);
+        assert_eq!(metadata, result_map)
+    }
+
+    #[test]
+    fn test_retain_empty() {
+        let mut metadata = Metadata::new();
+        metadata.retain(|_, _| -> bool { true });
+        assert!(metadata.is_empty())
+    }
+
+    #[test]
+    fn test_retain_all_removed() {
+        let mut metadata = Metadata::from([("a", "1"), ("b", "2"), ("c", "3")]);
+        metadata.retain(|_, _| false);
+        assert!(metadata.is_empty());
+        assert!(metadata.0.is_none());
+    }
+
+    #[test]
+    fn test_retain_copy_on_write() {
+        let mut metadata = Metadata::from([("a", "1"), ("b", "2"), ("c", "3")]);
+        let clone = metadata.clone();
+
+        // both share the same Arc before any mutation:
+        assert!(Arc::ptr_eq(
+            metadata.0.as_ref().expect("non-empty"),
+            clone.0.as_ref().expect("non-empty"),
+        ));
+
+        // retain clones the shared map, leaving the clone untouched:
+        metadata.retain(|k, _| k != "a");
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(clone.len(), 3);
+        assert!(!metadata.contains_key("a"));
+        assert!(clone.contains_key("a"));
     }
 
     #[test]

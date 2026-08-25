@@ -472,7 +472,7 @@ pub fn infer_schema_from_files(
         ..Default::default()
     };
 
-    for fname in files.iter() {
+    for fname in files {
         let f = File::open(fname)?;
         let (schema, records_read) = format.infer_schema(f, Some(records_to_read))?;
         if records_read == 0 {
@@ -1017,15 +1017,13 @@ fn parse(
         })
         .collect();
 
-    arrays.and_then(|arr| {
-        RecordBatch::try_new_with_options(
-            projected_schema,
-            arr,
-            &RecordBatchOptions::new()
-                .with_match_field_names(true)
-                .with_row_count(Some(rows.len())),
-        )
-    })
+    RecordBatch::try_new_with_options(
+        projected_schema,
+        arrays?,
+        &RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(rows.len())),
+    )
 }
 
 fn parse_bool(string: &str) -> Option<bool> {
@@ -2678,7 +2676,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            Err(ArrowError::CsvError(e)) => e.contains("incorrect number of fields"),
             _ => false,
         });
     }
@@ -2907,8 +2905,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::InvalidArgumentError(e)) =>
-                e.to_string().contains("contains null values"),
+            Err(ArrowError::InvalidArgumentError(e)) => e.contains("contains null values"),
             _ => false,
         });
     }

@@ -137,7 +137,8 @@ pub(crate) mod private {
                     T::get_physical_type()
                 ));
             }
-            e => return Err(nyi_err!("Encoding {} is not supported", e)),
+            #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
+            e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
         };
         Ok(encoder)
     }
@@ -869,7 +870,7 @@ mod tests {
         );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_encoder::<Int32Type>(
             0,
             Encoding::BIT_PACKED,

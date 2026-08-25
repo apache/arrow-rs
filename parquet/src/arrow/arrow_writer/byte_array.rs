@@ -323,7 +323,6 @@ impl Storage for ByteArrayStorage {
         key as u64
     }
 
-    #[allow(dead_code)] // not used in parquet_derive, so is dead there
     fn estimated_memory_size(&self) -> usize {
         self.page.capacity() * std::mem::size_of::<u8>()
             + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
@@ -568,6 +567,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         self.dict_encoder.is_some()
     }
 
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active the data page holds RLE
+        // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
+        // fallback shares prefixes with the preceding value.
+        self.dict_encoder.is_none()
+            && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
+    }
+
     fn estimated_memory_size(&self) -> usize {
         let encoder_size = match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),
@@ -646,12 +653,18 @@ where
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
         } else if let Some((min, max)) = compute_min_max(values, indices.clone()) {
-            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
-                encoder.min_value = Some(min);
+            // Compare before copying: `write_gather` runs once per
+            // mini-batch, and a byte-budgeted mini-batch of large values can
+            // hold a single value, so an unconditional copy here would
+            // duplicate every value once for `min` and once for `max`.
+            let min = min.as_ref();
+            if encoder.min_value.as_ref().is_none_or(|m| m.data() > min) {
+                encoder.min_value = Some(min.to_vec().into());
             }
 
-            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
-                encoder.max_value = Some(max);
+            let max = max.as_ref();
+            if encoder.max_value.as_ref().is_none_or(|m| m.data() < max) {
+                encoder.max_value = Some(max.to_vec().into());
             }
         }
     }
@@ -774,7 +787,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
 fn compute_min_max<T>(
     array: T,
     mut valid: impl Iterator<Item = usize>,
-) -> Option<(ByteArray, ByteArray)>
+) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -789,7 +802,7 @@ where
         min = min.min(val);
         max = max.max(val);
     }
-    Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+    Some((min, max))
 }
 
 /// Updates geospatial statistics for the provided array and indices

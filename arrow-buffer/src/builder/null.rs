@@ -192,8 +192,9 @@ impl NullBufferBuilder {
     /// Appends a boolean slice into the builder
     /// to indicate the validations of these items.
     pub fn append_slice(&mut self, slice: &[bool]) {
-        if slice.iter().any(|v| !v) {
-            self.materialize_if_needed()
+        // First check if not already materialized before checking if there are any nulls
+        if self.bitmap_builder.is_none() && slice.iter().any(|v| !v) {
+            self.materialize()
         }
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_slice(slice)

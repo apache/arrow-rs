@@ -135,6 +135,9 @@ impl CachedArrayReader {
             self.inner_position += skipped;
         }
 
+        // For sparse mask reads, this full-batch fallback relies on `MaskCursor`
+        // ending every chunk at a selected row. Predicate fetch expands cached
+        // columns to batch boundaries, so the batch containing that row is loaded.
         let read = self.inner.read_records(self.batch_size)?;
 
         // If there are no remaining records (EOF), return immediately without
@@ -165,7 +168,7 @@ impl CachedArrayReader {
 
     /// Remove batches from cache that have been completely consumed
     /// This is only called for Consumer role readers
-    fn cleanup_consumed_batches(&mut self) {
+    fn cleanup_consumed_batches(&self) {
         let current_batch_id = self.get_batch_id_from_position(self.outer_position);
 
         // Remove batches that are at least one batch behind the current position

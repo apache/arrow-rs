@@ -35,6 +35,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-GH-45185.parquet",
     "ARROW-GH-47662.parquet",
     "README.md",
+    "variants",
 ];
 
 /// Returns the path to 'parquet-testing/bad_data'
@@ -50,7 +51,7 @@ fn bad_data_dir() -> PathBuf {
 #[test]
 // Ensure that if we add a new test the files are added to the tests.
 fn test_invalid_files() {
-    let known_files: HashSet<_> = KNOWN_FILES.iter().cloned().collect();
+    let known_files: HashSet<_> = KNOWN_FILES.iter().copied().collect();
     let mut seen_files = HashSet::new();
 
     let files = std::fs::read_dir(bad_data_dir()).unwrap();

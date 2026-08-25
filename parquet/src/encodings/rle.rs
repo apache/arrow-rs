@@ -41,6 +41,12 @@ use bytes::Bytes;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
 
+/// Maximum bit width for dictionary page indices encoded with RLE / Bit-Packing hybrid encoding.
+///
+/// Parquet dictionary indices are represented as 32-bit signed integers, so dictionary
+/// index bit widths must not exceed 32.
+pub const MAX_RLE_DICTIONARY_BIT_WIDTH: u8 = 32;
+
 /// Number of values in one bit-packed group. The Parquet RLE/bit-packing hybrid
 /// format always bit-packs values in multiples of this count (see the
 /// [format spec](https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3):
@@ -82,7 +88,7 @@ pub struct RleEncoder {
 }
 
 impl RleEncoder {
-    #[allow(unused)]
+    #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
     pub fn new(bit_width: u8, buffer_len: usize) -> Self {
         let buffer = Vec::with_capacity(buffer_len);
         RleEncoder::new_from_buf(bit_width, buffer)
@@ -185,7 +191,7 @@ impl RleEncoder {
     }
 
     #[inline]
-    #[allow(unused)]
+    #[cfg_attr(not(feature = "experimental"), expect(unused))]
     pub fn buffer(&self) -> &[u8] {
         self.bit_writer.buffer()
     }
@@ -195,7 +201,7 @@ impl RleEncoder {
         self.bit_writer.bytes_written()
     }
 
-    #[allow(unused)]
+    #[cfg_attr(not(feature = "experimental"), expect(unused))]
     pub fn is_empty(&self) -> bool {
         self.bit_writer.bytes_written() == 0
     }
@@ -360,7 +366,12 @@ pub struct RleDecoder {
 }
 
 impl RleDecoder {
+    /// Creates a new `RleDecoder` with the specified bit width.
+    ///
+    /// Bit width must be between 0 and 64 (inclusive). Note that for dictionary indices
+    /// specifically, the bit width cannot exceed [`MAX_RLE_DICTIONARY_BIT_WIDTH`] (32).
     pub fn new(bit_width: u8) -> Self {
+        debug_assert!(bit_width <= 64, "Bit width must be <= 64");
         RleDecoder {
             bit_width,
             rle_left: 0,
@@ -389,7 +400,7 @@ impl RleDecoder {
     // These functions inline badly, they tend to inline and then create very large loop unrolls
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
-    #[allow(unused)]
+    #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
     pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= size_of::<u64>());
 
@@ -652,7 +663,7 @@ mod tests {
         // Test data: 0-7 with bit width 3
         // 00000011 10001000 11000110 11111010
         let data = vec![0x03, 0x88, 0xC6, 0xFA];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; BIT_PACK_GROUP_SIZE];
         let expected = vec![0, 1, 2, 3, 4, 5, 6, 7];
@@ -666,7 +677,7 @@ mod tests {
         // Test data: 0-7 with bit width 3
         // 00000011 10001000 11000110 11111010
         let data = vec![0x03, 0x88, 0xC6, 0xFA];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let expected = vec![2, 3, 4, 5, 6, 7];
         let skipped = decoder.skip(2).expect("skipping values");
@@ -707,7 +718,7 @@ mod tests {
             0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x0A,
         ];
 
-        let mut decoder: RleDecoder = RleDecoder::new(1);
+        let mut decoder = RleDecoder::new(1);
         decoder.set_data(data1.into()).unwrap();
         let mut buffer = vec![false; 100];
         let mut expected = vec![];
@@ -750,7 +761,7 @@ mod tests {
             0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x0A,
         ];
 
-        let mut decoder: RleDecoder = RleDecoder::new(1);
+        let mut decoder = RleDecoder::new(1);
         decoder.set_data(data1.into()).unwrap();
         let mut buffer = vec![true; 50];
         let expected = vec![false; 50];
@@ -788,7 +799,7 @@ mod tests {
         // 00000110 00000000 00001000 00000001 00001010 00000010
         let dict = vec![10, 20, 30];
         let data = vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 12];
         let expected = vec![10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
@@ -801,7 +812,7 @@ mod tests {
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
         let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; 12];
         let expected = vec![
@@ -819,7 +830,7 @@ mod tests {
         // 00000110 00000000 00001000 00000001 00001010 00000010
         let dict = vec![10, 20, 30];
         let data = vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 10];
         let expected = vec![10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
@@ -836,7 +847,7 @@ mod tests {
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
         let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
-        let mut decoder: RleDecoder = RleDecoder::new(3);
+        let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
         let expected = vec!["eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff"];
