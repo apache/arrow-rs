@@ -496,6 +496,24 @@ impl ParquetMetaData {
         &self.row_groups
     }
 
+    /// Returns the number of rows in `row_group_idx`.
+    ///
+    /// Returns an error if the row group index is out of bounds or its row
+    /// count cannot be represented as a [`usize`].
+    pub fn row_group_num_rows(&self, row_group_idx: usize) -> Result<usize> {
+        self.row_groups
+            .get(row_group_idx)
+            .ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Row group index {row_group_idx} out of bounds for file with {} row groups",
+                    self.num_row_groups()
+                ))
+            })?
+            .num_rows()
+            .try_into()
+            .map_err(|e| ParquetError::General(format!("Row count overflow: {e}")))
+    }
+
     /// Returns the page index for this file if loaded
     ///
     /// Returns `None` if the parquet file lacks page indexes or

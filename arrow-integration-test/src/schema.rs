@@ -728,4 +728,45 @@ mod tests {
         let schema = schema_from_json(&value).unwrap();
         assert!(schema.metadata.is_empty());
     }
+
+    #[test]
+    fn field_metadata_json() {
+        let schema = Schema::new(vec![
+            Field::new("field", DataType::Utf8, false)
+                .with_metadata(HashMap::from([("key".to_string(), "value".to_string())])),
+        ]);
+
+        let json = schema_to_json(&schema);
+
+        assert_eq!(
+            json["fields"][0]["metadata"],
+            serde_json::json!({"key": "value"})
+        );
+        assert_eq!(schema_from_json(&json).unwrap(), schema);
+    }
+
+    #[test]
+    fn dictionary_field_metadata_json() {
+        #[expect(deprecated)]
+        let field = Field::new_dict(
+            "dictionary",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            42,
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            "dictionary_key".to_string(),
+            "dictionary_value".to_string(),
+        )]));
+        let schema = Schema::new(vec![field]);
+
+        let json = schema_to_json(&schema);
+
+        assert_eq!(
+            json["fields"][0]["metadata"],
+            serde_json::json!({"dictionary_key": "dictionary_value"})
+        );
+        assert_eq!(schema_from_json(&json).unwrap(), schema);
+    }
 }
