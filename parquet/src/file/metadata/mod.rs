@@ -208,7 +208,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
-pub trait PageIndexProvider: HeapSize + Send + Sync + std::fmt::Debug {
+pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
     /// Returns `true` if offset index structures are present
     ///
     /// This indicates whether [`OffsetIndexMetaData`] structures were loaded or created.
@@ -870,11 +870,18 @@ impl ParquetMetaData {
         #[cfg(not(feature = "encryption"))]
         let encryption_size = 0usize;
 
-        let page_index_size = self
-            .page_index
-            .as_ref()
-            .map(|arc| std::mem::size_of::<Arc<dyn PageIndexProvider>>() + arc.heap_size())
-            .unwrap_or(0);
+        // We can only determine the heap size for PageIndex. Custom providers are
+        // out of scope.
+        let page_index_size = if let Some(page_index) = self.page_index.as_ref() {
+            if let Some(page_index) = page_index.as_any().downcast_ref::<PageIndex>() {
+                let page_index = Some(Arc::new(page_index.clone()));
+                page_index.heap_size()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
 
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
@@ -2732,9 +2739,9 @@ mod tests {
 
         // Size with page index (includes Arc overhead plus PageIndex heap size)
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3232;
+        let bigger_expected_size = 3233;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3400;
+        let bigger_expected_size = 3401;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
