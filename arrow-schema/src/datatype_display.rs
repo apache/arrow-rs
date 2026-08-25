@@ -174,10 +174,13 @@ impl Display for DataType {
             }
             Self::RunEndEncoded(run_ends_field, values_field) => {
                 write!(f, "RunEndEncoded(")?;
-                let run_ends_str = format_field(run_ends_field);
                 let values_str = format_field(values_field);
 
-                write!(f, "{run_ends_str}, {values_str})")?;
+                write!(
+                    f,
+                    "'run_ends': {}, {values_str})",
+                    run_ends_field.data_type()
+                )?;
                 Ok(())
             }
         }
@@ -478,7 +481,7 @@ mod tests {
         let values_field = Arc::new(Field::new("values", DataType::Int32, true));
         let ree_data_type = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
         let ree_data_type_string = ree_data_type.to_string();
-        let expected_string = "RunEndEncoded(\"run_ends\": non-null UInt32, \"values\": Int32)";
+        let expected_string = "RunEndEncoded('run_ends': UInt32, \"values\": Int32)";
         assert_eq!(ree_data_type_string, expected_string);
 
         // Test with metadata
@@ -488,7 +491,7 @@ mod tests {
         let ree_data_type_with_metadata =
             DataType::RunEndEncoded(Arc::new(run_ends_field_with_metadata), values_field.clone());
         let ree_data_type_with_metadata_string = ree_data_type_with_metadata.to_string();
-        let expected_string_with_metadata = "RunEndEncoded(\"run_ends\": non-null UInt32, metadata: {\"key\": \"value\"}, \"values\": Int32)";
+        let expected_string_with_metadata = "RunEndEncoded('run_ends': UInt32, \"values\": Int32)";
         assert_eq!(
             ree_data_type_with_metadata_string,
             expected_string_with_metadata
