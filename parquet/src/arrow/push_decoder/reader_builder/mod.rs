@@ -23,8 +23,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowGroupPlan,
+    RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -33,13 +33,261 @@ use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::util::push_buffers::PushBuffers;
+use crate::util::push_buffers::{BufferId, PushBuffers};
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
-use std::ops::Range;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Bound, Range};
 use std::sync::{Arc, RwLock};
+
+/// The independently releasable byte spans that may be needed by each queued
+/// row group.
+///
+/// This is deliberately smaller than a general retention set: it describes
+/// only the projected and predicate columns in the row-group plan. Adjacent
+/// column ranges are coalesced into spans. Admission splits a coalesced pushed
+/// buffer into owned `Bytes` values, while release uses row-group ownership
+/// instead of rescanning every logical range.
+#[derive(Debug)]
+pub(crate) struct BufferRetentionPlan {
+    retained_spans: BTreeMap<u64, Vec<RetainedSpan>>,
+    remaining_uses: BTreeMap<usize, usize>,
+    admitted_buffers: BTreeMap<usize, Vec<BufferId>>,
+}
+
+#[derive(Debug)]
+struct RetainedSpan {
+    row_group_idx: usize,
+    range: Range<u64>,
+}
+
+impl BufferRetentionPlan {
+    pub(crate) fn new(
+        metadata: &ParquetMetaData,
+        row_group_plan: &RowGroupPlan,
+        projection: &ProjectionMask,
+        filter: Option<&RowFilter>,
+    ) -> Self {
+        let row_group_indices = match row_group_plan {
+            RowGroupPlan::Global { row_groups, .. } => row_groups
+                .clone()
+                .unwrap_or_else(|| (0..metadata.num_row_groups()).collect()),
+            RowGroupPlan::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
+            RowGroupPlan::Conflicting => Vec::new(),
+        };
+
+        let predicate_projections = filter
+            .into_iter()
+            .flat_map(|filter| {
+                filter
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.projection())
+            })
+            .collect::<Vec<_>>();
+
+        let mut remaining_uses = BTreeMap::new();
+        let mut row_group_ranges: BTreeMap<usize, Vec<Range<u64>>> = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+
+        for row_group_idx in row_group_indices {
+            // `RemainingRowGroups` performs the user-facing validation. Do
+            // not dereference an invalid index while preparing admission
+            // metadata, otherwise an invalid plan would panic before build
+            // can return its normal error.
+            if row_group_idx >= metadata.num_row_groups() {
+                continue;
+            }
+            *remaining_uses.entry(row_group_idx).or_insert(0) += 1;
+
+            for (column_idx, column) in metadata
+                .row_group(row_group_idx)
+                .columns()
+                .iter()
+                .enumerate()
+            {
+                let retained = projection.leaf_included(column_idx)
+                    || predicate_projections
+                        .iter()
+                        .any(|projection| projection.leaf_included(column_idx));
+                if !retained {
+                    continue;
+                }
+
+                let (start, length) = column.byte_range();
+                let end = start + length;
+                if length == 0 || !seen.insert((row_group_idx, start, end)) {
+                    continue;
+                }
+                row_group_ranges
+                    .entry(row_group_idx)
+                    .or_default()
+                    .push(start..end);
+            }
+        }
+
+        let mut retained_spans: BTreeMap<u64, Vec<RetainedSpan>> = BTreeMap::new();
+        for (row_group_idx, mut ranges) in row_group_ranges {
+            ranges.sort_unstable_by_key(|range| (range.start, range.end));
+
+            let mut spans: Vec<Range<u64>> = Vec::new();
+            for range in ranges {
+                if let Some(previous) = spans.last_mut()
+                    && range.start <= previous.end
+                {
+                    previous.end = previous.end.max(range.end);
+                    continue;
+                }
+                spans.push(range);
+            }
+
+            for range in spans {
+                retained_spans
+                    .entry(range.start)
+                    .or_default()
+                    .push(RetainedSpan {
+                        row_group_idx,
+                        range,
+                    });
+            }
+        }
+
+        Self {
+            retained_spans,
+            remaining_uses,
+            admitted_buffers: BTreeMap::new(),
+        }
+    }
+
+    /// Carry physical entries that were admitted before an adaptive decoder
+    /// rebuild. New projection/filter scopes are built by the caller; these
+    /// already-owned entries still need to be released with their row group.
+    pub(crate) fn merge_admitted(&mut self, previous: BufferRetentionPlan) {
+        for (row_group_idx, buffer_ids) in previous.admitted_buffers {
+            self.admitted_buffers
+                .entry(row_group_idx)
+                .or_default()
+                .extend(buffer_ids);
+        }
+    }
+
+    pub(crate) fn admit(
+        &mut self,
+        buffers: &mut PushBuffers,
+        range: Range<u64>,
+        data: Bytes,
+    ) -> Result<(), ParquetError> {
+        if range.start > range.end {
+            return Err(general_err!("Invalid range {}..{}", range.start, range.end));
+        }
+        let expected = range.end - range.start;
+        if expected != data.len() as u64 {
+            return Err(general_err!(
+                "Buffer length ({}) does not match length ({}) of range {}..{}",
+                data.len(),
+                expected,
+                range.start,
+                range.end
+            ));
+        }
+
+        let mut overlaps = Vec::new();
+        if let Some((&predecessor_start, retained_ranges)) =
+            self.retained_spans.range(..=range.start).next_back()
+        {
+            for retained in retained_ranges {
+                if !self.remaining_uses.contains_key(&retained.row_group_idx) {
+                    continue;
+                }
+                let start = range.start.max(retained.range.start);
+                let end = range.end.min(retained.range.end);
+                if start < end {
+                    overlaps.push((retained.row_group_idx, start..end));
+                }
+            }
+
+            for retained_ranges in self.retained_spans.range((
+                Bound::Excluded(predecessor_start),
+                Bound::Excluded(range.end),
+            )) {
+                for retained in retained_ranges.1 {
+                    if !self.remaining_uses.contains_key(&retained.row_group_idx) {
+                        continue;
+                    }
+                    let start = range.start.max(retained.range.start);
+                    let end = range.end.min(retained.range.end);
+                    if start < end {
+                        overlaps.push((retained.row_group_idx, start..end));
+                    }
+                }
+            }
+        } else {
+            for retained_ranges in self.retained_spans.range(range.clone()) {
+                for retained in retained_ranges.1 {
+                    if !self.remaining_uses.contains_key(&retained.row_group_idx) {
+                        continue;
+                    }
+                    let start = range.start.max(retained.range.start);
+                    let end = range.end.min(retained.range.end);
+                    if start < end {
+                        overlaps.push((retained.row_group_idx, start..end));
+                    }
+                }
+            }
+        }
+
+        if overlaps.is_empty() {
+            // The input buffer can be dropped immediately: no future reader
+            // request can be satisfied from bytes outside the retention plan.
+            return Ok(());
+        }
+
+        let move_original = overlaps.len() == 1 && overlaps[0].1 == range;
+        if move_original {
+            let (row_group_idx, retained_range) = overlaps.into_iter().next().unwrap();
+            let buffer_id = buffers.push_owned_range(retained_range.clone(), data)?;
+            self.admitted_buffers
+                .entry(row_group_idx)
+                .or_default()
+                .push(buffer_id);
+        } else {
+            for (row_group_idx, retained_range) in overlaps {
+                let start = (retained_range.start - range.start) as usize;
+                let end = (retained_range.end - range.start) as usize;
+                let retained_data = Bytes::copy_from_slice(&data[start..end]);
+
+                let buffer_id = buffers.push_owned_range(retained_range.clone(), retained_data)?;
+                self.admitted_buffers
+                    .entry(row_group_idx)
+                    .or_default()
+                    .push(buffer_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn release_row_group(&mut self, buffers: &mut PushBuffers, row_group_idx: usize) {
+        let Some(remaining) = self.remaining_uses.get_mut(&row_group_idx) else {
+            return;
+        };
+
+        if *remaining > 1 {
+            *remaining -= 1;
+            return;
+        }
+
+        self.remaining_uses.remove(&row_group_idx);
+        if let Some(buffer_ids) = self.admitted_buffers.remove(&row_group_idx) {
+            buffers.remove_ids(&buffer_ids);
+        }
+    }
+}
 
 /// The current row group being read, its read plan, and its offset/limit budget.
 #[derive(Debug)]
@@ -271,6 +519,9 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// The underlying data store
     buffers: PushBuffers,
+
+    /// Admission and row-group ownership for staged bytes.
+    retention_plan: BufferRetentionPlan,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -290,6 +541,8 @@ pub(crate) struct RowGroupReaderBuilderParts {
     /// Bytes already pushed into the decoder, carried across a rebuild so they
     /// are not re-requested.
     pub buffers: PushBuffers,
+    /// Admission and row-group ownership carried across a rebuild.
+    pub retention_plan: BufferRetentionPlan,
 }
 
 impl RowGroupReaderBuilder {
@@ -305,6 +558,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        retention_plan: BufferRetentionPlan,
     ) -> Self {
         Self {
             batch_size,
@@ -317,6 +571,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
+            retention_plan,
         }
     }
 
@@ -337,6 +592,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: _,
             buffers,
+            retention_plan,
         } = self;
         RowGroupReaderBuilderParts {
             batch_size,
@@ -347,6 +603,7 @@ impl RowGroupReaderBuilder {
             metrics,
             row_selection_policy,
             buffers,
+            retention_plan,
         }
     }
 
@@ -356,7 +613,19 @@ impl RowGroupReaderBuilder {
         ranges: Vec<Range<u64>>,
         buffers: Vec<Bytes>,
     ) -> Result<(), ParquetError> {
-        self.buffers.push_ranges(ranges, buffers)
+        if ranges.len() != buffers.len() {
+            return Err(general_err!(
+                "Number of ranges ({}) must match number of buffers ({})",
+                ranges.len(),
+                buffers.len()
+            ));
+        }
+
+        for (range, buffer) in ranges.into_iter().zip(buffers) {
+            self.retention_plan
+                .admit(&mut self.buffers, range, buffer)?;
+        }
+        Ok(())
     }
 
     /// True iff the inner state is `Finished`. This is the only state in
@@ -372,9 +641,19 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
+    #[cfg(test)]
+    pub(crate) fn num_buffers(&self) -> usize {
+        self.buffers.num_buffers()
+    }
+
     /// Clear any staged ranges currently buffered for future decode work.
     pub fn clear_all_ranges(&mut self) {
         self.buffers.clear_all_ranges();
+    }
+
+    pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
+        self.retention_plan
+            .release_row_group(&mut self.buffers, row_group_idx);
     }
 
     /// take the current state, leaving None in its place.
@@ -533,6 +812,7 @@ impl RowGroupReaderBuilder {
                 if !plan_builder.selects_any() {
                     // ruled out entire row group
                     self.filter = Some(filter_info.into_filter());
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         RowGroupBuildResult::Finished {
@@ -608,7 +888,7 @@ impl RowGroupReaderBuilder {
                     row_count,
                     &self.metadata,
                     predicate.projection(),
-                    &mut self.buffers,
+                    &self.buffers,
                 )?;
 
                 let cache_options = filter_info.cache_builder().producer();
@@ -702,6 +982,7 @@ impl RowGroupReaderBuilder {
 
                 if rows_before_budget == 0 {
                     // ruled out entire row group
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         RowGroupBuildResult::Finished { remaining_budget },
@@ -710,6 +991,7 @@ impl RowGroupReaderBuilder {
 
                 if rows_after_budget == 0 {
                     // no rows left after applying limit/offset
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         RowGroupBuildResult::Finished { remaining_budget },
@@ -783,7 +1065,7 @@ impl RowGroupReaderBuilder {
                     row_count,
                     &self.metadata,
                     &self.projection,
-                    &mut self.buffers,
+                    &self.buffers,
                 )?;
 
                 let plan = plan_builder.build();
@@ -801,6 +1083,8 @@ impl RowGroupReaderBuilder {
                     array_reader_builder
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
+
+                self.release_row_group(row_group_idx);
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
                 NextState::result(

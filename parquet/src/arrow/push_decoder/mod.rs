@@ -31,7 +31,9 @@ use crate::file::metadata::ParquetMetaData;
 pub use crate::util::push_buffers::PushBuffers;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
-use reader_builder::{RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts};
+use reader_builder::{
+    BufferRetentionPlan, RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
+};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
 use std::ops::Range;
 use std::sync::Arc;
@@ -203,6 +205,8 @@ pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<PushDecoderInput>;
 pub struct PushDecoderInput {
     /// Bytes pushed into the decoder, awaiting decode.
     buffers: PushBuffers,
+    /// Ownership state for bytes admitted before an adaptive rebuild.
+    retention_plan: Option<BufferRetentionPlan>,
 }
 
 /// Methods for building a ParquetDecoder. See the base [`ArrowReaderBuilder`] for
@@ -245,7 +249,10 @@ impl ParquetPushDecoderBuilder {
     /// from, so bytes already fetched are not requested again.
     pub fn with_buffers(self, buffers: PushBuffers) -> Self {
         Self {
-            input: PushDecoderInput { buffers },
+            input: PushDecoderInput {
+                buffers,
+                retention_plan: None,
+            },
             ..self
         }
     }
@@ -305,7 +312,11 @@ impl ParquetPushDecoderBuilder {
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
-            input: PushDecoderInput { buffers },
+            input:
+                PushDecoderInput {
+                    buffers,
+                    retention_plan: previous_retention_plan,
+                },
             metadata: parquet_metadata,
             schema,
             fields,
@@ -324,6 +335,24 @@ impl ParquetPushDecoderBuilder {
             .as_ref()
             .is_some_and(|filter| !filter.predicates.is_empty());
 
+        let mut retention_plan = BufferRetentionPlan::new(
+            &parquet_metadata,
+            &row_group_plan,
+            &projection,
+            filter.as_ref(),
+        );
+        let mut buffers = buffers;
+        if let Some(previous_retention_plan) = previous_retention_plan {
+            retention_plan.merge_admitted(previous_retention_plan);
+        } else {
+            let (file_len, existing_ranges) = buffers.into_ranges();
+            let mut admitted_buffers = PushBuffers::new(file_len);
+            for (range, data) in existing_ranges {
+                retention_plan.admit(&mut admitted_buffers, range, data)?;
+            }
+            buffers = admitted_buffers;
+        }
+
         // Prepare to build RowGroup readers. `buffers` carries any bytes the
         // caller already pushed (preserved across `into_builder`); a fresh
         // builder supplies an empty `PushBuffers`.
@@ -337,6 +366,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            retention_plan,
         );
 
         // Initialize the decoder with the configured options
@@ -379,10 +409,14 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         metrics,
         row_selection_policy,
         buffers,
+        retention_plan,
     } = reader_builder;
 
     ArrowReaderBuilder {
-        input: PushDecoderInput::default(),
+        input: PushDecoderInput {
+            buffers,
+            retention_plan: Some(retention_plan),
+        },
         metadata,
         schema,
         fields,
@@ -396,9 +430,6 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         metrics,
         max_predicate_cache_size,
     }
-    // Carry the decoder's already-fetched bytes across the rebuild so the new
-    // decoder does not re-request them.
-    .with_buffers(buffers)
 }
 
 /// A push based Parquet Decoder
@@ -540,8 +571,10 @@ impl ParquetPushDecoder {
 
     /// Returns the total number of buffered bytes in the decoder
     ///
-    /// This is the sum of the size of all [`Bytes`] that has been pushed to the
-    /// decoder but not yet consumed.
+    /// This is the sum of the bytes in the independently owned staged ranges.
+    /// Coalesced input is split during admission, so this value reflects the
+    /// allocations still held by the decoder rather than the original input
+    /// allocation.
     ///
     /// Note that this does not include any overhead of the internal data
     /// structures and that since [`Bytes`] are ref counted memory, this may not
@@ -550,6 +583,11 @@ impl ParquetPushDecoder {
     /// This can be used to monitor memory usage of the decoder.
     pub fn buffered_bytes(&self) -> u64 {
         self.state.buffered_bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn num_buffers(&self) -> usize {
+        self.state.num_buffers()
     }
 
     /// Clear any staged byte ranges currently buffered for future decode work.
@@ -874,6 +912,20 @@ impl ParquetDecoderState {
         }
     }
 
+    #[cfg(test)]
+    fn num_buffers(&self) -> usize {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.num_buffers(),
+            ParquetDecoderState::Finished => 0,
+        }
+    }
+
     /// Clear any staged ranges currently buffered in the decoder.
     fn clear_all_ranges(&mut self) {
         match self {
@@ -983,7 +1035,25 @@ mod test {
     use bytes::Bytes;
     use std::fmt::Debug;
     use std::ops::Range;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, LazyLock};
+
+    struct TrackedBuffer {
+        data: Vec<u8>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl AsRef<[u8]> for TrackedBuffer {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    impl Drop for TrackedBuffer {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
 
     /// Test decoder struct size (as they are copied around on each transition, they
     /// should not grow too large)
@@ -1016,6 +1086,121 @@ mod test {
         let all_output = concat_batches(&TEST_BATCH.schema(), &results).unwrap();
         // Check that the output matches the input batch
         assert_eq!(all_output, *TEST_BATCH);
+    }
+
+    #[test]
+    fn test_decoder_full_file_admission_detaches_and_releases_row_groups() {
+        let cases = [
+            (vec![0, 1], vec![0, 1]),
+            (vec![1, 0], vec![1, 0]),
+            (vec![0], vec![0]),
+            (vec![1], vec![1]),
+            (vec![0, 0], vec![0, 0]),
+        ];
+
+        for (row_groups, expected_row_groups) in cases {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let mut decoder =
+                ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+                    .unwrap()
+                    .with_row_groups(row_groups.clone())
+                    .build()
+                    .unwrap();
+
+            decoder
+                .push_range(
+                    test_file_range(),
+                    Bytes::from_owner(TrackedBuffer {
+                        data: TEST_FILE_DATA.to_vec(),
+                        dropped: Arc::clone(&dropped),
+                    }),
+                )
+                .unwrap();
+
+            assert!(
+                dropped.load(Ordering::SeqCst),
+                "admitting a coalesced buffer must drop its original backing allocation"
+            );
+            assert_eq!(
+                decoder.num_buffers(),
+                expected_row_groups
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                "contiguous column ranges should coalesce to one allocation per row group"
+            );
+            let mut previous_buffered_bytes = decoder.buffered_bytes();
+            assert!(previous_buffered_bytes > 0);
+            assert!(previous_buffered_bytes < test_file_len());
+
+            for (position, row_group_idx) in expected_row_groups.iter().copied().enumerate() {
+                assert_eq!(
+                    expect_data(decoder.try_decode()),
+                    TEST_BATCH.slice(row_group_idx * 200, 200)
+                );
+                let buffered_bytes = decoder.buffered_bytes();
+                let final_use = !expected_row_groups[position + 1..].contains(&row_group_idx);
+                if final_use {
+                    assert!(
+                        buffered_bytes < previous_buffered_bytes,
+                        "row_groups {row_groups:?}: finishing final use of row group {row_group_idx} should release its retained bytes: {previous_buffered_bytes} -> {buffered_bytes}"
+                    );
+                } else {
+                    assert_eq!(
+                        buffered_bytes, previous_buffered_bytes,
+                        "row_groups {row_groups:?}: repeated row group {row_group_idx} must retain bytes until its final use"
+                    );
+                }
+                previous_buffered_bytes = buffered_bytes;
+            }
+
+            assert_eq!(decoder.buffered_bytes(), 0);
+            expect_finished(decoder.try_decode());
+        }
+    }
+
+    #[test]
+    fn test_decoder_full_file_admission_releases_skipped_row_groups() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_limit(0)
+            .build()
+            .unwrap();
+
+        decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+        assert!(decoder.buffered_bytes() > 0);
+
+        expect_finished(decoder.try_decode());
+        assert_eq!(decoder.buffered_bytes(), 0);
+    }
+
+    #[test]
+    fn test_decoder_with_buffers_uses_the_same_admission_path() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut buffers = PushBuffers::default();
+        buffers
+            .push_range(
+                test_file_range(),
+                Bytes::from_owner(TrackedBuffer {
+                    data: TEST_FILE_DATA.to_vec(),
+                    dropped: Arc::clone(&dropped),
+                }),
+            )
+            .unwrap();
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_buffers(buffers)
+            .build()
+            .unwrap();
+
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(decoder.buffered_bytes() > 0);
+        assert!(decoder.buffered_bytes() < test_file_len());
+        assert_eq!(expect_data(decoder.try_decode()), TEST_BATCH.slice(0, 200));
     }
 
     /// Decode the entire file incrementally, simulating a scenario where data is
@@ -1068,15 +1253,17 @@ mod test {
         decoder
             .push_range(test_file_range(), TEST_FILE_DATA.clone())
             .unwrap();
-        assert_eq!(decoder.buffered_bytes(), test_file_len());
+        assert!(decoder.buffered_bytes() > 0);
+        assert!(decoder.buffered_bytes() < test_file_len());
 
-        // The current row group reader is built from the prefetched bytes, but
-        // the speculative full-file range remains staged in the decoder.
+        // The current row group reader is built from the prefetched bytes, and
+        // the bytes consumed for that row group are released from staging.
         let batch1 = expect_data(decoder.try_decode());
         assert_eq!(batch1, TEST_BATCH.slice(0, 100));
-        assert_eq!(decoder.buffered_bytes(), test_file_len());
+        let buffered_after_first = decoder.buffered_bytes();
+        assert!(buffered_after_first < test_file_len());
 
-        // All of the buffer is released
+        // The remaining speculative bytes can still be released explicitly.
         decoder.clear_all_ranges();
         assert_eq!(decoder.buffered_bytes(), 0);
 
@@ -2461,7 +2648,8 @@ mod test {
     #[test]
     fn test_into_builder_preserves_buffered_bytes() {
         let mut decoder = prefetched_decoder(1024);
-        assert_eq!(decoder.buffered_bytes(), test_file_len());
+        assert!(decoder.buffered_bytes() > 0);
+        assert!(decoder.buffered_bytes() < test_file_len());
 
         // Drain RG0.
         let reader0 = expect_data(decoder.try_next_reader());
