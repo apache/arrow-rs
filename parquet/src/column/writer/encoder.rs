@@ -132,6 +132,27 @@ pub trait ColumnValueEncoder {
     /// Returns true if this encoder has a dictionary page
     fn has_dictionary(&self) -> bool;
 
+    /// Returns true if the encoder compresses each value against the value
+    /// immediately before it, within the current page.
+    ///
+    /// For such encodings a page boundary is not free: flushing discards the
+    /// previous value, so the first value of the next page is stored in full.
+    /// [`GenericColumnWriter::should_add_data_page`] uses this to exempt a
+    /// page's mandatory first value from the data page byte limit.
+    ///
+    /// Per encoding:
+    /// * `DELTA_BYTE_ARRAY`: true. Each value is stored as the length of the
+    ///   prefix it shares with its predecessor plus the remaining suffix.
+    /// * Everything else: false, the default. `PLAIN` and
+    ///   `DELTA_LENGTH_BYTE_ARRAY` store a value at the same cost wherever it
+    ///   lands, and a dictionary outlives the pages that index into it, so no
+    ///   page boundary makes a value more expensive.
+    ///
+    /// [`GenericColumnWriter::should_add_data_page`]: crate::column::writer::GenericColumnWriter::should_add_data_page
+    fn compresses_against_previous_value(&self) -> bool {
+        false
+    }
+
     /// Returns the estimated total memory usage of the encoder
     ///
     fn estimated_memory_size(&self) -> usize;
@@ -327,6 +348,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active `self.encoder` is unused: the
+        // data page holds RLE indices, which carry no cross-value state.
+        self.dict_encoder.is_none() && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
     }
 
     fn estimated_memory_size(&self) -> usize {
