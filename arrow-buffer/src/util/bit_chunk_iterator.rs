@@ -88,6 +88,8 @@ impl<'a> UnalignedBitChunk<'a> {
         }
 
         // Read into prefix and suffix as needed
+        // Safety: u8 has alignment 1 so any byte slice can be aligned to u64; u64 has no
+        // invalid bit patterns so reinterpreting initialized u8 bytes as u64 is sound.
         let (prefix, mut chunks, suffix) = unsafe { buffer.align_to::<u64>() };
         assert!(
             prefix.len() < 8 && suffix.len() < 8,
@@ -284,6 +286,8 @@ impl<'a> BitChunks<'a> {
             // might be one more than sizeof(u64) if the offset is in the middle of a byte
             let byte_len = ceil(bit_len + bit_offset, 8);
             // pointer to remainder bytes after all complete chunks
+            // Safety: the buffer contains `chunk_len * 8 + ceil(remainder_len + bit_offset, 8)`
+            // bytes, so offsetting by `chunk_len * 8` and reading `byte_len` bytes is in-bounds.
             let base = unsafe {
                 self.buffer
                     .as_ptr()
@@ -373,6 +377,9 @@ impl Iterator for BitChunkIterator<'_> {
 
         // bit-packed buffers are stored starting with the least-significant byte first
         // so when reading as u64 on a big-endian machine, the bytes need to be swapped
+        // Safety: `index < self.chunk_len` and the buffer is at least `chunk_len * 8` bytes long,
+        // so `raw_data.add(index)` is a valid in-bounds pointer; `read_unaligned` handles
+        // any pointer alignment.
         let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
 
         let bit_offset = self.bit_offset;
@@ -382,6 +389,8 @@ impl Iterator for BitChunkIterator<'_> {
         } else {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
+            // Safety: the buffer has at least one byte past the last chunk (the remainder byte
+            // needed for `bit_offset > 0`), so `index + 1` is within bounds.
             let next =
                 unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
 

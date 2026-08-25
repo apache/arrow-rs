@@ -322,7 +322,9 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Should FFI be checking validity?
+        // Safety: all fields (length, null_count, null buffer, data buffers, child data) were
+        // derived from the C Data Interface schema and array, which the caller of `from_ffi`
+        // guarantees follow the spec; the constructed `ArrayData` satisfies its invariants.
         Ok(unsafe {
             ArrayData::new_unchecked(
                 self.data_type,
@@ -482,7 +484,8 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
-                // get last offset
+                // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
+                // gives the number of i32 elements, and the last index is valid and within bounds.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
@@ -496,7 +499,7 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i64>();
-                // get last offset
+                // Safety: same as the i32 case above but for i64 offsets.
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
             // View types: these have variadic buffers.
