@@ -20,6 +20,8 @@
 //! These functions parse thrift-encoded metadata from a byte slice
 //! into the corresponding Rust structures
 
+use std::sync::Arc;
+
 use crate::errors::ParquetError;
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
@@ -282,7 +284,7 @@ pub(crate) fn parse_page_index(
     if !page_index.has_column_indexes() && !page_index.has_offset_indexes() {
         return Ok(());
     }
-    metadata.set_page_index(Some(page_index));
+    metadata.set_page_index(Some(Arc::new(page_index)));
     Ok(())
 }
 

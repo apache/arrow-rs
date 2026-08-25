@@ -840,12 +840,12 @@ impl ParquetMetaData {
             .map_err(|e| ParquetError::General(format!("Row count overflow: {e}")))
     }
 
-    /// Returns the page index for this file if loaded
+    /// Returns a [`PageIndexProvider`] for this file
     ///
     /// Returns `None` if the parquet file lacks page indexes or
-    /// [ArrowReaderOptions::with_page_index] was set to false.
+    /// [ArrowReaderOptions::with_page_index_policy] was set to [`PageIndexPolicy::Skip`].
     ///
-    /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
+    /// [ArrowReaderOptions::with_page_index_policy]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index_policy
     pub fn page_index(&self) -> Option<&Arc<dyn PageIndexProvider>> {
         self.page_index.as_ref()
     }
@@ -884,8 +884,8 @@ impl ParquetMetaData {
     }
 
     /// Override the page index
-    pub(crate) fn set_page_index(&mut self, index: Option<PageIndex>) {
-        self.page_index = index.map(|idx| Arc::new(idx) as Arc<dyn PageIndexProvider>);
+    pub(crate) fn set_page_index(&mut self, index: Option<Arc<dyn PageIndexProvider>>) {
+        self.page_index = index;
     }
 }
 
@@ -989,7 +989,14 @@ impl ParquetMetaDataBuilder {
         &self.0.row_groups
     }
 
-    /// Sets the column index
+    /// Sets the [`PageIndexProvider`]
+    ///
+    /// This crate provides [`PageIndex`] as a default implementation. Custom providers
+    /// can implement application-specific behavior such as lazy parsing or filtered access.
+    ///
+    /// For an example see [`custom_page_index.rs`]
+    ///
+    /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/custom_page_index.rs
     pub fn set_page_index(mut self, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
         self.0.page_index = page_index;
         self

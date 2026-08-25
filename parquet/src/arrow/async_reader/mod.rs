@@ -1780,7 +1780,7 @@ mod tests {
             .unwrap();
 
         let page_index = PageIndex::new(None, Some(vec![]));
-        metadata.set_page_index(Some(page_index));
+        metadata.set_page_index(Some(Arc::new(page_index)));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
