@@ -336,10 +336,16 @@ where
         self.write_continuation(write_options, layout.padded_metadata_len as i32)?;
         self.write_all(metadata)?;
         self.write_all(&PADDING[..layout.metadata_padding])?;
-        for enc in encoded_buffers.drain(..) {
+        for enc in encoded_buffers.iter_mut() {
             self.write_all(enc.as_slice())?;
             self.write_all(&PADDING[..pad_to_alignment(alignment, enc.len())])?;
         }
+        // Clearing the buffers after the loop instead of draining the vec is
+        // a deliberate choice. It seems to perform much better on certain
+        // ARM chips.
+        //
+        // See: https://github.com/apache/arrow-rs/pull/10128#issuecomment-5406019272
+        encoded_buffers.clear();
 
         Ok((layout.padded_header_len, body_len))
     }
