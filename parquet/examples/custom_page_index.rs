@@ -36,11 +36,10 @@ use std::fs::File;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// A custom PageIndexProvider that only stores indexes for specified columns
+/// A custom PageIndexProvider that only stores indexes for a subset of columns
 ///
-/// This provider wraps a standard PageIndex but only provides access to indexes
-/// for columns specified in the `target_columns` set. This demonstrates how you
-/// can create filtered or lazy-loading providers.
+/// This provider uses nested hash maps to store only the necessary indexes
+/// to satisfy a query
 #[derive(Debug, Clone)]
 struct SparsePageIndexProvider {
     column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
@@ -48,11 +47,6 @@ struct SparsePageIndexProvider {
 }
 
 impl SparsePageIndexProvider {
-    /// Creates a new selective page index provider
-    ///
-    /// # Arguments
-    /// * `inner` - The complete PageIndex
-    /// * `target_columns` - List of column indices to provide access to
     fn new(
         column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
         offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
