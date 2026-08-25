@@ -775,13 +775,12 @@ impl Decoder {
             Self::Nullable(nullable) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nullable.pending_nulls += 1;
-                    Ok(())
                 } else {
                     nullable.materialize_pending()?;
                     nullable.values.append_default(lit)?;
                     nullable.validity.append_non_null();
-                    Ok(())
                 }
+                Ok(())
             }
             Self::Null(count) => match lit {
                 AvroLiteral::Null => {
