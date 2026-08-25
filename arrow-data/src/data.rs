@@ -637,13 +637,22 @@ impl ArrayData {
         assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
-            // Slice into children
-            let new_offset = self.offset + offset;
+            assert!(
+                self.buffers.is_empty(),
+                "StructArrays should not contain buffers"
+            );
+            // A struct's offset windows its child data (and null buffer), so
+            // the slice is applied by pushing `offset` down into the children
+            // rather than by also adding it to the parent's own offset. Doing
+            // both would double-count the offset (see #7595): the parent offset
+            // would then window children that have already been windowed. We
+            // therefore keep `self.offset` unchanged and let the cumulative
+            // child offsets carry the new slice.
             ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: new_offset,
-                buffers: self.buffers.clone(),
+                offset: self.offset,
+                buffers: vec![],
                 // Slice child data, to propagate offsets down to them
                 child_data: self
                     .child_data()

@@ -630,7 +630,10 @@ impl Index<&str> for StructArray {
 mod tests {
     use super::*;
 
-    use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        cast::AsArray, types::Int32Type,
+    };
     use arrow_buffer::ToByteSlice;
 
     #[test]
@@ -730,6 +733,97 @@ mod tests {
             assert_eq!(struct_arr_from_data, expected);
             assert_eq!(struct_arr_from_data.column(0), expected.column(0));
         }
+    }
+
+    #[test]
+    fn test_struct_array_data_slice() {
+        // Slicing a struct's `ArrayData` and then rebuilding an array from it
+        // must window the children exactly once. Previously the offset was
+        // applied both to the parent's `offset` and to the (already sliced)
+        // children, so `make_array` re-applied it and panicked (#7595, #7750).
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        )
+        .into_data();
+        let sliced = struct_array.slice(1, 4);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(1, 4)
+        );
+
+        // A struct whose top-level `ArrayData` carries a non-zero offset over
+        // full-length children is how the C++ implementation of Arrow (and the
+        // C data interface) represents a sliced struct: the offset/length live
+        // on the struct, not on the children. arrow-rs must decode it to the
+        // same logical array its own `StructArray::slice` produces.
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let y = Int32Array::from(vec![Some(5), Some(6), None, Some(8), Some(9), Some(10)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+            ]),
+            vec![Arc::new(x), Arc::new(y)],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                struct_array.data_type().clone(),
+                true,
+            )]),
+            vec![Arc::new(struct_array)],
+            Some(NullBuffer::from(vec![true, false, true, true, true, true])),
+        );
+
+        let cpp_sliced_array = make_array(
+            struct_array
+                .to_data()
+                .into_builder()
+                .offset(1)
+                .len(4)
+                .nulls(Some(NullBuffer::from(vec![false, true, true, true])))
+                .build()
+                .unwrap(),
+        );
+
+        assert_eq!(cpp_sliced_array.as_struct(), &struct_array.slice(1, 4));
+    }
+
+    #[test]
+    fn test_make_array_sliced_struct_data() {
+        // Exact reproducer from #7750: `make_array` on a sliced struct's
+        // `ArrayData` used to panic with `(offset + length) <= self.len()`.
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("joe"),
+            None,
+            None,
+            Some("mark"),
+            Some("doe"),
+        ]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+
+        let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+            .unwrap()
+            .into_data()
+            .slice(1, 3);
+
+        let arr = make_array(array);
+        let expected = StructArray::try_from(vec![("f1", strings), ("f2", ints)])
+            .unwrap()
+            .slice(1, 3);
+        assert_eq!(arr.as_struct(), &expected);
     }
 
     #[test]
