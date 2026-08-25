@@ -1889,6 +1889,8 @@ impl<'a> StatisticsConverter<'a> {
     /// * the column is not present in the parquet file
     /// * statistics for the pages are not present in the row group
     /// * the stored statistic value can not be converted to the requested type
+    ///
+    /// [`PageIndex`]: crate::file::metadata::PageIndex
     pub fn data_page_mins<I>(
         &self,
         page_index: &dyn PageIndexProvider,
