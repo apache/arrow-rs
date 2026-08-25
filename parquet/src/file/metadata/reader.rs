@@ -27,7 +27,6 @@ use crate::file::metadata::{
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
 use bytes::Bytes;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
@@ -82,7 +81,7 @@ pub struct ParquetMetaDataReader {
 }
 
 /// Describes the policy for reading page indexes
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageIndexPolicy {
     /// Do not read the page index.
     #[default]
@@ -94,32 +93,6 @@ pub enum PageIndexPolicy {
     /// Only enforced for the offset index; this is the same as [`Self::Optional`]
     /// for the column index.
     Required,
-    /// Behaves as [`Self::Required`] for the listed column indexes, [`Self::Skip`] otherwise
-    OnlyColumns(Arc<HashSet<usize>>),
-}
-
-impl PageIndexPolicy {
-    /// Create a `PageIndexPolicy` to skip all columns except those in `keep`.
-    ///
-    /// If `keep` is empty, then this returns [`Self::Skip`]
-    pub fn only_columns(keep: &[usize]) -> Self {
-        if keep.is_empty() {
-            Self::Skip
-        } else {
-            let mut keep_set = HashSet::<usize>::with_capacity(keep.len());
-            keep_set.extend(keep.iter());
-            Self::OnlyColumns(Arc::new(keep_set))
-        }
-    }
-
-    /// Test whether a given column is in the "keep" set.
-    pub fn is_keep_column(&self, col_idx: usize) -> bool {
-        match self {
-            Self::OnlyColumns(cols) => cols.contains(&col_idx),
-            Self::Skip => false,
-            _ => true,
-        }
-    }
 }
 
 impl From<bool> for PageIndexPolicy {
@@ -148,7 +121,7 @@ impl ParquetMetaDataReader {
 
     /// Sets the [`PageIndexPolicy`] for the column and offset indexes
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
-        self.with_column_index_policy(policy.clone())
+        self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
     }
 
@@ -366,8 +339,8 @@ impl ParquetMetaDataReader {
         };
 
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
-            .with_offset_index_policy(self.offset_index.clone())
-            .with_column_index_policy(self.column_index.clone())
+            .with_offset_index_policy(self.offset_index)
+            .with_column_index_policy(self.column_index)
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -513,8 +486,8 @@ impl ParquetMetaDataReader {
         // this is ok since the offsets in the metadata are always valid
         let file_size = u64::MAX;
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
-            .with_offset_index_policy(self.offset_index.clone())
-            .with_column_index_policy(self.column_index.clone())
+            .with_offset_index_policy(self.offset_index)
+            .with_column_index_policy(self.column_index)
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -1012,37 +985,6 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
-    }
-
-    #[test]
-    fn test_parse_selected_columns() {
-        let file = get_test_file("alltypes_tiny_pages.parquet");
-
-        let mut reader = ParquetMetaDataReader::new()
-            .with_column_index_policy(PageIndexPolicy::only_columns(&[0]))
-            .with_offset_index_policy(PageIndexPolicy::only_columns(&[0, 1, 10, 11]));
-
-        // read entire file
-        reader.try_parse(&file).unwrap();
-        let metadata = reader.finish().unwrap();
-        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
-
-        let page_index = metadata.page_index().unwrap();
-        // should only have column index for column 0
-        assert!(page_index.column_index(0, 0).is_some());
-        for col in 1..metadata.file_metadata().schema_descr().num_columns() {
-            assert!(page_index.column_index(0, col).is_none());
-        }
-
-        // should only have offset index for columns 0, 1, 10, 11
-        assert!(page_index.offset_index(0, 0).is_some());
-        assert!(page_index.offset_index(0, 1).is_some());
-        assert!(page_index.offset_index(0, 10).is_some());
-        assert!(page_index.offset_index(0, 11).is_some());
-        for col in 2..10 {
-            assert!(page_index.offset_index(0, col).is_none());
-        }
-        assert!(page_index.offset_index(0, 12).is_none());
     }
 }
 
