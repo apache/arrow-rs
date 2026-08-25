@@ -62,6 +62,10 @@ name = "offset"
 harness = false
 
 [[bench]]
+name = "run_end_buffer"
+harness = false
+
+[[bench]]
 name = "mutable_buffer_repeat_slice"
 harness = false
 
