@@ -424,6 +424,12 @@ where
         .filter(|x| !x.run_ends().is_empty())
         .collect();
 
+    if run_arrays.is_empty() {
+        // If all input arrays are empty then handle here otherwise we
+        // lose the type below
+        return Ok(new_empty_array(arrays[0].data_type()));
+    }
+
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
     let needed_run_end_adjustments = std::iter::once(R::default_value())
         .chain(
@@ -1862,6 +1868,24 @@ mod tests {
         let expected = vec![20, 20, 40, 40, 40];
         let actual = result.into_iter().flatten().collect::<Vec<_>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_concat_run_array_all_empty() {
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+        let array1 = array1.slice(0, 0);
+
+        let run_ends2 = Int32Array::from(vec![1, 4]);
+        let values2 = Int32Array::from(vec![30, 40]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+        let array2 = array2.slice(0, 0);
+
+        let result = concat(&[&array1, &array2]).unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
+        assert_eq!(result_run_array.len(), 0);
+        assert_eq!(result_run_array.data_type(), array1.data_type());
     }
 
     #[test]
