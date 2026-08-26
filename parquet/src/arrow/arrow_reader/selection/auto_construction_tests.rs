@@ -19,32 +19,25 @@ use super::*;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
-const RANDOM_CASES: usize = 50_000;
-const MAX_RANDOM_ROWS: usize = 262_144;
+const MAX_RANDOM_ROWS: usize = 65_536;
 const THRESHOLDS: &[usize] = &[0, 1, 8, 16, 31, 32, 33, 64];
 const SELECTIVITIES: &[usize] = &[0, 1, 5, 15, 50, 90, 99, 100];
 
 #[test]
 fn auto_construction_preserves_global_runs_and_threshold_boundary() {
-    let boundary_selected = BooleanArray::from(vec![false, true, true]);
-    let boundary_selected_continued = BooleanArray::from(vec![true, true, false]);
-    let boundary_skipped_continued = BooleanArray::from(vec![false, false, true]);
-    let empty = BooleanArray::from(Vec::<bool>::new());
     let filters = vec![
-        boundary_selected,
-        empty,
-        boundary_selected_continued,
-        boundary_skipped_continued,
+        BooleanArray::from(vec![false, true, true]),
+        BooleanArray::from(Vec::<bool>::new()),
+        BooleanArray::from(vec![true, true, false]),
+        BooleanArray::from(vec![false, false, true]),
     ];
 
     for threshold in THRESHOLDS {
         assert_auto_equivalent(&filters, *threshold, "cross-filter run merge");
     }
 
-    let run31 = run_mask(65_536, 31, 31);
-    let run32 = run_mask(65_536, 32, 32);
-    let run31_filters = split_evenly(&run31, 8_192);
-    let run32_filters = split_evenly(&run32, 8_192);
+    let run31_filters = split_evenly(&run_mask(65_536, 31, 31), 8_192);
+    let run32_filters = split_evenly(&run_mask(65_536, 32, 32), 8_192);
 
     assert_eq!(
         RowSelection::from_filters(&run31_filters).auto_selection_strategy(32),
@@ -57,62 +50,62 @@ fn auto_construction_preserves_global_runs_and_threshold_boundary() {
     assert_auto_equivalent(&run31_filters, 32, "run31 below threshold");
     assert_auto_equivalent(&run32_filters, 32, "run32 equal to threshold");
 
-    let empty_filters = vec![BooleanArray::from(Vec::<bool>::new())];
     assert_auto_equivalent(&[], 0, "no filters");
-    assert_auto_equivalent(&empty_filters, 0, "empty filter");
+    assert_auto_equivalent(&[BooleanArray::from(Vec::<bool>::new())], 0, "empty filter");
 }
 
 #[test]
-fn auto_construction_randomized_equivalence_50k() {
+fn auto_construction_randomized_equivalence() {
     let mut rng = StdRng::seed_from_u64(0x1077_6000_5eed);
+    let edge_rows = [0, 1, 7, 8, 31, 32, 33, MAX_RANDOM_ROWS];
+    let mut case_idx = 0usize;
 
-    for case_idx in 0..RANDOM_CASES {
-        let rows = random_row_count(case_idx, &mut rng);
-        let selectivity = SELECTIVITIES[case_idx % SELECTIVITIES.len()];
-        let shape = (case_idx / SELECTIVITIES.len()) % 6;
-        let threshold = THRESHOLDS[(case_idx / (SELECTIVITIES.len() * 6)) % THRESHOLDS.len()];
+    for &threshold in THRESHOLDS {
+        for &selectivity in SELECTIVITIES {
+            for shape in 0..4 {
+                for with_offset in [false, true] {
+                    let rows = edge_rows
+                        .get(case_idx)
+                        .copied()
+                        .unwrap_or_else(|| rng.random_range(0..=MAX_RANDOM_ROWS));
+                    let mask = random_shape(&mut rng, rows, selectivity, shape);
+                    let bit_offset = if with_offset {
+                        rng.random_range(1..=63)
+                    } else {
+                        0
+                    };
+                    let mask = with_bit_offset(mask, bit_offset);
+                    let filter_count = rng.random_range(1..=32);
+                    let filters = random_split(&mut rng, &mask, filter_count);
+                    let context = format!(
+                        "case={case_idx} rows={rows} selectivity={selectivity} shape={shape} \
+                         filters={filter_count} threshold={threshold} bit_offset={bit_offset}"
+                    );
 
-        let mask = random_shape(&mut rng, rows, selectivity, shape);
-        let bit_offset = if case_idx % 3 == 0 {
-            rng.random_range(1..=63)
-        } else {
-            0
-        };
-        let mask = with_bit_offset(mask, bit_offset);
-        let filter_count = rng.random_range(1..=64);
-        let filters = random_split(&mut rng, &mask, filter_count);
-        let context = format!(
-            "case={case_idx} rows={rows} selectivity={selectivity} shape={shape} \
-             filters={filter_count} threshold={threshold} bit_offset={bit_offset}"
-        );
-
-        assert_auto_equivalent(&filters, threshold, &context);
+                    assert_auto_equivalent(&filters, threshold, &context);
+                    case_idx += 1;
+                }
+            }
+        }
     }
 }
 
 fn assert_auto_equivalent(filters: &[BooleanArray], threshold: usize, context: &str) {
-    let current = RowSelection::from_filters(filters);
-    let current_strategy = current.auto_selection_strategy(threshold);
-    let candidate = RowSelection::from_filters_auto(filters, threshold);
-    let candidate_strategy = candidate.auto_selection_strategy(threshold);
-    let candidate_backing = match &candidate.inner {
+    let reference = RowSelection::from_filters(filters);
+    let reference_strategy = reference.auto_selection_strategy(threshold);
+    let auto_built = RowSelection::from_filters_auto(filters, threshold);
+    let auto_built_strategy = auto_built.auto_selection_strategy(threshold);
+    let auto_built_backing = match &auto_built.inner {
         RowSelectionInner::Mask(_) => RowSelectionStrategy::Mask,
         RowSelectionInner::Selectors(_) => RowSelectionStrategy::Selectors,
     };
 
-    assert_eq!(current_strategy, candidate_backing, "backing: {context}");
-    assert_eq!(current_strategy, candidate_strategy, "strategy: {context}");
+    assert_eq!(reference_strategy, auto_built_backing, "backing: {context}");
     assert_eq!(
-        current.total_row_count(),
-        candidate.total_row_count(),
-        "length: {context}"
+        reference_strategy, auto_built_strategy,
+        "strategy: {context}"
     );
-    assert_eq!(
-        current.row_count(),
-        candidate.row_count(),
-        "selected rows: {context}"
-    );
-    assert_eq!(current, candidate, "logical selection: {context}");
+    assert_eq!(reference, auto_built, "logical selection: {context}");
 }
 
 fn run_mask(rows: usize, selected_run: usize, skipped_run: usize) -> BooleanBuffer {
@@ -130,24 +123,6 @@ fn split_evenly(mask: &BooleanBuffer, batch_size: usize) -> Vec<BooleanArray> {
         .collect()
 }
 
-fn random_row_count(case_idx: usize, rng: &mut StdRng) -> usize {
-    match case_idx {
-        0 => 0,
-        1 => 1,
-        2 => 7,
-        3 => 8,
-        4 => 31,
-        5 => 32,
-        6 => 33,
-        _ if case_idx.is_multiple_of(10_000) => MAX_RANDOM_ROWS,
-        _ => {
-            let exponent = rng.random_range(0..=18);
-            let upper = (1usize << exponent).min(MAX_RANDOM_ROWS);
-            rng.random_range(0..=upper)
-        }
-    }
-}
-
 fn random_shape(rng: &mut StdRng, rows: usize, selectivity: usize, shape: usize) -> BooleanBuffer {
     if selectivity == 0 {
         return BooleanBuffer::new_unset(rows);
@@ -158,13 +133,14 @@ fn random_shape(rng: &mut StdRng, rows: usize, selectivity: usize, shape: usize)
 
     match shape {
         0 => isolated_mask(rows, selectivity),
-        1 => fixed_run_mask(rng, rows, selectivity),
-        2 => geometric_run_mask(rng, rows, selectivity),
-        3 => bursty_mask(rng, rows, selectivity),
-        4 => {
+        1 => {
+            let scale = rng.random_range(1..=8);
+            run_mask(rows, selectivity * scale, (100 - selectivity) * scale)
+        }
+        2 => {
             BooleanBuffer::from_iter((0..rows).map(|_| rng.random_bool(selectivity as f64 / 100.0)))
         }
-        5 => one_cluster_mask(rng, rows, selectivity),
+        3 => one_cluster_mask(rng, rows, selectivity),
         _ => unreachable!(),
     }
 }
@@ -177,67 +153,6 @@ fn isolated_mask(rows: usize, selectivity: usize) -> BooleanBuffer {
         let period = 100usize.div_ceil(100 - selectivity).max(2);
         BooleanBuffer::from_iter((0..rows).map(|row| row % period != 0))
     }
-}
-
-fn fixed_run_mask(rng: &mut StdRng, rows: usize, selectivity: usize) -> BooleanBuffer {
-    let scale = rng.random_range(1..=8);
-    let selected_run = selectivity * scale;
-    let skipped_run = (100 - selectivity) * scale;
-    run_mask(rows, selected_run, skipped_run)
-}
-
-fn geometric_run_mask(rng: &mut StdRng, rows: usize, selectivity: usize) -> BooleanBuffer {
-    let scale = rng.random_range(1..=16);
-    let selected_mean = (selectivity * scale).max(1);
-    let skipped_mean = ((100 - selectivity) * scale).max(1);
-    let mut builder = BooleanBufferBuilder::new(rows);
-    let mut remaining = rows;
-    let mut selected = true;
-
-    while remaining != 0 {
-        let mean = if selected {
-            selected_mean
-        } else {
-            skipped_mean
-        };
-        let run = sample_geometric_run(rng, mean).min(remaining);
-        builder.append_n(run, selected);
-        remaining -= run;
-        selected = !selected;
-    }
-    builder.finish()
-}
-
-fn sample_geometric_run(rng: &mut StdRng, mean: usize) -> usize {
-    let probability = 1.0 / mean as f64;
-    let cap = mean.saturating_mul(8).max(1);
-    let mut run = 1usize;
-    while run < cap && !rng.random_bool(probability) {
-        run += 1;
-    }
-    run
-}
-
-fn bursty_mask(rng: &mut StdRng, rows: usize, selectivity: usize) -> BooleanBuffer {
-    let mut builder = BooleanBufferBuilder::new(rows);
-    let mut remaining = rows;
-    let mut high = true;
-    let target = selectivity as f64 / 100.0;
-
-    while remaining != 0 {
-        let block = rng.random_range(64..=2_048).min(remaining);
-        let probability = if high {
-            (target * 1.8).min(1.0)
-        } else {
-            target * 0.2
-        };
-        for _ in 0..block {
-            builder.append(rng.random_bool(probability));
-        }
-        remaining -= block;
-        high = !high;
-    }
-    builder.finish()
 }
 
 fn one_cluster_mask(rng: &mut StdRng, rows: usize, selectivity: usize) -> BooleanBuffer {

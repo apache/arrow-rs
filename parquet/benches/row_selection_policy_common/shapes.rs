@@ -26,15 +26,6 @@ pub(crate) const MODERATE_12_5_RUN32: &[SelectionRun] =
 pub(crate) const FRAGMENTED_50_RUN1: &[SelectionRun] =
     &[SelectionRun::skip(1), SelectionRun::select(1)];
 
-pub(crate) const Q25_LIKE_15_ISOLATED: &[SelectionRun] = &[
-    SelectionRun::select(1),
-    SelectionRun::skip(6),
-    SelectionRun::select(1),
-    SelectionRun::skip(6),
-    SelectionRun::select(1),
-    SelectionRun::skip(5),
-];
-
 pub(crate) const CLUSTERED_50_RUN128: &[SelectionRun] =
     &[SelectionRun::skip(128), SelectionRun::select(128)];
 
@@ -121,11 +112,6 @@ pub(crate) fn assert_shape_contracts() {
     assert_eq!(dense.selector_count, 2);
     assert_eq!(dense.average_selected_run(), 63.0);
     assert_eq!(dense.average_skipped_run(), 1.0);
-
-    let q25_like = ShapeSummary::from_cycle(Q25_LIKE_15_ISOLATED);
-    assert_eq!(q25_like.selected_rows, 3);
-    assert_eq!(q25_like.skipped_rows, 17);
-    assert_eq!(q25_like.selected_ratio(), 0.15);
 }
 
 pub(crate) fn expand_pattern(pattern: RowGroupPattern, row_count: usize) -> Vec<i32> {
@@ -133,17 +119,17 @@ pub(crate) fn expand_pattern(pattern: RowGroupPattern, row_count: usize) -> Vec<
         RowGroupPattern::AllSelected => vec![1; row_count],
         RowGroupPattern::Cycle(cycle) => {
             assert!(!cycle.is_empty(), "selection cycle must not be empty");
-            ShapeSummary::from_cycle(cycle);
+            let summary = ShapeSummary::from_cycle(cycle);
+            assert_eq!(
+                row_count % summary.total_rows(),
+                0,
+                "row group size must be divisible by cycle size"
+            );
 
             let mut values = Vec::with_capacity(row_count);
             while values.len() < row_count {
                 for run in cycle {
-                    let remaining = row_count - values.len();
-                    let run_len = run.len.min(remaining);
-                    values.extend(std::iter::repeat_n(i32::from(run.selected), run_len));
-                    if run_len != run.len {
-                        break;
-                    }
+                    values.extend(std::iter::repeat_n(i32::from(run.selected), run.len));
                 }
             }
             assert_eq!(values.len(), row_count);
@@ -157,20 +143,8 @@ pub(crate) fn selected_rows(pattern: RowGroupPattern, row_count: usize) -> usize
         RowGroupPattern::AllSelected => row_count,
         RowGroupPattern::Cycle(cycle) => {
             let summary = ShapeSummary::from_cycle(cycle);
-            let full_cycles = row_count / summary.total_rows();
-            let mut selected = summary.selected_rows * full_cycles;
-            let mut remaining = row_count % summary.total_rows();
-            for run in cycle {
-                let run_len = run.len.min(remaining);
-                if run.selected {
-                    selected += run_len;
-                }
-                remaining -= run_len;
-                if remaining == 0 {
-                    break;
-                }
-            }
-            selected
+            assert_eq!(row_count % summary.total_rows(), 0);
+            summary.selected_rows * (row_count / summary.total_rows())
         }
     }
 }
