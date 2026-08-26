@@ -2832,7 +2832,7 @@ where
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
 
-    let mut offset_builder = BufferBuilder::<TO::Offset>::new(offsets.len());
+    let mut cast_offsets = Vec::<TO::Offset>::with_capacity(offsets.len());
     offsets
         .iter()
         .try_for_each::<_, Result<_, ArrowError>>(|offset| {
@@ -2846,11 +2846,11 @@ where
                         TO::PREFIX
                     ))
                 })?;
-            offset_builder.append(offset);
+            cast_offsets.push(offset);
             Ok(())
         })?;
 
-    let offset_buffer = offset_builder.finish();
+    let offset_buffer = arrow_buffer::Buffer::from_vec(cast_offsets);
 
     let dtype = TO::DATA_TYPE;
 
