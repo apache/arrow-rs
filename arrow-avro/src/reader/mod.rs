@@ -54,10 +54,11 @@
 //!   (“Object Container Files”). <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
 //! * **Unframed binary datums**: Bare Avro records without an OCF header, schema fingerprint,
 //!   or schema-registry prefix. Register the known writer schema in a `SchemaStore`, select it
-//!   with [`ReaderBuilder::with_active_fingerprint`], configure
-//!   [`DecoderMode::UnframedDatum`] with [`ReaderBuilder::with_decoder_mode`], and call
-//!   [`Decoder::decode`] once per record. This supports bare Kafka messages and consecutive
-//!   records in one buffer.
+//!   with [`ReaderBuilder::with_active_fingerprint`](crate::reader::ReaderBuilder::with_active_fingerprint),
+//!   configure [`DecoderMode::UnframedDatum`](crate::reader::DecoderMode::UnframedDatum) with
+//!   [`ReaderBuilder::with_decoder_mode`](crate::reader::ReaderBuilder::with_decoder_mode), and
+//!   call [`Decoder::decode`](crate::reader::Decoder::decode) once per record. This supports bare
+//!   Kafka messages and consecutive records in one buffer.
 //! * **Single‑Object Encoding**: A stream‑friendly framing that prefixes each record body with
 //!   the 2‑byte marker `0xC3 0x01` followed by the **8‑byte little‑endian CRC‑64‑AVRO Rabin
 //!   fingerprint** of the writer schema, then the Avro binary body. Use `Decoder` with a
