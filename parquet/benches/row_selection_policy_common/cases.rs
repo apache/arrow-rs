@@ -18,7 +18,7 @@
 use super::model::{CaseSpec, RowGroupPattern};
 use super::shapes::{
     BURSTY_50_SAME_SUMMARY, CLUSTERED_50_RUN128, DENSE_98_44_SKIP1_SELECT63, FRAGMENTED_50_RUN1,
-    MODERATE_12_5_RUN32, REGULAR_50_RUN32, SPARSE_1_56_RUN32,
+    MODERATE_12_5_RUN32, Q25_LIKE_15_ISOLATED, REGULAR_50_RUN32, SPARSE_1_56_RUN32,
 };
 
 const FOUR_SPARSE: &[RowGroupPattern] = &[RowGroupPattern::Cycle(SPARSE_1_56_RUN32); 4];
@@ -26,6 +26,8 @@ const FOUR_SPARSE: &[RowGroupPattern] = &[RowGroupPattern::Cycle(SPARSE_1_56_RUN
 const FOUR_MODERATE: &[RowGroupPattern] = &[RowGroupPattern::Cycle(MODERATE_12_5_RUN32); 4];
 
 const FOUR_FRAGMENTED: &[RowGroupPattern] = &[RowGroupPattern::Cycle(FRAGMENTED_50_RUN1); 4];
+
+const FOUR_Q25_LIKE: &[RowGroupPattern] = &[RowGroupPattern::Cycle(Q25_LIKE_15_ISOLATED); 4];
 
 const FOUR_CLUSTERED: &[RowGroupPattern] = &[RowGroupPattern::Cycle(CLUSTERED_50_RUN128); 4];
 
@@ -75,6 +77,10 @@ pub(crate) const SHAPE_CASES: &[CaseSpec] = &[
     CaseSpec {
         name: "fragmented_50_run1",
         row_groups: FOUR_FRAGMENTED,
+    },
+    CaseSpec {
+        name: "q25_like_15_isolated",
+        row_groups: FOUR_Q25_LIKE,
     },
     CaseSpec {
         name: "clustered_50_run128",
