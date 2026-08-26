@@ -88,7 +88,7 @@ fn create_sample_file(temp_path: &PathBuf) -> Result<()> {
     ]));
 
     // Create multiple row groups with multiple pages
-    let file = File::create(&temp_path)?;
+    let file = File::create(temp_path)?;
     let props = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_data_page_size_limit(100) // Small pages for demonstration
