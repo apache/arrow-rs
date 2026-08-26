@@ -216,7 +216,8 @@ fn main() -> Result<()> {
     println!("=== Example 1: Standard PageIndex (all columns) ===");
     dump_page_index(&metadata)?;
 
-    // save original index to populate the custom one
+    // Save original index to populate the custom one. A real application could
+    // cache the indexes externally.
     let page_index = metadata.page_index().cloned().unwrap();
 
     // Example 2: Read metadata and then add custom PageIndexProvider
@@ -230,7 +231,7 @@ fn main() -> Result<()> {
             panic!("expected DecodeResult::Data, got: {other:?}")
         }
     };
-    println!("=== Example 2: Selective PageIndex (columns 0, 1, 2 only) ===");
+    println!("=== Example 2: Selective PageIndex (columns 0, 1, 4 only) ===");
     let mut builder = metadata.into_builder();
 
     // create partial indexes. column index for column 0 only (predicate column),
