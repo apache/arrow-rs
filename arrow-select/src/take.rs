@@ -468,7 +468,8 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
         Some(nulls) => {
-            let mut output = MutableBuffer::new_null(len);
+            let mut output = Vec::with_capacity(out_bytes);
+            output.resize(out_bytes, 0u8);
             let out_ptr = output.as_mut_ptr();
             nulls.valid_indices().for_each(|i| {
                 let src_idx = if CHECKED {
@@ -484,15 +485,14 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     }
                 }
             });
-            BooleanBuffer::new(output.into(), 0, len)
+            BooleanBuffer::new(Buffer::from(output), 0, len)
         }
         None => {
             // Build the output byte-by-byte with an 8-element inner loop so the
             // compiler can fully unroll it and issue the 8 source loads in parallel.
-            let mut output = MutableBuffer::with_capacity(out_bytes);
-            // SAFETY: every byte is written before BooleanBuffer reads it
-            unsafe { output.set_len(out_bytes) };
-            let out_slice = output.as_slice_mut();
+            let mut output = Vec::with_capacity(out_bytes);
+            output.resize(out_bytes, 0u8);
+            let out_slice = output.as_mut_slice();
             let full_bytes = len / 8;
 
             for (byte_idx, out_byte) in out_slice.iter_mut().enumerate().take(full_bytes) {
@@ -527,7 +527,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 }
                 out_slice[full_bytes] = byte;
             }
-            BooleanBuffer::new(output.into(), 0, len)
+            BooleanBuffer::new(Buffer::from(output), 0, len)
         }
     }
 }
@@ -547,18 +547,12 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
     let validity_data_ptr = validity.values().as_ptr();
     let out_bytes = len.div_ceil(8);
 
-    let mut value_out = MutableBuffer::with_capacity(out_bytes);
-    let mut validity_out = MutableBuffer::with_capacity(out_bytes);
+    let mut value_out = vec![0u8; out_bytes];
+    let mut validity_out = vec![0u8; out_bytes];
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
         Some(index_nulls) => {
-            // SAFETY: every byte is written (fill) before reading
-            unsafe {
-                value_out.set_len(out_bytes);
-                validity_out.set_len(out_bytes)
-            };
-            value_out.as_slice_mut().fill(0);
-            validity_out.as_slice_mut().fill(0);
+            // Vec is pre-zeroed; only set bits for valid indices via raw pointer.
             let value_out_ptr = value_out.as_mut_ptr();
             let validity_out_ptr = validity_out.as_mut_ptr();
             for out_pos in index_nulls.valid_indices() {
@@ -578,13 +572,8 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
             }
         }
         None => {
-            // SAFETY: every byte is written below before BooleanBuffer reads it
-            unsafe {
-                value_out.set_len(out_bytes);
-                validity_out.set_len(out_bytes)
-            };
-            let value_out_slice = value_out.as_slice_mut();
-            let validity_out_slice = validity_out.as_slice_mut();
+            let value_out_slice = value_out.as_mut_slice();
+            let validity_out_slice = validity_out.as_mut_slice();
             let full_bytes = len / 8;
 
             for (byte_idx, (value_out_byte, validity_out_byte)) in value_out_slice
@@ -633,7 +622,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
         }
     }
 
-    let value_buf_out = BooleanBuffer::new(value_out.into(), 0, len);
+    let value_buf_out = BooleanBuffer::new(Buffer::from(value_out), 0, len);
     let validity_buf_out = NullBuffer::from_unsliced_buffer(validity_out, len);
     (value_buf_out, validity_buf_out)
 }
