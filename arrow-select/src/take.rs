@@ -466,22 +466,21 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
     let src_ptr = values.values().as_ptr();
     let out_bytes = len.div_ceil(8);
 
-    match indices.nulls().filter(|n| n.null_count() > 0) {
-        Some(nulls) => {
-            let mut output = Vec::with_capacity(out_bytes);
-            output.resize(out_bytes, 0u8);
+    match indices.nulls().filter(|nulls| nulls.null_count() > 0) {
+        Some(index_nulls) => {
+            let mut output = vec![0u8; out_bytes];
             let out_ptr = output.as_mut_ptr();
-            nulls.valid_indices().for_each(|i| {
+            index_nulls.valid_indices().for_each(|valid_idx| {
                 let src_idx = if CHECKED {
-                    indices.value(i).as_usize()
+                    indices.value(valid_idx).as_usize()
                 } else {
-                    // SAFETY: i < len from the validity bitmap
-                    unsafe { indices.value_unchecked(i) }.as_usize()
+                    // SAFETY: valid_idx < len from the validity bitmap
+                    unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
                 // SAFETY: src_idx bounded by take's prior bounds check
                 unsafe {
                     if bit_util::get_bit_raw(src_ptr, src_idx) {
-                        bit_util::set_bit_raw(out_ptr, i);
+                        bit_util::set_bit_raw(out_ptr, valid_idx);
                     }
                 }
             });
@@ -490,14 +489,13 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
         None => {
             // Build the output byte-by-byte with an 8-element inner loop so the
             // compiler can fully unroll it and issue the 8 source loads in parallel.
-            let mut output = Vec::with_capacity(out_bytes);
-            output.resize(out_bytes, 0u8);
+            let mut output = vec![0u8; out_bytes];
             let out_slice = output.as_mut_slice();
             let full_bytes = len / 8;
 
-            for (byte_idx, out_byte) in out_slice.iter_mut().enumerate().take(full_bytes) {
+            for (byte_idx, out_slot) in out_slice.iter_mut().enumerate().take(full_bytes) {
                 let base = byte_idx * 8;
-                let mut byte = 0u8;
+                let mut out_byte = 0u8;
                 for bit in 0..8usize {
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
@@ -506,14 +504,15 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let raw = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
-                    byte |= ((raw >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
+                    let src_byte = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
+                    out_byte |= ((src_byte >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
                 }
-                *out_byte = byte;
+                *out_slot = out_byte;
             }
+            // Handle remaining bits when len is not a multiple of 8.
             if full_bytes < out_bytes {
                 let base = full_bytes * 8;
-                let mut byte = 0u8;
+                let mut out_byte = 0u8;
                 for bit in 0..(len - base) {
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
@@ -522,10 +521,10 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let raw = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
-                    byte |= ((raw >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
+                    let src_byte = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
+                    out_byte |= ((src_byte >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
                 }
-                out_slice[full_bytes] = byte;
+                out_slice[full_bytes] = out_byte;
             }
             BooleanBuffer::new(Buffer::from(output), 0, len)
         }
@@ -550,7 +549,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
     let mut value_out = vec![0u8; out_bytes];
     let mut validity_out = vec![0u8; out_bytes];
 
-    match indices.nulls().filter(|n| n.null_count() > 0) {
+    match indices.nulls().filter(|nulls| nulls.null_count() > 0) {
         Some(index_nulls) => {
             // Vec is pre-zeroed; only set bits for valid indices via raw pointer.
             let value_out_ptr = value_out.as_mut_ptr();
@@ -600,6 +599,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                 *value_out_byte = packed_values;
                 *validity_out_byte = packed_validity;
             }
+            // Handle remaining bits when len is not a multiple of 8.
             if full_bytes < out_bytes {
                 let bit_base = full_bytes * 8;
                 let mut packed_values = 0u8;
@@ -1872,6 +1872,96 @@ mod tests {
             None,
             vec![None, Some(false), Some(true), None],
         );
+    }
+
+    #[test]
+    // Null indices + sliced source boolean array — exercises src_offset in the sparse take_bits path.
+    fn test_take_bool_nullable_index_sliced_source() {
+        let source = BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false)]);
+        let source = source.slice(1, 3); // logical: [false, true, false], offset=1
+        let source = source.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        let indices = UInt32Array::from(vec![Some(2), None, Some(0)]);
+        let result = take(source, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        let expected = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    // >8 elements: exercises the 8-at-a-time unrolled byte packing in take_bits.
+    fn test_take_bool_no_nulls_multi_byte() {
+        let source = BooleanArray::from(vec![
+            true, false, true, true, false, false, true, false, true, true,
+        ]);
+        let indices = UInt32Array::from(vec![0, 2, 4, 6, 8, 1, 3, 5, 7, 9]);
+        let result = take(&source, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let expected = BooleanArray::from(vec![
+            true, true, false, true, true, false, true, false, false, true,
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    // Sliced source: verifies src_offset is applied when no null indices.
+    fn test_take_bool_no_nulls_sliced_source() {
+        let source = BooleanArray::from(vec![true, false, true, false, true]);
+        let source = source.slice(2, 3); // [true, false, true], offset=2
+        let source = source.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let indices = UInt32Array::from(vec![2, 0, 1]);
+        let result = take(source, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let expected = BooleanArray::from(vec![true, true, false]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    // Nullable source, >8 elements: exercises the 8-at-a-time unrolled byte packing in take_bits_with_validity.
+    fn test_take_bool_nullable_values_multi_byte() {
+        let source = BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+        ]);
+        let indices = UInt32Array::from(vec![0, 2, 4, 6, 8, 1, 3, 5, 7, 9]);
+        let result = take(&source, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let expected = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            Some(true),
+            None,
+            Some(true),
+            Some(false),
+            Some(false),
+            None,
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    // Nullable source, null indices, sliced source: verifies src_offset with both null paths.
+    fn test_take_bool_nullable_values_sliced_source_null_indices() {
+        let source =
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(false)]);
+        let source = source.slice(1, 4); // [false, null, true, false], offset=1
+        let source = source.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let indices = UInt32Array::from(vec![Some(3), None, Some(1), Some(0)]);
+        let result = take(source, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let expected = BooleanArray::from(vec![Some(false), None, None, Some(false)]);
+        assert_eq!(result, &expected);
     }
 
     fn _test_take_string<'a, K>()
