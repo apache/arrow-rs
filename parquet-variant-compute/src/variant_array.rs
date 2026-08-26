@@ -47,16 +47,13 @@ use std::sync::Arc;
 /// Returns the logical bytes at the given index from a binary-like array, resolving dictionary
 /// and run-end encodings. Returns `None` for nulls or if the logical values aren't binary-like.
 pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8]> {
+    if array.is_null(index) {
+        return None;
+    }
     match array.data_type() {
-        DataType::Binary => array
-            .is_valid(index)
-            .then(|| array.as_binary::<i32>().value(index)),
-        DataType::LargeBinary => array
-            .is_valid(index)
-            .then(|| array.as_binary::<i64>().value(index)),
-        DataType::BinaryView => array
-            .is_valid(index)
-            .then(|| array.as_binary_view().value(index)),
+        DataType::Binary => Some(array.as_binary::<i32>().value(index)),
+        DataType::LargeBinary => Some(array.as_binary::<i64>().value(index)),
+        DataType::BinaryView => Some(array.as_binary_view().value(index)),
         DataType::Dictionary(..) => downcast_dictionary_array! {
             array => {
                 let index = array.key(index)?;
@@ -328,7 +325,7 @@ impl VariantArray {
     /// # Requirements of the `StructArray`
     ///
     /// 1. A required field named `metadata` which is binary, large_binary, or
-    ///    binary_view, optionally dictionary- or run-end-encoded
+    ///    binary_view, optionally dictionary or run-end-encoded
     ///
     /// 2. A required field named `value` that is binary, large_binary, or
     ///    binary_view
