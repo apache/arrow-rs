@@ -83,12 +83,19 @@ fn create_string_run_array(logical_len: usize, physical_len: usize) -> RunArray<
 
 fn create_sparse_union(size: usize) -> UnionArray {
     let mut rng = seedable_rng();
-    let type_ids: ScalarBuffer<i8> = (0..size).map(|_| rng.random_range(0_i8..2)).collect();
+    let type_ids: ScalarBuffer<i8> = (0..size).map(|_| rng.random_range(0_i8..4)).collect();
     let int_array: Int32Array = (0..size).map(|_| Some(rng.random::<i32>())).collect();
     let float_array: Float64Array = (0..size).map(|_| Some(rng.random::<f64>())).collect();
+    let string_array = StringArray::from_iter((0..size).map(|i| Some(format!("basic_string:{i}"))));
+    let fsb_array = create_fsb_array(size, 0.0, 16);
     let fields = [
         (0, Arc::new(Field::new("a", DataType::Int32, false))),
         (1, Arc::new(Field::new("b", DataType::Float64, false))),
+        (2, Arc::new(Field::new("c", DataType::Utf8, false))),
+        (
+            3,
+            Arc::new(Field::new("d", DataType::FixedSizeBinary(16), false)),
+        ),
     ]
     .into_iter()
     .collect::<UnionFields>();
@@ -96,7 +103,12 @@ fn create_sparse_union(size: usize) -> UnionArray {
         fields,
         type_ids,
         None,
-        vec![Arc::new(int_array), Arc::new(float_array)],
+        vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+            Arc::new(fsb_array),
+        ],
     )
     .unwrap()
 }
@@ -105,26 +117,39 @@ fn create_dense_union(size: usize) -> UnionArray {
     let mut rng = seedable_rng();
     let mut int_vals: Vec<i32> = Vec::new();
     let mut float_vals: Vec<f64> = Vec::new();
+    let mut fsb_vals: Vec<[u8; 16]> = Vec::new();
     let mut type_ids = Vec::with_capacity(size);
     let mut offsets = Vec::with_capacity(size);
     for _ in 0..size {
-        let tid = rng.random_range(0_i8..2);
+        let tid = rng.random_range(0_i8..3);
         type_ids.push(tid);
-        if tid == 0 {
-            offsets.push(int_vals.len() as i32);
-            int_vals.push(rng.random());
-        } else {
-            offsets.push(float_vals.len() as i32);
-            float_vals.push(rng.random());
+        match tid {
+            0 => {
+                offsets.push(int_vals.len() as i32);
+                int_vals.push(rng.random());
+            }
+            1 => {
+                offsets.push(float_vals.len() as i32);
+                float_vals.push(rng.random());
+            }
+            _ => {
+                offsets.push(fsb_vals.len() as i32);
+                fsb_vals.push(rng.random());
+            }
         }
     }
     let type_ids: ScalarBuffer<i8> = type_ids.into_iter().collect();
     let offsets: ScalarBuffer<i32> = offsets.into_iter().collect();
     let int_array: Int32Array = int_vals.into_iter().map(Some).collect();
     let float_array: Float64Array = float_vals.into_iter().map(Some).collect();
+    let fsb_array = FixedSizeBinaryArray::try_from_iter(fsb_vals.into_iter()).unwrap();
     let fields = [
         (0, Arc::new(Field::new("a", DataType::Int32, false))),
         (1, Arc::new(Field::new("b", DataType::Float64, false))),
+        (
+            2,
+            Arc::new(Field::new("c", DataType::FixedSizeBinary(16), false)),
+        ),
     ]
     .into_iter()
     .collect::<UnionFields>();
@@ -132,7 +157,11 @@ fn create_dense_union(size: usize) -> UnionArray {
         fields,
         type_ids,
         Some(offsets),
-        vec![Arc::new(int_array), Arc::new(float_array)],
+        vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(fsb_array),
+        ],
     )
     .unwrap()
 }
