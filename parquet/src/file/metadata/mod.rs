@@ -99,7 +99,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 
 /// Trait for accessing Parquet [Page Index] data for efficient page-level skipping
 ///
-/// The Page Index enables query engines to skip irrelevant data pages during scans,
+/// The [Page Index] enables query engines to skip irrelevant data pages during scans,
 /// significantly improving I/O efficiency. It provides access to two complementary
 /// structures:
 ///
@@ -205,7 +205,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// }
 /// ```
 ///
-/// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
 pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
@@ -505,7 +505,7 @@ impl RowGroupPageIndex {
 /// assert!(metadata.page_index().unwrap().is_complete());
 /// ```
 ///
-/// [Page Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
 #[derive(Debug, Clone, PartialEq)]
