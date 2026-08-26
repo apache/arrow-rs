@@ -231,7 +231,6 @@ default_trait_access = "allow"               # ~210 violations in ~68 files
 doc_markdown = "allow"                       # ~2300 violations in ~290 files
 enum_glob_use = "allow"                      # ~65 violations in ~22 files
 float_cmp = "allow"                          # ~180 violations in ~2 files
-from_iter_instead_of_collect = "allow"       # ~200 violations in ~53 files
 if_not_else = "allow"                        # ~57 violations in ~39 files
 ignore_without_reason = "allow"              # ~16 violations in ~2 files
 implicit_hasher = "allow"                    # ~9 violations in ~4 files

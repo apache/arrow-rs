@@ -443,6 +443,7 @@ where
     /// Explicitly shut down and clean up the client.
     #[expect(
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "public API: dropping `async` would break callers that `.await` it"
     )]
     pub async fn close(&mut self) -> Result<()> {
