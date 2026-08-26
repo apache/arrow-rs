@@ -375,6 +375,8 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
         Ok(Arc::new(schema))
     } else {
         let message = format!("Cannot get schema from input stream. Error code: {ret_code}");
+        // SAFETY: `stream_ptr` is valid and unreleased, and the `get_schema` call above
+        // returned a non-zero code.
         let message = match unsafe { producer_error(stream_ptr) } {
             Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
             None => message,
@@ -441,6 +443,8 @@ impl Iterator for ArrowArrayStreamReader {
         } else {
             let message =
                 format!("Cannot get next batch from input stream. Error code: {ret_code}");
+            // SAFETY: `self.stream` is valid and unreleased by construction, and the
+            // `get_next` call above returned a non-zero code.
             let message = match unsafe { producer_error(&mut self.stream) } {
                 Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
                 None => message,
