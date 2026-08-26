@@ -4594,6 +4594,83 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_dictionary_key_cache_handles_collisions_and_rebinding() {
+        // `DictEncoder::encode_dict` resolves an input dictionary key through a
+        // direct-mapped cache, so this covers the two ways that cache could hand
+        // back a stale answer: distinct keys landing in the same slot, and a
+        // later batch binding the same key to a different value. Each batch also
+        // carries a duplicate value and an entry no key references, which must
+        // not change what is written.
+        //
+        // Deliberately larger than `DICT_KEY_CACHE_SLOTS` so keys collide; the
+        // test only needs *some* collisions, so it does not track that constant.
+        const KEYS: i32 = 1024;
+
+        fn logical_values(batch: &RecordBatch) -> Vec<Option<String>> {
+            let utf8 = arrow::compute::cast(batch.column(0), &DataType::Utf8).unwrap();
+            let utf8 = utf8.as_any().downcast_ref::<StringArray>().unwrap();
+            (0..utf8.len())
+                .map(|i| utf8.is_valid(i).then(|| utf8.value(i).to_string()))
+                .collect()
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+
+        let batch = |tag: &str| -> RecordBatch {
+            let mut values: Vec<String> = (0..2 * KEYS).map(|i| format!("{tag}-{i}")).collect();
+            values.push("duplicate".to_string());
+            values.push("duplicate".to_string());
+            values.push("never-referenced".to_string());
+
+            // Alternate k and k + KEYS so both fall in the same cache slot.
+            let mut keys: Vec<Option<i32>> = Vec::new();
+            for k in 0..KEYS {
+                keys.push(Some(k));
+                keys.push(Some(k + KEYS));
+                if k % 97 == 0 {
+                    keys.push(None);
+                    keys.push(Some(2 * KEYS)); // first "duplicate"
+                    keys.push(Some(2 * KEYS + 1)); // second, identical, value
+                }
+            }
+
+            let dict = DictionaryArray::<arrow::datatypes::Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::new(StringArray::from(values)),
+            )
+            .unwrap();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap()
+        };
+
+        let first = batch("first");
+        let second = batch("second");
+        let expected: Vec<Option<String>> = logical_values(&first)
+            .into_iter()
+            .chain(logical_values(&second))
+            .collect();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None).unwrap();
+        writer.write(&first).unwrap();
+        writer.write(&second).unwrap();
+        writer.close().unwrap();
+
+        let actual: Vec<Option<String>> =
+            ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024)
+                .unwrap()
+                .map(|b| b.unwrap())
+                .flat_map(|b| logical_values(&b))
+                .collect();
+
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
         #[expect(deprecated)]

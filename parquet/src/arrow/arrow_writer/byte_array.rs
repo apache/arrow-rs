@@ -31,10 +31,11 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use crate::util::prefix::common_prefix_length;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
     GenericByteArray, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    TypedDictionaryArray,
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
@@ -66,8 +67,12 @@ macro_rules! downcast_dict_op {
     };
 }
 
+/// Downcasts `$array` to its concrete byte-array type and applies an operation.
+///
+/// Dictionary-typed arrays go to `$dict_op` rather than `$op`, so the callee can
+/// see the dictionary keys instead of a flattened [`ArrayAccessor`].
 macro_rules! downcast_op {
-    ($data_type:expr, $array:ident, $op:expr $(, $arg:expr)*) => {
+    ($data_type:expr, $array:ident, $op:expr, $dict_op:expr $(, $arg:expr)*) => {
         match $data_type {
             DataType::Utf8 => $op($array.as_any().downcast_ref::<StringArray>().unwrap()$(, $arg)*),
             DataType::LargeUtf8 => {
@@ -84,16 +89,16 @@ macro_rules! downcast_op {
                 $op($array.as_any().downcast_ref::<BinaryViewArray>().unwrap()$(, $arg)*)
             }
             DataType::Dictionary(key, value) => match value.as_ref() {
-                DataType::Utf8 => downcast_dict_op!(key, StringArray, $array, $op$(, $arg)*),
+                DataType::Utf8 => downcast_dict_op!(key, StringArray, $array, $dict_op$(, $arg)*),
                 DataType::LargeUtf8 => {
-                    downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
+                    downcast_dict_op!(key, LargeStringArray, $array, $dict_op$(, $arg)*)
                 }
-                DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
+                DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $dict_op$(, $arg)*),
                 DataType::LargeBinary => {
-                    downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                    downcast_dict_op!(key, LargeBinaryArray, $array, $dict_op$(, $arg)*)
                 }
                 DataType::FixedSizeBinary(_) => {
-                    downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
+                    downcast_dict_op!(key, FixedSizeBinaryArray, $array, $dict_op$(, $arg)*)
                 }
                 d => unreachable!("cannot downcast {} dictionary value to byte array", d),
             },
@@ -329,12 +334,41 @@ impl Storage for ByteArrayStorage {
     }
 }
 
+/// Slots in [`DictEncoder`]'s dictionary-key cache.
+///
+/// A power of two so the index is a mask. At 24 bytes per slot the cache is
+/// 24 KiB and stays cache-resident whatever the input dictionary's size, which
+/// is what lets the lookup be unconditional rather than gated on a heuristic
+/// over the dictionary size or the row count.
+const DICT_KEY_CACHE_SLOTS: usize = 1024;
+
+/// One slot of [`DictEncoder::key_cache`].
+///
+/// `generation` records which [`DictEncoder::encode_dict`] call wrote the slot,
+/// so a new call invalidates the whole cache without clearing it -- necessary
+/// because `dict_key` is only meaningful relative to one input dictionary.
+#[derive(Debug, Clone, Copy, Default)]
+struct DictKeyCacheSlot {
+    generation: u32,
+    /// Byte length of the dictionary value, so a hit needs no access to the
+    /// dictionary at all to maintain `variable_length_bytes`.
+    len: u32,
+    /// The input dictionary key this slot describes.
+    dict_key: usize,
+    /// The key [`Interner::intern`] returned for that dictionary entry.
+    interned: u64,
+}
+
 /// A dictionary encoder for byte array data
 #[derive(Debug, Default)]
 struct DictEncoder {
     interner: Interner<ByteArrayStorage>,
     indices: Vec<u64>,
     variable_length_bytes: i64,
+    /// Direct-mapped cache from *input* dictionary key to interned key, used by
+    /// [`Self::encode_dict`]. Empty until the first dictionary-typed batch.
+    key_cache: Vec<DictKeyCacheSlot>,
+    key_cache_generation: u32,
 }
 
 impl DictEncoder {
@@ -351,6 +385,80 @@ impl DictEncoder {
             let interned = self.interner.intern(value.as_ref());
             self.indices.push(interned);
             self.variable_length_bytes += value.as_ref().len() as i64;
+        }
+    }
+
+    /// Encode a dictionary-typed array to the in-progress page.
+    ///
+    /// Produces exactly the same output as [`Self::encode`] on the same logical
+    /// values, but consults a small direct-mapped cache keyed by the *input*
+    /// dictionary key first. The input dictionary has already deduplicated the
+    /// values, so a hit replaces a hash of the value bytes plus a probe of the
+    /// dictionary page with one L1-resident lookup.
+    ///
+    /// The cache is a fixed 6 KiB regardless of the input dictionary's size, so
+    /// this needs no size heuristic: columns whose keys repeat -- either a small
+    /// dictionary or the runs a sorted column produces -- hit nearly always,
+    /// while a column with no repetition simply misses and pays one predictable
+    /// integer comparison per row.
+    ///
+    /// Duplicate and unused dictionary entries stay correct: duplicates intern
+    /// to the same key, unused entries are never interned.
+    fn encode_dict<'a, K, V>(
+        &mut self,
+        values: TypedDictionaryArray<'a, K, V>,
+        indices: impl ExactSizeIterator<Item = usize>,
+    ) where
+        K: ArrowDictionaryKeyType,
+        V: Sync + Send,
+        &'a V: ArrayAccessor,
+        <&'a V as ArrayAccessor>::Item: AsRef<[u8]> + Default,
+    {
+        let keys = values.keys().values();
+        let dict_values = values.values();
+
+        // A new generation invalidates every slot without touching the cache.
+        // On wrap-around, clear so a slot written 2^32 calls ago cannot be read
+        // as live against a different dictionary.
+        self.key_cache_generation = self.key_cache_generation.wrapping_add(1);
+        if self.key_cache_generation == 0 {
+            self.key_cache.clear();
+            self.key_cache_generation = 1;
+        }
+        if self.key_cache.is_empty() {
+            self.key_cache
+                .resize(DICT_KEY_CACHE_SLOTS, DictKeyCacheSlot::default());
+        }
+        let generation = self.key_cache_generation;
+
+        self.indices.reserve(indices.len());
+
+        for idx in indices {
+            // Mirrors the flattening `TypedDictionaryArray::value` performs, so
+            // an out-of-range key panics here just as it would there.
+            let dict_key = keys[idx].as_usize();
+            let slot = dict_key & (DICT_KEY_CACHE_SLOTS - 1);
+
+            let cached = self.key_cache[slot];
+            let (interned, len) = if cached.generation == generation && cached.dict_key == dict_key
+            {
+                (cached.interned, cached.len)
+            } else {
+                let value = dict_values.value(dict_key);
+                let bytes = value.as_ref();
+                let interned = self.interner.intern(bytes);
+                let len = bytes.len() as u32;
+                self.key_cache[slot] = DictKeyCacheSlot {
+                    generation,
+                    len,
+                    dict_key,
+                    interned,
+                };
+                (interned, len)
+            };
+
+            self.indices.push(interned);
+            self.variable_length_bytes += len as i64;
         }
     }
 
@@ -472,6 +580,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             values.data_type(),
             values,
             encode,
+            encode_dict,
             indices.iter().copied(),
             self
         );
@@ -649,6 +758,49 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
     I: ExactSizeIterator<Item = usize> + Clone,
 {
+    update_statistics_and_bloom_filter(values, indices.clone(), encoder);
+
+    match &mut encoder.dict_encoder {
+        Some(dict_encoder) => dict_encoder.encode(values, indices),
+        None => encoder.fallback.encode(values, indices),
+    }
+}
+
+/// Encodes the provided dictionary-typed `values` and `indices` to `encoder`
+///
+/// Produces the same output as [`encode`] on the same logical values, but hands
+/// the dictionary keys to [`DictEncoder::encode_dict`] so repeated keys skip
+/// re-interning the value they already resolved to.
+///
+/// This is a free function so it can be used with `downcast_op!`
+fn encode_dict<'a, K, V, I>(
+    values: TypedDictionaryArray<'a, K, V>,
+    indices: I,
+    encoder: &mut ByteArrayEncoder,
+) where
+    K: ArrowDictionaryKeyType,
+    V: Sync + Send,
+    &'a V: ArrayAccessor,
+    <&'a V as ArrayAccessor>::Item: Copy + Ord + AsRef<[u8]> + Default,
+    I: ExactSizeIterator<Item = usize> + Clone,
+{
+    update_statistics_and_bloom_filter(values, indices.clone(), encoder);
+
+    match &mut encoder.dict_encoder {
+        Some(dict_encoder) => dict_encoder.encode_dict(values, indices),
+        None => encoder.fallback.encode(values, indices),
+    }
+}
+
+/// Updates `encoder`'s statistics and bloom filter for the values at `indices`.
+///
+/// Shared by [`encode`] and [`encode_dict`] so the two entry points cannot drift.
+fn update_statistics_and_bloom_filter<T, I>(values: T, indices: I, encoder: &mut ByteArrayEncoder)
+where
+    T: ArrayAccessor + Copy,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+    I: ExactSizeIterator<Item = usize> + Clone,
+{
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
@@ -671,14 +823,9 @@ where
 
     // encode the values into bloom filter if enabled
     if let Some(bloom_filter) = &mut encoder.bloom_filter {
-        for idx in indices.clone() {
+        for idx in indices {
             bloom_filter.insert(values.value(idx).as_ref());
         }
-    }
-
-    match &mut encoder.dict_encoder {
-        Some(dict_encoder) => dict_encoder.encode(values, indices),
-        None => encoder.fallback.encode(values, indices),
     }
 }
 
