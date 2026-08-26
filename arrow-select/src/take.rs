@@ -33,7 +33,7 @@ use arrow_cmp::make_comparator;
 use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 
-use num_traits::Zero;
+use num_traits::{CheckedAdd, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -668,18 +668,14 @@ where
 
     if is_primitive_child {
         let values_buf = &child_data.buffers()[0];
-        let bytes_per_value = if !child_data.is_empty() {
-            values_buf.len() / child_data.len()
-        } else {
-            0
-        };
+        let bytes_per_value = child_data.data_type().primitive_width().unwrap_or(0);
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
         let avg_row_len = child_data
             .len()
             .checked_div(values.len().max(1))
             .unwrap_or(0);
-        let mut dst_buf = Vec::<u8>::with_capacity(
+        let mut dst_buf = MutableBuffer::new(
             avg_row_len
                 .saturating_mul(indices.len())
                 .saturating_mul(bytes_per_value),
@@ -694,7 +690,9 @@ where
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
                     let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
                     dst_buf.extend_from_slice(&values_buf[start..end]);
-                    child_len += src_offsets[row + 1] - src_offsets[row];
+                    child_len = child_len
+                        .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
                     dst_offsets.push(child_len);
                 }
             }
@@ -705,12 +703,18 @@ where
                     if prev < vidx {
                         dst_offsets.extend(std::iter::repeat_n(child_len, vidx - prev));
                     }
-                    // SAFETY: `vidx` comes from validity bitmap over `indices`, so in-bounds.
-                    let row = unsafe { indices.value_unchecked(vidx) }.as_usize();
+                    let row = if CHECKED {
+                        indices.value(vidx).as_usize()
+                    } else {
+                        // SAFETY: `vidx` comes from validity bitmap over `indices`, so in-bounds.
+                        unsafe { indices.value_unchecked(vidx) }.as_usize()
+                    };
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
                     let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
                     dst_buf.extend_from_slice(&values_buf[start..end]);
-                    child_len += src_offsets[row + 1] - src_offsets[row];
+                    child_len = child_len
+                        .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
                     dst_offsets.push(child_len);
                     prev = vidx + 1;
                 }
@@ -718,7 +722,7 @@ where
             }
         }
 
-        assert_eq!(
+        debug_assert_eq!(
             dst_offsets.len(),
             indices.len() + 1,
             "New offsets was filled under/over the expected capacity"
@@ -764,7 +768,12 @@ where
                 if last < i {
                     dst_offsets.extend(std::iter::repeat_n(current, i - last));
                 }
-                let row = unsafe { indices.value_unchecked(i) }.as_usize();
+                let row = if CHECKED {
+                    indices.value(i).as_usize()
+                } else {
+                    // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
+                    unsafe { indices.value_unchecked(i) }.as_usize()
+                };
                 mutable.try_extend(
                     0,
                     src_offsets[row].as_usize(),
@@ -773,13 +782,15 @@ where
                 dst_offsets.push(OffsetType::Native::from_usize(mutable.len()).unwrap());
                 last = i + 1;
             }
+            // Filling offsets for null values at the end
             let final_offset = OffsetType::Native::from_usize(mutable.len()).unwrap();
             dst_offsets.extend(std::iter::repeat_n(final_offset, indices.len() - last));
         }
     }
 
-    assert_eq!(dst_offsets.len(), indices.len() + 1);
+    debug_assert_eq!(dst_offsets.len(), indices.len() + 1);
 
+    // SAFETY: `dst_offsets` is constructed to be monotonically increasing above
     let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
     let child = make_array(mutable.freeze());
     GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls)
@@ -2201,6 +2212,29 @@ mod tests {
     }
 
     #[test]
+    // Fast path (primitive child, no child nulls) with null indices — verifies offset backfill for null slots.
+    fn test_take_list_primitive_child_null_indices() {
+        // Row sizes deliberately vary (1, 3, 2) so the test exercises
+        // non-uniform offset arithmetic, not just uniform stride.
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(3), Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+        ]);
+        let indices = Int32Array::from(vec![Some(2), None, Some(0), Some(1)]);
+        let result = take(&list, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(5), Some(6)]),
+            None,
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(3), Some(4)]),
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
     fn test_take_list() {
         test_take_list!(i32, List, ListArray);
     }
@@ -3018,6 +3052,41 @@ mod tests {
 
         assert!(matches!(
             take(&values, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    /// Fixture for list offset-overflow tests: a single row containing
+    /// `value_len` int32 elements, plus the repetition count needed for
+    /// `child_len` (an `i32`) to overflow.
+    fn list_offset_overflow_fixture() -> (ListArray, usize) {
+        let value_len = 1_000_000usize;
+        let values = Int32Array::from(vec![0i32; value_len]);
+        let offsets = OffsetBuffer::from_lengths([value_len]);
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let array = ListArray::new(field, offsets, Arc::new(values), None);
+        let n = i32::MAX as usize / value_len + 1;
+        (array, n)
+    }
+
+    #[test]
+    fn test_take_list_offset_overflow() {
+        let (array, n) = list_offset_overflow_fixture();
+        let indices = Int32Array::from(vec![0; n]);
+        assert!(matches!(
+            take(&array, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    #[test]
+    fn test_take_list_offset_overflow_nullable() {
+        let (array, n) = list_offset_overflow_fixture();
+        let validity =
+            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
+        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
+        assert!(matches!(
+            take(&array, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))
         ));
     }
