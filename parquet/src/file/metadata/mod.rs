@@ -241,6 +241,8 @@ pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
     /// Returns:
     /// * `Some(&ColumnIndexMetaData)` - Column index is available with statistics
     /// * `None` - Index unavailable (not loaded, row group/column out of bounds, or no statistics)
+    ///
+    /// For access to the indexes for a specific row group, use [`RowGroupPageIndex`].
     fn column_index(&self, row_group_idx: usize, column_idx: usize)
     -> Option<&ColumnIndexMetaData>;
 
@@ -254,6 +256,8 @@ pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
     /// Returns:
     /// * `Some(&OffsetIndexMetaData)` - Offset index is available
     /// * `None` - Index unavailable (not loaded, row group/column out of bounds)
+    ///
+    /// For access to the indexes for a specific row group, use [`RowGroupPageIndex`].
     fn offset_index(&self, row_group_idx: usize, column_idx: usize)
     -> Option<&OffsetIndexMetaData>;
 
@@ -454,25 +458,25 @@ impl RowGroupPageIndex {
 /// # use parquet::schema::types::{SchemaDescriptor, Type};
 /// // Create metadata for a file with a single row group containing a
 /// // single BYTE_ARRAY column "s" with three values
-/// let schema = Arc::new(SchemaDescriptor::new(Arc::new(
-///     Type::group_type_builder("schema")
-///         .with_fields(vec![Arc::new(
-///             Type::primitive_type_builder("s", PhysicalType::BYTE_ARRAY)
-///                 .build()
-///                 .unwrap(),
-///         )])
-///         .build()
-///         .unwrap(),
-/// )));
-/// let column = ColumnChunkMetaData::builder(schema.column(0))
-///     .set_num_values(3)
-///     .build()
-///     .unwrap();
-/// let row_group = RowGroupMetaData::builder(Arc::clone(&schema))
-///     .set_num_rows(3)
-///     .set_column_metadata(vec![column])
-///     .build()
-///     .unwrap();
+/// # let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+/// #     Type::group_type_builder("schema")
+/// #         .with_fields(vec![Arc::new(
+/// #             Type::primitive_type_builder("s", PhysicalType::BYTE_ARRAY)
+/// #                 .build()
+/// #                 .unwrap(),
+/// #         )])
+/// #         .build()
+/// #         .unwrap(),
+/// # )));
+/// # let column = ColumnChunkMetaData::builder(schema.column(0))
+/// #     .set_num_values(3)
+/// #     .build()
+/// #     .unwrap();
+/// # let row_group = RowGroupMetaData::builder(Arc::clone(&schema))
+/// #     .set_num_rows(3)
+/// #     .set_column_metadata(vec![column])
+/// #     .build()
+/// #     .unwrap();
 /// let file_metadata = FileMetaData::new(1, 3, None, None, schema, None);
 /// let metadata = ParquetMetaData::new(file_metadata, vec![row_group]);
 ///
