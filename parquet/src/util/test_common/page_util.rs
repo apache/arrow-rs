@@ -18,7 +18,9 @@
 use bytes::Bytes;
 
 use crate::basic::Encoding;
-use crate::column::page::{Page, PageIterator};
+use crate::column::page::Page;
+#[cfg(feature = "arrow")]
+use crate::column::page::PageIterator;
 use crate::column::page::{PageMetadata, PageReader};
 use crate::data_type::DataType;
 use crate::encodings::encoding::{Encoder, get_encoder};
@@ -227,11 +229,13 @@ impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
 }
 
 /// A utility page iterator which stores page readers in memory, used for tests.
+#[cfg(feature = "arrow")]
 #[derive(Clone)]
 pub struct InMemoryPageIterator<I: Iterator<Item = Vec<Page>>> {
     page_reader_iter: I,
 }
 
+#[cfg(feature = "arrow")]
 impl<I: Iterator<Item = Vec<Page>>> InMemoryPageIterator<I> {
     pub fn new(pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>) -> Self {
         Self {
@@ -240,6 +244,7 @@ impl<I: Iterator<Item = Vec<Page>>> InMemoryPageIterator<I> {
     }
 }
 
+#[cfg(feature = "arrow")]
 impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     type Item = Result<Box<dyn PageReader>>;
 
@@ -250,4 +255,5 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     }
 }
 
+#[cfg(feature = "arrow")]
 impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {}
