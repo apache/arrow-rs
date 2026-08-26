@@ -26,10 +26,47 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::{Array, BooleanArray};
+use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
-use arrow_select::filter::prep_null_mask_filter;
+use arrow_select::filter::{SlicesIterator, filter_record_batch, prep_null_mask_filter};
 use std::sync::Arc;
+
+#[derive(Debug, Eq, PartialEq)]
+enum PredicateBatchMaterialization {
+    /// The predicate accepted the entire batch; keep using it as-is.
+    PassThrough,
+    /// The predicate rejected the entire batch; do not evaluate later predicates.
+    Stop,
+    /// The survivors form one contiguous range and can be exposed zero-copy.
+    Slice { offset: usize, length: usize },
+    /// The survivors are fragmented and must be compacted into a new batch.
+    Compact,
+}
+
+fn predicate_batch_materialization(
+    filter: &BooleanArray,
+    true_count: usize,
+) -> PredicateBatchMaterialization {
+    if true_count == 0 {
+        return PredicateBatchMaterialization::Stop;
+    }
+    if true_count == filter.len() {
+        return PredicateBatchMaterialization::PassThrough;
+    }
+
+    let mut slices = SlicesIterator::new(filter);
+    let (start, end) = slices
+        .next()
+        .expect("a partially selected non-empty filter has a true slice");
+    if slices.next().is_none() {
+        PredicateBatchMaterialization::Slice {
+            offset: start,
+            length: end - start,
+        }
+    } else {
+        PredicateBatchMaterialization::Compact
+    }
+}
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
@@ -187,6 +224,98 @@ impl ReadPlanBuilder {
         self.with_predicate_options(PredicateOptions::new(array_reader, predicate))
     }
 
+    /// Evaluate consecutive predicates with the same projection from one
+    /// decoded batch stream.
+    ///
+    /// This preserves late-materialization for predicates with different
+    /// projections, while reusing one decoded batch stream when several
+    /// predicates consume exactly the same columns. Each predicate still sees
+    /// only rows accepted by its predecessors.
+    pub(crate) fn with_same_projection_predicates(
+        mut self,
+        array_reader: Box<dyn ArrayReader>,
+        predicates: &mut [Box<dyn ArrowPredicate>],
+    ) -> Result<Self> {
+        debug_assert!(predicates.len() > 1);
+        debug_assert!(
+            predicates
+                .windows(2)
+                .all(|pair| pair[0].projection() == pair[1].projection())
+        );
+
+        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        let mut filter_mask = BooleanBufferBuilder::new(
+            self.selection
+                .as_ref()
+                .map(RowSelection::row_count)
+                .unwrap_or_default(),
+        );
+        let mut all_selected = true;
+        let predicate_count = predicates.len();
+
+        for maybe_batch in reader {
+            let mut predicate_batch = maybe_batch?;
+            let input_rows = predicate_batch.num_rows();
+            let mut batch_selection: Option<RowSelection> = None;
+
+            for (idx, predicate) in predicates.iter_mut().enumerate() {
+                let filter = evaluate_predicate(predicate.as_mut(), predicate_batch.clone())?;
+                let true_count = filter.true_count();
+
+                if true_count != filter.len() {
+                    all_selected = false;
+                    let next = RowSelection::from_boolean_buffer(filter.values().clone());
+                    batch_selection = Some(match batch_selection.take() {
+                        Some(selection) => selection.and_then(&next),
+                        None => next,
+                    });
+                }
+
+                if idx + 1 != predicate_count {
+                    match predicate_batch_materialization(&filter, true_count) {
+                        PredicateBatchMaterialization::Stop => break,
+                        PredicateBatchMaterialization::PassThrough => {}
+                        PredicateBatchMaterialization::Slice { offset, length } => {
+                            predicate_batch = predicate_batch.slice(offset, length);
+                        }
+                        PredicateBatchMaterialization::Compact => {
+                            predicate_batch = filter_record_batch(&predicate_batch, &filter)?;
+                        }
+                    }
+                }
+            }
+
+            match batch_selection {
+                Some(selection) => filter_mask.append_buffer(
+                    selection
+                        .as_mask()
+                        .expect("same-projection pipeline builds mask selections"),
+                ),
+                None => filter_mask.append_n(input_rows, true),
+            }
+        }
+
+        if all_selected {
+            return Ok(self);
+        }
+
+        let filter = BooleanArray::new(filter_mask.finish(), None);
+        let raw = if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.as_mask().is_some())
+        {
+            RowSelection::from_boolean_buffer(filter.values().clone())
+        } else {
+            RowSelection::from_filters(std::slice::from_ref(&filter))
+        };
+        self.selection = match self.selection.take() {
+            Some(selection) => Some(selection.and_then(&raw)),
+            None => Some(raw),
+        };
+        Ok(self)
+    }
+
     /// Evaluates an [`ArrowPredicate`] with the given [`PredicateOptions`],
     /// updating this plan's `selection`.
     ///
@@ -314,6 +443,27 @@ impl ReadPlanBuilder {
             row_selection_cursor,
         }
     }
+}
+
+fn evaluate_predicate(
+    predicate: &mut dyn ArrowPredicate,
+    batch: RecordBatch,
+) -> Result<BooleanArray> {
+    let input_rows = batch.num_rows();
+    let filter = predicate.evaluate(batch)?;
+    // Since user supplied predicate, check error here to catch bugs quickly
+    if filter.len() != input_rows {
+        return Err(arrow_err!(
+            "ArrowPredicate predicate returned {} rows, expected {input_rows}",
+            filter.len()
+        ));
+    }
+    Ok(match filter.null_count() {
+        0 => filter,
+        // RowSelection::from_filters expects non-null filters. Convert NULL
+        // predicate results to false so they are not selected.
+        _ => prep_null_mask_filter(&filter),
+    })
 }
 
 /// Lower a [`RowSelection`] to the cursor form requested by the resolved strategy.
@@ -564,6 +714,110 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn same_projection_pipeline_matches_predicate_major_execution() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::make_int32_page_reader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+        let data: Vec<i32> = (0..97).collect();
+        let make_reader = || {
+            let levels = vec![0; data.len()];
+            let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+            let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+                "c0",
+                ArrowType::Int32,
+                false,
+            )]));
+            Box::new(StructArrayReader::new(
+                struct_type,
+                vec![leaf],
+                0,
+                0,
+                false,
+                None,
+            )) as Box<dyn ArrayReader>
+        };
+        let make_predicates = || -> Vec<Box<dyn ArrowPredicate>> {
+            let even = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+                let values = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                Ok(values
+                    .iter()
+                    .map(|value| value.map(|v| v % 2 == 0))
+                    .collect())
+            });
+            let divisible_by_three = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+                let values = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                assert!(values.iter().flatten().all(|v| v % 2 == 0));
+                Ok(values
+                    .iter()
+                    .map(|value| value.map(|v| v % 3 == 0))
+                    .collect())
+            });
+            vec![Box::new(even), Box::new(divisible_by_three)]
+        };
+
+        let prior = RowSelection::from_filters(&[BooleanArray::from(
+            (0..data.len()).map(|idx| idx % 5 != 0).collect::<Vec<_>>(),
+        )]);
+        for initial in [None, Some(prior)] {
+            let mut sequential_predicates = make_predicates();
+            let mut sequential = ReadPlanBuilder::new(7).with_selection(initial.clone());
+            for predicate in &mut sequential_predicates {
+                sequential = sequential
+                    .with_predicate(make_reader(), predicate.as_mut())
+                    .unwrap();
+            }
+
+            let mut fused_predicates = make_predicates();
+            let fused = ReadPlanBuilder::new(7)
+                .with_selection(initial)
+                .with_same_projection_predicates(make_reader(), &mut fused_predicates)
+                .unwrap();
+
+            assert_eq!(fused.selection(), sequential.selection());
+        }
+    }
+
+    #[test]
+    fn predicate_batch_materialization_classifies_survivors() {
+        let classify = |values: Vec<bool>| {
+            let filter = BooleanArray::from(values);
+            predicate_batch_materialization(&filter, filter.true_count())
+        };
+
+        assert_eq!(
+            classify(vec![false; 8]),
+            PredicateBatchMaterialization::Stop
+        );
+        assert_eq!(
+            classify(vec![true; 8]),
+            PredicateBatchMaterialization::PassThrough
+        );
+        assert_eq!(
+            classify(vec![false, false, true, true, true, false]),
+            PredicateBatchMaterialization::Slice {
+                offset: 2,
+                length: 3,
+            }
+        );
+        assert_eq!(
+            classify(vec![false, true, false, true, false]),
+            PredicateBatchMaterialization::Compact
+        );
     }
 
     #[test]

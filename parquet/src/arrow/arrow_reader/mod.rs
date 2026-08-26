@@ -64,6 +64,30 @@ pub mod statistics;
 /// Default batch size for reading parquet files
 pub const DEFAULT_BATCH_SIZE: usize = 1024;
 
+/// Returns whether a same-projection predicate group is a conservative fusion
+/// candidate.
+///
+/// Restricting automatic fusion to one non-repeated top-level parquet leaf
+/// bounds the cost of compacting survivor batches and excludes wide and nested
+/// projections. The callers separately exclude predicate chains with an active
+/// row limit.
+pub(crate) fn should_fuse_same_projection(
+    projection: &ProjectionMask,
+    parquet_schema: &SchemaDescriptor,
+) -> bool {
+    let mut selected =
+        (0..parquet_schema.num_columns()).filter(|idx| projection.leaf_included(*idx));
+    let Some(leaf_idx) = selected.next() else {
+        return false;
+    };
+    if selected.next().is_some() {
+        return false;
+    }
+
+    let column = parquet_schema.column(leaf_idx);
+    column.path().parts().len() == 1 && column.max_rep_level() == 0
+}
+
 /// A row group and its optional row-group-local [`RowSelection`].
 ///
 /// A row-group-local selection is relative to the rows in this row group. For
@@ -1354,21 +1378,65 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            for predicate in &mut filter.predicates {
-                // break early if we have ruled out all rows
-                if !plan_builder.selects_any() {
-                    break;
+            let parquet_schema = reader.metadata.file_metadata().schema_descr();
+            let has_fusable_group = filter.predicates.len() > 1
+                && limit.is_none()
+                && filter.predicates.windows(2).any(|pair| {
+                    pair[0].projection() == pair[1].projection()
+                        && should_fuse_same_projection(pair[0].projection(), parquet_schema)
+                });
+
+            if !has_fusable_group {
+                // Preserve the existing singleton hot path when there is
+                // nothing to fuse.
+                for predicate in &mut filter.predicates {
+                    if !plan_builder.selects_any() {
+                        break;
+                    }
+
+                    let mut cache_projection = predicate.projection().clone();
+                    cache_projection.intersect(&projection);
+
+                    let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                        .with_batch_size(batch_size)
+                        .with_parquet_metadata(&reader.metadata)
+                        .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
                 }
+            } else {
+                let mut predicate_idx = 0;
+                while predicate_idx < filter.predicates.len() {
+                    if !plan_builder.selects_any() {
+                        break;
+                    }
 
-                let mut cache_projection = predicate.projection().clone();
-                cache_projection.intersect(&projection);
-
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                    .with_batch_size(batch_size)
-                    .with_parquet_metadata(&reader.metadata)
-                    .build_array_reader(fields.as_deref(), predicate.projection())?;
-
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                    let projection = filter.predicates[predicate_idx].projection().clone();
+                    let mut group_end = predicate_idx + 1;
+                    while group_end < filter.predicates.len()
+                        && filter.predicates[group_end].projection() == &projection
+                    {
+                        group_end += 1;
+                    }
+                    if !should_fuse_same_projection(&projection, parquet_schema) {
+                        group_end = predicate_idx + 1;
+                    }
+                    let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                        .with_batch_size(batch_size)
+                        .with_parquet_metadata(&reader.metadata)
+                        .build_array_reader(fields.as_deref(), &projection)?;
+                    if group_end == predicate_idx + 1 {
+                        plan_builder = plan_builder.with_predicate(
+                            array_reader,
+                            filter.predicates[predicate_idx].as_mut(),
+                        )?;
+                    } else {
+                        plan_builder = plan_builder.with_same_projection_predicates(
+                            array_reader,
+                            &mut filter.predicates[predicate_idx..group_end],
+                        )?;
+                    }
+                    predicate_idx = group_end;
+                }
             }
         }
 
@@ -1835,6 +1903,34 @@ pub(crate) mod tests {
 
     fn row_selection(rows: usize) -> RowSelection {
         RowSelection::from(vec![RowSelector::select(rows)])
+    }
+
+    #[test]
+    fn conservative_same_projection_fusion_requires_one_leaf() {
+        let schema = parse_message_type(
+            "message schema {
+                REQUIRED INT32 a;
+                REQUIRED INT32 b;
+                REQUIRED INT32 c;
+                REQUIRED GROUP nested { REQUIRED INT32 d; }
+                REPEATED INT32 e;
+            }",
+        )
+        .unwrap();
+        let schema = crate::schema::types::SchemaDescriptor::new(Arc::new(schema));
+
+        let one_leaf = ProjectionMask::leaves(&schema, [1]);
+        let two_leaves = ProjectionMask::leaves(&schema, [0, 2]);
+        let nested_leaf = ProjectionMask::leaves(&schema, [3]);
+        let repeated_leaf = ProjectionMask::leaves(&schema, [4]);
+        assert!(super::should_fuse_same_projection(&one_leaf, &schema));
+        assert!(!super::should_fuse_same_projection(&two_leaves, &schema));
+        assert!(!super::should_fuse_same_projection(&nested_leaf, &schema));
+        assert!(!super::should_fuse_same_projection(&repeated_leaf, &schema));
+        assert!(!super::should_fuse_same_projection(
+            &ProjectionMask::none(schema.num_columns()),
+            &schema
+        ));
     }
 
     #[test]

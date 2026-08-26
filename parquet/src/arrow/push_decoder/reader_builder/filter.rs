@@ -87,20 +87,21 @@ impl FilterInfo {
         }
     }
 
-    /// Advance to the next predicate
+    /// Advance past `count` predicates evaluated as one same-projection group.
     ///
     /// Returns
     /// * [`AdvanceResult::Continue`] returning the `FilterInfo` if there are
     ///   more predicate to evaluate.
     /// * [`AdvanceResult::Done`] with the inner [`RowFilter`] and [`CacheInfo]`
     ///   if there are no more predicates
-    pub(super) fn advance(mut self) -> AdvanceResult {
-        if self.next_predicate.get() >= self.filter.predicates.len() {
+    pub(super) fn advance_by(mut self, count: usize) -> AdvanceResult {
+        debug_assert!(count > 0);
+        if self.next_predicate.get() - 1 + count >= self.filter.predicates.len() {
             AdvanceResult::Done(self.filter, self.cache_info)
         } else {
             self.next_predicate = self
                 .next_predicate
-                .checked_add(1)
+                .checked_add(count)
                 .expect("no usize overflow");
             AdvanceResult::Continue(self)
         }
@@ -111,7 +112,7 @@ impl FilterInfo {
         self.filter
             .predicates
             .get_mut(self.next_predicate.get() - 1)
-            // advance ensures next_predicate is always in bounds
+            // advance_by ensures next_predicate is always in bounds
             .unwrap()
             .as_mut()
     }
@@ -121,14 +122,29 @@ impl FilterInfo {
         self.filter
             .predicates
             .get(self.next_predicate.get() - 1)
-            // advance ensures next_predicate is always in bounds
+            // advance_by ensures next_predicate is always in bounds
             .unwrap()
             .as_ref()
     }
 
-    /// Returns `true` if the current predicate is the last one in the chain
-    /// (i.e. the next call to [`Self::advance`] will return
-    /// [`AdvanceResult::Done`]).
+    /// Number of consecutive predicates, starting at the current predicate,
+    /// that use exactly the same projection.
+    pub(super) fn current_projection_group_len(&self) -> usize {
+        let start = self.next_predicate.get() - 1;
+        let projection = self.filter.predicates[start].projection();
+        self.filter.predicates[start..]
+            .iter()
+            .take_while(|predicate| predicate.projection() == projection)
+            .count()
+    }
+
+    /// Return the current same-projection predicate group mutably.
+    pub(super) fn current_group_mut(&mut self, group_len: usize) -> &mut [Box<dyn ArrowPredicate>] {
+        let start = self.next_predicate.get() - 1;
+        &mut self.filter.predicates[start..start + group_len]
+    }
+
+    /// Returns `true` if the current predicate is the last one in the chain.
     pub(super) fn is_last(&self) -> bool {
         self.next_predicate.get() == self.filter.predicates.len()
     }

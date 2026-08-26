@@ -24,7 +24,7 @@ use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    RowSelectionPolicy, should_fuse_same_projection,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -601,13 +601,37 @@ impl RowGroupReaderBuilder {
                     budget,
                 } = row_group_info;
 
-                let predicate = filter_info.current();
+                // Fuse only consecutive predicates that consume exactly the
+                // same projection, and retain the existing predicate-major
+                // path when LIMIT early termination is active.
+                let candidate_group_len = if filter_info.is_last() {
+                    1
+                } else if budget.selected_row_limit().is_none() {
+                    filter_info.current_projection_group_len()
+                } else {
+                    1
+                };
+                let parquet_schema = self.metadata.file_metadata().schema_descr();
+                let group_len = if candidate_group_len > 1
+                    && should_fuse_same_projection(
+                        filter_info.current().projection(),
+                        parquet_schema,
+                    ) {
+                    candidate_group_len
+                } else {
+                    1
+                };
+                let fused_projection =
+                    (group_len > 1).then(|| filter_info.current().projection().clone());
+                let predicate_projection = fused_projection
+                    .as_ref()
+                    .unwrap_or_else(|| filter_info.current().projection());
 
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
                     &self.metadata,
-                    predicate.projection(),
+                    predicate_projection,
                     &mut self.buffers,
                 )?;
 
@@ -617,7 +641,7 @@ impl RowGroupReaderBuilder {
                     .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .build_array_reader(self.fields.as_deref(), predicate_projection)?;
 
                 // Auto resolution and loaded ranges are projection-specific, so restore the
                 // configured policy before preparing each predicate.
@@ -626,7 +650,7 @@ impl RowGroupReaderBuilder {
                 // Prepare selection execution for pages pruned during fetch.
                 plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
-                    predicate.projection(),
+                    predicate_projection,
                     self.row_group_offset_index(row_group_idx),
                     row_count,
                 );
@@ -634,20 +658,26 @@ impl RowGroupReaderBuilder {
                 // When this is the final predicate in the chain and an output
                 // limit is set, tell the filter evaluation to stop once enough
                 // matching rows have been accumulated.
-                let predicate_limit = filter_info
-                    .is_last()
+                let predicate_limit = (group_len == 1 && filter_info.is_last())
                     .then(|| budget.selected_row_limit())
                     .flatten();
 
-                // Evaluate the filter via `with_predicate_options`, opting into
-                // early termination when this is the final predicate and an
-                // output limit was set.
-                let mut predicate_options =
-                    PredicateOptions::new(array_reader, filter_info.current_mut());
-                if let Some(limit) = predicate_limit {
-                    predicate_options = predicate_options.with_limit(limit, row_count);
+                if group_len > 1 {
+                    plan_builder = plan_builder.with_same_projection_predicates(
+                        array_reader,
+                        filter_info.current_group_mut(group_len),
+                    )?;
+                } else {
+                    // Evaluate the filter via `with_predicate_options`, opting into
+                    // early termination when this is the final predicate and an
+                    // output limit was set.
+                    let mut predicate_options =
+                        PredicateOptions::new(array_reader, filter_info.current_mut());
+                    if let Some(limit) = predicate_limit {
+                        predicate_options = predicate_options.with_limit(limit, row_count);
+                    }
+                    plan_builder = plan_builder.with_predicate_options(predicate_options)?;
                 }
-                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -660,7 +690,7 @@ impl RowGroupReaderBuilder {
                 let column_chunks = Some(row_group.column_chunks);
 
                 // advance to the next predicate, if any
-                match filter_info.advance() {
+                match filter_info.advance_by(group_len) {
                     AdvanceResult::Continue(filter_info) => {
                         NextState::again(RowGroupDecoderState::Filters {
                             row_group_info,

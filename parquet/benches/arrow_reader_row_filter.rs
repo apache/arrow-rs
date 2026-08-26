@@ -510,6 +510,115 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
     }
 }
 
+/// Benchmark two independent predicates evaluated as a [`RowFilter`] pipeline.
+///
+/// Unlike [`FilterType::Composite`], these cases use two `ArrowPredicateFn`s so
+/// they exercise the reader's cross-predicate execution and predicate cache.
+/// No limit is configured: every row group is evaluated to completion.
+fn benchmark_multi_predicate_pipeline(c: &mut Criterion) {
+    let parquet_file = Bytes::from(write_parquet_file());
+    let cases = [
+        (
+            "selective_then_clustered",
+            FilterType::SelectiveUnclustered,
+            FilterType::ModeratelySelectiveClustered,
+        ),
+        (
+            "unselective_then_selective",
+            FilterType::UnselectiveClustered,
+            FilterType::SelectiveUnclustered,
+        ),
+        (
+            "fragmented_then_selective",
+            FilterType::Utf8ViewNonEmpty,
+            FilterType::ModeratelySelectiveUnclustered,
+        ),
+        (
+            "same_column_selective",
+            FilterType::ModeratelySelectiveUnclustered,
+            FilterType::PointLookup,
+        ),
+        (
+            "same_column_unselective",
+            FilterType::UnselectiveClustered,
+            FilterType::ModeratelySelectiveClustered,
+        ),
+    ];
+    let projection_cases = [
+        ProjectionCase::AllColumns,
+        ProjectionCase::ExcludeFilterColumn,
+    ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut group = c.benchmark_group("arrow_reader_multi_predicate_pipeline");
+
+    for (case_name, first, second) in cases {
+        for projection_case in &projection_cases {
+            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+            let metadata = Arc::clone(reader.metadata());
+            let schema_descr = metadata.file_metadata().schema_descr();
+
+            let mut filter_columns = first.filter_projection().to_vec();
+            filter_columns.extend_from_slice(second.filter_projection());
+            filter_columns.sort_unstable();
+            filter_columns.dedup();
+
+            let output_columns = match projection_case {
+                ProjectionCase::AllColumns => vec![0, 1, 2, 3],
+                ProjectionCase::ExcludeFilterColumn => {
+                    (0..4).filter(|idx| !filter_columns.contains(idx)).collect()
+                }
+            };
+            let projection_mask = ProjectionMask::roots(schema_descr, output_columns);
+            let first_mask =
+                ProjectionMask::roots(schema_descr, first.filter_projection().to_vec());
+            let second_mask =
+                ProjectionMask::roots(schema_descr, second.filter_projection().to_vec());
+
+            let make_filter = |first_mask: ProjectionMask, second_mask: ProjectionMask| {
+                let first_predicate =
+                    ArrowPredicateFn::new(first_mask, move |batch: RecordBatch| {
+                        first.filter_batch(&batch)
+                    });
+                let second_predicate =
+                    ArrowPredicateFn::new(second_mask, move |batch: RecordBatch| {
+                        second.filter_batch(&batch)
+                    });
+                RowFilter::new(vec![Box::new(first_predicate), Box::new(second_predicate)])
+            };
+
+            let benchmark_name = format!("{case_name}/{projection_case}");
+            let rt_handle = rt.handle().clone();
+            let async_reader = reader.clone();
+            let async_projection = projection_mask.clone();
+            let async_first_mask = first_mask.clone();
+            let async_second_mask = second_mask.clone();
+            group.bench_function(BenchmarkId::new(&benchmark_name, "async"), |b| {
+                b.iter(|| {
+                    rt_handle.block_on(benchmark_async_reader(
+                        async_reader.clone(),
+                        async_projection.clone(),
+                        make_filter(async_first_mask.clone(), async_second_mask.clone()),
+                    ));
+                });
+            });
+
+            group.bench_function(BenchmarkId::new(&benchmark_name, "sync"), |b| {
+                b.iter(|| {
+                    benchmark_sync_reader(
+                        reader.clone(),
+                        projection_mask.clone(),
+                        make_filter(first_mask.clone(), second_mask.clone()),
+                    );
+                });
+            });
+        }
+    }
+}
+
 /// Use async API
 async fn benchmark_async_reader(
     reader: InMemoryReader,
@@ -696,6 +805,7 @@ fn benchmark_filters_with_limit(c: &mut Criterion) {
 criterion_group!(
     benches,
     benchmark_filters_and_projections,
+    benchmark_multi_predicate_pipeline,
     benchmark_filters_with_limit,
 );
 criterion_main!(benches);
