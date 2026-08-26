@@ -1532,6 +1532,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// # Safety
     /// The iterator must be [`TrustedLen`](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html).
     /// I.e. that `size_hint().1` correctly reports its length.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the iterator does not report an upper bound on its length.
     #[inline]
     pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
     where

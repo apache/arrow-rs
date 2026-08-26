@@ -124,6 +124,10 @@ impl FixedSizeBinaryArray {
     /// - `value_length >= 0`
     /// - `values.len() == len * value_length as usize`
     /// - `nulls.len() == len` if `nulls` is `Some`
+    ///
+    /// # Panics
+    ///
+    /// With the `force_validate` feature enabled, panics if the arguments are invalid.
     pub unsafe fn new_unchecked(
         value_length: i32,
         values: Buffer,

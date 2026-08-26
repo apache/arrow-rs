@@ -225,6 +225,10 @@ impl BooleanBuffer {
     /// let expected = [0b00110011u8, 0b01000101u8, 255, 255, 255, 255, 255, 255];
     /// assert_eq!(result.values(), &expected);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `src` is shorter than `offset_in_bits + len_in_bits` bits.
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
         offset_in_bits: usize,
@@ -329,6 +333,10 @@ impl BooleanBuffer {
     ///     assert_eq!(result.value(i), l | r);
     /// }
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `left` or `right` is shorter than the requested range of bits.
     pub fn from_bitwise_binary_op<F>(
         left: impl AsRef<[u8]>,
         left_offset_in_bits: usize,

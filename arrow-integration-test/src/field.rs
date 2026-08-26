@@ -291,6 +291,10 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 }
 
 /// Generate a JSON representation of the `Field`.
+///
+/// # Panics
+///
+/// Panics if a dictionary field has no dictionary id or ordering.
 pub fn field_to_json(field: &Field) -> serde_json::Value {
     let children: Vec<serde_json::Value> = match field.data_type() {
         DataType::Struct(fields) => fields.iter().map(|x| field_to_json(x.as_ref())).collect(),
