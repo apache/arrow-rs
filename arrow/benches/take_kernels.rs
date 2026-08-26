@@ -356,6 +356,68 @@ fn add_benchmark(c: &mut Criterion) {
         "take_record_batch 7 mixed cols null values null indices 1024",
         |b| b.iter(|| bench_take_record_batch(&batch, &indices)),
     );
+
+    // FixedSizeList — list_size=8 (power-of-two) and list_size=22 (arbitrary/dynamic length)
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.0, 0.0, 8);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fixed_size_list<i32>[8] 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.5, 0.0, 8);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fixed_size_list<i32>[8] null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.0, 0.0, 8);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take fixed_size_list<i32>[8] null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.0, 0.0, 22);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fixed_size_list<i32>[22] 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.5, 0.0, 22);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fixed_size_list<i32>[22] null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_fixed_size_list_array::<Int32Type>(1024, 0.0, 0.0, 22);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take fixed_size_list<i32>[22] null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    // Map
+    let values = create_string_map_array::<Int32Type>(512, 0.0, 10, 8);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take map<str, i32> 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_map_array::<Int32Type>(1024, 0.0, 10, 8);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take map<str, i32> 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_map_array::<Int32Type>(1024, 0.5, 10, 8);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take map<str, i32> null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_map_array::<Int32Type>(1024, 0.0, 10, 8);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take map<str, i32> null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
 }
 
 criterion_group!(benches, add_benchmark);
