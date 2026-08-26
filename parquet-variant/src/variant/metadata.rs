@@ -284,13 +284,13 @@ impl<'m> VariantMetadata<'m> {
                 string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             let mut offsets = map_bytes_to_offsets(offset_bytes, self.header.offset_size);
+            let mut current_offset = offsets.next().unwrap_or(0);
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
                 //
                 // Since we use the offsets to access dictionary values, this also validates
                 // offsets are in-bounds and monotonically increasing
-                let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
                     let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
@@ -316,7 +316,6 @@ impl<'m> VariantMetadata<'m> {
                 // Slicing each dictionary value validates that offsets are in-bounds, non-decreasing,
                 // and land on UTF-8 character boundaries. Equal offsets are legal: they encode an
                 // empty dictionary entry.
-                let mut current_offset = offsets.next().unwrap_or(0);
                 for next_offset in offsets {
                     value_buffer
                         .get(current_offset..next_offset)

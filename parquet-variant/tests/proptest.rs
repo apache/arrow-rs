@@ -223,7 +223,7 @@ fn arb_metadata_bytes() -> impl Strategy<Value = Vec<u8>> {
         ),
     )
         .prop_map(|(sorted, size, offsets, values)| {
-            let mut bytes = vec![0x01 | u8::from(sorted) << 4];
+            let mut bytes = vec![0x01 | (u8::from(sorted) << 4)];
             bytes.push(size as u8);
             let mut offsets = offsets;
             offsets.resize(size + 1, 0);
