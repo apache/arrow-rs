@@ -11915,6 +11915,19 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_out_of_precision_decimal_to_string() {
+        // Decimal values are not validated against their type's declared
+        // precision by default. Check that out-of-precision values are rendered
+        // in full when cast to strings, rather than truncated to the declared
+        // precision (https://github.com/apache/arrow-rs/issues/10866)
+        let array = create_decimal128_array(vec![Some(123456789), Some(-123456789)], 7, 3).unwrap();
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_string::<i32>();
+        assert_eq!("123456.789", c.value(0));
+        assert_eq!("-123456.789", c.value(1));
+    }
+
+    #[test]
     fn test_cast_decimal_to_string() {
         assert!(can_cast_types(
             &DataType::Decimal32(9, 4),
@@ -11942,9 +11955,7 @@ mod tests {
                 assert_eq!("-3123.456", c.value(3));
                 assert_eq!("0.000", c.value(4));
                 assert_eq!("0.123", c.value(5));
-                assert_eq!("1234.567", c.value(6));
-                assert_eq!("-1234.567", c.value(7));
-                assert!(c.is_null(8));
+                assert!(c.is_null(6));
             };
         }
 
@@ -11975,8 +11986,6 @@ mod tests {
             Some(-3123456),
             Some(0),
             Some(123),
-            Some(123456789),
-            Some(-123456789),
             None,
         ];
         let array64: Vec<Option<i64>> = array32.iter().map(|num| num.map(|x| x as i64)).collect();
