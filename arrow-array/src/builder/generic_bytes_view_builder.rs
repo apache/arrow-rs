@@ -500,7 +500,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
         let views = std::mem::take(&mut self.views_buffer);
         // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views.into(), completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views.into(), completed.into(), nulls) }
     }
 
     /// Builds the [`GenericByteViewArray`] without resetting the builder
@@ -514,7 +514,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let views = ScalarBuffer::new(views, 0, len);
         let nulls = self.null_buffer_builder.finish_cloned();
         // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views, completed.into(), nulls) }
     }
 
     /// Returns the current null buffer as a slice

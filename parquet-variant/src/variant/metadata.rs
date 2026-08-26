@@ -115,7 +115,7 @@ impl VariantMetadataHeader {
 /// - first offset is zero
 /// - last offset is in-bounds
 /// - all other offsets are in-bounds (*)
-/// - all offsets are monotonically increasing (*)
+/// - all offsets are non-decreasing (*)
 /// - all values are valid utf-8 (*)
 ///
 /// NOTE: [`Self::new`] only skips expensive (non-constant cost) validation checks (marked by `(*)`
@@ -284,13 +284,13 @@ impl<'m> VariantMetadata<'m> {
                 string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             let mut offsets = map_bytes_to_offsets(offset_bytes, self.header.offset_size);
+            let mut current_offset = offsets.next().unwrap_or(0);
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
                 //
                 // Since we use the offsets to access dictionary values, this also validates
                 // offsets are in-bounds and monotonically increasing
-                let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
                     let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
@@ -313,15 +313,18 @@ impl<'m> VariantMetadata<'m> {
                     current_offset = next_offset;
                 }
             } else {
-                // Validate offsets are in-bounds and monotonically increasing
-                //
-                // Since shallow validation ensures the first and last offsets are in bounds,
-                // we can also verify all offsets are in-bounds by checking if
-                // offsets are monotonically increasing
-                if !offsets.is_sorted_by(|a, b| a < b) {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "offsets not monotonically increasing".to_string(),
-                    ));
+                // Slicing each dictionary value validates that offsets are in-bounds, non-decreasing,
+                // and land on UTF-8 character boundaries. Equal offsets are legal: they encode an
+                // empty dictionary entry.
+                for next_offset in offsets {
+                    value_buffer
+                        .get(current_offset..next_offset)
+                        .ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "range {current_offset}..{next_offset} is invalid or out of bounds"
+                            ))
+                        })?;
+                    current_offset = next_offset;
                 }
             }
 
@@ -619,6 +622,19 @@ mod tests {
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
         );
+
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,
+            0x00,
+            0x02,
+            0x02, // an unsorted dict may hold an empty string anywhere
+            b'h',
+            b'i',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert_eq!(&metadata[0], "hi");
+        assert_eq!(&metadata[1], "");
     }
 
     #[test]
@@ -673,5 +689,25 @@ mod tests {
         let m2 = VariantMetadata::new(&m);
 
         assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn test_empty_string_field_names() {
+        // Field names are added to the dictionary in insertion order, so this dictionary is
+        // unsorted, and the empty field name makes its last two offsets equal.
+        let mut b = VariantBuilder::new().with_field_names(["b", "a", ""]);
+        let mut o = b.new_object();
+
+        o.insert("b", false);
+        o.insert("a", false);
+        o.insert("", false);
+
+        o.finish();
+
+        let (m, _) = b.finish();
+
+        let metadata = VariantMetadata::try_new(&m).unwrap();
+        assert!(!metadata.is_sorted());
+        assert_eq!(metadata.iter().collect::<Vec<_>>(), vec!["b", "a", ""]);
     }
 }
