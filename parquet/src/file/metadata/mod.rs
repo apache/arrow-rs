@@ -596,6 +596,9 @@ impl PageIndexBuilder {
     ///
     /// Returns `Some` containing a nested vector structure where all entries are initialized to `None`.
     /// The outer vector has one entry per row group, and each inner vector has one entry per column.
+    ///
+    /// # Type Parameters
+    /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
     fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
         Some(
             (0..num_row_groups)
