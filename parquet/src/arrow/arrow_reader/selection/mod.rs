@@ -759,7 +759,7 @@ fn append_auto_selector(
     mask_run_limit.is_some_and(|limit| selectors.len() >= limit)
 }
 
-fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
+pub(crate) fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
     let total_rows = filters.iter().map(|filter| filter.len()).sum();
     let mut builder = BooleanBufferBuilder::new(total_rows);
     for filter in filters {

@@ -946,8 +946,13 @@ fn loaded_row_ranges_for_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::array_reader::StructArrayReader;
+    use crate::arrow::array_reader::test_util::make_int32_page_reader;
+    use crate::arrow::arrow_reader::ArrowPredicateFn;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
     use crate::file::page_index::offset_index::PageLocation;
+    use arrow_array::BooleanArray;
+    use arrow_schema::{DataType as ArrowType, Field, Fields};
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
@@ -991,15 +996,46 @@ mod tests {
     }
 
     #[test]
-    fn test_page_skipping_preparation_preserves_auto_without_selection() {
-        let policy = RowSelectionPolicy::Auto { threshold: 17 };
-        let plan_builder = ReadPlanBuilder::new(12).with_row_selection_policy(policy);
+    fn test_page_skipping_preparation_preserves_first_predicate_auto_mask() {
+        let policy = RowSelectionPolicy::Auto { threshold: 4 };
+        let plan_builder = ReadPlanBuilder::new(4).with_row_selection_policy(policy);
 
         let prepared =
             prepare_selection_for_page_skipping(plan_builder, &ProjectionMask::all(), None, 12);
-
         assert_eq!(prepared.row_selection_policy(), &policy);
         assert!(prepared.selection().is_none());
+
+        let data: Vec<i32> = (0..12).collect();
+        let levels = vec![0; data.len()];
+        let leaf = make_int32_page_reader(&data, &levels, &levels, 0, 0, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![leaf], 0, 0, false, None);
+        let mut offset = 0usize;
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), move |batch| {
+            let end = offset + batch.num_rows();
+            let filter =
+                BooleanArray::from((offset..end).map(|row| row % 2 == 0).collect::<Vec<_>>());
+            offset = end;
+            Ok(filter)
+        });
+
+        let prepared = prepared
+            .with_predicate_options(PredicateOptions::new(
+                Box::new(struct_reader),
+                &mut predicate,
+            ))
+            .unwrap();
+        let selection = prepared.selection().expect("first predicate selection");
+        let reference = RowSelection::from_filters(&[BooleanArray::from(
+            (0..12).map(|row| row % 2 == 0).collect::<Vec<_>>(),
+        )]);
+
+        assert_eq!(selection, &reference);
+        assert!(selection.as_mask().is_some());
     }
 
     #[test]
