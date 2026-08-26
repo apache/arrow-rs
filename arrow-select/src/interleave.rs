@@ -176,8 +176,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 
     // Process 8 elements at a time to issue multiple independent loads
     // and increase memory-level parallelism for random access patterns.
-    let chunks = indices.chunks_exact(8);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = indices.as_chunks::<8>();
     for chunk in chunks {
         let v0 = arrays[chunk[0].0].value(chunk[0].1);
         let v1 = arrays[chunk[1].0].value(chunk[1].1);

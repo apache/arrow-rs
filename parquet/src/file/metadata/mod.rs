@@ -1106,9 +1106,7 @@ impl LevelHistogram {
 
     /// Sets the values of all histogram levels to 0.
     pub fn reset(&mut self) {
-        for value in &mut self.inner {
-            *value = 0;
-        }
+        self.inner.fill(0);
     }
 
     /// Increments the count for a level value by `count`.

@@ -2895,7 +2895,7 @@ mod tests {
 
         assert_eq!(
             res.to_string(),
-            format!("Invalid argument error: Last offset 2 of Utf8 is larger than values length 0",)
+            "Invalid argument error: Last offset 2 of Utf8 is larger than values length 0"
         );
     }
 

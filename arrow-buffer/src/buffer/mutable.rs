@@ -887,7 +887,7 @@ impl MutableBuffer {
 
             let words_start = bit_idx / 8;
             let words_end = words_start + chunks * 8;
-            for dst in slice[words_start..words_end].chunks_exact_mut(8) {
+            for dst in slice[words_start..words_end].as_chunks_mut::<8>().0 {
                 let mut packed: u64 = 0;
                 for i in 0..64 {
                     packed |= (iter.next().unwrap() as u64) << i;

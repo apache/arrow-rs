@@ -402,11 +402,13 @@ impl Sbbf {
     /// Creates a new [Sbbf] from a raw byte slice.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
-            .chunks_exact(4 * 8)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                for (i, word) in chunk.as_chunks::<4>().0.iter().enumerate() {
+                    block[i] = u32::from_le_bytes(*word);
                 }
                 block
             })

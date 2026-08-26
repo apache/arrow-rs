@@ -404,22 +404,17 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
         return false;
     }
 
-    let chunks = offsets.chunks_exact(N);
-
-    let remainder = chunks.remainder();
-
-    chunks.enumerate().all(|(i, chunk)| {
-        let chunk_array = <&[i32; N]>::try_from(chunk).unwrap();
-
+    let (chunks, remainder) = offsets.as_chunks::<N>();
+    chunks.iter().enumerate().all(|(i, chunk)| {
         //checks if values within chunk are sequential
-        chunk_array
+        chunk
             .iter()
             .copied()
             .enumerate()
             .fold(true, |acc, (i, offset)| {
-                acc & (offset == chunk_array[0] + i as i32)
+                acc & (offset == chunk[0] + i as i32)
             })
-            && offsets[0] + (i * N) as i32 == chunk_array[0] //checks if chunk is sequential relative to the first offset
+            && offsets[0] + (i * N) as i32 == chunk[0] //checks if chunk is sequential relative to the first offset
     }) && remainder
         .iter()
         .copied()
