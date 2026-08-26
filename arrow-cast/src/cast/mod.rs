@@ -65,7 +65,7 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -2850,7 +2850,7 @@ where
             Ok(())
         })?;
 
-    let offset_buffer = arrow_buffer::Buffer::from_vec(cast_offsets);
+    let offset_buffer = Buffer::from_vec(cast_offsets);
 
     let dtype = TO::DATA_TYPE;
 
