@@ -121,7 +121,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// Within a Parquet file, both indexes are organized as a two-level structure, with
 /// indexes arranged first by row group, and then column. The [`ColumnChunkMetaData`]
 /// contains pointers to the indexes for a given column chunk, so they may be
-/// populated piecemeal. This struct allows access  by row group index and column number
+/// populated piecemeal. This trait allows access by row group index and column number
 /// ([Self::column_index], [Self::offset_index]). Access by row group is provided by
 /// [`RowGroupPageIndex`].
 ///

@@ -28,73 +28,21 @@
 use bytes::Bytes;
 use parquet::DecodeResult;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::{PageIndexProvider, ParquetMetaData, ParquetMetaDataPushDecoder};
+use parquet::file::metadata::{
+    PageIndexPolicy, PageIndexProvider, ParquetMetaData, ParquetMetaDataPushDecoder,
+};
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::HashMap;
 use std::fs::File;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// A custom PageIndexProvider that only stores indexes for a subset of columns
-///
-/// This provider uses nested hash maps to store only the necessary indexes
-/// to satisfy a query
-#[derive(Debug, Clone)]
-struct SparsePageIndexProvider {
-    column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
-    offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
-}
+//////////////////////////////////////////////
+// helper functions
 
-impl SparsePageIndexProvider {
-    fn new(
-        column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
-        offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
-    ) -> Self {
-        Self {
-            column_indexes,
-            offset_indexes,
-        }
-    }
-}
-
-impl PageIndexProvider for SparsePageIndexProvider {
-    fn has_offset_indexes(&self) -> bool {
-        self.offset_indexes.is_some()
-    }
-
-    fn has_column_indexes(&self) -> bool {
-        self.column_indexes.is_some()
-    }
-
-    fn column_index(
-        &self,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Option<&ColumnIndexMetaData> {
-        self.column_indexes
-            .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx)
-    }
-
-    fn offset_index(
-        &self,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Option<&OffsetIndexMetaData> {
-        self.offset_indexes
-            .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-fn dump_page_index(metadata: &ParquetMetaData) -> Result<()> {
+fn print_page_index(metadata: &ParquetMetaData) -> Result<()> {
     if let Some(page_index) = metadata.page_index() {
         let num_columns = metadata.file_metadata().schema_descr().num_columns();
 
@@ -120,16 +68,13 @@ fn dump_page_index(metadata: &ParquetMetaData) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    // Create a sample parquet file with page indexes for this example
+fn create_sample_file(temp_path: &PathBuf) -> Result<()> {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
-    let tempdir = TempDir::new().unwrap();
-    let temp_path = tempdir.path().join("custom_page_index_example.parquet");
     println!("Creating sample file: {}", temp_path.display());
 
     // Create a sample dataset with multiple columns
@@ -189,10 +134,77 @@ fn main() -> Result<()> {
     }
 
     writer.close()?;
+    Ok(())
+}
+
+/// A custom PageIndexProvider that only stores indexes for a subset of columns
+///
+/// This provider uses nested hash maps to store only the indexes necessary
+/// to satisfy a query
+#[derive(Debug, Clone)]
+struct SparsePageIndexProvider {
+    column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
+    offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
+}
+
+impl SparsePageIndexProvider {
+    fn new(
+        column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
+        offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
+    ) -> Self {
+        Self {
+            column_indexes,
+            offset_indexes,
+        }
+    }
+}
+
+// Custom providers must implement the `PageIndexProvider` trait.
+impl PageIndexProvider for SparsePageIndexProvider {
+    fn has_offset_indexes(&self) -> bool {
+        self.offset_indexes.is_some()
+    }
+
+    fn has_column_indexes(&self) -> bool {
+        self.column_indexes.is_some()
+    }
+
+    fn column_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&ColumnIndexMetaData> {
+        self.column_indexes
+            .as_ref()?
+            .get(&row_group_idx)?
+            .get(&column_idx)
+    }
+
+    fn offset_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&OffsetIndexMetaData> {
+        self.offset_indexes
+            .as_ref()?
+            .get(&row_group_idx)?
+            .get(&column_idx)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn main() -> Result<()> {
+    // Create a sample parquet file with page indexes for this example
+    let tempdir = TempDir::new().unwrap();
+    let temp_path = tempdir.path().join("custom_page_index_example.parquet");
+    create_sample_file(&temp_path)?;
     println!("Sample file created with page indexes\n");
 
-    // Now read it back with page indexes
-    use parquet::file::metadata::PageIndexPolicy;
+    // Example 1: Use the standard PageIndex provider (all columns accessible)
+    println!("=== Example 1: Standard PageIndex (all columns) ===");
 
     let file_bytes = Bytes::from(std::fs::read(temp_path)?);
     let file_len = file_bytes.len() as u64;
@@ -212,15 +224,21 @@ fn main() -> Result<()> {
     println!("Number of columns: {num_columns}");
     println!();
 
-    // Example 1: Use the standard PageIndex provider (all columns accessible)
-    println!("=== Example 1: Standard PageIndex (all columns) ===");
-    dump_page_index(&metadata)?;
+    print_page_index(&metadata)?;
 
-    // Save original index to populate the custom one. A real application could
-    // cache the indexes externally.
+    // Save original index to populate the custom one. This of course is not
+    // very memory efficient. A real implementation would instead either selectively
+    // (or on demand) parse individual indexes from the footer, or could instead
+    // save the indexes in an external store indexed for easy retrieval. The approach
+    // here mimics the latter. The former would require either the use of third-party
+    // Thrift parsers, or the addition of APIs to the parquet crate to enable selective
+    // index parsing.
     let page_index = metadata.page_index().cloned().unwrap();
 
     // Example 2: Read metadata and then add custom PageIndexProvider
+    println!("=== Example 2: Selective PageIndex (columns 0, 1, 4 only) ===");
+
+    // first read the metadata without page indexes
     decoder = ParquetMetaDataPushDecoder::try_new(file_len)?
         .with_page_index_policy(PageIndexPolicy::Skip);
     #[expect(clippy::single_range_in_vec_init)]
@@ -231,12 +249,13 @@ fn main() -> Result<()> {
             panic!("expected DecodeResult::Data, got: {other:?}")
         }
     };
-    println!("=== Example 2: Selective PageIndex (columns 0, 1, 4 only) ===");
+
+    // convert the retrieved metadata into a `ParquetMetaDataBuilder`
     let mut builder = metadata.into_builder();
 
-    // create partial indexes. column index for column 0 only (predicate column),
-    // offset index for columns 0, 1, 4 (projected columns)
-    // only populate first row group
+    // Selectively populate the indexes. Column index for column 0 only (predicate column),
+    // offset index for columns 0, 1, 4 (projected columns).
+    // Only populate first row group for brevity.
     let mut colidx = HashMap::new();
     let mut offidx = HashMap::new();
     colidx.insert(0usize, page_index.column_index(0, 0).unwrap().clone());
@@ -247,13 +266,15 @@ fn main() -> Result<()> {
     colidxs.insert(0usize, colidx);
     let mut offidxs = HashMap::new();
     offidxs.insert(0usize, offidx);
+
+    // create the provider
     let provider = SparsePageIndexProvider::new(Some(colidxs), Some(offidxs));
 
-    // add our custom provider to the metadata
+    // and add it to the metadata
     builder = builder.set_page_index(Some(Arc::new(provider)));
 
     let metadata = builder.build();
-    dump_page_index(&metadata)?;
+    print_page_index(&metadata)?;
 
     Ok(())
 }
