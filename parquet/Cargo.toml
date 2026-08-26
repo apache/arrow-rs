@@ -230,6 +230,11 @@ name = "parquet-index"
 required-features = ["cli"]
 
 [[bench]]
+name = "writer_page_windows"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_writer"
 required-features = ["arrow"]
 harness = false
