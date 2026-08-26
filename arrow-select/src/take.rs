@@ -660,13 +660,11 @@ where
     dst_offsets.push(OffsetType::Native::zero());
 
     let field = match values.data_type() {
-        DataType::List(f) | DataType::LargeList(f) => f.clone(),
-        d => unreachable!("take_list called with non-list data type {d}"),
+        DataType::List(fld) | DataType::LargeList(fld) => fld.clone(),
+        dtype => unreachable!("take_list called with non-list data type {dtype}"),
     };
 
-    let is_primitive_child = child_data.null_count() == 0
-        && child_data.buffers().len() == 1
-        && child_data.child_data().is_empty();
+    let is_primitive_child = child_data.null_count() == 0 && child_data.data_type().is_primitive();
 
     if is_primitive_child {
         let values_buf = &child_data.buffers()[0];
@@ -681,7 +679,7 @@ where
             .len()
             .checked_div(values.len().max(1))
             .unwrap_or(0);
-        let mut dst_buf = MutableBuffer::new(
+        let mut dst_buf = Vec::<u8>::with_capacity(
             avg_row_len
                 .saturating_mul(indices.len())
                 .saturating_mul(bytes_per_value),
@@ -701,31 +699,40 @@ where
                 }
             }
             Some(valid) => {
-                let mut last = 0;
-                for i in valid.valid_indices() {
-                    if last < i {
-                        dst_offsets.extend(std::iter::repeat_n(child_len, i - last));
+                let mut prev = 0;
+                for vidx in valid.valid_indices() {
+                    // Fill offsets for null values between the two valid indices.
+                    if prev < vidx {
+                        dst_offsets.extend(std::iter::repeat_n(child_len, vidx - prev));
                     }
-                    let row = unsafe { indices.value_unchecked(i) }.as_usize();
+                    // SAFETY: `vidx` comes from validity bitmap over `indices`, so in-bounds.
+                    let row = unsafe { indices.value_unchecked(vidx) }.as_usize();
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
                     let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
                     dst_buf.extend_from_slice(&values_buf[start..end]);
                     child_len += src_offsets[row + 1] - src_offsets[row];
                     dst_offsets.push(child_len);
-                    last = i + 1;
+                    prev = vidx + 1;
                 }
-                dst_offsets.extend(std::iter::repeat_n(child_len, indices.len() - last));
+                dst_offsets.extend(std::iter::repeat_n(child_len, indices.len() - prev));
             }
         }
 
-        assert_eq!(dst_offsets.len(), indices.len() + 1);
+        assert_eq!(
+            dst_offsets.len(),
+            indices.len() + 1,
+            "New offsets was filled under/over the expected capacity"
+        );
 
-        let child = make_array(
+        // Safety: data_type, len, and buffer are all derived from the already-validated
+        // source child_data, so re-validation is unnecessary.
+        let child = make_array(unsafe {
             ArrayData::builder(child_data.data_type().clone())
                 .len(child_len.as_usize())
                 .add_buffer(dst_buf.into())
-                .build()?,
-        );
+                .build_unchecked()
+        });
+        // SAFETY: `dst_offsets` is constructed to be monotonically increasing above.
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
         return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
     }
@@ -733,7 +740,7 @@ where
     let capacity = child_data
         .len()
         .checked_div(values.len())
-        .map(|v| v * indices.len())
+        .map(|avg| avg * indices.len())
         .unwrap_or_default();
     let mut mutable =
         MutableArrayData::new(vec![&child_data], child_data.null_count() > 0, capacity);
