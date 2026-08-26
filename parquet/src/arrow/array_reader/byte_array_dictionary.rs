@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, make_array, new_empty_array,
+    Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -134,8 +134,8 @@ fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayR
         ));
     };
 
-    let data = array.to_data();
-    let values = make_array(data.child_data()[0].clone());
+    let array = array.as_any_dictionary();
+    let values = array.values();
 
     let new_values: ArrayRef = match to_value_type.as_ref() {
         ArrowType::Utf8View => Arc::new(StringViewArray::from(values.as_string::<i32>())),
@@ -148,16 +148,7 @@ fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayR
         }
     };
 
-    let new_data = unsafe {
-        // safety: The original ArrayData is valid, and we only replace the child dictionary
-        // values with a correctly typed array, so skip ArrayDataBuilder validation.
-        data.into_builder()
-            .data_type(to_type.clone())
-            .child_data(vec![new_values.to_data()])
-            .build_unchecked()
-    };
-
-    Ok(make_array(new_data))
+    Ok(array.with_values(new_values))
 }
 
 /// An [`ArrayReader`] for dictionary encoded variable length byte arrays
