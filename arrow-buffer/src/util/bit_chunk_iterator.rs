@@ -88,8 +88,7 @@ impl<'a> UnalignedBitChunk<'a> {
         }
 
         // Read into prefix and suffix as needed
-        // Safety: u8 has alignment 1 so any byte slice can be aligned to u64; u64 has no
-        // invalid bit patterns so reinterpreting initialized u8 bytes as u64 is sound.
+        // Safety: u64 has no invalid bit patterns so reinterpreting initialized u8 bytes as u64 is sound.
         let (prefix, mut chunks, suffix) = unsafe { buffer.align_to::<u64>() };
         assert!(
             prefix.len() < 8 && suffix.len() < 8,

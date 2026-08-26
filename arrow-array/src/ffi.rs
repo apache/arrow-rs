@@ -485,7 +485,8 @@ impl ImportedArrowArray<'_> {
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
                 // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
-                // gives the number of i32 elements, and the last index is valid and within bounds.
+                // gives the number of i32 elements. The `- 1` is safe because the array is non-empty
+                // (checked above), so the offset buffer has at least one element.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
